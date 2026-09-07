@@ -1,11 +1,13 @@
 """Asynchronous processing for durable webhook receipts."""
 
 import json
+from datetime import UTC, datetime
 
 from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.models.base import utc_now
+from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.webhook import (
     AuditChangeGroup,
@@ -14,7 +16,13 @@ from mist_config_guardian_backend.models.webhook import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
+from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
+from mist_config_guardian_backend.services.notifications import NotificationService
+
+# Mist stamps audit and device events with an epoch timestamp. Values far in the
+# past are milliseconds, not seconds; the boundary is well before Mist existed.
+_EPOCH_MILLISECOND_BOUNDARY = 100_000_000_000
 
 
 class WebhookReceiptNotFoundError(ValueError):
@@ -24,8 +32,15 @@ class WebhookReceiptNotFoundError(ValueError):
 class WebhookProcessingService:
     """Decrypt and correlate authenticated webhook receipts."""
 
-    def __init__(self, vault: CredentialVault) -> None:
+    def __init__(
+        self,
+        vault: CredentialVault,
+        projector: ChangeGroupProjector | None = None,
+    ) -> None:
         self._vault = vault
+        self._projector = (
+            projector if projector is not None else ChangeGroupProjector(notifications=NotificationService())
+        )
 
     async def process(self, receipt_id: PydanticObjectId) -> None:
         """Process one receipt idempotently."""
@@ -60,11 +75,38 @@ class WebhookProcessingService:
             await self._add_to_change_group(receipt, payload)
         await AuditVersioningService(self._vault).apply(receipt, payload, organization)
         await MonitoringEventService(self._vault).handle(receipt, payload, organization)
+        # The projection is rebuilt from scratch afterwards, so it does not
+        # matter whether the audit event or the device events arrived first, or
+        # how many times either was delivered.
+        await self.project(receipt, payload)
 
         receipt.status = WebhookProcessingStatus.PROCESSED
         receipt.processed_at = utc_now()
         receipt.touch()
         await receipt.save()
+
+    async def project(self, receipt: WebhookReceipt, payload: dict[str, object]) -> None:
+        """Recompute every change-group projection this receipt can affect."""
+        for audit_id in sorted(await self._affected_audit_ids(receipt, payload)):
+            await self._projector.rebuild(receipt.organization_id, audit_id)
+
+    @staticmethod
+    async def _affected_audit_ids(
+        receipt: WebhookReceipt,
+        payload: dict[str, object],
+    ) -> set[str]:
+        if receipt.audit_id:
+            return {receipt.audit_id}
+        # A device event that carries no audit identifier still belongs to the
+        # administrator action its session was opened for.
+        device_mac = WebhookProcessingService._first_string(payload, "mac", "device_mac", "ap_mac")
+        if receipt.topic != "device-events" or not device_mac:
+            return set()
+        session = await MonitoringSession.find_one(
+            MonitoringSession.organization_id == receipt.organization_id,
+            MonitoringSession.device_mac == device_mac.replace(":", "").replace("-", "").lower(),
+        )
+        return set(session.audit_ids) if session is not None else set()
 
     @staticmethod
     async def _add_to_change_group(
@@ -93,6 +135,7 @@ class WebhookProcessingService:
                     "src",
                 ),
                 message=WebhookProcessingService._first_string(payload, "message"),
+                occurred_at=WebhookProcessingService._event_time(payload) or receipt.created_at,
             )
             try:
                 await group.insert()
@@ -106,6 +149,17 @@ class WebhookProcessingService:
 
         if receipt.id not in group.receipt_ids:
             group.receipt_ids.append(receipt.id)
+        # A later delivery of the same audit may be the one that carries the
+        # actor or the message, so fill blanks without overwriting known values.
+        group.actor = group.actor or WebhookProcessingService._first_string(
+            payload,
+            "admin_name",
+            "admin_id",
+            "user",
+        )
+        group.method = group.method or WebhookProcessingService._first_string(payload, "method", "src")
+        group.message = group.message or WebhookProcessingService._first_string(payload, "message")
+        group.occurred_at = group.occurred_at or WebhookProcessingService._event_time(payload)
         site_id = WebhookProcessingService._first_string(payload, "site_id")
         if site_id and site_id not in group.affected_site_ids:
             group.affected_site_ids.append(site_id)
@@ -119,6 +173,15 @@ class WebhookProcessingService:
             group.affected_object_ids.append(object_id)
         group.touch()
         await group.save()
+
+    @staticmethod
+    def _event_time(payload: dict[str, object]) -> datetime | None:
+        for key in ("timestamp", "when", "occurred_at"):
+            value = payload.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                seconds = value / 1000 if value > _EPOCH_MILLISECOND_BOUNDARY else value
+                return datetime.fromtimestamp(seconds, tz=UTC)
+        return None
 
     @staticmethod
     def _first_string(payload: dict[str, object], *keys: str) -> str | None:

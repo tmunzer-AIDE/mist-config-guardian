@@ -257,6 +257,7 @@ async def enroll_totp(
         secret=started.secret,
         otpauth_uri=started.otpauth_uri,
         issuer=settings.totp_issuer,
+        qr_svg=started.qr_svg,
     )
 
 

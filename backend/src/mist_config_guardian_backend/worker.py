@@ -15,6 +15,7 @@ celery_app = Celery(
         "mist_config_guardian_backend.tasks.webhooks",
         "mist_config_guardian_backend.tasks.restores",
         "mist_config_guardian_backend.tasks.monitoring",
+        "mist_config_guardian_backend.tasks.change_groups",
     ],
 )
 celery_app.conf.update(
@@ -30,6 +31,16 @@ celery_app.conf.update(
         "expire-restore-credentials": {
             "task": "restores.expire_credentials",
             "schedule": 60.0,
+        },
+        "expire-restore-approvals": {
+            "task": "restores.expire_approvals",
+            "schedule": 300.0,
+        },
+        # Change groups recorded before the projection existed, and any whose
+        # rebuild was lost to a worker restart, are filled in here.
+        "backfill-change-group-projections": {
+            "task": "change_groups.backfill_projections",
+            "schedule": 900.0,
         },
     },
 )

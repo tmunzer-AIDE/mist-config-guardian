@@ -35,6 +35,7 @@ from mist_config_guardian_backend.security.totp import (
     generate_totp_secret,
     hash_recovery_code,
     totp_provisioning_uri,
+    totp_qr_svg,
     verify_totp,
 )
 from mist_config_guardian_backend.services.sessions import SessionService
@@ -123,6 +124,7 @@ class TotpEnrollmentStart:
 
     secret: str
     otpauth_uri: str
+    qr_svg: str
 
 
 @dataclass(frozen=True)
@@ -258,13 +260,15 @@ class MfaService:
             self._identity(user),
             self._vault.encrypt_for_context(secret, context=TOTP_SECRET_CONTEXT),
         )
+        provisioning_uri = totp_provisioning_uri(
+            secret,
+            account_name=user.email,
+            issuer=self._settings.totp_issuer,
+        )
         return TotpEnrollmentStart(
             secret=secret,
-            otpauth_uri=totp_provisioning_uri(
-                secret,
-                account_name=user.email,
-                issuer=self._settings.totp_issuer,
-            ),
+            otpauth_uri=provisioning_uri,
+            qr_svg=totp_qr_svg(provisioning_uri),
         )
 
     async def confirm_totp_enrollment(self, user: User, code: str) -> list[str]:

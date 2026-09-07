@@ -11,7 +11,7 @@ from mist_config_guardian_backend.models.challenge import PendingTotpEnrollment,
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.notification import Notification
 from mist_config_guardian_backend.models.organization import Organization
-from mist_config_guardian_backend.models.restore import RestoreOperation
+from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreOperationStateRecord
 from mist_config_guardian_backend.models.session import UserSession
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
@@ -41,6 +41,7 @@ def document_models() -> list[type[Document]]:
         WebhookReceipt,
         AuditChangeGroup,
         RestoreOperation,
+        RestoreOperationStateRecord,
         RestoreApproval,
         MonitoringSession,
         Notification,
@@ -60,6 +61,7 @@ __all__ = [
     "PendingTotpEnrollment",
     "RestoreApproval",
     "RestoreOperation",
+    "RestoreOperationStateRecord",
     "SnapshotManifest",
     "User",
     "UserSession",

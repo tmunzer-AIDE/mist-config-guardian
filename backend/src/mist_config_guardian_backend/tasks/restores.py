@@ -7,6 +7,7 @@ from beanie import PydanticObjectId
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.database import DatabaseManager
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.approvals import expire_pending_approvals
 from mist_config_guardian_backend.services.restore_authorization import (
     RestoreAuthorizationService,
 )
@@ -42,5 +43,21 @@ async def _expire_restore_credentials() -> int:
     await database.connect()
     try:
         return await RestoreAuthorizationService.expire_stale_credentials()
+    finally:
+        await database.close()
+
+
+@celery_app.task(name="restores.expire_approvals")
+def expire_restore_approvals() -> int:
+    """Expire every pending restore approval past its review window."""
+    return asyncio.run(_expire_restore_approvals())
+
+
+async def _expire_restore_approvals() -> int:
+    settings = get_settings()
+    database = DatabaseManager(settings)
+    await database.connect()
+    try:
+        return await expire_pending_approvals()
     finally:
         await database.close()

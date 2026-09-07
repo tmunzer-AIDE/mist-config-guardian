@@ -39,6 +39,35 @@
         "title": "AcceptInvitationRequest",
         "type": "object"
       },
+      "AffectedDeviceResponse": {
+        "description": "One device that received configuration from a change group.",
+        "properties": {
+          "device_mac": {
+            "title": "Device Mac",
+            "type": "string"
+          },
+          "device_name": {
+            "default": "",
+            "title": "Device Name",
+            "type": "string"
+          },
+          "device_type": {
+            "default": "",
+            "title": "Device Type",
+            "type": "string"
+          },
+          "site_mist_id": {
+            "default": "",
+            "title": "Site Mist Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_mac"
+        ],
+        "title": "AffectedDeviceResponse",
+        "type": "object"
+      },
       "AiAssistCard": {
         "description": "One model-produced card shown beside the deterministic diff.\n\n``kind`` separates stated intent from flagged risks; ``field`` references a\ndiff entry path when the model cited one.",
         "properties": {
@@ -388,6 +417,206 @@
         "title": "AiSettingsUpdate",
         "type": "object"
       },
+      "ApprovalCreateRequest": {
+        "description": "The restore plan a second administrator is asked to review.",
+        "properties": {
+          "restore_operation_id": {
+            "$ref": "#/components/schemas/PydanticObjectId"
+          }
+        },
+        "required": [
+          "restore_operation_id"
+        ],
+        "title": "ApprovalCreateRequest",
+        "type": "object"
+      },
+      "ApprovalDecisionRequest": {
+        "description": "An optional reason recorded with an approval decision.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "ApprovalDecisionRequest",
+        "type": "object"
+      },
+      "ApprovalListResponse": {
+        "description": "Paginated approval requests.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ApprovalListResponse",
+        "type": "object"
+      },
+      "ApprovalResponse": {
+        "description": "An approval request as the restore page renders it.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By Email"
+          },
+          "decision_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Reason"
+          },
+          "delete_count": {
+            "title": "Delete Count",
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "object_count": {
+            "title": "Object Count",
+            "type": "integer"
+          },
+          "plan_hash": {
+            "title": "Plan Hash",
+            "type": "string"
+          },
+          "requested_by_email": {
+            "title": "Requested By Email",
+            "type": "string"
+          },
+          "restore_operation_id": {
+            "title": "Restore Operation Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "triggered_rules": {
+            "items": {
+              "$ref": "#/components/schemas/TriggeredRuleResponse"
+            },
+            "title": "Triggered Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "restore_operation_id",
+          "status",
+          "triggered_rules",
+          "requested_by_email",
+          "decided_by_email",
+          "decided_at",
+          "decision_reason",
+          "expires_at",
+          "plan_hash",
+          "summary",
+          "object_count",
+          "delete_count",
+          "created_at"
+        ],
+        "title": "ApprovalResponse",
+        "type": "object"
+      },
+      "ApprovalRule": {
+        "description": "Policy rule that made a plan require approval.",
+        "enum": [
+          "organization_scope",
+          "exact_mode_deletes",
+          "object_count_threshold",
+          "sensitive_object_type"
+        ],
+        "title": "ApprovalRule",
+        "type": "string"
+      },
+      "ApprovalStatus": {
+        "description": "Approval request lifecycle.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "expired",
+          "invalidated"
+        ],
+        "title": "ApprovalStatus",
+        "type": "string"
+      },
+      "BaselineConfidence": {
+        "description": "Confidence in the pre-change baseline used for impact comparison.",
+        "enum": [
+          "high",
+          "medium",
+          "low",
+          "none"
+        ],
+        "title": "BaselineConfidence",
+        "type": "string"
+      },
       "Body_login_api_v1_auth_login_post": {
         "properties": {
           "client_id": {
@@ -483,6 +712,468 @@
           "bootstrap_token"
         ],
         "title": "BootstrapAdminRequest",
+        "type": "object"
+      },
+      "ChangeEvidenceResponse": {
+        "description": "One deterministic statement supporting a group's assessment.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ImpactSeverity",
+            "default": "none"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "ChangeEvidenceResponse",
+        "type": "object"
+      },
+      "ChangeGroupDetailResponse": {
+        "description": "One change group with its evidence, objects, and competing changes.",
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "affected_devices": {
+            "items": {
+              "$ref": "#/components/schemas/AffectedDeviceResponse"
+            },
+            "title": "Affected Devices",
+            "type": "array"
+          },
+          "affected_site_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Site Ids",
+            "type": "array"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "baseline_confidence": {
+            "$ref": "#/components/schemas/BaselineConfidence",
+            "default": "none"
+          },
+          "changed_objects": {
+            "items": {
+              "$ref": "#/components/schemas/ChangedObjectResponse"
+            },
+            "title": "Changed Objects",
+            "type": "array"
+          },
+          "competing_change_group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Competing Change Group Ids",
+            "type": "array"
+          },
+          "degraded_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Metrics",
+            "type": "array"
+          },
+          "deterministic_assessment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deterministic Assessment"
+          },
+          "device_count": {
+            "title": "Device Count",
+            "type": "integer"
+          },
+          "devices_label": {
+            "title": "Devices Label",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeEvidenceResponse"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "impact_label": {
+            "title": "Impact Label",
+            "type": "string"
+          },
+          "impact_severity": {
+            "$ref": "#/components/schemas/ImpactSeverity",
+            "default": "none"
+          },
+          "is_mine": {
+            "default": false,
+            "title": "Is Mine",
+            "type": "boolean"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeMetricResponse"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "monitoring_session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Monitoring Session Ids",
+            "type": "array"
+          },
+          "object_count": {
+            "title": "Object Count",
+            "type": "integer"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "recovery_state": {
+            "$ref": "#/components/schemas/RecoveryState",
+            "default": "not_applicable"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ChangeSource",
+            "default": "webhook"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "audit_id",
+          "occurred_at",
+          "title",
+          "summary",
+          "object_count",
+          "device_count",
+          "devices_label",
+          "impact_label"
+        ],
+        "title": "ChangeGroupDetailResponse",
+        "type": "object"
+      },
+      "ChangeGroupListResponse": {
+        "description": "One page of change groups and the total matching the query.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeGroupSummaryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ChangeGroupListResponse",
+        "type": "object"
+      },
+      "ChangeGroupSummaryResponse": {
+        "description": "One change group as the Overview feed and Changes table render it.",
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "affected_site_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Site Ids",
+            "type": "array"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "degraded_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Metrics",
+            "type": "array"
+          },
+          "device_count": {
+            "title": "Device Count",
+            "type": "integer"
+          },
+          "devices_label": {
+            "title": "Devices Label",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "impact_label": {
+            "title": "Impact Label",
+            "type": "string"
+          },
+          "impact_severity": {
+            "$ref": "#/components/schemas/ImpactSeverity",
+            "default": "none"
+          },
+          "is_mine": {
+            "default": false,
+            "title": "Is Mine",
+            "type": "boolean"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeMetricResponse"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "monitoring_session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Monitoring Session Ids",
+            "type": "array"
+          },
+          "object_count": {
+            "title": "Object Count",
+            "type": "integer"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "recovery_state": {
+            "$ref": "#/components/schemas/RecoveryState",
+            "default": "not_applicable"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ChangeSource",
+            "default": "webhook"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "audit_id",
+          "occurred_at",
+          "title",
+          "summary",
+          "object_count",
+          "device_count",
+          "devices_label",
+          "impact_label"
+        ],
+        "title": "ChangeGroupSummaryResponse",
+        "type": "object"
+      },
+      "ChangeMetricResponse": {
+        "description": "One metric tile rendered on an Overview feed card.",
+        "properties": {
+          "from": {
+            "default": "",
+            "title": "From",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ImpactSeverity",
+            "default": "none"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "ChangeMetricResponse",
+        "type": "object"
+      },
+      "ChangeSource": {
+        "description": "How the application learned about a change.",
+        "enum": [
+          "webhook",
+          "reconcile",
+          "restore",
+          "snapshot"
+        ],
+        "title": "ChangeSource",
+        "type": "string"
+      },
+      "ChangedObjectResponse": {
+        "description": "One configuration object an administrator action touched.",
+        "properties": {
+          "after_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Version"
+          },
+          "after_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Version Id"
+          },
+          "before_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Version"
+          },
+          "before_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Version Id"
+          },
+          "changed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Fields",
+            "type": "array"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "logical_object_id": {
+            "title": "Logical Object Id",
+            "type": "string"
+          },
+          "object_name": {
+            "title": "Object Name",
+            "type": "string"
+          },
+          "object_type": {
+            "title": "Object Type",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "site_mist_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Mist Id"
+          }
+        },
+        "required": [
+          "logical_object_id",
+          "object_type",
+          "object_name",
+          "scope",
+          "event"
+        ],
+        "title": "ChangedObjectResponse",
         "type": "object"
       },
       "ComponentHealthResponse": {
@@ -952,6 +1643,41 @@
           "expires_at"
         ],
         "title": "EmailChangeResponse",
+        "type": "object"
+      },
+      "FailedRestoreResponse": {
+        "description": "One restore that stopped part way and may need compensation.",
+        "properties": {
+          "compensation_available": {
+            "default": false,
+            "title": "Compensation Available",
+            "type": "boolean"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "failed_at": {
+            "format": "date-time",
+            "title": "Failed At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "detail",
+          "failed_at"
+        ],
+        "title": "FailedRestoreResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1929,6 +2655,88 @@
         "title": "OrganizationListResponse",
         "type": "object"
       },
+      "OrganizationOverviewResponse": {
+        "description": "Everything the Overview page renders, in one purpose-built read model.",
+        "properties": {
+          "change_groups": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeGroupSummaryResponse"
+            },
+            "title": "Change Groups",
+            "type": "array"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/OverviewCountsResponse"
+          },
+          "failed_restores": {
+            "items": {
+              "$ref": "#/components/schemas/FailedRestoreResponse"
+            },
+            "title": "Failed Restores",
+            "type": "array"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "latest_snapshot_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Snapshot At"
+          },
+          "latest_snapshot_objects": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Snapshot Objects"
+          },
+          "pending_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/PendingApprovalResponse"
+            },
+            "title": "Pending Approvals",
+            "type": "array"
+          },
+          "range_end": {
+            "format": "date-time",
+            "title": "Range End",
+            "type": "string"
+          },
+          "range_start": {
+            "format": "date-time",
+            "title": "Range Start",
+            "type": "string"
+          },
+          "safety_net": {
+            "items": {
+              "$ref": "#/components/schemas/SafetyNetItemResponse"
+            },
+            "title": "Safety Net",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generated_at",
+          "range_start",
+          "range_end",
+          "counts"
+        ],
+        "title": "OrganizationOverviewResponse",
+        "type": "object"
+      },
       "OrganizationResponse": {
         "description": "Safe organization representation.",
         "properties": {
@@ -2167,6 +2975,43 @@
           }
         },
         "title": "OrganizationUpdateRequest",
+        "type": "object"
+      },
+      "OverviewCountsResponse": {
+        "description": "Badge counts the shell polls for, independently of the feed.",
+        "properties": {
+          "change_groups": {
+            "default": 0,
+            "title": "Change Groups",
+            "type": "integer"
+          },
+          "failed_restores": {
+            "default": 0,
+            "title": "Failed Restores",
+            "type": "integer"
+          },
+          "impacting": {
+            "default": 0,
+            "title": "Impacting",
+            "type": "integer"
+          },
+          "mine": {
+            "default": 0,
+            "title": "Mine",
+            "type": "integer"
+          },
+          "pending_approvals": {
+            "default": 0,
+            "title": "Pending Approvals",
+            "type": "integer"
+          },
+          "unrecovered": {
+            "default": 0,
+            "title": "Unrecovered",
+            "type": "integer"
+          }
+        },
+        "title": "OverviewCountsResponse",
         "type": "object"
       },
       "PasskeyAuthenticationOptionsResponse": {
@@ -2429,6 +3274,108 @@
         "title": "PasswordConfirmationRequest",
         "type": "object"
       },
+      "PendingApprovalResponse": {
+        "description": "One restore plan waiting for a second pair of eyes.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by_email": {
+            "title": "Requested By Email",
+            "type": "string"
+          },
+          "restore_operation_id": {
+            "title": "Restore Operation Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "restore_operation_id",
+          "title",
+          "detail",
+          "requested_by_email",
+          "requested_at"
+        ],
+        "title": "PendingApprovalResponse",
+        "type": "object"
+      },
+      "PointInTimeModeResponse": {
+        "description": "Whether the caller is browsing a past point in time.",
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "historical": {
+            "title": "Historical",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "historical"
+        ],
+        "title": "PointInTimeModeResponse",
+        "type": "object"
+      },
+      "PointInTimeStateResponse": {
+        "description": "A scope reconstructed as it existed at one instant.",
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "object_count": {
+            "title": "Object Count",
+            "type": "integer"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/ReconstructedObjectResponse"
+            },
+            "title": "Objects",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "org",
+              "site"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "scope",
+          "object_count"
+        ],
+        "title": "PointInTimeStateResponse",
+        "type": "object"
+      },
       "ProfileResponse": {
         "description": "The parts of an account its owner may edit.",
         "properties": {
@@ -2620,6 +3567,45 @@
         "title": "ReadinessResponse",
         "type": "object"
       },
+      "ReconstructedObjectResponse": {
+        "description": "One object as it existed at the reconstructed instant.",
+        "properties": {
+          "is_deleted": {
+            "default": false,
+            "title": "Is Deleted",
+            "type": "boolean"
+          },
+          "logical_object_id": {
+            "title": "Logical Object Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "object_type": {
+            "title": "Object Type",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "logical_object_id",
+          "object_type",
+          "name",
+          "version_id",
+          "version"
+        ],
+        "title": "ReconstructedObjectResponse",
+        "type": "object"
+      },
       "RecoveryCodesResponse": {
         "description": "Single-use recovery codes, returned exactly once.",
         "properties": {
@@ -2642,6 +3628,18 @@
         ],
         "title": "RecoveryCodesResponse",
         "type": "object"
+      },
+      "RecoveryState": {
+        "description": "Whether an impacting change has recovered.",
+        "enum": [
+          "not_applicable",
+          "monitoring",
+          "recovered",
+          "unrecovered",
+          "completed"
+        ],
+        "title": "RecoveryState",
+        "type": "string"
       },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
@@ -2826,6 +3824,21 @@
             "title": "Actions",
             "type": "array"
           },
+          "approval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "compensation_available": {
+            "default": false,
+            "title": "Compensation Available",
+            "type": "boolean"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -2970,6 +3983,316 @@
         ],
         "title": "RestoreStatus",
         "type": "string"
+      },
+      "RestoreTargetListResponse": {
+        "description": "Restore targets with the facet vocabularies the filter rows render.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreTargetResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "sites": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreTargetSiteResponse"
+            },
+            "title": "Sites",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreTargetTypeCountResponse"
+            },
+            "title": "Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "types",
+          "sites"
+        ],
+        "title": "RestoreTargetListResponse",
+        "type": "object"
+      },
+      "RestoreTargetResponse": {
+        "description": "One restorable object version offered on restore step one.",
+        "properties": {
+          "logical_object_id": {
+            "title": "Logical Object Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "object_type": {
+            "title": "Object Type",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "site_mist_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Mist Id"
+          },
+          "site_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Name"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "logical_object_id",
+          "version_id",
+          "name",
+          "object_type",
+          "scope",
+          "site_mist_id",
+          "site_name",
+          "version",
+          "observed_at"
+        ],
+        "title": "RestoreTargetResponse",
+        "type": "object"
+      },
+      "RestoreTargetSiteResponse": {
+        "description": "One site facet entry.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "RestoreTargetSiteResponse",
+        "type": "object"
+      },
+      "RestoreTargetTypeCountResponse": {
+        "description": "One object-type facet count.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "count"
+        ],
+        "title": "RestoreTargetTypeCountResponse",
+        "type": "object"
+      },
+      "RestoreVerificationResponse": {
+        "description": "Post-restore checks, snapshot, and reopened monitoring sessions.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/VerificationCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "monitoring_session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Monitoring Session Ids",
+            "type": "array"
+          },
+          "post_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Post Snapshot Id"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "verified",
+          "checks",
+          "post_snapshot_id",
+          "monitoring_session_ids"
+        ],
+        "title": "RestoreVerificationResponse",
+        "type": "object"
+      },
+      "SafetyNetItemResponse": {
+        "description": "One line of the Overview safety-net card.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "backup",
+              "webhook",
+              "reconciliation",
+              "credential"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "warn",
+              "crit"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "status",
+          "detail"
+        ],
+        "title": "SafetyNetItemResponse",
+        "type": "object"
+      },
+      "SearchResultListResponse": {
+        "description": "Everything the query matched, capped at the requested limit.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResultResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "SearchResultListResponse",
+        "type": "object"
+      },
+      "SearchResultResponse": {
+        "description": "One row of the global search results page.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "object",
+              "change_group",
+              "actor",
+              "audit_id",
+              "restore",
+              "site"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "meta": {
+            "default": "",
+            "title": "Meta",
+            "type": "string"
+          },
+          "subtitle": {
+            "default": "",
+            "title": "Subtitle",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "overview",
+              "changes",
+              "history",
+              "restore",
+              "impact",
+              "settings"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "target_params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Target Params",
+            "type": "object"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "target"
+        ],
+        "title": "SearchResultResponse",
+        "type": "object"
       },
       "ServiceTokenUpdateRequest": {
         "description": "Replace the organization's read-only service token.",
@@ -3321,6 +4644,63 @@
         "title": "SnapshotTriggerRequest",
         "type": "object"
       },
+      "TimelineMarkerListResponse": {
+        "description": "Every marker inside the selected window.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineMarkerResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "range_end": {
+            "format": "date-time",
+            "title": "Range End",
+            "type": "string"
+          },
+          "range_start": {
+            "format": "date-time",
+            "title": "Range Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range_start",
+          "range_end"
+        ],
+        "title": "TimelineMarkerListResponse",
+        "type": "object"
+      },
+      "TimelineMarkerResponse": {
+        "description": "One change tick drawn on the shell's time bar.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "change_group_id": {
+            "title": "Change Group Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ImpactSeverity",
+            "default": "none"
+          }
+        },
+        "required": [
+          "at",
+          "change_group_id",
+          "label"
+        ],
+        "title": "TimelineMarkerResponse",
+        "type": "object"
+      },
       "TotpConfirmRequest": {
         "description": "Authenticator code that confirms a pending enrollment.",
         "properties": {
@@ -3348,6 +4728,10 @@
             "title": "Otpauth Uri",
             "type": "string"
           },
+          "qr_svg": {
+            "title": "Qr Svg",
+            "type": "string"
+          },
           "secret": {
             "title": "Secret",
             "type": "string"
@@ -3356,9 +4740,28 @@
         "required": [
           "secret",
           "otpauth_uri",
-          "issuer"
+          "issuer",
+          "qr_svg"
         ],
         "title": "TotpEnrollmentResponse",
+        "type": "object"
+      },
+      "TriggeredRuleResponse": {
+        "description": "One policy rule with the evidence that triggered it.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/ApprovalRule"
+          }
+        },
+        "required": [
+          "rule",
+          "detail"
+        ],
+        "title": "TriggeredRuleResponse",
         "type": "object"
       },
       "UserInviteRequest": {
@@ -3703,6 +5106,41 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerificationCheckResponse": {
+        "description": "One named post-restore check and its outcome.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "status"
+        ],
+        "title": "VerificationCheckResponse",
         "type": "object"
       },
       "VersionEvent": {
@@ -5308,6 +6746,565 @@
         ]
       }
     },
+    "/api/v1/organizations/{organization_id}/approvals": {
+      "get": {
+        "description": "List approval requests newest first, optionally filtered by status.",
+        "operationId": "list_approvals_api_v1_organizations__organization_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ApprovalStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "List Approvals",
+        "tags": [
+          "Approvals"
+        ]
+      },
+      "post": {
+        "description": "Ask a second administrator to review one restore plan.",
+        "operationId": "request_approval_api_v1_organizations__organization_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Request Approval",
+        "tags": [
+          "Approvals"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/approvals/{approval_id}": {
+      "get": {
+        "description": "Return one approval request with a freshly reconciled status.",
+        "operationId": "get_approval_api_v1_organizations__organization_id__approvals__approval_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Get Approval",
+        "tags": [
+          "Approvals"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/approvals/{approval_id}/approve": {
+      "post": {
+        "description": "Approve one restore plan as a second administrator.",
+        "operationId": "approve_restore_api_v1_organizations__organization_id__approvals__approval_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Approve Restore",
+        "tags": [
+          "Approvals"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/approvals/{approval_id}/reject": {
+      "post": {
+        "description": "Reject one restore plan as a second administrator.",
+        "operationId": "reject_restore_api_v1_organizations__organization_id__approvals__approval_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Reject Restore",
+        "tags": [
+          "Approvals"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups": {
+      "get": {
+        "description": "List change groups in the selected window, newest first.",
+        "operationId": "list_change_groups_api_v1_organizations__organization_id__change_groups_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "title": "Range",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "enum": [
+                "any",
+                "critical",
+                "warning",
+                "none"
+              ],
+              "title": "Severity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeGroupListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "List Change Groups",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}": {
+      "get": {
+        "description": "Return one change group with its objects, devices, and evidence.",
+        "operationId": "read_change_group_api_v1_organizations__organization_id__change_groups__change_group_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeGroupDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Change Group",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
     "/api/v1/organizations/{organization_id}/diff": {
       "get": {
         "description": "Return the deterministic, secret-safe diff between two versions.",
@@ -6126,6 +8123,417 @@
         ]
       }
     },
+    "/api/v1/organizations/{organization_id}/overview": {
+      "get": {
+        "description": "Return the Overview read model, or only its navigation badge counts.",
+        "operationId": "read_overview_api_v1_organizations__organization_id__overview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "title": "Range",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "counts_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Counts Only",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationOverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Overview",
+        "tags": [
+          "Overview"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/point-in-time/markers": {
+      "get": {
+        "description": "List the change markers drawn on the shell's time bar.",
+        "operationId": "list_markers_api_v1_organizations__organization_id__point_in_time_markers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "title": "Range",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Config-Guardian-As-Of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Config-Guardian-As-Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineMarkerListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "List Markers",
+        "tags": [
+          "Point In Time"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/point-in-time/mode": {
+      "get": {
+        "description": "Report whether this request is browsing a reconstructed past instant.",
+        "operationId": "read_mode_api_v1_organizations__organization_id__point_in_time_mode_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Config-Guardian-As-Of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Config-Guardian-As-Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointInTimeModeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Mode",
+        "tags": [
+          "Point In Time"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/point-in-time/objects/{logical_object_id}": {
+      "get": {
+        "description": "Return one object's configuration as it existed at an instant.",
+        "operationId": "read_object_at_api_v1_organizations__organization_id__point_in_time_objects__logical_object_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "logical_object_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "At"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Config-Guardian-As-Of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Config-Guardian-As-Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Object At",
+        "tags": [
+          "Point In Time"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/point-in-time/state": {
+      "get": {
+        "description": "Reconstruct an organization or site as it existed at an instant.",
+        "operationId": "read_state_api_v1_organizations__organization_id__point_in_time_state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "org",
+              "enum": [
+                "org",
+                "site"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointInTimeStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read State",
+        "tags": [
+          "Point In Time"
+        ]
+      }
+    },
     "/api/v1/organizations/{organization_id}/restores": {
       "get": {
         "description": "List restore operations newest first.",
@@ -6261,9 +8669,146 @@
         ]
       }
     },
+    "/api/v1/organizations/{organization_id}/restores/targets": {
+      "get": {
+        "description": "List restorable objects with the facet counts the filters render.",
+        "operationId": "list_restore_targets_api_v1_organizations__organization_id__restores_targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "org",
+                "site"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "object_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Object Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreTargetListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "List Restore Targets",
+        "tags": [
+          "Restores"
+        ]
+      }
+    },
     "/api/v1/organizations/{organization_id}/restores/{operation_id}": {
       "get": {
-        "description": "Return one restore operation.",
+        "description": "Return one restore operation, including live per-action progress.",
         "operationId": "get_restore_operation_api_v1_organizations__organization_id__restores__operation_id__get",
         "parameters": [
           {
@@ -6315,6 +8860,134 @@
           }
         ],
         "summary": "Get Restore Operation",
+        "tags": [
+          "Restores"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/restores/{operation_id}/compensation": {
+      "post": {
+        "description": "Plan the reversal of every action a failed restore actually applied.",
+        "operationId": "create_compensation_plan_api_v1_organizations__organization_id__restores__operation_id__compensation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Create Compensation Plan",
+        "tags": [
+          "Restores"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/restores/{operation_id}/compensation/execute": {
+      "post": {
+        "description": "Verify a fresh Mist administrator and queue the compensating plan.\n\nCompensation writes with the same delegated administrator identity a\nrestore does; it never falls back to the read-only service token.",
+        "operationId": "execute_compensation_plan_api_v1_organizations__organization_id__restores__operation_id__compensation_execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Execute Compensation Plan",
         "tags": [
           "Restores"
         ]
@@ -6386,6 +9059,138 @@
         "summary": "Execute Restore",
         "tags": [
           "Restores"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/restores/{operation_id}/verification": {
+      "get": {
+        "description": "Return the post-restore checks recorded for one operation.",
+        "operationId": "get_restore_verification_api_v1_organizations__organization_id__restores__operation_id__verification_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreVerificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Get Restore Verification",
+        "tags": [
+          "Restores"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/search": {
+      "get": {
+        "description": "Search objects, change groups, actors, sites, and restores in one organization.",
+        "operationId": "search_organization_api_v1_organizations__organization_id__search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "minLength": 2,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResultListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Search Organization",
+        "tags": [
+          "Search"
         ]
       }
     },

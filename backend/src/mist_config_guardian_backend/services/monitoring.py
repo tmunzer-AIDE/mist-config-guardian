@@ -1,5 +1,6 @@
 """Device-event driven post-change monitoring."""
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -27,6 +28,7 @@ from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
     ImpactAiRuntimeConfiguration,
 )
+from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
 from mist_config_guardian_backend.services.impact_analysis import (
     ImpactAssessment,
     assess_impact,
@@ -67,6 +69,9 @@ _WINDOWS: dict[DeviceType, tuple[int, int]] = {
     DeviceType.SWITCH: (5, 1),
     DeviceType.GATEWAY: (10, 2),
 }
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -281,13 +286,22 @@ class MonitoringPollService:
         self,
         vault: CredentialVault,
         application_configuration: ApplicationConfigurationService,
+        projector: ChangeGroupProjector | None = None,
     ) -> None:
         self._vault = vault
         self._application_configuration = application_configuration
+        self._projector = projector or ChangeGroupProjector()
 
     async def poll_active(self) -> int:
         """Poll every due active session once."""
         now = utc_now()
+        # Collected before the bulk update, because afterwards these sessions no
+        # longer match the query and their change groups would never learn that
+        # monitoring was abandoned.
+        timed_out = await MonitoringSession.find(
+            MonitoringSession.status == MonitoringStatus.AWAITING_CONFIG,
+            {"created_at": {"$lte": now - timedelta(minutes=10)}},
+        ).to_list()
         await MonitoringSession.find(
             MonitoringSession.status == MonitoringStatus.AWAITING_CONFIG,
             {"created_at": {"$lte": now - timedelta(minutes=10)}},
@@ -305,6 +319,8 @@ class MonitoringPollService:
                 },
             }
         )
+        for session in timed_out:
+            await self._refresh_change_groups(session)
         sessions = await MonitoringSession.find(
             MonitoringSession.status == MonitoringStatus.MONITORING,
             {"next_poll_at": {"$lte": now}},
@@ -359,6 +375,24 @@ class MonitoringPollService:
             session.next_poll_at = now + timedelta(minutes=interval)
         session.touch()
         await session.save()
+        await self._refresh_change_groups(session)
+
+    async def _refresh_change_groups(self, session: MonitoringSession) -> None:
+        """Recompute the projections of every change group this session feeds.
+
+        Severity and recovery state live on the change group, so without this a
+        group's projection would only refresh on the next webhook for that audit
+        and the Changes page would keep reporting a stale recovery state. The
+        rebuild is idempotent, so running it on every poll is safe.
+        """
+        for audit_id in session.audit_ids:
+            try:
+                await self._projector.rebuild(session.organization_id, audit_id)
+            except Exception:
+                logger.exception(
+                    "Unable to refresh the change-group projection for audit %s",
+                    audit_id,
+                )
 
     async def _assess_with_ai(
         self,

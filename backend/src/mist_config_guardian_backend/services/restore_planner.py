@@ -1,27 +1,303 @@
-"""Dependency-aware immutable restore planning."""
+"""Dependency-aware immutable restore planning and plan-lifecycle state.
+
+Plan hashes, safety snapshots, verification results, and the link between a
+failed restore and its compensation live in a sidecar collection keyed by
+operation id. They are deliberately not attributes of ``RestoreOperation``:
+:meth:`beanie.Document.save` replaces the whole document, so state written
+outside the model would be erased by the executor's own progress writes.
+"""
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal, Protocol
 
 from beanie import PydanticObjectId
+from pydantic import BaseModel, Field
 
+from mist_config_guardian_backend.models.approval import ApprovalPolicy, TriggeredRule
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
     RestoreActionType,
     RestoreMode,
     RestoreOperation,
+    RestoreOperationStateRecord,
 )
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
     ObjectIncarnation,
     ObjectVersion,
 )
+from mist_config_guardian_backend.services.approvals import (
+    compute_plan_hash,
+    evaluate_approval_policy,
+)
 from mist_config_guardian_backend.snapshots.registry import get_definition
+
+VerificationStatus = Literal["ok", "failed", "skipped"]
 
 
 class RestorePlanningError(ValueError):
     """Raised when selected history cannot form a safe restore plan."""
+
+
+class SafetySnapshotEntry(BaseModel):
+    """The pre-restore state of one object a plan may modify."""
+
+    logical_object_id: PydanticObjectId
+    order: int
+    action: RestoreActionType
+    scope: Literal["org", "site"]
+    object_type: str
+    object_name: str
+    mist_object_id: str
+    site_mist_id: str | None = None
+    existed: bool = False
+    configuration: dict[str, object] = Field(default_factory=dict)
+    configuration_hash: str | None = None
+    pre_version_id: PydanticObjectId | None = None
+
+
+class VerificationCheck(BaseModel):
+    """One named post-restore check and its outcome."""
+
+    label: str
+    status: VerificationStatus
+    detail: str | None = None
+
+
+class RestoreVerificationResult(BaseModel):
+    """Everything the post-restore verification pass established."""
+
+    verified: bool = False
+    checks: list[VerificationCheck] = Field(default_factory=list)
+    post_snapshot_id: str | None = None
+    monitoring_session_ids: list[str] = Field(default_factory=list)
+
+
+class RestoreOperationState(BaseModel):
+    """Lifecycle state that belongs to a plan but not to its action list."""
+
+    organization_id: PydanticObjectId
+    operation_id: PydanticObjectId
+    plan_hash: str
+    triggered_rules: list[TriggeredRule] = Field(default_factory=list)
+    safety_snapshot: list[SafetySnapshotEntry] = Field(default_factory=list)
+    verification: RestoreVerificationResult | None = None
+    compensates_operation_id: PydanticObjectId | None = None
+    compensation_operation_id: PydanticObjectId | None = None
+
+
+class RestoreStateStore(Protocol):
+    """Persistence for plan-lifecycle state outside the operation document."""
+
+    async def load(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> RestoreOperationState | None:
+        """Return the stored state for one operation, if any."""
+
+    async def save(self, state: RestoreOperationState) -> None:
+        """Insert or replace the state for one operation."""
+
+    async def find_compensation_of(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> RestoreOperationState | None:
+        """Return the state of the plan that compensates this operation."""
+
+
+class MongoRestoreStateStore:
+    """Plan-lifecycle state backed by the registered state document.
+
+    Going through Beanie rather than the raw collection is what gives the
+    collection its unique and lookup indexes at start-up; the raw handle it used
+    before left every load scanning.
+    """
+
+    async def load(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> RestoreOperationState | None:
+        """Return the stored state for one operation, if any."""
+        record = await RestoreOperationStateRecord.find_one(
+            RestoreOperationStateRecord.organization_id == organization_id,
+            RestoreOperationStateRecord.operation_id == operation_id,
+        )
+        return None if record is None else _state_from_record(record)
+
+    async def save(self, state: RestoreOperationState) -> None:
+        """Insert or replace the state for one operation."""
+        record = await RestoreOperationStateRecord.find_one(
+            RestoreOperationStateRecord.organization_id == state.organization_id,
+            RestoreOperationStateRecord.operation_id == state.operation_id,
+        )
+        fields = state.model_dump(mode="json")
+        triggered_rules = list(fields["triggered_rules"])
+        safety_snapshot = list(fields["safety_snapshot"])
+        verification = fields["verification"]
+        if record is None:
+            record = RestoreOperationStateRecord(
+                organization_id=state.organization_id,
+                operation_id=state.operation_id,
+                plan_hash=state.plan_hash,
+                triggered_rules=triggered_rules,
+                safety_snapshot=safety_snapshot,
+                verification=verification,
+                compensates_operation_id=state.compensates_operation_id,
+                compensation_operation_id=state.compensation_operation_id,
+            )
+            await record.insert()
+            return
+        record.plan_hash = state.plan_hash
+        record.triggered_rules = triggered_rules
+        record.safety_snapshot = safety_snapshot
+        record.verification = verification
+        record.compensates_operation_id = state.compensates_operation_id
+        record.compensation_operation_id = state.compensation_operation_id
+        record.touch()
+        await record.save()
+
+    async def find_compensation_of(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> RestoreOperationState | None:
+        """Return the state of the plan that compensates this operation."""
+        record = await RestoreOperationStateRecord.find_one(
+            RestoreOperationStateRecord.organization_id == organization_id,
+            RestoreOperationStateRecord.compensates_operation_id == operation_id,
+        )
+        return None if record is None else _state_from_record(record)
+
+
+def _state_from_record(record: RestoreOperationStateRecord) -> RestoreOperationState:
+    """Rebuild the transfer model from a stored document."""
+    return RestoreOperationState.model_validate(
+        {
+            "organization_id": record.organization_id,
+            "operation_id": record.operation_id,
+            "plan_hash": record.plan_hash,
+            "triggered_rules": record.triggered_rules,
+            "safety_snapshot": record.safety_snapshot,
+            "verification": record.verification,
+            "compensates_operation_id": record.compensates_operation_id,
+            "compensation_operation_id": record.compensation_operation_id,
+        }
+    )
+
+
+class RestorePlanRepository(Protocol):
+    """Organization-scoped reads of persisted restore plans."""
+
+    async def load(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> RestoreOperation | None:
+        """Return one restore operation belonging to this organization."""
+
+    async def page(
+        self,
+        organization_id: PydanticObjectId,
+        *,
+        skip: int,
+        limit: int,
+    ) -> tuple[list[RestoreOperation], int]:
+        """Return one newest-first page of restore operations and its total."""
+
+
+class BeanieRestorePlanRepository:
+    """MongoDB-backed restore plan reads."""
+
+    async def load(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> RestoreOperation | None:
+        """Return one restore operation belonging to this organization."""
+        return await RestoreOperation.find_one(
+            RestoreOperation.id == operation_id,
+            RestoreOperation.organization_id == organization_id,
+        )
+
+    async def page(
+        self,
+        organization_id: PydanticObjectId,
+        *,
+        skip: int,
+        limit: int,
+    ) -> tuple[list[RestoreOperation], int]:
+        """Return one newest-first page of restore operations and its total."""
+        query = RestoreOperation.find(RestoreOperation.organization_id == organization_id)
+        total = await query.count()
+        items = await query.sort("-created_at").skip(skip).limit(limit).to_list()
+        return items, total
+
+
+def get_restore_plan_repository() -> RestorePlanRepository:
+    """Build the default MongoDB restore plan repository."""
+    return BeanieRestorePlanRepository()
+
+
+def get_restore_state_store() -> RestoreStateStore:
+    """Build the default MongoDB plan-state store."""
+    return MongoRestoreStateStore()
+
+
+async def load_or_build_state(
+    store: RestoreStateStore,
+    operation: RestoreOperation,
+) -> RestoreOperationState:
+    """Return the persisted plan state, materializing it when absent."""
+    if operation.id is None:
+        msg = "Persisted restore operation is missing an identifier"
+        raise RestorePlanningError(msg)
+    state = await store.load(operation.organization_id, operation.id)
+    if state is not None:
+        return state
+    return RestoreOperationState(
+        organization_id=operation.organization_id,
+        operation_id=operation.id,
+        plan_hash=compute_plan_hash(operation.actions),
+    )
+
+
+async def assert_plan_current(
+    store: RestoreStateStore,
+    operation: RestoreOperation,
+) -> str:
+    """Fail closed when the persisted plan no longer hashes as reviewed."""
+    if operation.id is None:
+        msg = "Persisted restore operation is missing an identifier"
+        raise RestorePlanningError(msg)
+    current = compute_plan_hash(operation.actions)
+    state = await store.load(operation.organization_id, operation.id)
+    if state is not None and state.plan_hash != current:
+        msg = "This restore plan changed after it was reviewed; create a new plan"
+        raise RestorePlanningError(msg)
+    return current
+
+
+def validate_action_capabilities(actions: Sequence[RestoreAction]) -> list[str]:
+    """Return one preflight error per action the registry cannot perform."""
+    errors: list[str] = []
+    for action in actions:
+        definition = get_definition(action.scope, action.object_type)
+        if definition is None or not definition.supports_restore_action(action.action):
+            errors.append(
+                f"{action.object_name}: {action.action} is not supported for {action.scope}:{action.object_type}"
+            )
+    return errors
+
+
+async def latest_version(logical_id: PydanticObjectId) -> ObjectVersion | None:
+    """Return the newest immutable version recorded for a logical object."""
+    return await ObjectVersion.find(ObjectVersion.logical_object_id == logical_id).sort("-version").first_or_none()
 
 
 @dataclass
@@ -38,6 +314,14 @@ class PlanningContext:
 
 class RestorePlanner:
     """Build reviewable plans without making Mist API writes."""
+
+    def __init__(
+        self,
+        store: RestoreStateStore | None = None,
+        policy: ApprovalPolicy | None = None,
+    ) -> None:
+        self._store = store or get_restore_state_store()
+        self._policy = policy
 
     async def create_plan(
         self,
@@ -92,7 +376,12 @@ class RestorePlanner:
         )
         self._add_containment_delete_dependencies(actions)
         actions = order_restore_actions(actions)
-        preflight_errors = self._validate_capabilities(actions)
+        preflight_errors = validate_action_capabilities(actions)
+        triggered = evaluate_approval_policy(self._policy or ApprovalPolicy(), actions, mode)
+        warnings = [] if actions else ["Selected versions already match the recorded current state"]
+        if triggered:
+            rules = ", ".join(rule.detail for rule in triggered)
+            warnings.append(f"Approval by a second administrator is required before execution: {rules}")
         operation = RestoreOperation(
             organization_id=organization_id,
             requested_by=requested_by,
@@ -100,22 +389,20 @@ class RestorePlanner:
             include_dependencies=include_dependencies,
             target_at=target_at,
             actions=actions,
-            warnings=[] if actions else ["Selected versions already match the recorded current state"],
+            warnings=warnings,
             preflight_errors=preflight_errors,
         )
         await operation.insert()
-        return operation
-
-    @staticmethod
-    def _validate_capabilities(actions: list[RestoreAction]) -> list[str]:
-        errors: list[str] = []
-        for action in actions:
-            definition = get_definition(action.scope, action.object_type)
-            if definition is None or not definition.supports_restore_action(action.action):
-                errors.append(
-                    f"{action.object_name}: {action.action} is not supported for {action.scope}:{action.object_type}"
+        if operation.id is not None:
+            await self._store.save(
+                RestoreOperationState(
+                    organization_id=organization_id,
+                    operation_id=operation.id,
+                    plan_hash=compute_plan_hash(actions),
+                    triggered_rules=triggered,
                 )
-        return errors
+            )
+        return operation
 
     async def _expand_dependencies(self, context: PlanningContext) -> None:
         pending = deque(context.selected.values())
@@ -346,7 +633,7 @@ class RestorePlanner:
 
     @staticmethod
     async def _latest_version(logical_id: PydanticObjectId) -> ObjectVersion | None:
-        return await ObjectVersion.find(ObjectVersion.logical_object_id == logical_id).sort("-version").first_or_none()
+        return await latest_version(logical_id)
 
 
 def order_restore_actions(actions: list[RestoreAction]) -> list[RestoreAction]:

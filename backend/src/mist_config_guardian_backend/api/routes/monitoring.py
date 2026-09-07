@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.api.dependencies import (
     get_organization_service,
-    require_administrator,
+    require_viewer,
 )
 from mist_config_guardian_backend.models.monitoring import (
     ImpactSeverity,
@@ -41,7 +41,7 @@ class MonitoringListFilters(BaseModel):
 async def list_monitoring_sessions(
     organization_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
     filters: Annotated[MonitoringListFilters, Query()],
 ) -> MonitoringSessionListResponse:
     """List newest monitoring windows for one organization."""
@@ -65,7 +65,7 @@ async def get_monitoring_session(
     organization_id: PydanticObjectId,
     session_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
 ) -> MonitoringSessionResponse:
     """Return one organization-scoped monitoring session."""
     await _require_organization(organizations, organization_id)

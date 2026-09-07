@@ -5,7 +5,11 @@ from typing import Annotated
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from mist_config_guardian_backend.api.dependencies import get_organization_service, require_administrator
+from mist_config_guardian_backend.api.dependencies import (
+    get_organization_service,
+    require_administrator,
+    require_viewer,
+)
 from mist_config_guardian_backend.integrations.mist import MistVerificationError
 from mist_config_guardian_backend.models.user import User
 from mist_config_guardian_backend.schemas.organization import (
@@ -61,7 +65,7 @@ async def rotate_webhook_secret(
 @router.get("")
 async def list_organizations(
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> OrganizationListResponse:
@@ -77,7 +81,7 @@ async def list_organizations(
 async def get_organization(
     organization_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
 ) -> OrganizationResponse:
     """Return one managed organization."""
     try:

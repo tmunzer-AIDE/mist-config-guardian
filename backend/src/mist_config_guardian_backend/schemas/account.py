@@ -157,6 +157,7 @@ class TotpEnrollmentResponse(BaseModel):
     secret: str
     otpauth_uri: str
     issuer: str
+    qr_svg: str
 
 
 class TotpConfirmRequest(BaseModel):

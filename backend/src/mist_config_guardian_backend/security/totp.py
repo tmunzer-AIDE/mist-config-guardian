@@ -2,10 +2,12 @@
 
 import hashlib
 import hmac
+import io
 import secrets
 from collections.abc import Sequence
 
 import pyotp
+import segno
 
 RECOVERY_CODE_COUNT = 10
 _RECOVERY_GROUP_LENGTH = 5
@@ -66,3 +68,27 @@ def consume_recovery_code(code: str, hashes: Sequence[str]) -> list[str] | None:
 def _recovery_code() -> str:
     groups = ["".join(secrets.choice(_RECOVERY_CODE_ALPHABET) for _ in range(_RECOVERY_GROUP_LENGTH)) for _ in range(2)]
     return "-".join(groups)
+
+
+def totp_qr_svg(otpauth_uri: str) -> str:
+    """Render a provisioning URI as a self-contained, inline-able SVG.
+
+    Rendered server-side with a tested encoder rather than hand-rolled in the
+    browser: an authenticator that cannot read the code is worse than no code at
+    all, and correctness here is not something a UI review would catch.
+    """
+    code = segno.make(otpauth_uri, error="m")
+    buffer = io.BytesIO()
+    code.save(
+        buffer,
+        kind="svg",
+        scale=1,
+        border=2,
+        omitsize=True,
+        svgclass=None,
+        lineclass=None,
+        xmldecl=False,
+        svgns=True,
+        nl=False,
+    )
+    return buffer.getvalue().decode()
