@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 
 import { authGuard } from './core/auth.guard';
+import { AdministrationPage } from './features/administration/administration-page';
 import { LoginPage } from './features/auth/login-page';
 import { HistoryPage } from './features/history/history-page';
 import { MonitoringPage } from './features/monitoring/monitoring-page';
@@ -40,6 +41,11 @@ export const routes: Routes = [
   {
     path: 'monitoring',
     component: MonitoringPage,
+    canActivate: [authGuard],
+  },
+  {
+    path: 'administration',
+    component: AdministrationPage,
     canActivate: [authGuard],
   },
   {

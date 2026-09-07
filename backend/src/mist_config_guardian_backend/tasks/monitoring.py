@@ -5,6 +5,9 @@ import asyncio
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.database import DatabaseManager
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.application_configuration import (
+    ApplicationConfigurationService,
+)
 from mist_config_guardian_backend.services.monitoring import MonitoringPollService
 from mist_config_guardian_backend.worker import celery_app
 
@@ -20,9 +23,10 @@ async def _poll_active_monitoring() -> int:
     database = DatabaseManager(settings)
     await database.connect()
     try:
+        vault = CredentialVault(settings)
         return await MonitoringPollService(
-            CredentialVault(settings),
-            settings,
+            vault,
+            ApplicationConfigurationService(vault),
         ).poll_active()
     finally:
         await database.close()

@@ -2,6 +2,9 @@
 
 from beanie import Document
 
+from mist_config_guardian_backend.models.application_configuration import (
+    ApplicationConfiguration,
+)
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation
@@ -18,6 +21,7 @@ from mist_config_guardian_backend.models.webhook import AuditChangeGroup, Webhoo
 def document_models() -> list[type[Document]]:
     """Return every Beanie document initialized by the application."""
     return [
+        ApplicationConfiguration,
         Organization,
         User,
         LogicalObject,
@@ -32,6 +36,7 @@ def document_models() -> list[type[Document]]:
 
 
 __all__ = [
+    "ApplicationConfiguration",
     "AuditChangeGroup",
     "LogicalObject",
     "MonitoringSession",

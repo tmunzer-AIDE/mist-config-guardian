@@ -54,6 +54,7 @@ async def test_ai_adapter_sends_only_derived_evidence(httpx_mock: HTTPXMock) -> 
 
     request = httpx_mock.get_request()
     assert request is not None
+    assert request.headers["Authorization"] == "Bearer secret-key"
     body = request.content.decode()
     assert "coverage" in body
     assert "device_mac" not in body

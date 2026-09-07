@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 from pymongo.errors import DuplicateKeyError
 
-from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.integrations.impact_ai import (
     AiImpactError,
     OpenAiCompatibleImpactProvider,
@@ -23,6 +22,11 @@ from mist_config_guardian_backend.models.monitoring import (
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.webhook import WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.application_configuration import (
+    ApplicationConfigurationError,
+    ApplicationConfigurationService,
+    ImpactAiRuntimeConfiguration,
+)
 from mist_config_guardian_backend.services.impact_analysis import (
     ImpactAssessment,
     assess_impact,
@@ -273,9 +277,13 @@ class MonitoringEventService:
 class MonitoringPollService:
     """Capture due SLE snapshots and finalize bounded windows."""
 
-    def __init__(self, vault: CredentialVault, settings: Settings) -> None:
+    def __init__(
+        self,
+        vault: CredentialVault,
+        application_configuration: ApplicationConfigurationService,
+    ) -> None:
         self._vault = vault
-        self._settings = settings
+        self._application_configuration = application_configuration
 
     async def poll_active(self) -> int:
         """Poll every due active session once."""
@@ -329,12 +337,18 @@ class MonitoringPollService:
         session.impact_severity = assessment.severity
         session.deterministic_summary = assessment.summary
         session.degraded_metrics = list(assessment.degraded_metrics)
-        if (
-            self._settings.impact_ai_enabled
-            and session.monitoring_ends_at is not None
-            and now >= session.monitoring_ends_at
-        ):
-            await self._assess_with_ai(session, assessment)
+        if session.monitoring_ends_at is not None and now >= session.monitoring_ends_at:
+            try:
+                ai_configuration = await self._application_configuration.impact_ai_runtime()
+            except ApplicationConfigurationError as exc:
+                session.ai_assessment_error = str(exc)
+            else:
+                if ai_configuration is not None:
+                    await self._assess_with_ai(
+                        session,
+                        assessment,
+                        ai_configuration,
+                    )
         if session.monitoring_ends_at is not None and now >= session.monitoring_ends_at:
             session.status = MonitoringStatus.COMPLETED
             session.active = False
@@ -350,11 +364,12 @@ class MonitoringPollService:
         self,
         session: MonitoringSession,
         assessment: ImpactAssessment,
+        configuration: ImpactAiRuntimeConfiguration,
     ) -> None:
         async with OpenAiCompatibleImpactProvider(
-            base_url=self._settings.impact_ai_base_url,
-            model=self._settings.impact_ai_model,
-            api_key=self._settings.impact_ai_api_key.get_secret_value(),
+            base_url=configuration.base_url,
+            model=configuration.model,
+            api_key=configuration.api_key,
         ) as provider:
             try:
                 session.ai_assessment = await provider.assess(assessment)

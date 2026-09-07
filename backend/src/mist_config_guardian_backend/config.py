@@ -41,10 +41,6 @@ class Settings(BaseSettings):
     credential_encryption_key: SecretStr = SecretStr("development-only-encryption-key")
     webhook_max_body_bytes: int = 1_048_576
     delegated_credential_ttl_minutes: int = 15
-    impact_ai_enabled: bool = False
-    impact_ai_base_url: str = ""
-    impact_ai_model: str = ""
-    impact_ai_api_key: SecretStr = SecretStr("")
 
     @property
     def parsed_cors_origins(self) -> list[str]:
@@ -66,11 +62,6 @@ class Settings(BaseSettings):
             "development-only"
         ):
             msg = "BOOTSTRAP_ADMIN_TOKEN must be replaced in production"
-            raise ValueError(msg)
-        if self.impact_ai_enabled and (
-            not self.impact_ai_base_url or not self.impact_ai_model or not self.impact_ai_api_key.get_secret_value()
-        ):
-            msg = "AI impact assessment requires a base URL, model, and API key"
             raise ValueError(msg)
         return self
 

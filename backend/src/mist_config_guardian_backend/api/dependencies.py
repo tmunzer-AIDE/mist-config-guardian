@@ -10,6 +10,9 @@ from mist_config_guardian_backend.integrations.mist import MistVerificationServi
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.auth import AccessTokenError, decode_access_token
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.application_configuration import (
+    ApplicationConfigurationService,
+)
 from mist_config_guardian_backend.services.organizations import OrganizationService
 from mist_config_guardian_backend.services.restore_authorization import RestoreAuthorizationService
 from mist_config_guardian_backend.services.users import UserService
@@ -39,6 +42,13 @@ def get_organization_service(
 ) -> OrganizationService:
     """Build the organization application service."""
     return OrganizationService(vault, mist)
+
+
+def get_application_configuration_service(
+    vault: Annotated[CredentialVault, Depends(get_credential_vault)],
+) -> ApplicationConfigurationService:
+    """Build the administrator-managed application configuration service."""
+    return ApplicationConfigurationService(vault)
 
 
 def get_webhook_ingestion_service(

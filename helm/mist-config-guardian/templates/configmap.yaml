@@ -18,6 +18,3 @@ data:
   INFLUXDB_URL: {{ .Values.config.influxdbUrl | quote }}
   INFLUXDB_ORG: {{ .Values.config.influxdbOrg | quote }}
   INFLUXDB_BUCKET: {{ .Values.config.influxdbBucket | quote }}
-  IMPACT_AI_ENABLED: {{ .Values.config.impactAiEnabled | quote }}
-  IMPACT_AI_BASE_URL: {{ .Values.config.impactAiBaseUrl | quote }}
-  IMPACT_AI_MODEL: {{ .Values.config.impactAiModel | quote }}

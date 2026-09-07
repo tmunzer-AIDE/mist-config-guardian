@@ -16,7 +16,8 @@
         ['Configuration history', '/history'],
         ['Restore center', '/restores'],
         ['Impact monitoring', '/monitoring'],
-        ['Organizations', '/organizations']
+        ['Organizations', '/organizations'],
+        ['Administration', '/administration']
       ]; track item[1]) {
         <a [routerLink]="item[1]" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: item[1] === '/' }">
           {{ item[0] }}

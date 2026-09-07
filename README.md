@@ -50,12 +50,14 @@ InfluxDB services, networking, and application secrets through the form.
 
 By default, the chart reads sensitive settings from the Secret named by
 `existingSecret`. It must contain `SECRET_KEY`, `BOOTSTRAP_ADMIN_TOKEN`,
-`CREDENTIAL_ENCRYPTION_KEY`, and `INFLUXDB_TOKEN`. If AI-assisted analysis is
-enabled, it must also contain `IMPACT_AI_API_KEY`.
+`CREDENTIAL_ENCRYPTION_KEY`, and `INFLUXDB_TOKEN`.
 
 For evaluation environments, the form can create this Secret by enabling
 `secrets.create`. External secret management is recommended for production
 because chart-managed secret values are retained in Helm release data.
+
+AI-assisted impact analysis is configured after deployment from the
+Administration page. Its provider API key is encrypted before it is stored.
 
 ## Publishing a release
 

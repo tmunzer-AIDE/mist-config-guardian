@@ -109,26 +109,3 @@ questions:
       --from-literal=INFLUXDB_TOKEN=<value>`.
     group: Secrets
     show_if: "secrets.create=false"
-
-  - variable: config.impactAiEnabled
-    default: false
-    type: boolean
-    label: Enable AI-assisted impact analysis
-    group: AI Impact Analysis
-    show_subquestion_if: true
-    subquestions:
-      - variable: config.impactAiBaseUrl
-        default: ""
-        type: string
-        required: true
-        label: OpenAI-compatible API base URL
-      - variable: config.impactAiModel
-        default: ""
-        type: string
-        required: true
-        label: Model name
-      - variable: secrets.impactAiApiKey
-        default: ""
-        type: password
-        label: AI API key
-        description: Required here only when the chart creates the Secret; otherwise add IMPACT_AI_API_KEY to the existing Secret.

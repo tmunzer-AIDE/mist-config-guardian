@@ -25,7 +25,6 @@ secrets:
   bootstrapAdminToken: ""
   credentialEncryptionKey: ""
   influxdbToken: ""
-  impactAiApiKey: ""
 
 config:
   environment: production
@@ -39,9 +38,6 @@ config:
   influxdbUrl: http://influxdb:8086
   influxdbOrg: mist_config_guardian
   influxdbBucket: network_monitoring
-  impactAiEnabled: false
-  impactAiBaseUrl: ""
-  impactAiModel: ""
 
 resources: {}
 frontendResources: {}

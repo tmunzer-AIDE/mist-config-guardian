@@ -2,6 +2,9 @@
 
 from fastapi import APIRouter
 
+from mist_config_guardian_backend.api.routes.application_configuration import (
+    router as application_configuration_router,
+)
 from mist_config_guardian_backend.api.routes.auth import router as auth_router
 from mist_config_guardian_backend.api.routes.health import router as health_router
 from mist_config_guardian_backend.api.routes.history import router as history_router
@@ -20,3 +23,4 @@ router.include_router(webhooks_router, tags=["Webhooks"])
 router.include_router(history_router, tags=["Configuration History"])
 router.include_router(restores_router, tags=["Restores"])
 router.include_router(monitoring_router, tags=["Impact Monitoring"])
+router.include_router(application_configuration_router, tags=["Application Settings"])
