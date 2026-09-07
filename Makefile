@@ -5,6 +5,7 @@ VERSION ?= $(CURRENT_VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
 PUBLISH_LATEST ?= true
 GIT_REMOTE ?= origin
+export NG_CLI_ANALYTICS := false
 
 BACKEND_IMAGE ?= $(DOCKER_REGISTRY)/$(DOCKERHUB_NAMESPACE)/mist-config-guardian
 FRONTEND_IMAGE ?= $(DOCKER_REGISTRY)/$(DOCKERHUB_NAMESPACE)/mist-config-guardian-frontend
@@ -16,7 +17,7 @@ BACKEND_TAGS += --tag $(BACKEND_IMAGE):latest
 FRONTEND_TAGS += --tag $(FRONTEND_IMAGE):latest
 endif
 
-.PHONY: install check backend frontend compose publish publish-images publish-preflight set-version version-check
+.PHONY: install check openapi backend frontend compose publish publish-images publish-preflight set-version version-check
 
 install:
 	cd backend && uv sync
@@ -24,7 +25,11 @@ install:
 
 check:
 	cd backend && uv run ruff format --check . && uv run ruff check . && uv run ty check src && uv run pytest
+	cd backend && uv run python ../scripts/export-openapi.py --check
 	cd frontend && npm test -- --watch=false && npm run build
+
+openapi:
+	cd backend && uv run python ../scripts/export-openapi.py
 
 backend:
 	cd backend && uv run mist-config-guardian

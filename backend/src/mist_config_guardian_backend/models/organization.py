@@ -8,6 +8,7 @@ from beanie import Document
 from pydantic import Field, field_validator
 from pymongo import IndexModel
 
+from mist_config_guardian_backend.models.approval import ApprovalPolicy
 from mist_config_guardian_backend.models.base import TimestampedModel
 
 
@@ -62,6 +63,7 @@ class Organization(TimestampedModel, Document):
     reconciliation_cron: str = "0 2 * * *"
     configuration_retention_days: int = Field(default=365, ge=1)
     monitoring_retention_days: int = Field(default=90, ge=1)
+    approval_policy: ApprovalPolicy = Field(default_factory=ApprovalPolicy)
 
     @field_validator("cloud_region", mode="before")
     @classmethod
