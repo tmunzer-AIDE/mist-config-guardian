@@ -92,9 +92,8 @@ publish: publish-preflight
 		backend/src/mist_config_guardian_backend/config.py \
 		frontend/package.json frontend/package-lock.json \
 		helm/mist-config-guardian/Chart.yaml \
-		helm/mist-config-guardian/values.yaml \
-		helm/mist-config-guardian/questions.yaml
-	git diff --cached --check
+		helm/mist-config-guardian/values.yaml
+	git --no-pager diff --cached --check
 	git commit -m "chore: release v$(VERSION)" \
 		-m "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
 	$(MAKE) publish-images VERSION="$(VERSION)" PUBLISH_LATEST="$(PUBLISH_LATEST)"

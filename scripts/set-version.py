@@ -75,13 +75,6 @@ def main() -> None:
         expected=2,
         check=check,
     )
-    replace(
-        "helm/mist-config-guardian/questions.yaml",
-        r'^    default: "\d+\.\d+\.\d+"$',
-        f'    default: "{version}"',
-        expected=2,
-        check=check,
-    )
 
 
 if __name__ == "__main__":
