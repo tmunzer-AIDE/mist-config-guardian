@@ -61,55 +61,6 @@ questions:
     description: Comma-separated application origins, including scheme.
     group: Networking
 
-  - variable: config.mongodbUrl
-    default: mongodb://mongodb:27017
-    type: string
-    required: true
-    label: MongoDB URL
-    group: Data Services
-  - variable: config.mongodbDatabase
-    default: mist_config_guardian
-    type: string
-    required: true
-    label: MongoDB database
-    group: Data Services
-  - variable: config.redisUrl
-    default: redis://redis:6379/0
-    type: string
-    required: true
-    label: Redis URL
-    group: Data Services
-  - variable: config.celeryBrokerUrl
-    default: redis://redis:6379/1
-    type: string
-    required: true
-    label: Celery broker URL
-    group: Data Services
-  - variable: config.celeryResultBackend
-    default: redis://redis:6379/2
-    type: string
-    required: true
-    label: Celery result backend
-    group: Data Services
-  - variable: config.influxdbUrl
-    default: http://influxdb:8086
-    type: string
-    required: true
-    label: InfluxDB URL
-    group: Data Services
-  - variable: config.influxdbOrg
-    default: mist_config_guardian
-    type: string
-    required: true
-    label: InfluxDB organization
-    group: Data Services
-  - variable: config.influxdbBucket
-    default: network_monitoring
-    type: string
-    required: true
-    label: InfluxDB bucket
-    group: Data Services
-
   - variable: secrets.create
     default: false
     type: boolean
@@ -123,30 +74,39 @@ questions:
         type: password
         required: true
         label: JWT signing secret
-        description: Use a unique, random value of at least 64 characters.
+        description: "Generate with: openssl rand -hex 32"
       - variable: secrets.bootstrapAdminToken
         default: ""
         type: password
         required: true
         label: Administrator bootstrap token
-        description: Used once to create the first local administrator.
+        description: "Used once to create the first administrator. Generate with: openssl rand -hex 32"
       - variable: secrets.credentialEncryptionKey
         default: ""
         type: password
         required: true
         label: Credential encryption key
-        description: Back up this value; losing it makes encrypted credentials unrecoverable.
+        description: "Back up this value; losing it makes encrypted credentials unrecoverable. Generate with: openssl rand -hex 32"
       - variable: secrets.influxdbToken
         default: ""
         type: password
         required: true
         label: InfluxDB API token
+        description: "Must match the configured InfluxDB token. Generate with: openssl rand -hex 32"
   - variable: existingSecret
     default: mist-config-guardian-secrets
     type: string
     required: true
     label: Existing Secret name
-    description: Must contain SECRET_KEY, BOOTSTRAP_ADMIN_TOKEN, CREDENTIAL_ENCRYPTION_KEY, and INFLUXDB_TOKEN.
+    description: >-
+      Must contain SECRET_KEY, BOOTSTRAP_ADMIN_TOKEN,
+      CREDENTIAL_ENCRYPTION_KEY, and INFLUXDB_TOKEN. Generate each value with
+      `openssl rand -hex 32`, then create the Secret with
+      `kubectl create secret generic mist-config-guardian-secrets
+      --from-literal=SECRET_KEY=<value>
+      --from-literal=BOOTSTRAP_ADMIN_TOKEN=<value>
+      --from-literal=CREDENTIAL_ENCRYPTION_KEY=<value>
+      --from-literal=INFLUXDB_TOKEN=<value>`.
     group: Secrets
     show_if: "secrets.create=false"
 
