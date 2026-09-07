@@ -14,6 +14,8 @@ backend/                       FastAPI API and Celery workers
 frontend/                      Angular application
 helm/mist-config-guardian/     Kubernetes Helm chart
 docs/product-specification.md  Approved product and technical baseline
+docs/design/prototype.html     Approved interface design, rendered
+docs/openapi.json              Published API contract
 docker-compose.yml             Local and single-node deployment
 ```
 
@@ -30,7 +32,40 @@ make frontend
 ```
 
 The API runs at `http://localhost:8000` and the Angular development server at
-`http://localhost:4200`.
+`http://localhost:4200`. The development server proxies `/api` to the API, so
+sign-in cookies are same-origin.
+
+## API contract
+
+`docs/openapi.json` is the contract the browser application and any integration
+are written against. It is generated from the code, so `make check` fails when
+the two disagree. Regenerate it after changing any endpoint:
+
+```bash
+make openapi
+```
+
+The document records what the schemas alone cannot: the two ways a client
+authenticates, how the three roles nest, the difference between the stored
+read-only service token and the delegated administrator credential every Mist
+write requires, and the header that makes writes refuse while a client is
+browsing a past point in time. Outside production the same document is browsable
+at `http://localhost:8000/docs`.
+
+## Interface design
+
+`docs/design/prototype.html` is the approved design. It is a reference artifact,
+not a dependency: the application implements it natively in Angular, with the
+prototype's computed colours, type, spacing, and elevation transcribed into
+`frontend/src/styles/`. IBM Plex Sans and Mono are self-hosted from
+`frontend/public/fonts`, so no deployment contacts an external font CDN.
+
+Open it side by side with the running application to check a change against the
+design:
+
+```bash
+python3 -m http.server 4310 --directory docs/design
+```
 
 ## Docker Compose
 
@@ -45,8 +80,10 @@ The application is served at `http://localhost:8080`.
 ## Helm
 
 The chart includes `questions.yaml` for guided installation in Rancher-compatible
-catalog UIs. Configure the container images, external MongoDB, Redis, and
-InfluxDB services, networking, and application secrets through the form.
+catalog UIs. The default installation includes persistent MongoDB, Redis, and
+InfluxDB services. Configure workload sizing, networking, and application
+secrets through the form. Advanced deployments can disable any bundled data
+service and set its external endpoint in `values.yaml`.
 
 By default, the chart reads sensitive settings from the Secret named by
 `existingSecret`. It must contain `SECRET_KEY`, `BOOTSTRAP_ADMIN_TOKEN`,

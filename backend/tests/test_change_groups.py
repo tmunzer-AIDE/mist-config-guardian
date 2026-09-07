@@ -745,7 +745,9 @@ async def test_summary_renders_the_designs_metric_tiles() -> None:
 
     assert total == 1
     card = items[0]
-    assert card.title == "Organization WLAN updated on NW-Corp · 2 objects"
+    # The fixture's WLAN changes rf_template_id, so the headline names the
+    # change the way the design does rather than saying "WLAN updated".
+    assert card.title == "RF template reassigned on NW-Corp WLAN · 2 objects"
     assert card.devices_label == "6 APs · Seattle-DC"
     assert card.impact_label == f"CRITICAL {MINUS_SIGN}29"
     assert card.object_count == 2
@@ -1272,3 +1274,54 @@ async def test_summary_reports_an_organization_wide_change_with_no_devices() -> 
     )
     assert items[0].devices_label == "org-wide"
     assert items[0].impact_label == "NO IMPACT"
+
+
+def _changed(object_type: str, name: str, fields: list[str], event: str = "updated") -> ChangedObjectRef:
+    return ChangedObjectRef(
+        logical_object_id=PydanticObjectId(),
+        object_type=object_type,
+        object_name=name,
+        scope="org",
+        event=event,
+        changed_fields=fields,
+    )
+
+
+def test_a_known_field_gives_the_headline_the_design_shows() -> None:
+    """The design names the change itself, not just "<type> updated"."""
+    title = build_title([_changed("wlans", "NW-Corp", ["rf_template_id", "band_steer"])], None)
+
+    assert title == "RF template reassigned on NW-Corp WLAN"
+
+
+def test_the_headline_stays_scope_free() -> None:
+    """The scope prefix belongs in the table column, not in a sentence."""
+    assert "Organization" not in build_title([_changed("wlans", "NW-Guest", ["psk"])], None)
+    assert build_title([_changed("wlans", "NW-Guest", ["psk"])], None) == "NW-Guest PSK rotated"
+
+
+def test_several_objects_keep_the_phrase_and_count_the_rest() -> None:
+    """A group covering more than one object still leads with what happened."""
+    title = build_title(
+        [
+            _changed("wlans", "NW-Corp", ["rf_template_id"]),
+            _changed("rftemplates", "Indoor-Dense-6G", ["band_5.channels"]),
+        ],
+        None,
+    )
+
+    assert title == "RF template reassigned on NW-Corp WLAN · 2 objects"
+
+
+def test_an_unknown_field_falls_back_to_the_generic_form() -> None:
+    """Prose cannot be invented for arbitrary Mist fields."""
+    title = build_title([_changed("gatewaytemplates", "NW-Edge-Standard", ["port_config"])], None)
+
+    assert title == "Gateway template updated · NW-Edge-Standard"
+
+
+def test_a_creation_is_never_described_as_a_field_change() -> None:
+    """Saying a field changed on an object that did not exist would be wrong."""
+    title = build_title([_changed("wlans", "New-WLAN", ["rf_template_id"], event="created")], None)
+
+    assert title == "Organization WLAN created · New-WLAN"

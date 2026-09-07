@@ -84,6 +84,22 @@ _EVENT_VERB: Mapping[VersionEvent, str] = {
     VersionEvent.DELETED: "deleted",
     VersionEvent.RESTORED: "restored",
 }
+# Phrasing for the handful of fields whose change is worth naming outright. The
+# design's headlines read as prose ("RF template reassigned on NW-Corp WLAN")
+# rather than as "<type> updated", but prose cannot be invented for arbitrary
+# Mist fields, so only these well-understood ones get a phrase and everything
+# else falls back to the generic form.
+_FIELD_PHRASES: Mapping[str, str] = {
+    "rf_template_id": "RF template reassigned on {name} {label}",
+    "rftemplate_id": "RF template reassigned on {name} {label}",
+    "sitegroup_ids": "Site group reassigned · {name}",
+    "site_ids": "Site group reassigned · {name}",
+    "psk": "{name} PSK rotated",
+    "auth_servers_timeout": "Authentication server timeout changed · {name}",
+    "vlan_id": "VLAN reassigned on {name}",
+    "gatewaytemplate_id": "Gateway template reassigned on {name}",
+    "networktemplate_id": "Switch template reassigned on {name}",
+}
 _DEVICE_NOUNS: Mapping[DeviceType, tuple[str, str]] = {
     DeviceType.AP: ("AP", "APs"),
     DeviceType.SWITCH: ("switch", "switches"),
@@ -460,10 +476,33 @@ def build_title(objects: Sequence[ChangedObjectRef], message: str | None) -> str
         return message or "Configuration change"
     primary = objects[0]
     label = object_type_label(primary.object_type, primary.scope)
+    phrased = _phrase_for(primary, label)
+    if phrased is not None:
+        return phrased if len(objects) == 1 else f"{phrased} · {len(objects)} objects"
     verb = _EVENT_VERB.get(VersionEvent(primary.event), primary.event) if _is_event(primary.event) else primary.event
     if len(objects) == 1:
         return f"{label} {verb} · {primary.object_name}"
     return f"{label} {verb} on {primary.object_name} · {len(objects)} objects"
+
+
+def _phrase_for(primary: ChangedObjectRef, label: str) -> str | None:
+    """Name the change outright when one of its fields has known phrasing.
+
+    Only an update qualifies: a creation or deletion is already fully described
+    by its verb, and saying a field "changed" on an object that did not exist
+    before would be wrong.
+    """
+    if primary.event != VersionEvent.UPDATED.value:
+        return None
+    for field in primary.changed_fields:
+        # Nested paths ("wlan.rf_template_id") are named by their leaf.
+        phrase = _FIELD_PHRASES.get(field) or _FIELD_PHRASES.get(field.rsplit(".", 1)[-1])
+        if phrase is not None:
+            # A headline names the object, so the scope prefix the table column
+            # needs ("Organization WLAN") only gets in the way here.
+            plain = label.removeprefix("Organization ").removeprefix("Site ")
+            return phrase.format(name=primary.object_name, label=plain)
+    return None
 
 
 def _is_event(value: str) -> bool:
