@@ -1,8 +1,10 @@
 DOCKER_REGISTRY ?= docker.io
 DOCKERHUB_NAMESPACE ?= tmunzer
-VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml | head -n 1)
+CURRENT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml | head -n 1)
+VERSION ?= $(CURRENT_VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
 PUBLISH_LATEST ?= true
+GIT_REMOTE ?= origin
 
 BACKEND_IMAGE ?= $(DOCKER_REGISTRY)/$(DOCKERHUB_NAMESPACE)/mist-config-guardian
 FRONTEND_IMAGE ?= $(DOCKER_REGISTRY)/$(DOCKERHUB_NAMESPACE)/mist-config-guardian-frontend
@@ -14,7 +16,7 @@ BACKEND_TAGS += --tag $(BACKEND_IMAGE):latest
 FRONTEND_TAGS += --tag $(FRONTEND_IMAGE):latest
 endif
 
-.PHONY: install check backend frontend compose publish-images release release-preflight version-check
+.PHONY: install check backend frontend compose publish publish-images publish-preflight set-version version-check
 
 install:
 	cd backend && uv sync
@@ -35,6 +37,8 @@ compose:
 
 version-check:
 	@test -n "$(VERSION)" || (echo "VERSION could not be determined" >&2; exit 1)
+	@test "$(VERSION)" = "$(CURRENT_VERSION)" || \
+		(echo "VERSION does not match backend/pyproject.toml" >&2; exit 1)
 	@test "$(VERSION)" = "$$(node -p "require('./frontend/package.json').version")" || \
 		(echo "VERSION does not match frontend/package.json" >&2; exit 1)
 	@test "$(VERSION)" = "$$(sed -n 's/^appVersion: "\(.*\)"/\1/p' helm/mist-config-guardian/Chart.yaml)" || \
@@ -43,6 +47,7 @@ version-check:
 		(echo "VERSION does not match the Helm backend image tag" >&2; exit 1)
 	@test "$(VERSION)" = "$$(awk '/^  tag:/ {count++; if (count == 2) {gsub(/"/, "", $$2); print $$2; exit}}' helm/mist-config-guardian/values.yaml)" || \
 		(echo "VERSION does not match the Helm frontend image tag" >&2; exit 1)
+	@python3 scripts/set-version.py --check "$(VERSION)"
 
 publish-images: version-check
 	@docker info >/dev/null
@@ -51,16 +56,48 @@ publish-images: version-check
 	docker buildx build --platform "$(PLATFORMS)" $(FRONTEND_TAGS) --push frontend
 	@echo "Published $(BACKEND_IMAGE):$(VERSION) and $(FRONTEND_IMAGE):$(VERSION)"
 
-release-preflight: version-check
+publish-preflight:
+	@test "$(origin VERSION)" = "command line" || \
+		(echo "VERSION is required; use: make publish VERSION=x.y.z" >&2; exit 1)
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$' || \
+		(echo "VERSION must use major.minor.patch format, such as 1.2.3" >&2; exit 1)
 	@git rev-parse --is-inside-work-tree >/dev/null
 	@git rev-parse --verify HEAD >/dev/null
 	@test -z "$$(git status --porcelain)" || \
-		(echo "The Git working tree must be clean before releasing" >&2; exit 1)
+		(echo "The Git working tree must be clean before publishing" >&2; exit 1)
+	@test "$(VERSION)" != "$(CURRENT_VERSION)" || \
+		(echo "VERSION must differ from the current version $(CURRENT_VERSION)" >&2; exit 1)
+	@git remote get-url "$(GIT_REMOTE)" >/dev/null 2>&1 || \
+		(echo "Git remote '$(GIT_REMOTE)' is not configured" >&2; exit 1)
+	@git ls-remote "$(GIT_REMOTE)" >/dev/null
 	@! git rev-parse --verify "refs/tags/v$(VERSION)" >/dev/null 2>&1 || \
 		(echo "Git tag v$(VERSION) already exists" >&2; exit 1)
+	@test -z "$$(git ls-remote --tags "$(GIT_REMOTE)" "refs/tags/v$(VERSION)")" || \
+		(echo "Git tag v$(VERSION) already exists on $(GIT_REMOTE)" >&2; exit 1)
+	@docker info >/dev/null
+	@docker buildx version >/dev/null
 
-release: release-preflight
+set-version:
+	cd backend && uv version "$(VERSION)" --no-sync
+	cd frontend && npm version "$(VERSION)" --no-git-tag-version --allow-same-version --ignore-scripts
+	python3 scripts/set-version.py "$(VERSION)"
+
+publish: publish-preflight
+	$(MAKE) set-version VERSION="$(VERSION)"
 	$(MAKE) check
+	helm lint helm/mist-config-guardian
+	helm template mist-config-guardian helm/mist-config-guardian >/dev/null
+	git add .env.example backend/pyproject.toml backend/uv.lock \
+		backend/src/mist_config_guardian_backend/__init__.py \
+		backend/src/mist_config_guardian_backend/config.py \
+		frontend/package.json frontend/package-lock.json \
+		helm/mist-config-guardian/Chart.yaml \
+		helm/mist-config-guardian/values.yaml \
+		helm/mist-config-guardian/questions.yaml
+	git diff --cached --check
+	git commit -m "chore: release v$(VERSION)" \
+		-m "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
 	$(MAKE) publish-images VERSION="$(VERSION)" PUBLISH_LATEST="$(PUBLISH_LATEST)"
 	git tag -a "v$(VERSION)" -m "Mist Config Guardian $(VERSION)"
-	@echo "Created v$(VERSION). Push the commit and tag with: git push origin HEAD --follow-tags"
+	git push --atomic "$(GIT_REMOTE)" HEAD "refs/tags/v$(VERSION)"
+	@echo "Published Mist Config Guardian v$(VERSION)"

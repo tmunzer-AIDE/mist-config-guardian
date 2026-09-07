@@ -59,29 +59,33 @@ because chart-managed secret values are retained in Helm release data.
 
 ## Publishing a release
 
-Authenticate to Docker Hub once, then publish the backend and frontend images
-for the application version declared in `backend/pyproject.toml`:
+Authenticate to Docker Hub and configure a GitHub `origin` remote once. A
+release is then published with one command:
 
 ```bash
 docker login
-make publish-images
+make publish VERSION=0.2.0
 ```
+
+The command:
+
+1. Requires a clean Git working tree and a new semantic version.
+2. Synchronizes the backend, frontend, environment example, Docker image tags,
+   and Helm chart versions.
+3. Runs the application checks and Helm validation.
+4. Creates a release commit.
+5. Publishes versioned and `latest` multi-architecture backend and frontend
+   images to Docker Hub.
+6. Creates an annotated `v<version>` tag and pushes the commit and tag to
+   GitHub.
 
 The default destination is `docker.io/tmunzer`. Override
-`DOCKERHUB_NAMESPACE`, `DOCKER_REGISTRY`, `PLATFORMS`, or `PUBLISH_LATEST` when
-needed. For example:
+`DOCKERHUB_NAMESPACE`, `DOCKER_REGISTRY`, `PLATFORMS`, `PUBLISH_LATEST`, or
+`GIT_REMOTE` when needed:
 
 ```bash
-make publish-images DOCKERHUB_NAMESPACE=example PUBLISH_LATEST=false
+make publish VERSION=0.2.0 DOCKERHUB_NAMESPACE=example PUBLISH_LATEST=false
 ```
 
-To validate the application, publish both images, and create the annotated Git
-tag in one command, first commit all release changes and run:
-
-```bash
-make release
-git push origin HEAD --follow-tags
-```
-
-`make release` refuses to run from a dirty working tree or overwrite an
-existing `v<version>` tag.
+To publish images without changing versions or Git history, use
+`make publish-images`.
