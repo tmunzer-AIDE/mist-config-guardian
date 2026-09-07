@@ -13,7 +13,7 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 RUN useradd --create-home --uid 10001 guardian
-USER guardian
+USER 10001:10001
 
 EXPOSE 8000
 

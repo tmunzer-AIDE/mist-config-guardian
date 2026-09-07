@@ -1,5 +1,7 @@
 """Administrator-managed application configuration schemas."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
@@ -37,3 +39,70 @@ class ImpactAiSettingsResponse(BaseModel):
     model: str
     api_key_set: bool
     api_key_last_four: str | None
+
+
+class AiSettingsUpdate(BaseModel):
+    """Update the optional AI provider used for assistance and assessment."""
+
+    enabled: bool = False
+    base_url: str = Field(default="", max_length=2048)
+    model: str = Field(default="", max_length=255)
+    api_key: SecretStr | None = Field(default=None, max_length=4096)
+    clear_api_key: bool = False
+    max_response_tokens: int = Field(default=1500, ge=256, le=32_000)
+    automatic_summaries: bool = False
+
+    @model_validator(mode="after")
+    def validate_provider(self) -> "AiSettingsUpdate":
+        """Normalise the provider identity and reject contradictory key edits."""
+        self.base_url = self.base_url.strip().rstrip("/")
+        self.model = self.model.strip()
+        if self.api_key is not None and not self.api_key.get_secret_value().strip():
+            self.api_key = None
+        if self.enabled and (not self.base_url or not self.model):
+            msg = "AI base URL and model are required when AI assistance is enabled"
+            raise ValueError(msg)
+        if self.base_url and not self.base_url.startswith(("http://", "https://")):
+            msg = "AI base URL must use HTTP or HTTPS"
+            raise ValueError(msg)
+        if self.api_key is not None and self.clear_api_key:
+            msg = "An API key cannot be replaced and cleared in the same request"
+            raise ValueError(msg)
+        return self
+
+
+class AiSettingsResponse(BaseModel):
+    """Safe AI provider settings without encrypted credential material."""
+
+    enabled: bool
+    base_url: str
+    model: str
+    api_key_set: bool
+    api_key_last_four: str | None
+    max_response_tokens: int
+    automatic_summaries: bool
+    last_test_at: datetime | None = None
+    last_test_ok: bool | None = None
+    last_test_detail: str | None = None
+
+
+class AiConnectionTestResponse(BaseModel):
+    """Result of a provider credential and model health check."""
+
+    ok: bool
+    detail: str
+    checked_at: datetime
+
+
+class AiModelResponse(BaseModel):
+    """One model advertised by the configured provider."""
+
+    id: str
+    owned_by: str | None = None
+    context_window: int | None = None
+
+
+class AiModelListResponse(BaseModel):
+    """Models discovered from the configured provider."""
+
+    items: list[AiModelResponse]

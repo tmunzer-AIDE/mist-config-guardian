@@ -42,6 +42,27 @@ class Settings(BaseSettings):
     webhook_max_body_bytes: int = 1_048_576
     delegated_credential_ttl_minutes: int = 15
 
+    session_cookie_name: str = "cg_session"
+    csrf_cookie_name: str = "cg_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
+    session_absolute_lifetime_days: int = 30
+    session_idle_timeout_minutes: int = 720
+    session_cookie_secure: bool = False
+    session_cookie_domain: str | None = None
+    session_cookie_same_site: Literal["lax", "strict", "none"] = "lax"
+
+    totp_issuer: str = "Mist Config Guardian"
+    mfa_step_up_window_minutes: int = 10
+
+    webauthn_rp_id: str = "localhost"
+    webauthn_rp_name: str = "Mist Config Guardian"
+    webauthn_origin: str = "http://localhost:4200"
+
+    ai_request_timeout_seconds: float = 45.0
+    ai_max_response_tokens: int = 1500
+
+    notification_retention_days: int = 90
+
     @property
     def parsed_cors_origins(self) -> list[str]:
         """Return normalized configured CORS origins."""
