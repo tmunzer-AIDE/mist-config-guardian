@@ -1,0 +1,146 @@
+<div class="page">
+  <header class="head">
+    <h1 class="cg-page-title">Change timeline</h1>
+    <p class="head-sub">{{ subtitle() }}</p>
+    <div class="cg-pills head-filters" role="group" aria-label="Change filter">
+      @for (option of filters; track option) {
+        <button
+          class="cg-pill"
+          type="button"
+          [class.cg-pill--on]="filter() === option"
+          [attr.aria-pressed]="filter() === option"
+          (click)="filter.set(option)"
+        >
+          {{ option.toUpperCase() }}
+        </button>
+      }
+    </div>
+  </header>
+
+  @if (!hasChanges()) {
+    <div class="empty">
+      <div class="empty-mark" aria-hidden="true">
+        <i></i><i></i><i></i>
+      </div>
+      <div class="empty-title">{{ emptyTitle() }}</div>
+      <p class="empty-body">{{ emptyBody() }}</p>
+      <button class="cg-btn cg-btn--primary empty-action" type="button" (click)="openSettings()">
+        Open organization setup
+      </button>
+    </div>
+  }
+
+  <div class="columns">
+    <div class="timeline">
+      @if (hasChanges()) {
+        <span class="timeline-rail" aria-hidden="true"></span>
+      }
+
+      @if (atNow()) {
+        <div class="now">
+          <span class="now-time">{{ nowLabel() }}</span>
+          <span class="now-mark" aria-hidden="true"></span>
+          <span class="now-label">Now</span>
+        </div>
+      }
+
+      @for (card of feed(); track card.id) {
+        <article class="entry">
+          <span class="entry-time" [style.color]="'var(--tone-' + (card.tone === 'crit' ? 'critical' : card.tone === 'warn' ? 'warning' : card.tone) + '-ink)'">
+            {{ card.time }}
+          </span>
+          <span class="entry-dot" [attr.data-tone]="card.tone" [class.entry-dot--filled]="card.prominent"></span>
+
+          <div class="cg-card card" [attr.data-tone]="card.tone" [class.card--prominent]="card.prominent">
+            <div class="card-head">
+              <span class="cg-badge" [class]="'cg-badge cg-badge--' + card.tone">{{ card.level }}</span>
+              <span class="card-title" [class.card-title--big]="card.prominent">{{ card.title }}</span>
+              <span class="card-audit">{{ card.audit }}</span>
+            </div>
+            <p class="card-summary">{{ card.summary }}</p>
+
+            @if (card.metrics.length > 0) {
+              <div class="metrics">
+                @for (metric of card.metrics; track metric.label) {
+                  <div class="metric">
+                    <div class="metric-label">{{ metric.label }}</div>
+                    <div
+                      class="metric-value"
+                      [style.color]="'var(--tone-' + (metric.tone === 'crit' ? 'critical' : metric.tone === 'warn' ? 'warning' : metric.tone) + '-ink)'"
+                    >
+                      {{ metric.value }} <span class="metric-from">{{ metric.from }}</span>
+                    </div>
+                  </div>
+                }
+              </div>
+            }
+
+            <div class="card-actions">
+              <button class="cg-btn cg-btn--primary" type="button" (click)="open(card.id)">Open change group</button>
+              @if (card.restorable && canRestore()) {
+                <button class="cg-btn" type="button" (click)="planRestore(card.group)">Plan a restore</button>
+              }
+              @if (card.inspectable) {
+                <button class="cg-btn" type="button" (click)="openImpact(card.group)">Impact session</button>
+              }
+            </div>
+          </div>
+        </article>
+      }
+    </div>
+
+    <aside class="rail">
+      <section class="cg-card panel">
+        <h2 class="cg-label panel-title">SAFETY NET</h2>
+        <div class="safety">
+          @for (item of safety(); track item.key) {
+            <div class="safety-row">
+              <span class="safety-dot" [attr.data-status]="item.status" aria-hidden="true"></span>
+              {{ item.label }}
+              <span class="safety-value">{{ item.detail }}</span>
+            </div>
+          }
+        </div>
+        <button class="panel-link" type="button" (click)="openSettings()">Organization settings →</button>
+      </section>
+
+      @if (pending().length > 0) {
+        <section class="cg-card panel panel--flush">
+          <header class="panel-head">
+            <span class="panel-head-title">Awaiting approval</span>
+            <span class="panel-head-count">{{ pending().length }}</span>
+          </header>
+          @for (approval of pending(); track approval.id) {
+            <div class="approval">
+              <div class="approval-title">{{ approval.title }}</div>
+              <div class="approval-detail">{{ approval.detail }}</div>
+              <div class="approval-foot">
+                <span class="approval-meta">{{ approvalMeta(approval.requested_by_email, approval.requested_at) }}</span>
+                <button class="approval-link" type="button" (click)="openApproval(approval.restore_operation_id)">
+                  Review →
+                </button>
+              </div>
+            </div>
+          }
+        </section>
+      }
+
+      @if (failed().length > 0) {
+        <section class="failed">
+          <h2 class="cg-label failed-title">FAILED RESTORE · {{ failed().length }}</h2>
+          @for (restore of failed(); track restore.id) {
+            <div class="failed-item">
+              <div class="failed-name">{{ restore.title }}</div>
+              <div class="failed-detail">{{ restore.detail }}</div>
+              @if (restore.compensation_available && canRestore()) {
+                <button class="cg-btn cg-btn--sm failed-action" type="button" (click)="openCompensation(restore.id)">
+                  Open compensation →
+                </button>
+              }
+            </div>
+          }
+        </section>
+      }
+    </aside>
+  </div>
+</div>

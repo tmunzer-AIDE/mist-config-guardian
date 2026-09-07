@@ -1,0 +1,106 @@
+<button
+  class="org-control"
+  type="button"
+  (click)="toggleOrgMenu()"
+  [attr.aria-expanded]="orgMenuOpen()"
+  aria-haspopup="menu"
+>
+  <span class="dot" [class.dot--warn]="!orgVerified()" aria-hidden="true"></span>
+  <span class="org-name">{{ organization()?.name ?? 'No organization' }}</span>
+  <span class="org-region">{{ regionCode() }}</span>
+  <span class="caret" aria-hidden="true">▾</span>
+</button>
+
+<div class="search">
+  <span class="search-glyph" aria-hidden="true"></span>
+  <label class="cg-visually-hidden" for="global-search">Search objects, actors, audit IDs</label>
+  <input
+    id="global-search"
+    type="search"
+    placeholder="Search objects, actors, audit IDs"
+    [value]="search.query()"
+    (input)="onSearch($any($event.target).value)"
+    (keydown)="onSearchKey($event)"
+  />
+</div>
+
+<div class="actions">
+  <button
+    class="bell"
+    type="button"
+    (click)="openNotifications.emit()"
+    [attr.aria-label]="unread() > 0 ? unread() + ' unread notifications' : 'Notifications'"
+  >
+    <span class="bell-glyph" aria-hidden="true"></span>
+    @if (unread() > 0) {
+      <span class="bell-count">{{ unread() }}</span>
+    }
+  </button>
+
+  <span class="divider" aria-hidden="true"></span>
+
+  <button
+    class="user"
+    type="button"
+    (click)="toggleUserMenu()"
+    [attr.aria-expanded]="userMenuOpen()"
+    aria-haspopup="menu"
+  >
+    <span class="avatar" aria-hidden="true">{{ auth.initials() }}</span>
+    <span class="user-text">
+      <span class="user-name">{{ auth.user()?.display_name }}</span>
+      <span class="user-role">{{ auth.role().toUpperCase() }}</span>
+    </span>
+    <span class="caret" aria-hidden="true">▾</span>
+  </button>
+</div>
+
+@if (orgMenuOpen() || userMenuOpen()) {
+  <div class="scrim" (click)="closeMenus()" aria-hidden="true"></div>
+}
+
+@if (orgMenuOpen()) {
+  <div class="menu menu--org" role="menu">
+    <div class="menu-head">SCOPE · {{ options().length }} ORGANIZATION{{ options().length === 1 ? '' : 'S' }}</div>
+    @for (option of options(); track option.id) {
+      <button
+        class="org-option"
+        [class.org-option--current]="option.current"
+        type="button"
+        role="menuitem"
+        (click)="pick(option.id)"
+      >
+        <span class="dot" [class.dot--warn]="!option.verified" aria-hidden="true"></span>
+        <span class="org-option-text">
+          <span class="org-option-name">{{ option.name }}</span>
+          <span class="org-option-meta">{{ option.meta }}</span>
+        </span>
+        @if (option.current) {
+          <span class="current-flag">CURRENT</span>
+        }
+      </button>
+    }
+    <button class="menu-foot" type="button" role="menuitem" (click)="go('/settings/organizations')">
+      Manage organizations →
+    </button>
+  </div>
+}
+
+@if (userMenuOpen()) {
+  <div class="menu menu--user" role="menu">
+    <div class="user-card">
+      <div class="user-card-name">{{ auth.user()?.display_name }}</div>
+      <div class="user-card-email">{{ auth.user()?.email }}</div>
+      <div class="user-card-tags">
+        <span class="tag tag--role">{{ auth.role().toUpperCase() }}</span>
+        <span class="tag">LOCAL ACCOUNT</span>
+      </div>
+    </div>
+    <button class="menu-row" type="button" role="menuitem" (click)="go('/account')">Your account</button>
+    <button class="menu-row menu-row--health" type="button" role="menuitem" (click)="go('/settings/health')">
+      <span class="dot" [class.dot--warn]="serviceHealthy() === false" aria-hidden="true"></span>
+      {{ serviceHealthy() === false ? 'Service degraded' : 'Service healthy' }} · {{ buildLabel() }}
+    </button>
+    <button class="menu-row menu-row--danger" type="button" role="menuitem" (click)="signOut()">Sign out</button>
+  </div>
+}

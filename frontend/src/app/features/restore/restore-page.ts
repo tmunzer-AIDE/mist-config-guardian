@@ -1,9 +1,9 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 @Component({
-  selector: 'app-history-page',
+  selector: 'app-restore-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `<div class="page"><h1 class="cg-page-title">Configuration history</h1></div>`,
+  template: `<div class="page"><h1 class="cg-page-title">Restore center</h1></div>`,
   styles: `.page { padding: 20px; }`,
 })
-export class HistoryPage {}
+export class RestorePage {}

@@ -1,0 +1,43 @@
+<div class="scrim" (click)="closed.emit()" aria-hidden="true"></div>
+
+<aside
+  class="panel"
+  role="dialog"
+  aria-modal="true"
+  aria-label="Notifications"
+  tabindex="-1"
+  (keydown)="onKey($event)"
+>
+  <header class="panel-head">
+    <h2>Notifications</h2>
+    @if (notifications.unread() > 0) {
+      <span class="new-count">{{ notifications.unread() }} NEW</span>
+    }
+    <button class="mark-all" type="button" (click)="markAllRead()">Mark all read</button>
+  </header>
+
+  <div class="feed cg-scroll">
+    @for (row of rows(); track row.id) {
+      <button
+        class="row"
+        type="button"
+        [class.row--unread]="row.unread"
+        [attr.data-tone]="row.tone"
+        (click)="open(row)"
+      >
+        <span class="row-head">
+          <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.kind.toUpperCase() }}</span>
+          <span class="row-title">{{ row.title }}</span>
+          <span class="row-at">{{ row.at }}</span>
+        </span>
+        <span class="row-body">{{ row.body }}</span>
+      </button>
+    } @empty {
+      <p class="empty">No notifications yet. Snapshot, webhook, monitoring, and restore activity appears here.</p>
+    }
+  </div>
+
+  <footer class="panel-foot">
+    Delivery gaps and snapshot failures always raise a notification, even when muted.
+  </footer>
+</aside>

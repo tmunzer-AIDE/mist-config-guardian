@@ -16,7 +16,11 @@ export class LoginPage {
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
 
-  protected readonly mode = signal<'login' | 'bootstrap'>('login');
+  protected readonly mode = signal<'login' | 'bootstrap' | 'mfa'>('login');
+  protected readonly challengeToken = signal('');
+  protected readonly mfaForm = new FormGroup({
+    code: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
+  });
   protected readonly busy = signal(false);
   protected readonly error = signal('');
   protected readonly bootstrapCreated = signal(false);
@@ -51,12 +55,12 @@ export class LoginPage {
     }),
   });
 
-  protected switchMode(mode: 'login' | 'bootstrap'): void {
+  protected switchMode(mode: 'login' | 'bootstrap' | 'mfa'): void {
     this.mode.set(mode);
     this.error.set('');
   }
 
-  protected login(): void {
+  protected async login(): Promise<void> {
     if (this.loginForm.invalid || this.busy()) {
       this.loginForm.markAllAsTouched();
       return;
@@ -64,13 +68,36 @@ export class LoginPage {
     this.busy.set(true);
     this.error.set('');
     const { email, password } = this.loginForm.getRawValue();
-    this.auth
-      .login(email, password)
-      .pipe(finalize(() => this.busy.set(false)))
-      .subscribe({
-        next: () => void this.router.navigate(['/organizations']),
-        error: (error: HttpErrorResponse) => this.error.set(this.errorMessage(error)),
-      });
+    try {
+      const result = await this.auth.login(email, password);
+      if (result.mfa_required) {
+        this.challengeToken.set(result.challenge_token);
+        this.mode.set('mfa');
+        return;
+      }
+      await this.router.navigate(['/']);
+    } catch (cause) {
+      this.error.set(this.errorMessage(cause as HttpErrorResponse));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  protected async verifyMfa(): Promise<void> {
+    const code = this.mfaForm.controls.code.value.trim();
+    if (!code || this.busy()) {
+      return;
+    }
+    this.busy.set(true);
+    this.error.set('');
+    try {
+      await this.auth.completeMfa(this.challengeToken(), code);
+      await this.router.navigate(['/']);
+    } catch (cause) {
+      this.error.set(this.errorMessage(cause as HttpErrorResponse));
+    } finally {
+      this.busy.set(false);
+    }
   }
 
   protected bootstrap(): void {
@@ -94,6 +121,7 @@ export class LoginPage {
   }
 
   private errorMessage(error: HttpErrorResponse): string {
-    return typeof error.error?.detail === 'string' ? error.error.detail : 'The request could not be completed.';
+    const detail: unknown = (error.error as { detail?: unknown } | null)?.detail;
+    return typeof detail === 'string' ? detail : 'The request could not be completed.';
   }
 }
