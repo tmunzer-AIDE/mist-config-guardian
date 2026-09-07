@@ -90,7 +90,7 @@ nav {
   text-decoration: none;
 
   &:hover {
-    color: #d6dae2;
+    color: var(--nav-ink-hover);
   }
 
   &:focus-visible {

@@ -106,8 +106,8 @@ export class AuthService {
     return user;
   }
 
-  bootstrap(request: BootstrapAdministrator) {
-    return this.http.post<CurrentUser>(`${API_ROOT}/auth/bootstrap`, request);
+  async bootstrapAdministrator(request: BootstrapAdministrator): Promise<CurrentUser> {
+    return firstValueFrom(this.http.post<CurrentUser>(`${API_ROOT}/auth/bootstrap`, request));
   }
 
   async logout(): Promise<void> {

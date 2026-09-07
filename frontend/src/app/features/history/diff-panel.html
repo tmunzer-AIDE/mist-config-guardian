@@ -1,0 +1,137 @@
+@if (compact()) {
+  <div class="cards">
+    @for (card of cards(); track card.key) {
+      <article class="card">
+        <div class="card-field cg-mono">{{ card.field }}</div>
+        <div class="card-values cg-mono">
+          <span class="card-before">{{ card.before }}</span>
+          <span class="card-arrow" aria-hidden="true">→</span>
+          <span class="card-after">{{ card.after }}</span>
+        </div>
+        @if (card.note) {
+          <p class="card-note">{{ card.note }}</p>
+        }
+      </article>
+    }
+  </div>
+}
+
+@if (sectioned()) {
+  @if (notable().length > 0) {
+    <div class="notable">
+      <div class="notable-head">
+        <span class="cg-label notable-title">NOTABLE · {{ notable().length }} OF {{ changed() }}</span>
+        <span class="notable-hint">Ranked by blast radius, not by position in the file.</span>
+      </div>
+      @for (finding of notable(); track finding.key) {
+        <div class="finding" [attr.data-tone]="finding.tone">
+          <span class="cg-badge" [class]="'cg-badge cg-badge--' + finding.tone">{{ finding.kind }}</span>
+          <span class="finding-field cg-mono">{{ finding.field }}</span>
+          <span class="finding-note">{{ finding.note }}</span>
+        </div>
+      }
+    </div>
+  }
+
+  <div class="sections">
+    <nav class="index" aria-label="Comparison sections">
+      <h3 class="cg-label index-title">SECTIONS</h3>
+      @for (section of sections(); track section.key) {
+        <button
+          class="index-row"
+          type="button"
+          [class.index-row--on]="section.open"
+          (click)="openSection.emit(section.key)"
+        >
+          <span class="index-name">{{ section.name }}</span>
+          <span class="index-count cg-mono">{{ section.changed }}</span>
+        </button>
+      }
+    </nav>
+
+    <div class="section-list">
+      @for (section of sections(); track section.key) {
+        <div class="section">
+          <button
+            class="section-head"
+            type="button"
+            [class.section-head--on]="section.open"
+            [attr.aria-expanded]="section.open"
+            (click)="openSection.emit(section.key)"
+          >
+            <span class="section-name cg-mono">
+              <span aria-hidden="true">{{ section.open ? '▾' : '▸' }}</span> {{ section.name }}
+            </span>
+            <span class="section-count">{{ section.countLabel }}</span>
+            @if (section.notable > 0) {
+              <span class="cg-badge cg-badge--warn">{{ section.notable }} NOTABLE</span>
+            }
+            <span class="section-path cg-mono">{{ section.path }}</span>
+          </button>
+
+          @if (section.open) {
+            @if (section.loading) {
+              <div class="loading-row">
+                <span class="cg-spinner" aria-hidden="true"></span>Loading {{ section.name }}…
+              </div>
+            } @else if (!section.loaded) {
+              <div class="loading-row">Entries for {{ section.name }} have not been loaded.</div>
+            } @else {
+              <div class="entry-head cg-mono">
+                <span>FIELD</span><span>CHANGE</span><span>BEFORE</span><span>AFTER</span>
+              </div>
+              @for (row of section.rows; track row.key) {
+                <div class="entry" [class.entry--removed]="row.removed">
+                  <span class="entry-field cg-mono" [attr.title]="row.field">{{ row.field }}</span>
+                  <span>
+                    <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.kind }}</span>
+                  </span>
+                  <span class="entry-before cg-mono" [attr.title]="row.before">{{ row.before }}</span>
+                  <span class="entry-after cg-mono" [attr.title]="row.after">{{ row.after }}</span>
+                </div>
+              }
+              @if (section.more) {
+                <button class="section-more" type="button" (click)="expandSection.emit(section.key)">
+                  {{ section.more }}
+                </button>
+              }
+            }
+          }
+        </div>
+      }
+
+      <div class="section-foot cg-mono">j / k to move between versions</div>
+    </div>
+  </div>
+}
+
+<div class="raw">
+  <div class="raw-head">
+    <span class="raw-label cg-mono">
+      <span aria-hidden="true">{{ rawExpanded() ? '▾' : '▸' }}</span> {{ rawLabel() }}
+    </span>
+    <button
+      class="raw-toggle cg-mono"
+      type="button"
+      [attr.aria-expanded]="rawExpanded()"
+      (click)="toggleRaw.emit()"
+    >
+      {{ rawExpanded() ? 'COLLAPSE' : 'EXPAND' }}
+    </button>
+  </div>
+
+  @if (rawExpanded()) {
+    @if (rawLoading()) {
+      <div class="loading-row"><span class="cg-spinner" aria-hidden="true"></span>Loading raw JSON…</div>
+    } @else {
+      <div class="raw-grid cg-scroll">
+        <div class="raw-col-head cg-mono">A · before</div>
+        <div class="raw-col-head cg-mono">B · after</div>
+        @for (line of rawRows(); track line.index) {
+          <div class="raw-line cg-mono"><span class="raw-no">{{ line.index }}</span>{{ line.before }}</div>
+          <div class="raw-line cg-mono"><span class="raw-no">{{ line.index }}</span>{{ line.after }}</div>
+        }
+      </div>
+    }
+  }
+</div>

@@ -1,0 +1,355 @@
+<div class="tab-body">
+  <div class="intro">
+    <p class="intro-text">
+      Service tokens must be read-only. Write-capable tokens are refused at onboarding.
+    </p>
+    @if (canManage()) {
+      <button class="cg-btn cg-btn--primary cg-btn--lg intro-action" type="button" (click)="openAdd()">
+        Add organization
+      </button>
+    }
+  </div>
+
+  @if (addOpen()) {
+    <form class="cg-card add" [formGroup]="addForm" (ngSubmit)="add()">
+      <h3 class="add-title">Onboard a Mist organization</h3>
+      <p class="hint">
+        The organization's name and identifier are read from Mist with the token, so nothing here can
+        disagree with the cloud.
+      </p>
+
+      <div class="add-grid">
+        <div class="add-field">
+          <label class="cg-label" for="add-region">CLOUD REGION</label>
+          <select class="cg-select" id="add-region" formControlName="cloud_region">
+            @for (region of regions; track region.value) {
+              <option [value]="region.value">{{ region.label }}</option>
+            }
+          </select>
+        </div>
+        <div class="add-field add-field--wide">
+          <label class="cg-label" for="add-token">READ-ONLY SERVICE TOKEN</label>
+          <input
+            class="cg-input cg-mono"
+            id="add-token"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            formControlName="service_token"
+          />
+        </div>
+        <div class="add-field add-field--narrow">
+          <label class="cg-label" for="add-cfg">CONFIGURATION RETENTION</label>
+          <input
+            class="cg-input cg-mono"
+            id="add-cfg"
+            type="number"
+            min="1"
+            max="3650"
+            formControlName="configuration_retention_days"
+          />
+        </div>
+        <div class="add-field add-field--narrow">
+          <label class="cg-label" for="add-mon">MONITORING RETENTION</label>
+          <input
+            class="cg-input cg-mono"
+            id="add-mon"
+            type="number"
+            min="1"
+            max="3650"
+            formControlName="monitoring_retention_days"
+          />
+        </div>
+      </div>
+
+      <div class="chips" role="group" aria-label="Reconciliation interval">
+        @for (preset of presets; track preset.minutes) {
+          <button
+            class="cg-chip"
+            type="button"
+            [class.cg-chip--on]="isAddPreset(preset)"
+            [attr.aria-pressed]="isAddPreset(preset)"
+            (click)="pickAddPreset(preset)"
+          >
+            {{ preset.label }}
+          </button>
+        }
+      </div>
+      <p class="hint">
+        Checks for changes {{ addCronLabel() }}. A write-capable token is refused: onboarding reads the
+        token's privileges from Mist before storing it.
+      </p>
+
+      <div class="row-buttons">
+        <button class="cg-btn cg-btn--primary" type="submit" [disabled]="isBusy('add')">
+          {{ isBusy('add') ? 'Verifying token…' : 'Onboard organization' }}
+        </button>
+        <button class="cg-btn" type="button" (click)="closeAdd()">Cancel</button>
+      </div>
+    </form>
+  }
+
+  @if (!canManage()) {
+    <p class="readonly" role="note">
+      Organization credentials and schedules are administrator-only. You can see which organizations are
+      onboarded, but not their tokens, webhooks or retention settings.
+    </p>
+  }
+
+  @if (notice()) {
+    <p class="notice" role="status">{{ notice() }}</p>
+  }
+  @if (error()) {
+    <p class="failure" role="alert">{{ error() }}</p>
+  }
+
+  @if (cards().length === 0) {
+    <div class="empty">
+      <div class="empty-title">No organizations onboarded</div>
+      <p class="empty-body">
+        Configuration history begins after a Mist organization is onboarded with a read-only service token
+        and its first snapshot completes.
+      </p>
+    </div>
+  }
+
+  @for (card of cards(); track card.id) {
+    <section class="card" [class.card--current]="card.isCurrent">
+      <button
+        class="summary"
+        type="button"
+        [attr.aria-expanded]="card.expanded"
+        [attr.aria-controls]="'org-detail-' + card.id"
+        (click)="toggle(card.organization)"
+      >
+        <span class="cg-mono caret" aria-hidden="true">{{ card.caret }}</span>
+        <span class="summary-name">{{ card.name }}</span>
+        <span class="cg-badge" [class]="'cg-badge cg-badge--' + card.statusTone">{{ card.status }}</span>
+        @if (card.isCurrent) {
+          <span class="cg-mono scope-flag">CURRENT SCOPE</span>
+        }
+        <span class="cg-meta summary-region">{{ card.region }}</span>
+        <span class="summary-snapshot">{{ card.snapshotLabel }}</span>
+      </button>
+
+      @if (card.expanded) {
+        <div class="detail" [id]="'org-detail-' + card.id">
+          <div class="column column--left">
+            <h3 class="cg-label">CREDENTIALS AND SCHEDULE</h3>
+
+            <div class="row">
+              <span class="row-label">Mist organization ID</span>
+              <span class="cg-mono row-value">{{ card.mistId }}</span>
+            </div>
+
+            <div class="row">
+              <span class="row-label">Service token</span>
+              <span class="cg-mono row-value">{{ card.tokenSuffix }}</span>
+              @if (canManage() && !card.tokenEditing) {
+                <button class="cg-btn cg-btn--link row-action" type="button" (click)="startTokenEdit(card.organization)">
+                  Replace
+                </button>
+              }
+            </div>
+
+            @if (card.tokenEditing) {
+              <div class="token-form">
+                <label class="cg-label token-label" [attr.for]="'token-' + card.id">NEW READ-ONLY SERVICE TOKEN</label>
+                <input
+                  class="cg-input cg-mono"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Paste the token"
+                  [id]="'token-' + card.id"
+                  [value]="tokenDraft()"
+                  (input)="onTokenInput($event)"
+                />
+                <p class="hint">
+                  The token is verified against the Mist cloud before it is stored, and a write-capable token
+                  is refused.
+                </p>
+                <div class="row-buttons">
+                  <button
+                    class="cg-btn cg-btn--sm cg-btn--primary"
+                    type="button"
+                    [disabled]="!tokenDraft().trim() || isBusy('token-' + card.id)"
+                    (click)="replaceToken(card.organization)"
+                  >
+                    {{ isBusy('token-' + card.id) ? 'Verifying…' : 'Save token' }}
+                  </button>
+                  <button class="cg-btn cg-btn--sm" type="button" (click)="cancelTokenEdit()">Cancel</button>
+                </div>
+              </div>
+            }
+
+            <div class="row">
+              <span class="row-label">Last verified</span>
+              <span class="cg-mono row-value">{{ card.verifiedAt }}</span>
+              @if (canManage()) {
+                <button
+                  class="cg-btn cg-btn--link row-action"
+                  type="button"
+                  [disabled]="isBusy('verify-' + card.id)"
+                  (click)="reverify(card.organization)"
+                >
+                  {{ isBusy('verify-' + card.id) ? 'Verifying…' : 'Reverify' }}
+                </button>
+              }
+            </div>
+            @if (card.credentialError) {
+              <p class="failure">{{ card.credentialError }}</p>
+            }
+
+            <hr class="rule" />
+
+            <div class="schedule">
+              <span class="row-label">Check for changes</span>
+              <div class="schedule-body">
+                <div class="chips" role="group" aria-label="Reconciliation interval">
+                  @for (preset of presets; track preset.minutes) {
+                    <button
+                      class="cg-chip"
+                      type="button"
+                      [class.cg-chip--on]="isPreset(card.organization, preset)"
+                      [attr.aria-pressed]="isPreset(card.organization, preset)"
+                      [disabled]="!canManage()"
+                      (click)="pickPreset(card.organization, preset)"
+                    >
+                      {{ preset.label }}
+                    </button>
+                  }
+                </div>
+                <p class="hint hint--body">{{ card.reconSummary }}</p>
+                <p class="hint">
+                  Webhooks deliver changes within seconds; this schedule is the safety net that catches
+                  anything a webhook missed.
+                </p>
+                @if (card.reconWarn) {
+                  <p class="warn">{{ card.reconWarn }}</p>
+                }
+                <button class="cg-btn cg-btn--link" type="button" (click)="showCron(card.organization)">
+                  Show cron expression
+                </button>
+              </div>
+            </div>
+
+            <div class="row">
+              <label class="row-label" [attr.for]="'cfg-' + card.id">Configuration retention</label>
+              <input
+                class="cg-input cg-input--sm cg-mono retention"
+                type="number"
+                min="1"
+                max="3650"
+                [id]="'cfg-' + card.id"
+                [value]="card.configurationRetention"
+                [disabled]="!canManage()"
+                (change)="setRetention(card.organization, 'configurationRetention', $event)"
+              />
+              <span class="cg-meta unit">days</span>
+            </div>
+
+            <div class="row">
+              <label class="row-label" [attr.for]="'mon-' + card.id">Monitoring retention</label>
+              <input
+                class="cg-input cg-input--sm cg-mono retention"
+                type="number"
+                min="1"
+                max="3650"
+                [id]="'mon-' + card.id"
+                [value]="card.monitoringRetention"
+                [disabled]="!canManage()"
+                (change)="setRetention(card.organization, 'monitoringRetention', $event)"
+              />
+              <span class="cg-meta unit">days</span>
+            </div>
+
+            @if (canManage()) {
+              <div class="row-buttons">
+                <button
+                  class="cg-btn cg-btn--primary"
+                  type="button"
+                  [disabled]="!card.dirty || isBusy('save-' + card.id)"
+                  (click)="save(card.organization)"
+                >
+                  {{ isBusy('save-' + card.id) ? 'Saving…' : 'Save settings' }}
+                </button>
+                <button
+                  class="cg-btn"
+                  type="button"
+                  [disabled]="isBusy('snapshot-' + card.id)"
+                  (click)="runSnapshot(card.organization)"
+                >
+                  {{ isBusy('snapshot-' + card.id) ? 'Queueing…' : 'Run snapshot now' }}
+                </button>
+              </div>
+            }
+          </div>
+
+          <div class="column">
+            <h3 class="cg-label">WEBHOOK</h3>
+            <p class="webhook-state">{{ card.webhookLabel }}</p>
+            <p class="cg-mono endpoint">{{ card.endpoint }}</p>
+            <p class="hint">Last delivery received {{ card.webhookLastReceived }}.</p>
+            <div class="row-buttons">
+              <button class="cg-btn cg-btn--sm" type="button" (click)="copyEndpoint(card.endpoint)">
+                Copy URL
+              </button>
+              @if (canManage()) {
+                <button class="cg-btn cg-btn--sm" type="button" (click)="requestRotate(card.organization)">
+                  Rotate secret
+                </button>
+              }
+            </div>
+            <p class="hint">A rotated secret is shown once, immediately after generation, and never again.</p>
+
+            @if (canManage()) {
+              <div class="history">
+                <h3 class="cg-label">SNAPSHOT HISTORY</h3>
+                @if (card.history.length > 0) {
+                  <table class="history-table">
+                    <caption class="cg-visually-hidden">Snapshots for {{ card.name }}, newest first</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Taken</th>
+                        <th scope="col">Kind</th>
+                        <th scope="col">Objects</th>
+                        <th scope="col">Duration</th>
+                        <th scope="col">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (row of card.history; track row.id) {
+                        <tr>
+                          <td class="cg-mono">{{ row.at }}</td>
+                          <td class="muted">{{ row.kind }}</td>
+                          <td class="cg-mono">{{ row.objects }}</td>
+                          <td class="cg-mono muted">{{ row.duration }}</td>
+                          <td>
+                            <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.status }}</span>
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                } @else {
+                  <p class="hint">
+                    {{ card.historyLoaded ? 'No snapshots recorded yet.' : 'Reading snapshot history…' }}
+                  </p>
+                }
+              </div>
+            }
+
+            @if (!card.isCurrent) {
+              <div class="scope-switch">
+                <button class="cg-btn cg-btn--selected" type="button" (click)="switchScope(card.organization)">
+                  Switch scope to {{ card.name }}
+                </button>
+              </div>
+            }
+          </div>
+        </div>
+      }
+    </section>
+  }
+</div>

@@ -1,0 +1,188 @@
+<div class="stack">
+  <section class="cg-panel progress" [attr.data-tone]="statusTone()">
+    <div class="progress-head">
+      @if (polling()) {
+        <span class="cg-spinner" aria-hidden="true"></span>
+      }
+      <span class="cg-badge" [class]="'cg-badge cg-badge--' + statusTone()">{{ status() }}</span>
+      <span class="progress-label" aria-live="polite">{{ progressLabel() }}</span>
+      <span class="progress-pct cg-mono">{{ percent() }}%</span>
+    </div>
+
+    <div
+      class="track"
+      role="progressbar"
+      aria-label="Restore progress"
+      [attr.aria-valuenow]="applied()"
+      [attr.aria-valuemin]="0"
+      [attr.aria-valuemax]="total()"
+      [attr.aria-valuetext]="applied() + ' of ' + total() + ' actions'"
+    >
+      <span class="track-fill" [style.width.%]="percent()"></span>
+    </div>
+
+    <p class="progress-note">
+      Actions run in dependency order. Leaving this page does not stop the worker.
+    </p>
+    <p class="progress-meta cg-meta">
+      {{ reference().id }} · {{ reference().actor }} · {{ reference().window }}
+    </p>
+
+    @if (pollExhausted()) {
+      <p class="progress-stalled" role="status">
+        This page stopped polling after a long wait. The worker may still be running — refresh to
+        read the operation again.
+      </p>
+    }
+
+    @if (!polling() && inFlight()) {
+      <button
+        class="cg-btn cg-btn--sm progress-refresh"
+        type="button"
+        [disabled]="busy()"
+        (click)="refreshRequested.emit()"
+      >
+        Refresh
+      </button>
+    }
+  </section>
+
+  @if (succeeded()) {
+    <section class="outcome outcome--ok">
+      <div class="outcome-head">
+        <span class="cg-badge cg-badge--ok">{{ status() }}</span>
+        <span class="outcome-title">{{ applied() }} of {{ total() }} actions applied</span>
+      </div>
+      <p class="outcome-body">
+        A post-restore snapshot is captured when the run finishes, so the restored state is itself a
+        version in history. Impact monitoring reopens on the devices the restore touched.
+      </p>
+      <div class="outcome-actions">
+        @if (snapshotId(); as snapshot) {
+          <button
+            class="cg-btn cg-btn--primary"
+            type="button"
+            (click)="snapshotOpened.emit(snapshot)"
+          >
+            Open the post-restore snapshot
+          </button>
+        }
+        @for (session of sessionIds(); track session; let index = $index) {
+          <button class="cg-btn" type="button" (click)="impactOpened.emit(session)">
+            Watch impact {{ sessionIds().length > 1 ? index + 1 : '' }}
+          </button>
+        }
+        <button class="cg-btn" type="button" (click)="restartRequested.emit()">New restore</button>
+      </div>
+      @if (!snapshotId() && sessionIds().length === 0) {
+        <p class="outcome-note">
+          No post-restore snapshot or monitoring session has been recorded for this run yet.
+        </p>
+      }
+    </section>
+  }
+
+  @if (failure(); as failed) {
+    <section class="outcome outcome--crit" role="alert">
+      <div class="outcome-head">
+        <span class="cg-badge cg-badge--crit">{{ status() }}</span>
+        <span class="outcome-title">Halted at {{ failed.label }}</span>
+      </div>
+      <p class="outcome-error cg-mono">{{ failed.error }}</p>
+      <p class="outcome-body">
+        {{ failed.applied }} of {{ total() }} actions were applied before the run stopped.
+        @if (compensationOffered()) {
+          Compensation reverses exactly those, in reverse order, leaving the organization as it was
+          before this run.
+        }
+      </p>
+      <div class="outcome-actions">
+        @if (compensationOffered()) {
+          <button
+            class="cg-btn cg-btn--danger"
+            type="button"
+            [disabled]="busy()"
+            (click)="compensationRequested.emit()"
+          >
+            Plan compensation for {{ failed.applied }} applied
+            {{ failed.applied === 1 ? 'action' : 'actions' }}
+          </button>
+        }
+        <button class="cg-btn" type="button" (click)="restartRequested.emit()">Leave as is</button>
+      </div>
+      @if (!compensationOffered() && !canAuthorize()) {
+        <p class="outcome-note" role="note">{{ authorizeNote() }}</p>
+      }
+    </section>
+  }
+
+  @if (verification(); as result) {
+    <section class="cg-card panel">
+      <div class="panel-head">
+        <p class="cg-label panel-label">VERIFICATION</p>
+        <span class="cg-badge" [class]="result.verified ? 'cg-badge cg-badge--ok' : 'cg-badge cg-badge--warn'">
+          {{ result.verified ? 'VERIFIED' : 'UNVERIFIED' }}
+        </span>
+      </div>
+      <ul class="checks">
+        @for (check of checks(); track check.key) {
+          <li class="check">
+            <span class="check-mark" [attr.data-tone]="check.tone" aria-hidden="true">
+              {{ check.mark }}
+            </span>
+            <span class="check-body">
+              <span class="check-label">{{ check.label }}</span>
+              @if (check.detail) {
+                <span class="check-detail">{{ check.detail }}</span>
+              }
+            </span>
+          </li>
+        }
+        @if (checks().length === 0) {
+          <li class="check check--empty">No post-restore checks were recorded for this run.</li>
+        }
+      </ul>
+    </section>
+  }
+
+  <section class="cg-card table-card">
+    <table class="table" role="table" aria-label="Restore actions">
+      <thead role="rowgroup">
+        <tr class="row row--head" role="row">
+          <th class="head-cell" role="columnheader" scope="col">#</th>
+          <th class="head-cell" role="columnheader" scope="col">OP</th>
+          <th class="head-cell" role="columnheader" scope="col">OBJECT</th>
+          <th class="head-cell" role="columnheader" scope="col">TYPE</th>
+          <th class="head-cell" role="columnheader" scope="col">STATUS</th>
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        @for (row of rows(); track row.key) {
+          <tr class="row" role="row" [class.row--failed]="row.failed">
+            <td class="cell cell-index" role="cell">{{ row.index }}</td>
+            <td class="cell" role="cell">
+              <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.opTone">{{ row.op }}</span>
+            </td>
+            <td class="cell cell-object" role="cell">
+              <span class="object-name">{{ row.name }}</span>
+              <span class="object-detail">{{ row.detail }}</span>
+              @if (row.error) {
+                <span class="object-error">{{ row.error }}</span>
+              }
+            </td>
+            <td class="cell cell-kind" role="cell">{{ row.kind }}</td>
+            <td class="cell" role="cell">
+              <span
+                class="cg-badge"
+                [class]="'cg-badge cg-badge--' + row.statusTone"
+                [class.status--running]="row.running"
+              >
+                {{ row.status }}
+              </span>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </section>
+</div>

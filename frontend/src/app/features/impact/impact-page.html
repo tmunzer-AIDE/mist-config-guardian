@@ -1,0 +1,249 @@
+<div class="page">
+  <aside class="rail">
+    <div class="rail-head">
+      <h1 class="cg-label rail-title">MONITORING SESSIONS · {{ total() }}</h1>
+      <div class="rail-filters" role="group" aria-label="Session status filter">
+        @for (option of filters; track option) {
+          <button
+            class="cg-chip"
+            type="button"
+            [class.cg-chip--on]="statusFilter() === option"
+            [attr.aria-pressed]="statusFilter() === option"
+            (click)="setFilter(option)"
+          >
+            {{ filterLabel(option) }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <div class="rail-list cg-scroll" (keydown)="onListKey($event)">
+      @for (row of rows(); track row.id) {
+        <button
+          class="row"
+          type="button"
+          [class.row--on]="row.id === selectedId()"
+          [attr.aria-current]="row.id === selectedId() ? 'true' : null"
+          (click)="select(row.id)"
+        >
+          <span class="row-line">
+            <span class="row-device">{{ row.device }}</span>
+            <span class="cg-meta">{{ row.model }}</span>
+            <span class="cg-badge row-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.severity }}</span>
+          </span>
+          <span class="cg-meta row-mac">{{ row.mac }} · {{ row.site }}</span>
+          <span class="row-line">
+            <span class="cg-meta">{{ row.at }}</span>
+            <span class="row-status">{{ row.status }}</span>
+          </span>
+        </button>
+      } @empty {
+        <p class="rail-empty">
+          No sessions match this filter. Sessions are created when a configuration change lands on a
+          monitored device.
+        </p>
+      }
+    </div>
+  </aside>
+
+  @if (detail(); as head) {
+    <section class="detail">
+      <div>
+        <div class="head">
+          <span class="cg-badge" [class]="'cg-badge cg-badge--' + head.tone">{{ head.severity }}</span>
+          <h2 class="head-device">{{ head.device }}</h2>
+          <span class="cg-meta">{{ head.meta }}</span>
+          <span class="head-status">{{ head.status }}</span>
+        </div>
+
+        <!-- Without a comparison the summary is the state panel's body instead. -->
+        @if (hasData() && head.summary) {
+          <p class="head-summary">{{ head.summary }}</p>
+        }
+
+        @if (verdict(); as note) {
+          <p class="verdict">
+            <span class="cg-badge" [class]="'cg-badge cg-badge--' + note.tone">{{ note.tag }}</span>
+            <span class="verdict-detail">{{ note.detail }}</span>
+          </p>
+        }
+
+        <div class="meta">
+          <div>
+            <div class="meta-label">WINDOW</div>
+            <div class="meta-value">{{ head.window }}</div>
+          </div>
+          <div>
+            <div class="meta-label">SLE SAMPLES</div>
+            <div class="meta-value">{{ head.samples }}</div>
+          </div>
+          <div>
+            <div class="meta-label">CORRELATED AUDIT</div>
+            <div class="meta-value">{{ head.audit }}</div>
+          </div>
+        </div>
+
+        @for (warning of head.warnings; track $index) {
+          <p class="warning">{{ warning }}</p>
+        }
+      </div>
+
+      @if (state(); as panel) {
+        <div class="state" [attr.data-tone]="panel.tone">
+          <div class="state-head">
+            <span class="cg-badge" [class]="'cg-badge cg-badge--' + panel.tone">{{ panel.tag }}</span>
+            <div class="state-title">{{ panel.title }}</div>
+          </div>
+          <p class="state-body">{{ panel.body }}</p>
+          <div class="state-meta">
+            <div>
+              <div class="meta-label">{{ panel.metaA }}</div>
+              <div class="state-meta-value">{{ panel.metaAValue }}</div>
+            </div>
+            <div>
+              <div class="meta-label">{{ panel.metaB }}</div>
+              <div class="state-meta-value">{{ panel.metaBValue }}</div>
+            </div>
+          </div>
+          <div class="state-foot">
+            <p class="state-next">{{ panel.next }}</p>
+            <button class="cg-btn" type="button" [disabled]="!changeGroupId()" (click)="openChangeGroup()">
+              Open the change group
+            </button>
+          </div>
+        </div>
+      }
+
+      @if (chart(); as series) {
+        <div class="cg-card panel">
+          <app-sle-chart
+            [bars]="series.bars"
+            [tone]="series.tone"
+            [axis]="series.axis"
+            [metric]="series.metric"
+            [labels]="series.labels"
+          />
+        </div>
+      }
+
+      @if (showBody()) {
+        <div class="body" [class.body--split]="hasData()">
+          <div class="column">
+            @if (hasData()) {
+              <div class="cg-card panel">
+                <h3 class="panel-title">Baseline versus latest</h3>
+                <div class="metrics">
+                  @for (metric of metrics(); track metric.key) {
+                    <div>
+                      <div class="metric-head">
+                        <span class="metric-name">{{ metric.label }}</span>
+                        <span class="metric-delta" [style.color]="metric.deltaInk">{{ metric.deltaLabel }}</span>
+                      </div>
+                      <div class="track">
+                        <span class="track-base" [style.width.%]="metric.baseline"></span>
+                        <span
+                          class="track-now"
+                          [style.width.%]="metric.latest"
+                          [style.background]="metric.barInk"
+                        ></span>
+                        <span class="track-mark" [style.left.%]="metric.baseline"></span>
+                      </div>
+                      <div class="metric-foot">
+                        <span>{{ metric.baselineLabel }}</span>
+                        <span>{{ metric.latestLabel }}</span>
+                      </div>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+
+            @if (incidents().length > 0) {
+              <div class="cg-card panel panel--tight">
+                <h3 class="cg-label panel-label">INFRASTRUCTURE INCIDENTS IN WINDOW</h3>
+                <div class="incidents">
+                  @for (incident of incidents(); track incident.key) {
+                    <div class="incident">
+                      <span class="cg-badge" [class]="'cg-badge cg-badge--' + incident.tone">{{ incident.tag }}</span>
+                      <span class="incident-label">{{ incident.label }}</span>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+
+          @if (showAside()) {
+            <div class="column">
+              @if (ai(); as assessment) {
+                <div class="ai">
+                  <h3 class="cg-label ai-label">OPTIONAL AI ASSESSMENT</h3>
+                  @if (assessment.explanation) {
+                    <p class="ai-text">{{ assessment.explanation }}</p>
+                  }
+                  @if (assessment.recommendations.length > 0) {
+                    <ul class="ai-list">
+                      @for (item of assessment.recommendations; track $index) {
+                        <li>{{ item }}</li>
+                      }
+                    </ul>
+                  }
+                  @if (assessment.severity || assessment.confidence) {
+                    <p class="ai-meta">
+                      @if (assessment.severity) {
+                        <span>SEVERITY {{ assessment.severity }}</span>
+                      }
+                      @if (assessment.confidence) {
+                        <span>CONFIDENCE {{ assessment.confidence }}</span>
+                      }
+                    </p>
+                  }
+                </div>
+              } @else if (aiError(); as failure) {
+                <p class="ai-note">Optional AI assessment unavailable — {{ failure }}. The evidence above is unaffected.</p>
+              }
+
+              @if (hasData()) {
+                <div class="cg-card panel panel--tight">
+                  <h3 class="panel-title panel-title--sm">Act on this session</h3>
+                  <p class="act-text">
+                    Deep links carry the correlated audit ID, so the change group and the restore plan open
+                    pre-scoped.
+                  </p>
+                  @if (!changeGroupId()) {
+                    <p class="act-note">This session is not correlated to a change group yet.</p>
+                  }
+                  <div class="act-buttons">
+                    <button
+                      class="cg-btn cg-btn--primary"
+                      type="button"
+                      [disabled]="!changeGroupId()"
+                      (click)="openChangeGroup()"
+                    >
+                      Open the change group
+                    </button>
+                    @if (canRestore()) {
+                      <button class="cg-btn" type="button" [disabled]="!changeGroupId()" (click)="planRestore()">
+                        Plan a restore
+                      </button>
+                    }
+                  </div>
+                </div>
+              }
+            </div>
+          }
+        </div>
+      }
+    </section>
+  } @else {
+    <section class="detail detail--empty">
+      <div class="blank">
+        <div class="blank-title">No monitoring session selected</div>
+        <p class="blank-body">
+          Sessions appear here once a configuration change lands on a monitored device and the first
+          SLE samples arrive. Clear the status filter to see every session.
+        </p>
+      </div>
+    </section>
+  }
+</div>

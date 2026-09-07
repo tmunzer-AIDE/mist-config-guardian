@@ -50,6 +50,13 @@ export interface OrganizationCreate {
   monitoring_retention_days: number;
 }
 
+export interface OrganizationUpdate {
+  name?: string;
+  reconciliation_cron?: string;
+  configuration_retention_days?: number;
+  monitoring_retention_days?: number;
+}
+
 export type SnapshotStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed';
 
 export interface SnapshotManifest {
@@ -75,3 +82,33 @@ export interface WebhookSecret {
   endpoint: string;
   secret: string;
 }
+
+/**
+ * API host per Mist cloud region, mirroring `integrations/mist.REGION_HOSTS`
+ * on the backend. Settings shows the host so an operator can confirm which
+ * cloud a service token was issued against.
+ */
+export const MIST_REGION_HOSTS: Record<MistCloudRegion, string> = {
+  global_01: 'api.mist.com',
+  global_02: 'api.gc1.mist.com',
+  global_03: 'api.ac2.mist.com',
+  global_04: 'api.gc2.mist.com',
+  global_05: 'api.gc4.mist.com',
+  emea_01: 'api.eu.mist.com',
+  emea_02: 'api.gc3.mist.com',
+  emea_03: 'api.ac6.mist.com',
+  emea_04: 'api.gc6.mist.com',
+  apac_01: 'api.ac5.mist.com',
+  apac_02: 'api.gc5.mist.com',
+  apac_03: 'api.gc7.mist.com',
+};
+
+/** `Global 03 · api.ac2.mist.com` — the region line on an organization card. */
+export function regionLabel(region: MistCloudRegion): string {
+  const [area, index] = region.split('_');
+  const name = area === 'global' ? 'Global' : area.toUpperCase();
+  return `${name} ${index} · ${MIST_REGION_HOSTS[region]}`;
+}
+
+/** Every region, ordered as the onboarding form lists them. */
+export const MIST_REGIONS: MistCloudRegion[] = Object.keys(MIST_REGION_HOSTS) as MistCloudRegion[];

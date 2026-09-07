@@ -56,5 +56,19 @@ export const routes: Routes = [
     loadComponent: () => import('./features/settings/settings-page').then((m) => m.SettingsPage),
     title: 'Settings · Config Guardian',
   },
+  {
+    // The shell's organization and user menus link straight to a tab, so the
+    // tab is addressable as a path segment as well as a query parameter.
+    path: 'settings/:tab',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/settings/settings-page').then((m) => m.SettingsPage),
+    title: 'Settings · Config Guardian',
+  },
+  {
+    path: 'account/:tab',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/account/account-page').then((m) => m.AccountPage),
+    title: 'Your account · Config Guardian',
+  },
   { path: '**', redirectTo: '' },
 ];

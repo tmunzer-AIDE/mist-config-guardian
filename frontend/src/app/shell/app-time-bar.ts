@@ -39,7 +39,7 @@ export class AppTimeBar {
       return {
         left: `${(this.time.positionOf(at) * 100).toFixed(2)}%`,
         height: critical ? '28px' : warning ? '22px' : '12px',
-        color: critical ? 'var(--tone-critical-ink)' : warning ? 'var(--tone-warning-ink)' : '#a9aeb6',
+        color: critical ? 'var(--tone-critical-ink)' : warning ? 'var(--tone-warning-ink)' : 'var(--tone-none-mark)',
         label: marker.label,
       };
     }),

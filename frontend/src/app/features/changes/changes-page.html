@@ -1,0 +1,147 @@
+<div class="page">
+  <header class="head">
+    <h1 class="cg-page-title">Changes</h1>
+    <p class="head-sub">{{ subtitle() }}</p>
+    <div class="head-filters" role="group" aria-label="Impact filter">
+      @for (option of severities; track option.value) {
+        <button
+          class="cg-chip"
+          type="button"
+          [class.cg-chip--on]="severity() === option.value"
+          [attr.aria-pressed]="severity() === option.value"
+          (click)="severity.set(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      }
+    </div>
+  </header>
+
+  @if (isEmpty()) {
+    <div class="empty">
+      <div class="empty-title">{{ emptyTitle() }}</div>
+      <p class="empty-body">{{ emptyBody() }}</p>
+    </div>
+  }
+
+  <div class="stack">
+    <div class="cg-card table-card">
+      <table class="table" role="table" aria-label="Change groups">
+        <thead role="rowgroup">
+          <tr class="row row--head" role="row">
+            @for (column of columns; track column) {
+              <th class="head-cell" role="columnheader" scope="col">{{ column }}</th>
+            }
+          </tr>
+        </thead>
+
+        @for (day of days(); track day.key) {
+          <tbody role="rowgroup">
+            <tr class="row row--day" role="row">
+              <th class="day" role="rowheader" scope="rowgroup" colspan="6" aria-colspan="6">
+                {{ day.label }}
+              </th>
+            </tr>
+
+            @for (row of day.rows; track row.id) {
+              <tr
+                class="row row--group"
+                role="row"
+                tabindex="0"
+                [attr.data-tone]="row.tone"
+                [class.row--on]="selectedId() === row.id"
+                [attr.aria-expanded]="selectedId() === row.id"
+                [attr.aria-controls]="selectedId() === row.id ? panelId : null"
+                (click)="select(row.id)"
+                (keydown.enter)="select(row.id)"
+                (keydown.space)="$event.preventDefault(); select(row.id)"
+              >
+                <td class="cell cell-time" role="cell">{{ row.time }}</td>
+                <td class="cell cell-group" role="cell">
+                  <div class="row-title">{{ row.title }}</div>
+                  <div class="row-meta">{{ row.meta }}</div>
+                </td>
+                <td class="cell cell-actor" role="cell">{{ row.actor }}</td>
+                <td class="cell cell-objects" role="cell">{{ row.objects }}</td>
+                <td class="cell cell-devices" role="cell">{{ row.devices }}</td>
+                <td class="cell cell-impact" role="cell">
+                  <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.impact }}</span>
+                  @if (row.recovery) {
+                    <div class="row-recovery">{{ row.recovery }}</div>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        }
+      </table>
+
+      <div class="table-foot">{{ footer() }}</div>
+    </div>
+
+    @if (panel(); as detail) {
+      <section
+        class="cg-card panel"
+        [id]="panelId"
+        role="region"
+        aria-live="polite"
+        [attr.aria-labelledby]="panelId + '-title'"
+      >
+        <header class="panel-head">
+          <div class="panel-head-line">
+            <span class="cg-badge" [class]="'cg-badge cg-badge--' + detail.tone">{{ detail.level }}</span>
+            <h2 class="panel-title" [id]="panelId + '-title'">{{ detail.title }}</h2>
+            <span class="panel-audit">{{ detail.audit }}</span>
+            <button class="panel-close" type="button" (click)="close()">Close</button>
+          </div>
+          <p class="panel-byline">{{ detail.byline }}</p>
+        </header>
+
+        <div class="panel-body">
+          <section class="panel-col panel-col--objects">
+            <h3 class="cg-label panel-col-title">CHANGED OBJECTS · {{ detail.objectCount }}</h3>
+            @for (object of detail.objects; track object.key) {
+              <article class="object">
+                <div class="object-head">
+                  <span class="cg-badge cg-badge--warn object-event">{{ object.event }}</span>
+                  <span class="object-name">{{ object.name }}</span>
+                  <span class="object-kind">{{ object.kind }}</span>
+                  <span class="object-versions">{{ object.versions }}</span>
+                </div>
+                <p class="object-fields">{{ object.fields }}</p>
+                <button class="cg-btn cg-btn--link object-compare" type="button" (click)="compare(object.object)">
+                  Compare in History →
+                </button>
+              </article>
+            }
+          </section>
+
+          <section class="panel-col">
+            <h3 class="cg-label panel-col-title">EVIDENCE</h3>
+            <p class="assessment">{{ detail.assessment }}</p>
+            <ul class="evidence">
+              @for (item of detail.evidence; track item.key) {
+                <li class="evidence-row">
+                  <span class="evidence-dot" [style.background]="item.ink" aria-hidden="true"></span>
+                  {{ item.label }}
+                </li>
+              }
+            </ul>
+            <div class="panel-actions">
+              @if (detail.sessionId; as sessionId) {
+                <button class="cg-btn cg-btn--primary" type="button" (click)="openImpact(sessionId)">
+                  Open impact session
+                </button>
+              }
+              @if (canRestore()) {
+                <button class="cg-btn" type="button" (click)="planRestore(detail.id)">Plan a restore</button>
+              }
+            </div>
+          </section>
+        </div>
+      </section>
+    } @else if (detailPending()) {
+      <div class="cg-skeleton panel-pending" role="status" aria-live="polite" aria-label="Loading change group"></div>
+    }
+  </div>
+</div>

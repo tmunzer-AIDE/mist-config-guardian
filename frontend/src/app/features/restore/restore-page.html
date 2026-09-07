@@ -1,0 +1,140 @@
+<div class="page">
+  <header class="head">
+    <h1 class="cg-page-title">Restore center</h1>
+    <p class="head-sub">
+      Plans are built read-only. Nothing is written until you authorize with a separate write
+      credential.
+    </p>
+  </header>
+
+  @if (readOnly()) {
+    <p class="read-only" role="note">{{ readOnlyNote() }}</p>
+  }
+
+  <ol class="steps" aria-label="Restore steps">
+    @for (item of steps(); track item.name) {
+      <li class="step">
+        <button
+          class="step-button"
+          type="button"
+          [class.step-button--on]="item.current"
+          [class.step-button--done]="item.done"
+          [attr.aria-current]="item.current ? 'step' : null"
+          [disabled]="!item.reachable || item.current"
+          (click)="goTo(item.name)"
+        >
+          {{ item.label }}
+          @if (item.done) {
+            <span class="cg-visually-hidden">, completed</span>
+          }
+        </button>
+      </li>
+    }
+  </ol>
+
+  @switch (currentStep()) {
+    @case ('targets') {
+      <app-restore-step-targets
+        [targets]="targets()"
+        [pills]="selectedPills()"
+        [selectedIds]="selectedIds()"
+        [typeOptions]="typeOptions()"
+        [siteOptions]="siteOptions()"
+        [scope]="scope()"
+        [siteId]="siteId()"
+        [objectType]="objectType()"
+        [query]="query()"
+        [total]="catalogTotal()"
+        [matched]="matched()"
+        [capped]="capped()"
+        [mode]="mode()"
+        [includeDependencies]="includeDependencies()"
+        [history]="history()"
+        [readOnly]="readOnly()"
+        [readOnlyNote]="readOnlyNote()"
+        [busy]="busy()"
+        [changeGroupTitle]="changeGroupTitle()"
+        (scopePicked)="setScope($event)"
+        (sitePicked)="setSite($event)"
+        (typePicked)="setType($event)"
+        (queryChanged)="setQuery($event)"
+        (targetToggled)="toggleTarget($event)"
+        (targetRemoved)="removeTarget($event)"
+        (cleared)="clearSelection()"
+        (filtersCleared)="clearFilters()"
+        (changeGroupCleared)="clearChangeGroup()"
+        (modePicked)="setMode($event)"
+        (dependenciesToggled)="setIncludeDependencies($event)"
+        (planRequested)="buildPlan()"
+        (operationPicked)="openOperation($event)"
+      />
+    }
+
+    @case ('plan') {
+      @if (activeOperation(); as operation) {
+        <app-restore-step-plan
+          [operation]="operation"
+          [mode]="mode()"
+          [readOnly]="readOnly()"
+          [readOnlyNote]="readOnlyNote()"
+          [busy]="busy()"
+          (authorizeRequested)="goToAuthorize()"
+          (backRequested)="backToTargets()"
+        />
+      }
+    }
+
+    @case ('authorize') {
+      @if (activeOperation(); as operation) {
+        <app-restore-step-authorize
+          [operation]="operation"
+          [mode]="mode()"
+          [canAuthorize]="canAuthorize()"
+          [authorizeNote]="authorizeNote()"
+          [readOnly]="readOnly()"
+          [busy]="busy()"
+          [approval]="approval()"
+          [blockedByApproval]="blockedByApproval()"
+          (authorized)="execute($event)"
+          (cancelled)="backToTargets()"
+          (modePicked)="setMode($event)"
+          (approvalRequested)="requestApproval()"
+          (approvalRefreshed)="refreshApproval()"
+        />
+      }
+    }
+
+    @case ('execute') {
+      @if (compensating()) {
+        @if (compensationPlan(); as plan) {
+          <app-restore-step-authorize
+            [operation]="plan"
+            [mode]="mode()"
+            [canAuthorize]="canAuthorize()"
+            [authorizeNote]="authorizeNote()"
+            [readOnly]="readOnly()"
+            [busy]="busy()"
+            [compensation]="true"
+            (authorized)="runCompensation($event)"
+            (cancelled)="cancelCompensation()"
+          />
+        }
+      } @else if (activeOperation(); as operation) {
+        <app-restore-step-execute
+          [operation]="operation"
+          [verification]="verification()"
+          [polling]="polling()"
+          [pollExhausted]="pollExhausted()"
+          [canAuthorize]="canAuthorize()"
+          [authorizeNote]="authorizeNote()"
+          [busy]="busy()"
+          (refreshRequested)="refreshOperation()"
+          (restartRequested)="restart()"
+          (compensationRequested)="planCompensation()"
+          (impactOpened)="openImpact($event)"
+          (snapshotOpened)="openSnapshot($event)"
+        />
+      }
+    }
+  }
+</div>

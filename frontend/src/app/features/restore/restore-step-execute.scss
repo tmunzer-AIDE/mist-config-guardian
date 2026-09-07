@@ -1,0 +1,323 @@
+// The action list shares the five-column track step 2 defines.
+$columns: minmax(0, 0.32fr) minmax(0, 0.8fr) minmax(150px, 2.6fr) minmax(0, 1fr) minmax(0, 0.85fr);
+$sunken: rgba(251, 250, 247, 0.55);
+
+:host {
+  display: block;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+// ------------------------------------------------------------------- progress
+.progress {
+  padding: 16px 18px;
+  border-color: var(--brand-line);
+}
+
+.progress[data-tone='ok'] {
+  border-color: var(--tone-ok-line);
+}
+
+.progress[data-tone='crit'] {
+  border-color: var(--tone-critical-line);
+}
+
+.progress[data-tone='warn'] {
+  border-color: var(--tone-warning-line);
+}
+
+.progress-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+.progress-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.progress-pct {
+  margin-left: auto;
+  font: 600 12px var(--font-mono);
+  color: var(--brand);
+}
+
+.track {
+  height: 7px;
+  background: rgba(20, 22, 26, 0.09);
+  border-radius: var(--radius-pill);
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.track-fill {
+  display: block;
+  height: 7px;
+  background: var(--brand-gradient);
+  border-radius: var(--radius-pill);
+  transition: width 0.3s ease;
+}
+
+.progress-note {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 9px 0 0;
+}
+
+.progress-meta {
+  margin: 5px 0 0;
+}
+
+.progress-stalled {
+  font-size: 11.5px;
+  color: var(--tone-warning-ink);
+  margin: 9px 0 0;
+  line-height: 1.55;
+}
+
+.progress-refresh {
+  margin-top: 11px;
+}
+
+// -------------------------------------------------------------------- outcome
+.outcome {
+  border-radius: var(--radius-xl);
+  padding: 18px 20px;
+  border: 1px solid var(--tone-none-line);
+  border-left: 3px solid var(--ink-muted);
+  background: var(--surface-sunken);
+}
+
+.outcome--ok {
+  border-color: rgba(18, 107, 52, 0.22);
+  border-left-color: var(--tone-ok-ink);
+  background: linear-gradient(180deg, rgba(232, 243, 236, 0.92), rgba(255, 255, 255, 0.76));
+  box-shadow: 0 14px 34px -18px rgba(18, 107, 52, 0.3);
+}
+
+.outcome--crit {
+  border-color: rgba(185, 28, 28, 0.2);
+  border-left-color: var(--tone-critical-ink);
+  background: linear-gradient(180deg, rgba(253, 244, 244, 0.94), rgba(255, 255, 255, 0.76));
+  box-shadow: 0 14px 34px -18px rgba(185, 28, 28, 0.32);
+}
+
+.outcome-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.outcome-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.outcome-body {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  margin: 9px 0 0;
+  line-height: 1.6;
+  max-width: 720px;
+}
+
+.outcome-error {
+  font: 400 11.5px var(--font-mono);
+  color: var(--tone-critical-ink);
+  margin: 9px 0 0;
+  line-height: 1.5;
+  max-width: 720px;
+}
+
+.outcome-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+}
+
+.outcome-note {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 11px 0 0;
+  line-height: 1.55;
+}
+
+// ---------------------------------------------------------------- verification
+.panel {
+  padding: 15px 17px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-label {
+  margin: 0;
+}
+
+.panel-head .cg-badge {
+  margin-left: auto;
+}
+
+.checks {
+  list-style: none;
+  margin: 11px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.check--empty {
+  color: var(--ink-soft);
+}
+
+.check-mark {
+  font-weight: 600;
+  flex: none;
+  color: var(--ink-faint);
+}
+
+.check-mark[data-tone='ok'] {
+  color: var(--tone-ok-ink);
+}
+
+.check-mark[data-tone='crit'] {
+  color: var(--tone-critical-ink);
+}
+
+.check-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.check-detail {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin-top: 3px;
+}
+
+// ---------------------------------------------------------------- action list
+.table-card {
+  overflow: hidden;
+}
+
+.table {
+  display: block;
+  width: 100%;
+  border-collapse: collapse;
+
+  thead,
+  tbody {
+    display: block;
+  }
+}
+
+.row {
+  display: grid;
+  grid-template-columns: $columns;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.row--head {
+  padding: 8px 15px;
+  border-bottom: 1px solid var(--hairline-strong);
+  background: $sunken;
+}
+
+.row--failed {
+  background: var(--tone-critical-wash);
+  box-shadow: inset 3px 0 0 var(--tone-critical-ink);
+}
+
+.head-cell {
+  font: 600 9px var(--font-mono);
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+  text-align: left;
+  padding: 0;
+}
+
+.cell {
+  padding: 0;
+  min-width: 0;
+}
+
+.cell-index {
+  font: 500 11px var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.cell-object {
+  display: flex;
+  flex-direction: column;
+}
+
+.object-name {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.object-detail {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  margin-top: 3px;
+}
+
+.object-error {
+  font: 400 11px var(--font-mono);
+  color: var(--tone-critical-ink);
+  margin-top: 4px;
+}
+
+.cell-kind {
+  font: 400 10.5px var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.status--running {
+  animation: cg-pulse 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status--running {
+    animation: none;
+  }
+
+  .track-fill {
+    transition: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .row {
+    grid-template-columns: minmax(0, 0.4fr) minmax(0, 0.9fr) minmax(0, 2.6fr) minmax(0, 1fr);
+  }
+
+  .head-cell:nth-child(4),
+  .cell-kind {
+    display: none;
+  }
+}

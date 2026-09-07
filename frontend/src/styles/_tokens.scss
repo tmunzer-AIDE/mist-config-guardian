@@ -15,6 +15,7 @@
   --ink-soft: #65696f; // tertiary text and mono meta
   --ink-faint: #7c828c; // quaternary text
   --ink-dim: #a09a8c; // disabled / placeholder
+  --ink-outline: #a4a9b1; // unfilled control outlines
   --ink-invert: #ffffff;
 
   // ---- Surfaces ----
@@ -53,11 +54,13 @@
   --brand-tint: #eef1fb;
   --brand-tint-deep: #dfe5f6;
   --brand-gradient: linear-gradient(180deg, #3757bd, #2743a3);
+  --brand-gradient-hover: linear-gradient(180deg, #4062c9, #2b4bb4);
 
   // ---- Sidebar ----
   --nav-background: linear-gradient(180deg, #1e2128 0%, #14161b 100%);
   --nav-rule: #262a32;
   --nav-ink: #a4aab4;
+  --nav-ink-hover: #d6dae2;
   --nav-ink-active: #f7f7f5;
   --nav-brand-ink: #f2f1ee;
   --nav-meta: #8b919b;
@@ -74,6 +77,8 @@
   --tone-critical-soft: #fbeaea;
   --tone-critical-line: #f0c9c9;
   --tone-critical-hover: #cc2626;
+  --tone-critical-gradient: linear-gradient(180deg, #cc2626, #b91c1c);
+  --tone-critical-gradient-hover: linear-gradient(180deg, #d63232, #c42020);
   --tone-critical-wash: #fffdfd;
 
   --tone-warning-ink: #8a5306;
@@ -89,6 +94,7 @@
   --tone-none-ink: #4a4f57;
   --tone-none-soft: #f4f3ef;
   --tone-none-line: #e4e1d9;
+  --tone-none-mark: #a9aeb6; // unremarkable timeline ticks
 
   --tone-info-ink: #2743a3;
   --tone-info-soft: #e8ecf8;

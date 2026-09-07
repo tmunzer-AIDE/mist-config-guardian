@@ -1,0 +1,58 @@
+.page {
+  padding: 20px;
+  animation: cg-in 0.2s ease-out;
+}
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+
+  h1 {
+    font-size: 21px;
+    line-height: 1.2;
+  }
+}
+
+.head-sub {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  padding-bottom: 2px;
+  margin: 0;
+}
+
+// The account strip sits tighter than the shared tab primitive: each tab is a
+// padded target rather than a spaced label, so the gap and padding are local.
+.tabs {
+  gap: 2px;
+  margin-top: 15px;
+  border-bottom-color: var(--hairline-strong);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tab {
+  padding: 9px 14px;
+  white-space: nowrap;
+  color: var(--ink-muted);
+  align-items: baseline;
+  gap: 7px;
+
+  &:focus-visible {
+    outline-offset: -2px;
+  }
+}
+
+.tab-label {
+  font-size: 12.5px;
+}
+
+.tab-hint {
+  font: 400 10.5px var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.panel {
+  outline-offset: 4px;
+}

@@ -1,0 +1,342 @@
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { computed, inject, Injectable, signal } from '@angular/core';
+import { firstValueFrom } from 'rxjs';
+
+import { API_ROOT } from '../../core/api';
+import { AuthService } from '../../core/auth.service';
+import { ClockPreference } from '../../core/format';
+import {
+  AccountProfile,
+  AccountSession,
+  AccountSessionList,
+  EmailChangePending,
+  Passkey,
+  PasskeyList,
+  PasskeyRegistrationOptions,
+  PasswordChangeResult,
+  ProfilePatch,
+  RecoveryCodesResponse,
+  RegisteredCredentialJson,
+  SessionRevocation,
+  TotpEnrollment,
+} from './account.model';
+
+const ACCOUNT = `${API_ROOT}/account`;
+
+/**
+ * The local account: profile, credentials, second factors and sessions.
+ *
+ * Lists are held here because the page's tab strip shows their counts before
+ * the panel that owns them is mounted. Secrets — passwords, the TOTP seed and
+ * recovery codes — are deliberately *not* held: they are returned from the call
+ * that produced them and live only in the panel that displays them, so nothing
+ * survives a navigation.
+ */
+@Injectable({ providedIn: 'root' })
+export class AccountService {
+  private readonly http = inject(HttpClient);
+  private readonly auth = inject(AuthService);
+
+  private readonly mfaOverride = signal<boolean | null>(null);
+  private readonly passkeysLoaded = signal(false);
+
+  readonly sessions = signal<AccountSession[]>([]);
+  readonly passkeys = signal<Passkey[]>([]);
+  readonly profile = signal<AccountProfile | null>(null);
+
+  /** Second-factor state: the signed-in user's, until this page changes it. */
+  readonly mfaEnabled = computed(
+    () => this.mfaOverride() ?? this.auth.user()?.mfa_enabled ?? false,
+  );
+
+  /** Registered passkeys: the list once loaded, the session's count before that. */
+  readonly passkeyCount = computed(() =>
+    this.passkeysLoaded() ? this.passkeys().length : (this.auth.user()?.passkey_count ?? 0),
+  );
+
+  readonly sessionCount = computed(() => this.sessions().length);
+
+  /** The signed-in user's clock, for every timestamp this page renders. */
+  readonly clock = computed<ClockPreference>(() => {
+    const preferences = this.auth.user()?.preferences;
+    return { timezone: preferences?.timezone ?? 'UTC', clock: preferences?.clock ?? '24h' };
+  });
+
+  // ---------------------------------------------------------------- profile
+
+  async loadProfile(): Promise<AccountProfile> {
+    return this.apply(await firstValueFrom(this.http.get<AccountProfile>(`${ACCOUNT}/profile`)));
+  }
+
+  async updateProfile(patch: ProfilePatch): Promise<AccountProfile> {
+    return this.apply(
+      await firstValueFrom(this.http.patch<AccountProfile>(`${ACCOUNT}/profile`, patch)),
+    );
+  }
+
+  requestEmailChange(newEmail: string, password: string): Promise<EmailChangePending> {
+    return firstValueFrom(
+      this.http.post<EmailChangePending>(`${ACCOUNT}/email-change`, {
+        new_email: newEmail,
+        password,
+      }),
+    );
+  }
+
+  async confirmEmailChange(token: string): Promise<AccountProfile> {
+    return this.apply(
+      await firstValueFrom(
+        this.http.post<AccountProfile>(`${ACCOUNT}/email-change/confirm`, { token }),
+      ),
+    );
+  }
+
+  async cancelEmailChange(): Promise<AccountProfile> {
+    return this.apply(
+      await firstValueFrom(this.http.delete<AccountProfile>(`${ACCOUNT}/email-change`)),
+    );
+  }
+
+  /**
+   * Fold a profile response into the session user.
+   *
+   * `ProfileResponse` is narrower than `CurrentUser` — no role, no second-factor
+   * state — so it is merged rather than substituted; replacing would silently
+   * downgrade the role the shell reads for its permission checks.
+   */
+  private apply(profile: AccountProfile): AccountProfile {
+    this.profile.set(profile);
+    const current = this.auth.user();
+    if (current) {
+      this.auth.applyUser({
+        ...current,
+        email: profile.email,
+        display_name: profile.display_name,
+        preferences: profile.preferences,
+      });
+    }
+    return profile;
+  }
+
+  // --------------------------------------------------------------- password
+
+  /** Every other session is revoked server-side on success. */
+  async changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<PasswordChangeResult> {
+    const result = await firstValueFrom(
+      this.http.post<PasswordChangeResult>(`${ACCOUNT}/password`, {
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    );
+    this.sessions.update((items) => items.filter((item) => item.current));
+    return result;
+  }
+
+  // --------------------------------------------------------------- sessions
+
+  async loadSessions(): Promise<void> {
+    const response = await firstValueFrom(
+      this.http.get<AccountSessionList>(`${ACCOUNT}/sessions`),
+    );
+    this.sessions.set(response.items);
+  }
+
+  async revokeSession(id: string): Promise<void> {
+    await firstValueFrom(this.http.delete<SessionRevocation>(`${ACCOUNT}/sessions/${id}`));
+    this.sessions.update((items) => items.filter((item) => item.id !== id));
+  }
+
+  async revokeOtherSessions(): Promise<number> {
+    const result = await firstValueFrom(
+      this.http.post<SessionRevocation>(`${ACCOUNT}/sessions/revoke-others`, {}),
+    );
+    this.sessions.update((items) => items.filter((item) => item.current));
+    return result.revoked_sessions;
+  }
+
+  // ------------------------------------------------------------- two-factor
+
+  enrollTotp(): Promise<TotpEnrollment> {
+    return firstValueFrom(this.http.post<TotpEnrollment>(`${ACCOUNT}/totp/enroll`, {}));
+  }
+
+  /** Confirms enrolment and returns the recovery codes, which are shown once. */
+  async confirmTotp(code: string): Promise<string[]> {
+    const response = await firstValueFrom(
+      this.http.post<RecoveryCodesResponse>(`${ACCOUNT}/totp/confirm`, { code }),
+    );
+    this.mfaOverride.set(true);
+    return response.recovery_codes;
+  }
+
+  async disableTotp(password: string): Promise<void> {
+    // `HttpClient.delete` only sends a body when one is given explicitly.
+    this.apply(
+      await firstValueFrom(
+        this.http.delete<AccountProfile>(`${ACCOUNT}/totp`, { body: { password } }),
+      ),
+    );
+    this.mfaOverride.set(false);
+  }
+
+  async regenerateRecoveryCodes(password: string): Promise<string[]> {
+    const response = await firstValueFrom(
+      this.http.post<RecoveryCodesResponse>(`${ACCOUNT}/totp/recovery-codes`, { password }),
+    );
+    return response.recovery_codes;
+  }
+
+  // --------------------------------------------------------------- passkeys
+
+  async loadPasskeys(): Promise<void> {
+    const response = await firstValueFrom(this.http.get<PasskeyList>(`${ACCOUNT}/passkeys`));
+    this.passkeys.set(response.items);
+    this.passkeysLoaded.set(true);
+  }
+
+  registrationOptions(): Promise<PasskeyRegistrationOptions> {
+    return firstValueFrom(
+      this.http.post<PasskeyRegistrationOptions>(`${ACCOUNT}/passkeys/options`, {}),
+    );
+  }
+
+  async registerPasskey(
+    challengeToken: string,
+    credential: RegisteredCredentialJson,
+    name: string,
+  ): Promise<Passkey> {
+    const created = await firstValueFrom(
+      this.http.post<Passkey>(`${ACCOUNT}/passkeys`, {
+        challenge_token: challengeToken,
+        credential,
+        name: name || null,
+      }),
+    );
+    this.passkeys.update((items) => [created, ...items]);
+    this.passkeysLoaded.set(true);
+    return created;
+  }
+
+  async renamePasskey(id: string, name: string): Promise<void> {
+    const updated = await firstValueFrom(
+      this.http.patch<Passkey>(`${ACCOUNT}/passkeys/${id}`, { name }),
+    );
+    this.passkeys.update((items) => items.map((item) => (item.id === id ? updated : item)));
+  }
+
+  async removePasskey(id: string): Promise<void> {
+    await firstValueFrom(this.http.delete(`${ACCOUNT}/passkeys/${id}`));
+    this.passkeys.update((items) => items.filter((item) => item.id !== id));
+  }
+}
+
+// ---------------------------------------------------------------- messages
+
+/**
+ * The message a panel shows next to the control that failed.
+ *
+ * These failures are expected and local — a wrong password, a code that did not
+ * verify — so they belong beside the field rather than in the shell's error
+ * banner, which is reserved for a page that could not load at all.
+ */
+export function detailOf(cause: unknown): string {
+  if (cause instanceof HttpErrorResponse) {
+    const detail: unknown = (cause.error as { detail?: unknown } | null)?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+    if (cause.status === 0) {
+      return 'The application server is unreachable.';
+    }
+  }
+  return 'The request could not be completed.';
+}
+
+// -------------------------------------------------------------- WebAuthn IO
+
+/** True when this browser can run a WebAuthn registration ceremony. */
+export function webauthnAvailable(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.PublicKeyCredential !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
+    typeof navigator.credentials?.create === 'function'
+  );
+}
+
+/**
+ * Decode base64url into bytes.
+ *
+ * The buffer is allocated as a plain `ArrayBuffer` rather than left to the
+ * `Uint8Array(length)` overload, whose `ArrayBufferLike` buffer type is not a
+ * `BufferSource`: a `SharedArrayBuffer` cannot be handed to `credentials
+ * .create()`. Naming the concrete buffer type keeps that guarantee in the type
+ * system instead of asserting it away.
+ */
+export function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(padded.padEnd(padded.length + ((4 - (padded.length % 4)) % 4), '='));
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+export function bytesToBase64Url(buffer: ArrayBuffer): string {
+  let binary = '';
+  for (const byte of new Uint8Array(buffer)) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Turn the JSON transport form into the binary form `create()` requires. */
+export function toCreationOptions(
+  json: PasskeyRegistrationOptions['options'],
+): PublicKeyCredentialCreationOptions {
+  return {
+    challenge: base64UrlToBytes(json.challenge),
+    rp: json.rp,
+    user: {
+      id: base64UrlToBytes(json.user.id),
+      name: json.user.name,
+      displayName: json.user.displayName,
+    },
+    pubKeyCredParams: json.pubKeyCredParams.map((parameter) => ({
+      type: parameter.type as PublicKeyCredentialType,
+      alg: parameter.alg,
+    })),
+    timeout: json.timeout,
+    attestation: json.attestation as AttestationConveyancePreference | undefined,
+    excludeCredentials: json.excludeCredentials?.map((descriptor) => ({
+      id: base64UrlToBytes(descriptor.id),
+      type: descriptor.type as PublicKeyCredentialType,
+      transports: descriptor.transports as AuthenticatorTransport[] | undefined,
+    })),
+    authenticatorSelection: json.authenticatorSelection as
+      | AuthenticatorSelectionCriteria
+      | undefined,
+  };
+}
+
+/** Serialize the credential the authenticator produced for the API. */
+export function toRegisteredCredential(credential: PublicKeyCredential): RegisteredCredentialJson {
+  const response = credential.response as AuthenticatorAttestationResponse;
+  return {
+    id: credential.id,
+    rawId: bytesToBase64Url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment,
+    clientExtensionResults: credential.getClientExtensionResults() as Record<string, unknown>,
+    response: {
+      clientDataJSON: bytesToBase64Url(response.clientDataJSON),
+      attestationObject: bytesToBase64Url(response.attestationObject),
+      transports:
+        typeof response.getTransports === 'function' ? response.getTransports() : undefined,
+    },
+  };
+}

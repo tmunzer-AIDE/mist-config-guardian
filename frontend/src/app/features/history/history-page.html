@@ -1,0 +1,214 @@
+<section class="col col--objects" aria-label="Configuration objects">
+  <div class="col-head">
+    <h2 class="cg-label col-title">OBJECTS</h2>
+    <div class="filter">
+      <span class="filter-mark" aria-hidden="true"></span>
+      <input
+        class="filter-input"
+        type="search"
+        placeholder="Filter by name or type"
+        aria-label="Filter by name or type"
+        [value]="query()"
+        (input)="setQuery($event)"
+      />
+    </div>
+  </div>
+
+  <div class="col-body cg-scroll">
+    @for (group of objectGroups(); track group.label) {
+      <h3 class="cg-label group">{{ group.label }}</h3>
+      @for (row of group.items; track row.id) {
+        <button
+          class="object"
+          type="button"
+          [class.object--on]="row.selected"
+          [class.object--deleted]="row.deleted"
+          [attr.aria-pressed]="row.selected"
+          (click)="selectObject(row.id)"
+        >
+          <span class="object-top">
+            <span class="object-name">{{ row.name }}</span>
+            @if (row.deleted) {
+              <span class="object-tomb">DELETED</span>
+            }
+            <span class="object-version">{{ row.version }}</span>
+          </span>
+          <span class="object-meta">{{ row.meta }}</span>
+        </button>
+      }
+    }
+
+    @if (noObjects()) {
+      <p class="col-empty">No configuration objects have been captured for this organization yet.</p>
+    } @else if (noMatches()) {
+      <p class="col-empty">No object matches that filter.</p>
+    }
+  </div>
+
+  <div class="col-foot">
+    <button
+      class="cg-toggle"
+      type="button"
+      [class.cg-toggle--on]="showDeleted()"
+      [attr.aria-pressed]="showDeleted()"
+      (click)="toggleDeleted()"
+    >
+      <span class="cg-toggle__track" aria-hidden="true"><span class="cg-toggle__thumb"></span></span>
+      Show deleted
+    </button>
+  </div>
+</section>
+
+<section class="col col--versions" aria-label="Versions">
+  <div class="col-head col-head--ruled">
+    <h2 class="cg-label col-title">VERSIONS</h2>
+    <p class="col-hint">Newest is B, previous is A</p>
+  </div>
+
+  <div class="col-body cg-scroll">
+    @for (row of versionRows(); track row.id) {
+      <div class="version" [class.version--a]="row.isA" [class.version--b]="row.isB">
+        <div class="version-top">
+          <span class="version-label">{{ row.label }}</span>
+          <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.event }}</span>
+          <span class="pins">
+            <button
+              class="pin"
+              type="button"
+              [class.pin--on]="row.isA"
+              [attr.aria-pressed]="row.isA"
+              [attr.aria-label]="'Compare from ' + row.label"
+              (click)="pin('a', row.id)"
+            >
+              A
+            </button>
+            <button
+              class="pin"
+              type="button"
+              [class.pin--on]="row.isB"
+              [attr.aria-pressed]="row.isB"
+              [attr.aria-label]="'Compare to ' + row.label"
+              (click)="pin('b', row.id)"
+            >
+              B
+            </button>
+          </span>
+        </div>
+        <div class="version-at cg-mono">{{ row.at }}</div>
+        <div class="version-actor">{{ row.actor }}</div>
+      </div>
+    } @empty {
+      <p class="col-empty">No versions captured for this object.</p>
+    }
+  </div>
+</section>
+
+<section class="panel" aria-label="Comparison">
+  @if (selectedObject(); as object) {
+    <header class="panel-head">
+      <div class="panel-head-top">
+        <h1 class="panel-name">{{ object.name }}</h1>
+        <span class="panel-kind cg-mono">{{ objectKind() }}</span>
+        <div class="panel-actions">
+          <div class="export">
+            <button
+              class="cg-btn cg-btn--sm cg-btn--selected"
+              type="button"
+              [disabled]="!hasDiff() || exporting()"
+              [attr.aria-expanded]="exportOpen()"
+              (click)="toggleExport()"
+            >
+              Export ▾
+            </button>
+            @if (exportOpen()) {
+              <div class="cg-menu export-menu" role="menu">
+                <button class="export-option" type="button" role="menuitem" (click)="exportDiff('json')">
+                  Structured JSON
+                </button>
+                <button class="export-option" type="button" role="menuitem" (click)="exportDiff('patch')">
+                  JSON Patch
+                </button>
+              </div>
+            }
+          </div>
+          @if (restorable()) {
+            <button
+              class="cg-btn cg-btn--sm cg-btn--primary"
+              type="button"
+              [disabled]="!canRestore()"
+              [attr.title]="time.isHistorical() ? 'Write operations are disabled while viewing the past' : null"
+              (click)="restoreVersion()"
+            >
+              Restore this version
+            </button>
+          }
+        </div>
+      </div>
+
+      @if (hasDiff()) {
+        <div class="pair">
+          <span class="pair-tag pair-tag--a">{{ pairA() }}</span>
+          <span class="pair-arrow" aria-hidden="true">→</span>
+          <span class="pair-tag pair-tag--b">{{ pairB() }}</span>
+          <span class="pair-summary">{{ summary() }}</span>
+        </div>
+      }
+    </header>
+  }
+
+  @if (hasDiff()) {
+    <div class="body cg-scroll">
+      <app-ai-assist-strip
+        [offered]="aiOffered()"
+        [state]="aiState()"
+        [prompt]="aiPrompt()"
+        [disclaimer]="disclaimer()"
+        [note]="aiNote()"
+        [meta]="aiMeta()"
+        [summary]="aiSummary()"
+        [question]="question()"
+        [answer]="answer()"
+        [asking]="asking()"
+        [canAsk]="canAsk()"
+        [questionMaxLength]="questionMaxLength"
+        (run)="runAi($event)"
+        (ask)="ask()"
+        (questionChange)="question.set($event)"
+        (openSettings)="openAiSettings()"
+      />
+
+      @if (truncated()) {
+        <p class="notice cg-meta">
+          This comparison is larger than one response carries: the sections below are complete, but their
+          entries are capped by the API.
+        </p>
+      }
+
+      <app-diff-panel
+        [compact]="isCompact()"
+        [sectioned]="isSectioned()"
+        [changed]="counts()?.changed ?? 0"
+        [cards]="changeCards()"
+        [notable]="notable()"
+        [sections]="sections()"
+        [rawLabel]="rawLabel()"
+        [rawExpanded]="rawExpanded()"
+        [rawLoading]="rawLoading()"
+        [rawRows]="rawRows()"
+        (openSection)="toggleSection($event)"
+        (expandSection)="expandSection($event)"
+        (toggleRaw)="toggleRaw()"
+      />
+    </div>
+  } @else if (!diffLoading()) {
+    <div class="body">
+      <div class="empty">
+        <div class="empty-title">No comparison for this object yet</div>
+        <p class="empty-body">
+          Pick two versions in the rail to build a diff, or choose an object with more than one captured
+          version.
+        </p>
+      </div>
+    </div>
+  }
+</section>

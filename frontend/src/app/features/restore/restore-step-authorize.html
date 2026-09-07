@@ -1,0 +1,179 @@
+<section class="cg-card panel">
+  <h2 class="title">{{ title() }}</h2>
+  <p class="lead">
+    The organization's stored service token is read-only by design, so a restore needs a separate
+    write credential. Whichever you use is encrypted at rest, used for this operation only, and
+    discarded when it finishes.
+  </p>
+
+  @if (deleteCount() > 0) {
+    <p class="destructive" role="note">
+      <span class="cg-badge cg-badge--crit">DESTRUCTIVE</span>
+      This plan deletes {{ deleteCount() }}
+      {{ deleteCount() === 1 ? 'object' : 'objects' }} in Mist. Deletion is not reversible from Mist;
+      only compensation, planned from the recorded configuration, can put them back.
+    </p>
+  }
+
+  @if (!compensation()) {
+    <p class="cg-label section-label">RESTORE MODE</p>
+    <div class="modes" role="radiogroup" aria-label="Restore mode">
+      @for (option of modes(); track option.value) {
+        <label class="mode" [class.mode--on]="option.on">
+          <input
+            class="cg-visually-hidden"
+            type="radio"
+            name="authorize-mode"
+            [value]="option.value"
+            [checked]="option.on"
+            [disabled]="readOnly() || busy()"
+            (change)="modePicked.emit(option.value)"
+          />
+          <span class="mode-name">{{ option.label }}</span>
+          <span class="mode-body">{{ option.consequence }}</span>
+        </label>
+      }
+    </div>
+    <p class="mode-note">Changing the mode rebuilds the plan, because the action list differs.</p>
+  }
+
+  @if (review(); as approval) {
+    <div class="approval" [attr.data-tone]="approval.tone">
+      <div class="approval-head">
+        <span class="cg-label">SECOND ADMINISTRATOR</span>
+        <span class="cg-badge" [class]="'cg-badge cg-badge--' + approval.tone">
+          {{ approval.status }}
+        </span>
+      </div>
+      @if (approval.summary) {
+        <p class="approval-summary">{{ approval.summary }}</p>
+      }
+      <ul class="approval-rules">
+        @for (rule of approval.rules; track rule.key) {
+          <li><span class="approval-rule">{{ rule.label }}</span> — {{ rule.detail }}</li>
+        }
+      </ul>
+      <dl class="approval-meta">
+        <div><dt>Requested by</dt><dd>{{ approval.requestedBy }}</dd></div>
+        <div><dt>Plan</dt><dd>{{ approval.counts }}</dd></div>
+        @if (approval.expiresAt) {
+          <div><dt>Expires</dt><dd>{{ approval.expiresAt }}</dd></div>
+        }
+        @if (approval.decidedBy) {
+          <div><dt>Decided by</dt><dd>{{ approval.decidedBy }} · {{ approval.decidedAt }}</dd></div>
+        }
+      </dl>
+      @if (approval.reason) {
+        <p class="approval-reason">“{{ approval.reason }}”</p>
+      }
+      @if (approval.pending) {
+        <p class="approval-wait">
+          Execution stays closed until a second administrator approves this exact plan. Rebuilding
+          the plan invalidates the request.
+        </p>
+        <button
+          class="cg-btn cg-btn--sm"
+          type="button"
+          [disabled]="busy()"
+          (click)="approvalRefreshed.emit()"
+        >
+          Check for a decision
+        </button>
+      }
+    </div>
+  }
+
+  <p class="cg-label section-label">CREDENTIAL METHOD</p>
+  <div class="methods" role="radiogroup" aria-label="Credential method">
+    @for (option of methods; track option.key) {
+      <label
+        class="method"
+        [class.method--on]="method() === option.key"
+        [class.method--off]="!option.available"
+      >
+        <input
+          class="cg-visually-hidden"
+          type="radio"
+          name="credential-method"
+          [value]="option.key"
+          [checked]="method() === option.key"
+          [disabled]="!option.available"
+          (change)="setMethod(option.key)"
+        />
+        <span class="method-head">
+          <span class="method-name">{{ option.label }}</span>
+          @if (!option.available) {
+            <span class="cg-badge">PLANNED</span>
+          }
+        </span>
+        <span class="method-sub">{{ option.sub }}</span>
+      </label>
+    }
+  </div>
+
+  @if (method() === 'token') {
+    <p class="cg-label section-label" id="token-label">ADMINISTRATOR API TOKEN</p>
+    <div class="token">
+      <input
+        class="token-input"
+        [type]="revealed() ? 'text' : 'password'"
+        placeholder="Paste token"
+        autocomplete="off"
+        spellcheck="false"
+        aria-labelledby="token-label"
+        aria-describedby="token-hint"
+        [value]="token()"
+        [disabled]="!canAuthorize() || busy()"
+        (input)="setToken($event)"
+      />
+      <button
+        class="cg-btn cg-btn--sm token-reveal"
+        type="button"
+        [attr.aria-pressed]="revealed()"
+        (click)="toggleReveal()"
+      >
+        {{ revealed() ? 'Hide' : 'Show' }}
+      </button>
+    </div>
+    <p class="token-hint" id="token-hint" [attr.data-tone]="tokenTone()">{{ tokenHint() }}</p>
+    <p class="token-note">
+      The narrowest option — no password leaves your hands, the token is never stored by this page,
+      and its write scope is verified before the first action.
+    </p>
+  } @else {
+    <div class="planned">
+      <p class="planned-title">Mist login and password</p>
+      <p class="planned-body">
+        Not available yet. Exchanging an administrator login for a short-lived Mist session awaits a
+        Mist API support discovery step; until it lands, authorize with a fresh administrator API
+        token.
+      </p>
+    </div>
+  }
+
+  <div class="actions">
+    <button
+      class="cg-btn cg-btn--danger cg-btn--lg"
+      type="button"
+      [disabled]="!canSubmit()"
+      (click)="submit()"
+    >
+      {{ compensation() ? 'Authorize and run compensation' : 'Authorize and execute ' + count() + ' write actions' }}
+    </button>
+    <button class="cg-btn cg-btn--lg" type="button" (click)="cancel()">Cancel</button>
+    @if (!approval() && !compensation()) {
+      <button
+        class="cg-btn cg-btn--link"
+        type="button"
+        [disabled]="readOnly() || busy()"
+        (click)="approvalRequested.emit()"
+      >
+        Ask a second administrator to review
+      </button>
+    }
+  </div>
+
+  @if (!canAuthorize()) {
+    <p class="blocked" role="note">{{ authorizeNote() }}</p>
+  }
+</section>

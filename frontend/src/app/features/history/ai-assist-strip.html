@@ -1,0 +1,106 @@
+@if (!offered()) {
+  <!-- Advisory only: an unconfigured or refusing endpoint is a quiet inline
+       note, never the shell's error banner. -->
+  <div class="ai-off" role="note">
+    <span class="cg-label">AI ASSIST</span>
+    <span class="ai-off-text">
+      {{ note() || 'Disabled in settings. The comparison below is computed and unaffected.' }}
+    </span>
+    <button class="cg-btn--link ai-off-link" type="button" (click)="openSettings.emit()">
+      Settings · AI Assist →
+    </button>
+  </div>
+} @else {
+  <div class="ai">
+    <div class="ai-head">
+      <span class="cg-label ai-title">AI ASSIST</span>
+      <span class="cg-badge cg-badge--info">ADVISORY</span>
+
+      @switch (state()) {
+        @case ('generating') {
+          <span class="ai-note">Reading the changed fields…</span>
+          <span class="cg-spinner ai-spinner" aria-hidden="true"></span>
+          <span class="cg-visually-hidden" role="status">Summarising the changed fields</span>
+        }
+        @case ('generated') {
+          <span class="ai-note">{{ meta() }}</span>
+          <span class="ai-head-actions">
+            <button class="ai-action" type="button" (click)="run.emit(true)">REGENERATE</button>
+          </span>
+        }
+        @default {
+          <span class="ai-note">{{ disclaimer() }}</span>
+          <button class="cg-btn cg-btn--sm cg-btn--primary ai-run" type="button" (click)="run.emit(false)">
+            {{ prompt() }}
+          </button>
+        }
+      }
+    </div>
+
+    @if (state() === 'generating') {
+      <div class="ai-skeleton" aria-hidden="true">
+        <div class="cg-skeleton ai-line ai-line--1"></div>
+        <div class="cg-skeleton ai-line ai-line--2"></div>
+        <div class="cg-skeleton ai-line ai-line--3"></div>
+      </div>
+    }
+
+    @if (state() === 'failed') {
+      <p class="ai-quiet">{{ note() }}</p>
+    }
+
+    @if (state() === 'generated' && summary(); as generated) {
+      <div class="ai-body">
+        <div>
+          <p class="ai-summary">{{ generated.summary }}</p>
+          @if (intent().length > 0) {
+            <h3 class="cg-label ai-sub">LIKELY INTENT</h3>
+            <ul class="ai-intent">
+              @for (card of intent(); track $index) {
+                <li><span class="ai-dash" aria-hidden="true">—</span>{{ card.text }}</li>
+              }
+            </ul>
+          }
+        </div>
+        @if (flags().length > 0) {
+          <div>
+            <h3 class="cg-label ai-sub ai-sub--flag">FLAGGED FOR REVIEW · {{ flags().length }}</h3>
+            <div class="ai-flags">
+              @for (card of flags(); track $index) {
+                <div class="ai-flag" [attr.data-tone]="toneOfLevel(card.level)">
+                  <p class="ai-flag-text">{{ card.text }}</p>
+                  @if (card.field) {
+                    <span class="ai-flag-ref cg-mono">{{ card.field }} ↗</span>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+        }
+      </div>
+
+      <div class="ai-foot">
+        @if (answer(); as text) {
+          <p class="ai-answer">{{ text }}</p>
+        }
+        <div class="ai-ask">
+          <input
+            class="cg-input ai-ask-input"
+            type="text"
+            placeholder="Ask a follow-up about these changes"
+            aria-label="Ask a follow-up about these changes"
+            [maxLength]="questionMaxLength()"
+            [value]="question()"
+            (input)="onQuestion($event)"
+          />
+          <button class="cg-btn cg-btn--sm" type="button" [disabled]="!canAsk()" (click)="ask.emit()">
+            {{ asking() ? 'Asking…' : 'Ask' }}
+          </button>
+          <p class="ai-disclaimer">
+            {{ generated.disclaimer }} Advisory only — the counts and values below are computed.
+          </p>
+        </div>
+      </div>
+    }
+  </div>
+}

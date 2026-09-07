@@ -1,0 +1,245 @@
+.stack {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.card {
+  padding: 18px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0;
+}
+
+.card-sub {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+
+.card-action {
+  margin-top: 14px;
+}
+
+// The enrolment card is the one place the operator is asked to move a secret by
+// hand, so it takes the brand's attention treatment.
+.card--enrolling {
+  background: linear-gradient(180deg, rgba(246, 248, 253, 0.92), rgba(255, 255, 255, 0.74));
+  border-color: rgba(39, 67, 163, 0.22);
+  border-top: 2px solid var(--brand);
+  box-shadow:
+    0 1px 2px rgba(39, 67, 163, 0.06),
+    0 14px 34px -18px rgba(39, 67, 163, 0.34);
+  animation: cg-in 0.18s ease-out;
+}
+
+.card--on {
+  background: linear-gradient(180deg, rgba(232, 243, 236, 0.92), rgba(255, 255, 255, 0.76));
+  border-color: rgba(18, 107, 52, 0.22);
+  border-left: 3px solid var(--tone-ok-ink);
+  box-shadow:
+    0 1px 2px rgba(18, 107, 52, 0.06),
+    0 14px 34px -18px rgba(18, 107, 52, 0.3);
+}
+
+.card--prompt {
+  border-color: var(--border-subtle);
+  animation: cg-in 0.18s ease-out;
+}
+
+.field {
+  display: block;
+  margin-top: 15px;
+}
+
+.cg-label {
+  display: block;
+  margin-bottom: 7px;
+}
+
+.secret,
+.uri {
+  border: 1px solid var(--hairline-strong);
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  margin: 0;
+  user-select: text;
+}
+
+.secret {
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+}
+
+.uri {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.code-input {
+  max-width: 190px;
+  font: 400 15px var(--font-mono);
+  letter-spacing: 0.24em;
+}
+
+.password-input {
+  max-width: 280px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.badge-on,
+.badge-once {
+  display: inline-block;
+  font: 600 9.5px var(--font-mono);
+  color: var(--ink-invert);
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+
+.badge-on {
+  background: var(--tone-ok-ink);
+}
+
+.badge-once {
+  background: var(--tone-warning-ink);
+}
+
+.danger-link {
+  margin-left: auto;
+  color: var(--tone-critical-ink);
+
+  &:hover:not(:disabled) {
+    color: var(--tone-critical-hover);
+  }
+}
+
+.brand-link {
+  margin-left: auto;
+}
+
+.codes {
+  margin-top: 12px;
+  border: 1px solid rgba(138, 83, 6, 0.2);
+  background: linear-gradient(180deg, rgba(253, 251, 244, 0.92), rgba(255, 255, 255, 0.68));
+  border-radius: var(--radius-xl);
+  box-shadow: 0 8px 22px -14px rgba(138, 83, 6, 0.28);
+  padding: 14px;
+}
+
+.codes-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.codes-note {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.codes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code {
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-raised);
+  border-radius: var(--radius);
+  padding: 7px 9px;
+  font-size: 12px;
+  text-align: center;
+  user-select: text;
+}
+
+.codes-actions {
+  margin-top: 13px;
+  gap: 8px;
+}
+
+.status {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.status-text {
+  display: inline-block;
+
+  &::before {
+    margin-right: 5px;
+  }
+}
+
+.status-text--ok {
+  color: var(--tone-ok-ink);
+
+  &::before {
+    content: '✓';
+  }
+}
+
+.status-text--bad {
+  color: var(--tone-critical-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card--enrolling,
+  .card--prompt {
+    animation: none;
+  }
+}
+
+.qr {
+  width: 168px;
+  padding: 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    shape-rendering: crispEdges;
+  }
+
+  path {
+    stroke: var(--ink);
+  }
+}
