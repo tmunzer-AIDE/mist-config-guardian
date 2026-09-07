@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mist-config-guardian.fullname" . }}
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+data:
+  APP_NAME: Mist Config Guardian
+  APP_VERSION: {{ .Chart.AppVersion | quote }}
+  ENVIRONMENT: {{ .Values.config.environment | quote }}
+  API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
+  CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  MONGODB_URL: {{ .Values.config.mongodbUrl | quote }}
+  MONGODB_DB_NAME: {{ .Values.config.mongodbDatabase | quote }}
+  REDIS_URL: {{ .Values.config.redisUrl | quote }}
+  CELERY_BROKER_URL: {{ .Values.config.celeryBrokerUrl | quote }}
+  CELERY_RESULT_BACKEND: {{ .Values.config.celeryResultBackend | quote }}
+  INFLUXDB_URL: {{ .Values.config.influxdbUrl | quote }}
+  INFLUXDB_ORG: {{ .Values.config.influxdbOrg | quote }}
+  INFLUXDB_BUCKET: {{ .Values.config.influxdbBucket | quote }}
+  IMPACT_AI_ENABLED: {{ .Values.config.impactAiEnabled | quote }}
+  IMPACT_AI_BASE_URL: {{ .Values.config.impactAiBaseUrl | quote }}
+  IMPACT_AI_MODEL: {{ .Values.config.impactAiModel | quote }}

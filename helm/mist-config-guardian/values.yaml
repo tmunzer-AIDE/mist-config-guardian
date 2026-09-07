@@ -1,0 +1,54 @@
+image:
+  repository: docker.io/tmunzer/mist-config-guardian
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+frontendImage:
+  repository: docker.io/tmunzer/mist-config-guardian-frontend
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+workerReplicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 80
+
+existingSecret: mist-config-guardian-secrets
+
+secrets:
+  # Prefer an externally managed Secret in production. Enabling this stores
+  # sensitive values in the Helm release as well as the generated Secret.
+  create: false
+  secretKey: ""
+  bootstrapAdminToken: ""
+  credentialEncryptionKey: ""
+  influxdbToken: ""
+  impactAiApiKey: ""
+
+config:
+  environment: production
+  apiV1Prefix: /api/v1
+  corsOrigins: https://guardian.example.com
+  mongodbUrl: mongodb://mongodb:27017
+  mongodbDatabase: mist_config_guardian
+  redisUrl: redis://redis:6379/0
+  celeryBrokerUrl: redis://redis:6379/1
+  celeryResultBackend: redis://redis:6379/2
+  influxdbUrl: http://influxdb:8086
+  influxdbOrg: mist_config_guardian
+  influxdbBucket: network_monitoring
+  impactAiEnabled: false
+  impactAiBaseUrl: ""
+  impactAiModel: ""
+
+resources: {}
+frontendResources: {}
+workerResources: {}
+
+ingress:
+  enabled: false
+  className: ""
+  host: guardian.example.com
+  tlsSecretName: ""

@@ -1,0 +1,233 @@
+categories:
+  - Monitoring
+  - Security
+
+questions:
+  - variable: image.repository
+    default: docker.io/tmunzer/mist-config-guardian
+    type: string
+    required: true
+    label: Backend image repository
+    group: Container Images
+  - variable: image.tag
+    default: "0.1.0"
+    type: string
+    required: true
+    label: Backend image tag
+    group: Container Images
+  - variable: image.pullPolicy
+    default: IfNotPresent
+    type: enum
+    options:
+      - IfNotPresent
+      - Always
+      - Never
+    label: Backend image pull policy
+    group: Container Images
+  - variable: frontendImage.repository
+    default: docker.io/tmunzer/mist-config-guardian-frontend
+    type: string
+    required: true
+    label: Frontend image repository
+    group: Container Images
+  - variable: frontendImage.tag
+    default: "0.1.0"
+    type: string
+    required: true
+    label: Frontend image tag
+    group: Container Images
+  - variable: frontendImage.pullPolicy
+    default: IfNotPresent
+    type: enum
+    options:
+      - IfNotPresent
+      - Always
+      - Never
+    label: Frontend image pull policy
+    group: Container Images
+
+  - variable: replicaCount
+    default: 1
+    type: int
+    min: 1
+    label: API and frontend replicas
+    group: Workloads
+  - variable: workerReplicaCount
+    default: 1
+    type: int
+    min: 1
+    label: Celery worker replicas
+    group: Workloads
+
+  - variable: service.type
+    default: ClusterIP
+    type: enum
+    options:
+      - ClusterIP
+      - NodePort
+      - LoadBalancer
+    label: Frontend service type
+    group: Networking
+  - variable: service.port
+    default: 80
+    type: int
+    min: 1
+    max: 65535
+    label: Frontend service port
+    group: Networking
+  - variable: ingress.enabled
+    default: false
+    type: boolean
+    label: Enable ingress
+    group: Networking
+    show_subquestion_if: true
+    subquestions:
+      - variable: ingress.className
+        default: ""
+        type: string
+        label: Ingress class name
+      - variable: ingress.host
+        default: guardian.example.com
+        type: hostname
+        required: true
+        label: Application hostname
+      - variable: ingress.tlsSecretName
+        default: ""
+        type: string
+        label: TLS Secret name
+        description: Leave empty to expose the ingress without TLS.
+  - variable: config.corsOrigins
+    default: https://guardian.example.com
+    type: string
+    required: true
+    label: Allowed CORS origins
+    description: Comma-separated application origins, including scheme.
+    group: Networking
+
+  - variable: config.environment
+    default: production
+    type: enum
+    options:
+      - production
+      - development
+      - test
+    label: Runtime environment
+    group: Application
+  - variable: config.apiV1Prefix
+    default: /api/v1
+    type: string
+    required: true
+    label: API path prefix
+    group: Application
+
+  - variable: config.mongodbUrl
+    default: mongodb://mongodb:27017
+    type: string
+    required: true
+    label: MongoDB URL
+    group: Data Services
+  - variable: config.mongodbDatabase
+    default: mist_config_guardian
+    type: string
+    required: true
+    label: MongoDB database
+    group: Data Services
+  - variable: config.redisUrl
+    default: redis://redis:6379/0
+    type: string
+    required: true
+    label: Redis URL
+    group: Data Services
+  - variable: config.celeryBrokerUrl
+    default: redis://redis:6379/1
+    type: string
+    required: true
+    label: Celery broker URL
+    group: Data Services
+  - variable: config.celeryResultBackend
+    default: redis://redis:6379/2
+    type: string
+    required: true
+    label: Celery result backend
+    group: Data Services
+  - variable: config.influxdbUrl
+    default: http://influxdb:8086
+    type: string
+    required: true
+    label: InfluxDB URL
+    group: Data Services
+  - variable: config.influxdbOrg
+    default: mist_config_guardian
+    type: string
+    required: true
+    label: InfluxDB organization
+    group: Data Services
+  - variable: config.influxdbBucket
+    default: network_monitoring
+    type: string
+    required: true
+    label: InfluxDB bucket
+    group: Data Services
+
+  - variable: secrets.create
+    default: false
+    type: boolean
+    label: Create the application Secret
+    description: Prefer an externally managed Secret in production. Managed values are also stored in Helm release data.
+    group: Secrets
+    show_subquestion_if: true
+    subquestions:
+      - variable: secrets.secretKey
+        default: ""
+        type: password
+        required: true
+        label: JWT signing secret
+        description: Use a unique, random value of at least 64 characters.
+      - variable: secrets.bootstrapAdminToken
+        default: ""
+        type: password
+        required: true
+        label: Administrator bootstrap token
+        description: Used once to create the first local administrator.
+      - variable: secrets.credentialEncryptionKey
+        default: ""
+        type: password
+        required: true
+        label: Credential encryption key
+        description: Back up this value; losing it makes encrypted credentials unrecoverable.
+      - variable: secrets.influxdbToken
+        default: ""
+        type: password
+        required: true
+        label: InfluxDB API token
+  - variable: existingSecret
+    default: mist-config-guardian-secrets
+    type: string
+    required: true
+    label: Existing Secret name
+    description: Must contain SECRET_KEY, BOOTSTRAP_ADMIN_TOKEN, CREDENTIAL_ENCRYPTION_KEY, and INFLUXDB_TOKEN.
+    group: Secrets
+    show_if: "secrets.create=false"
+
+  - variable: config.impactAiEnabled
+    default: false
+    type: boolean
+    label: Enable AI-assisted impact analysis
+    group: AI Impact Analysis
+    show_subquestion_if: true
+    subquestions:
+      - variable: config.impactAiBaseUrl
+        default: ""
+        type: string
+        required: true
+        label: OpenAI-compatible API base URL
+      - variable: config.impactAiModel
+        default: ""
+        type: string
+        required: true
+        label: Model name
+      - variable: secrets.impactAiApiKey
+        default: ""
+        type: password
+        label: AI API key
+        description: Required here only when the chart creates the Secret; otherwise add IMPACT_AI_API_KEY to the existing Secret.

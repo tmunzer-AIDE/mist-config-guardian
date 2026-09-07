@@ -1,0 +1,70 @@
+<section class="auth-page">
+  <div class="auth-card">
+    <p class="eyebrow">Secure administration</p>
+    <h2>{{ mode() === 'login' ? 'Sign in' : 'Create the first administrator' }}</h2>
+    <p class="intro">
+      Local accounts manage the application. Mist super-user re-authentication will be required
+      separately before any configuration write.
+    </p>
+
+    <div class="mode-switch" role="tablist" aria-label="Authentication mode">
+      <button type="button" [class.active]="mode() === 'login'" (click)="switchMode('login')">
+        Sign in
+      </button>
+      <button
+        type="button"
+        [class.active]="mode() === 'bootstrap'"
+        (click)="switchMode('bootstrap')"
+      >
+        First-time setup
+      </button>
+    </div>
+
+    @if (bootstrapCreated()) {
+      <div class="success">Administrator created. Sign in to continue.</div>
+    }
+    @if (error()) {
+      <div class="error" role="alert">{{ error() }}</div>
+    }
+
+    @if (mode() === 'login') {
+      <form [formGroup]="loginForm" (ngSubmit)="login()">
+        <label>
+          Email
+          <input type="email" formControlName="email" autocomplete="username" />
+        </label>
+        <label>
+          Password
+          <input type="password" formControlName="password" autocomplete="current-password" />
+        </label>
+        <button class="primary" type="submit" [disabled]="busy()">
+          {{ busy() ? 'Signing in…' : 'Sign in' }}
+        </button>
+      </form>
+    } @else {
+      <form [formGroup]="bootstrapForm" (ngSubmit)="bootstrap()">
+        <label>
+          Display name
+          <input type="text" formControlName="display_name" autocomplete="name" />
+        </label>
+        <label>
+          Email
+          <input type="email" formControlName="email" autocomplete="username" />
+        </label>
+        <label>
+          Password
+          <input type="password" formControlName="password" autocomplete="new-password" />
+          <small>At least 12 characters.</small>
+        </label>
+        <label>
+          Bootstrap token
+          <input type="password" formControlName="bootstrap_token" autocomplete="off" />
+          <small>Set by the deployment operator through <code>BOOTSTRAP_ADMIN_TOKEN</code>.</small>
+        </label>
+        <button class="primary" type="submit" [disabled]="busy()">
+          {{ busy() ? 'Creating administrator…' : 'Create administrator' }}
+        </button>
+      </form>
+    }
+  </div>
+</section>

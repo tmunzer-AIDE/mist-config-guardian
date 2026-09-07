@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mist-config-guardian.fullname" . }}-worker
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.workerReplicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - mist_config_guardian_backend.worker.celery_app
+            - worker
+            - --loglevel=INFO
+          envFrom:
+            - configMapRef:
+                name: {{ include "mist-config-guardian.fullname" . }}
+            - secretRef:
+                name: {{ include "mist-config-guardian.secretName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          resources:
+            {{- toYaml .Values.workerResources | nindent 12 }}

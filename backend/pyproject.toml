@@ -1,0 +1,86 @@
+[project]
+name = "mist-config-guardian-backend"
+version = "0.1.0"
+description = "FastAPI backend for Mist Config Guardian"
+readme = "README.md"
+authors = [
+    { name = "Thomas Munzer", email = "tmunzer@juniper.net" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "beanie>=2.2.0",
+    "celery>=5.6.3",
+    "cryptography>=50.0.1",
+    "email-validator>=2.3.0",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "influxdb-client[async]>=1.50.0",
+    "mistapi>=0.63.3",
+    "motor>=3.7.1",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic-settings>=2.15.0",
+    "pyjwt>=2.13.0",
+    "pymongo>=4.18.0",
+    "python-multipart>=0.0.32",
+    "redis>=8.1.0",
+    "structlog>=26.1.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.scripts]
+mist-config-guardian = "mist_config_guardian_backend.main:run"
+
+[build-system]
+requires = ["uv_build>=0.11.25,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "pytest-httpx>=0.36.2",
+    "ruff>=0.16.5",
+    "ty>=0.0.78",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",
+    "CPY001",
+    "D",
+    "ISC001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ANN", "PLR2004", "S101", "S105", "S106"]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--cov=mist_config_guardian_backend",
+    "--cov-report=term-missing",
+]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/mist_config_guardian_backend"]
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+unused-ignore-comment = "warn"

@@ -1,0 +1,46 @@
+<div class="app-shell">
+  @if (auth.isAuthenticated()) {
+  <aside class="sidebar">
+    <a class="brand" routerLink="/" aria-label="Mist Config Guardian home">
+      <span class="brand-mark" aria-hidden="true">MCG</span>
+      <span>
+        <strong>Mist Config</strong>
+        <small>Guardian</small>
+      </span>
+    </a>
+
+    <nav aria-label="Primary navigation">
+      @for (item of [
+        ['Overview', '/'],
+        ['Changes', '/changes'],
+        ['Configuration history', '/history'],
+        ['Restore center', '/restores'],
+        ['Impact monitoring', '/monitoring'],
+        ['Organizations', '/organizations']
+      ]; track item[1]) {
+        <a [routerLink]="item[1]" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: item[1] === '/' }">
+          {{ item[0] }}
+        </a>
+      }
+    </nav>
+
+    <div class="security-note">
+      <strong>Read-only by default</strong>
+      <span>Mist writes require fresh administrator authentication.</span>
+    </div>
+    <button class="logout" type="button" (click)="logout()">Sign out</button>
+  </aside>
+  }
+
+  <main [class.full-width]="!auth.isAuthenticated()">
+    <header>
+      <div>
+        <p class="eyebrow">Configuration resilience</p>
+        <h1>Mist Config Guardian</h1>
+      </div>
+      <span class="foundation-status">Foundation ready</span>
+    </header>
+
+    <router-outlet />
+  </main>
+</div>

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mist-config-guardian
+description: Configuration recovery and impact monitoring for Juniper Mist
+type: application
+version: 0.2.0
+appVersion: "0.1.0"

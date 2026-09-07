@@ -1,0 +1,136 @@
+<section class="page">
+  <div class="page-heading">
+    <div>
+      <p>Correlate configuration events with SLE and infrastructure health.</p>
+      <h2>Impact monitoring</h2>
+    </div>
+    <div class="controls">
+      <label>
+        Organization
+        <select #organizationSelect (change)="selectOrganization(organizationSelect.value)">
+          @for (organization of organizations(); track organization.id) {
+            <option [value]="organization.id">{{ organization.name }}</option>
+          }
+        </select>
+      </label>
+      <label>
+        Status
+        <select #statusSelect (change)="filter(statusSelect.value)">
+          <option value="">All</option>
+          <option value="awaiting_config">Awaiting config</option>
+          <option value="monitoring">Monitoring</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+        </select>
+      </label>
+      <button type="button" (click)="refresh()">Refresh</button>
+    </div>
+  </div>
+
+  @if (error()) {
+    <div class="error" role="alert">{{ error() }}</div>
+  }
+
+  <div class="monitoring-layout">
+    <aside class="sessions">
+      <strong>Change windows</strong>
+      @if (loading()) {
+        <p>Loading…</p>
+      } @else if (sessions().length === 0) {
+        <p>No device configuration changes have been observed.</p>
+      }
+      @for (session of sessions(); track session.id) {
+        <button
+          type="button"
+          [class.selected]="selected()?.id === session.id"
+          (click)="choose(session)"
+        >
+          <span>
+            <strong>{{ session.device_name || session.device_mac }}</strong>
+            <em [class]="'severity ' + session.impact_severity">
+              {{ session.impact_severity }}
+            </em>
+          </span>
+          <small>{{ session.device_type }} · {{ session.status }}</small>
+          <small>{{ session.created_at | date: 'short' }}</small>
+        </button>
+      }
+    </aside>
+
+    <article class="detail">
+      @if (selected(); as session) {
+        <div class="detail-heading">
+          <div>
+            <small>{{ session.device_type }} · {{ session.device_mac }}</small>
+            <h3>{{ session.device_name || 'Unnamed device' }}</h3>
+          </div>
+          <span [class]="'severity ' + session.impact_severity">
+            {{ session.impact_severity }}
+          </span>
+        </div>
+
+        <p class="summary">
+          {{ session.deterministic_summary || 'Waiting for the monitoring window to begin.' }}
+        </p>
+
+        @for (warning of session.warnings; track warning) {
+          <p class="warning">{{ warning }}</p>
+        }
+
+        <dl>
+          <div><dt>Status</dt><dd>{{ session.status }}</dd></div>
+          <div><dt>Site ID</dt><dd>{{ session.site_id }}</dd></div>
+          <div><dt>Started</dt><dd>{{ session.monitoring_started_at ? (session.monitoring_started_at | date: 'short') : '—' }}</dd></div>
+          <div><dt>Ends</dt><dd>{{ session.monitoring_ends_at ? (session.monitoring_ends_at | date: 'short') : '—' }}</dd></div>
+          <div><dt>Audit IDs</dt><dd>{{ session.audit_ids.join(', ') || '—' }}</dd></div>
+          <div><dt>Samples</dt><dd>{{ session.observations.length }}</dd></div>
+        </dl>
+
+        <h4>SLE comparison</h4>
+        @if (session.baseline && latest(session); as current) {
+          <div class="metrics">
+            @for (entry of session.baseline.values | keyvalue; track entry.key) {
+              <div>
+                <strong>{{ entry.key }}</strong>
+                <span>{{ entry.value | number: '1.1-1' }}%</span>
+                <span>{{ currentValue(session, entry.key) ?? '—' }}%</span>
+                @if (delta(session, entry.key); as change) {
+                  <em [class.negative]="change < -10">
+                    {{ change > 0 ? '+' : '' }}{{ change | number: '1.1-1' }}
+                  </em>
+                } @else if (delta(session, entry.key) === 0) {
+                  <em>0.0</em>
+                } @else {
+                  <em>—</em>
+                }
+              </div>
+            }
+          </div>
+        } @else {
+          <p>No comparable SLE samples are available yet.</p>
+        }
+
+        <h4>Relevant events</h4>
+        @if (session.incidents.length === 0) {
+          <p>No negative device events observed.</p>
+        }
+        @for (incident of session.incidents; track incident.event_type + incident.occurred_at) {
+          <div class="incident">
+            <strong>{{ incident.event_type }}</strong>
+            <span>{{ incident.occurred_at | date: 'short' }}</span>
+            <em>{{ incident.resolved ? 'Resolved' : incident.severity }}</em>
+          </div>
+        }
+
+        @if (session.ai_assessment) {
+          <h4>AI-assisted assessment</h4>
+          <pre>{{ session.ai_assessment | json }}</pre>
+        } @else if (session.ai_assessment_error) {
+          <p class="warning">{{ session.ai_assessment_error }}</p>
+        }
+      } @else {
+        <p>Select a change window to inspect its impact assessment.</p>
+      }
+    </article>
+  </div>
+</section>

@@ -1,0 +1,164 @@
+<section class="page">
+  <div class="page-heading">
+    <div>
+      <p>Managed Mist organizations and their read-only service credentials.</p>
+      <h2>Organizations</h2>
+    </div>
+    <button class="primary" type="button" (click)="showCreate.set(!showCreate())">
+      {{ showCreate() ? 'Cancel' : 'Add organization' }}
+    </button>
+  </div>
+
+  <div class="security-banner">
+    <strong>Read-only credential policy</strong>
+    <span>
+      Tokens with write privileges are rejected. Configuration writes will require a separate,
+      freshly authenticated Mist super-user.
+    </span>
+  </div>
+
+  @if (error()) {
+    <div class="error" role="alert">{{ error() }}</div>
+  }
+
+  @if (showCreate()) {
+    <form class="create-card" [formGroup]="createForm" (ngSubmit)="create()">
+      <label>
+        Mist Cloud
+        <select formControlName="cloud_region">
+          <optgroup label="Global">
+            <option value="global_01">Mist Global 01 — api.mist.com</option>
+            <option value="global_02">Mist Global 02 — api.gc1.mist.com</option>
+            <option value="global_03">Mist Global 03 — api.ac2.mist.com</option>
+            <option value="global_04">Mist Global 04 — api.gc2.mist.com</option>
+            <option value="global_05">Mist Global 05 — api.gc4.mist.com</option>
+          </optgroup>
+          <optgroup label="EMEA">
+            <option value="emea_01">Mist EMEA 01 — api.eu.mist.com</option>
+            <option value="emea_02">Mist EMEA 02 — api.gc3.mist.com</option>
+            <option value="emea_03">Mist EMEA 03 — api.ac6.mist.com</option>
+            <option value="emea_04">Mist EMEA 04 — api.gc6.mist.com</option>
+          </optgroup>
+          <optgroup label="APAC">
+            <option value="apac_01">Mist APAC 01 — api.ac5.mist.com</option>
+            <option value="apac_02">Mist APAC 02 — api.gc5.mist.com</option>
+            <option value="apac_03">Mist APAC 03 — api.gc7.mist.com</option>
+          </optgroup>
+        </select>
+      </label>
+      <label class="wide">
+        Read-only service token
+        <input type="password" formControlName="service_token" autocomplete="off" />
+        <small>
+          Use an organization API token with read-only access. The organization ID and name are
+          discovered automatically.
+        </small>
+      </label>
+      <label>
+        Reconciliation schedule
+        <input type="text" formControlName="reconciliation_cron" />
+      </label>
+      <label>
+        Configuration retention (days)
+        <input type="number" formControlName="configuration_retention_days" min="1" />
+      </label>
+      <label>
+        Monitoring retention (days)
+        <input type="number" formControlName="monitoring_retention_days" min="1" />
+      </label>
+      <button class="primary wide" type="submit" [disabled]="saving()">
+        {{ saving() ? 'Verifying token…' : 'Verify and add organization' }}
+      </button>
+    </form>
+  }
+
+  @if (loading()) {
+    <p class="empty">Loading organizations…</p>
+  } @else if (organizations().length === 0) {
+    <div class="empty">
+      <strong>No organizations configured</strong>
+      <span>Add an organization to run its initial configuration snapshot.</span>
+    </div>
+  } @else {
+    <div class="organization-list">
+      @for (organization of organizations(); track organization.id) {
+        <article>
+          <div>
+            <span class="status" [class]="organization.status">{{ organization.status }}</span>
+            <h3>{{ organization.name }}</h3>
+            <p>{{ organization.mist_org_id }} · {{ organization.cloud_region }}</p>
+          </div>
+          <dl>
+            <div>
+              <dt>Credential</dt>
+              <dd>•••• {{ organization.service_token_last_four }}</dd>
+            </div>
+            <div>
+              <dt>Last verified</dt>
+              <dd>
+                {{
+                  organization.credential_verified_at
+                    ? (organization.credential_verified_at | date: 'medium')
+                    : 'Never'
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>Initial snapshot</dt>
+              <dd>{{ snapshotLabel(organization) }}</dd>
+            </div>
+            <div>
+              <dt>Webhook</dt>
+              <dd>
+                {{
+                  organization.webhook_secret_set
+                    ? 'Configured · •••• ' + organization.webhook_secret_last_four
+                    : 'Not configured'
+                }}
+              </dd>
+            </div>
+          </dl>
+          <div class="actions">
+            <button type="button" (click)="verify(organization)">Verify token</button>
+            <button
+              type="button"
+              (click)="triggerSnapshot(organization)"
+              [disabled]="snapshotRunning()[organization.id]"
+            >
+              {{
+                snapshotRunning()[organization.id]
+                  ? 'Queueing…'
+                  : organization.initial_snapshot_completed_at
+                    ? 'Snapshot now'
+                    : 'Run initial snapshot'
+              }}
+            </button>
+            <button
+              type="button"
+              (click)="rotateWebhookSecret(organization)"
+              [disabled]="webhookRotating()[organization.id]"
+            >
+              {{
+                webhookRotating()[organization.id]
+                  ? 'Generating…'
+                  : organization.webhook_secret_set
+                    ? 'Rotate webhook secret'
+                    : 'Configure webhook'
+              }}
+            </button>
+          </div>
+          @if (webhookSetup()[organization.id]; as setup) {
+            <div class="webhook-setup">
+              <strong>Copy these values now</strong>
+              <span>URL</span>
+              <code>{{ setup.endpoint }}</code>
+              <span>Secret</span>
+              <code>{{ setup.secret }}</code>
+              <small>The secret will not be shown again.</small>
+            </div>
+          }
+        </article>
+      }
+    </div>
+  }
+</section>

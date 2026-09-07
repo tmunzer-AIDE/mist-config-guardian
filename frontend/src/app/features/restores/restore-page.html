@@ -1,0 +1,115 @@
+<section class="page">
+  <div class="page-heading">
+    <div>
+      <p>Build and review a dependency-aware plan before any Mist write.</p>
+      <h2>Restore center</h2>
+    </div>
+    <label>
+      Organization
+      <select #organizationSelect (change)="selectOrganization(organizationSelect.value)">
+        @for (organization of organizations(); track organization.id) {
+          <option [value]="organization.id">{{ organization.name }}</option>
+        }
+      </select>
+    </label>
+  </div>
+
+  @if (error()) {
+    <div class="error" role="alert">{{ error() }}</div>
+  }
+
+  <div class="builder">
+    <label>
+      Object
+      <select #objectSelect (change)="selectObject(objectSelect.value)">
+        <option value="">Select an object</option>
+        @for (object of objects(); track object.id) {
+          <option [value]="object.id">{{ object.object_type }} · {{ object.name }}</option>
+        }
+      </select>
+    </label>
+    <label>
+      Target version
+      <select #versionSelect (change)="versionId.set(versionSelect.value)">
+        <option value="">Select a version</option>
+        @for (version of versions(); track version.id) {
+          <option [value]="version.id">
+            v{{ version.version }} · {{ version.event }} · {{ version.observed_at | date: 'short' }}
+          </option>
+        }
+      </select>
+    </label>
+    <button type="button" (click)="addSelection()" [disabled]="!versionId()">Add target</button>
+  </div>
+
+  <div class="selection-card">
+    <h3>Selected targets</h3>
+    @if (selections().length === 0) {
+      <p>No versions selected.</p>
+    }
+    @for (selection of selections(); track selection.object.id) {
+      <div class="selection">
+        <span>{{ selection.object.object_type }} · {{ selection.object.name }}</span>
+        <strong>v{{ selection.version.version }}</strong>
+        <button type="button" (click)="removeSelection(selection.object.id)">Remove</button>
+      </div>
+    }
+    <div class="options">
+      <label>
+        Restore mode
+        <select #modeSelect (change)="mode.set($any(modeSelect.value))">
+          <option value="non_destructive">Non-destructive</option>
+          <option value="exact">Exact point-in-time</option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input
+          #dependenciesCheckbox
+          type="checkbox"
+          checked
+          (change)="includeDependencies.set(dependenciesCheckbox.checked)"
+        />
+        Include dependencies and contained objects
+      </label>
+      <button type="button" class="primary" (click)="createPlan()" [disabled]="busy() || selections().length === 0">
+        {{ busy() ? 'Planning…' : 'Build restore plan' }}
+      </button>
+    </div>
+  </div>
+
+  @if (plan(); as operation) {
+    <article class="plan">
+      <div class="plan-heading">
+        <div>
+          <small>{{ operation.mode }} · {{ operation.target_at | date: 'medium' }}</small>
+          <h3>{{ operation.actions.length }} planned actions</h3>
+        </div>
+        <span class="status">{{ operation.status }}</span>
+      </div>
+      @for (warning of operation.warnings; track warning) {
+        <p class="warning">{{ warning }}</p>
+      }
+      <ol>
+        @for (action of operation.actions; track action.logical_object_id) {
+          <li>
+            <strong>{{ action.action }}</strong>
+            <span>{{ action.object_type }} · {{ action.object_name }}</span>
+            <small>{{ action.status }}</small>
+          </li>
+        }
+      </ol>
+      @if (operation.status === 'planned' && operation.actions.length > 0) {
+        <div class="execute">
+          <label>
+            Fresh Mist administrator API token
+            <input type="password" [formControl]="administratorToken" autocomplete="off" />
+            <small>Verified for write access, encrypted for this operation, then discarded.</small>
+          </label>
+          <button type="button" class="danger" (click)="execute()" [disabled]="busy() || !administratorToken.value">
+            {{ busy() ? 'Authorizing…' : 'Authorize and execute' }}
+          </button>
+        </div>
+      }
+    </article>
+  }
+</section>
