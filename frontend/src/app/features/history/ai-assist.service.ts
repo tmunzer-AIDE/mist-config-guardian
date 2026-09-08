@@ -124,18 +124,29 @@ export class AiAssistService {
   );
 
   /** Resolve AI availability once per session. Never throws. */
+  /** Which session resolved this; a read outliving it is discarded. */
+  private generation = 0;
+
   async loadSettings(force = false): Promise<void> {
     if (this.resolvedState() && !force) {
       return;
     }
+    const generation = this.generation;
     try {
-      this.settingsState.set(await firstValueFrom(this.http.get<AiSettings>(`${API_ROOT}/ai/settings`)));
+      const settings = await firstValueFrom(this.http.get<AiSettings>(`${API_ROOT}/ai/settings`));
+      if (generation === this.generation) {
+        this.settingsState.set(settings);
+      }
     } catch {
       // 403 for non-administrators, or an unreachable endpoint. Availability is
       // unknown; deterministic diffing is unaffected either way.
-      this.settingsState.set(null);
+      if (generation === this.generation) {
+        this.settingsState.set(null);
+      }
     } finally {
-      this.resolvedState.set(true);
+      if (generation === this.generation) {
+        this.resolvedState.set(true);
+      }
     }
   }
 
@@ -163,6 +174,7 @@ export class AiAssistService {
   }
 
   reset(): void {
+    this.generation += 1;
     this.settingsState.set(null);
     this.resolvedState.set(false);
     this.refusedState.set(false);

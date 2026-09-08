@@ -81,7 +81,13 @@ export class AppHeader {
     // the organization list alone left the previous user's notifications,
     // overview, change groups, monitoring, search and account panels in place
     // for whoever signed in next.
-    await this.auth.logout();
+    try {
+      await this.auth.logout();
+    } catch {
+      // The server could not be told, or refused. The session is over on this
+      // device either way, and leaving the user in a shell whose caches belong
+      // to them is the worse outcome.
+    }
     this.reset.clear();
     await this.router.navigate(['/login']);
   }

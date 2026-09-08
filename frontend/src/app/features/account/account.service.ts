@@ -66,17 +66,32 @@ export class AccountService {
 
   // ---------------------------------------------------------------- profile
 
-  async loadProfile(): Promise<AccountProfile> {
+  /**
+   * Await a request and let it write only while its session is still current.
+   *
+   * Reads and writes alike: a profile update issued by one user can answer
+   * after another has signed in, and `apply` merges it into the signed-in
+   * user — name, email and preferences and all.
+   */
+  private async owned<T>(request: Promise<T>, write: (value: T) => void): Promise<T> {
     const generation = this.generation;
-    const profile = await firstValueFrom(this.http.get<AccountProfile>(`${ACCOUNT}/profile`));
-    // A read that outlived its session must not fill these panels for whoever
-    // is signed in now.
-    return generation === this.generation ? this.apply(profile) : profile;
+    const value = await request;
+    if (generation === this.generation) {
+      write(value);
+    }
+    return value;
+  }
+
+  async loadProfile(): Promise<AccountProfile> {
+    return this.owned(firstValueFrom(this.http.get<AccountProfile>(`${ACCOUNT}/profile`)), (profile) =>
+      this.apply(profile),
+    );
   }
 
   async updateProfile(patch: ProfilePatch): Promise<AccountProfile> {
-    return this.apply(
-      await firstValueFrom(this.http.patch<AccountProfile>(`${ACCOUNT}/profile`, patch)),
+    return this.owned(
+      firstValueFrom(this.http.patch<AccountProfile>(`${ACCOUNT}/profile`, patch)),
+      (profile) => this.apply(profile),
     );
   }
 
@@ -90,16 +105,16 @@ export class AccountService {
   }
 
   async confirmEmailChange(token: string): Promise<AccountProfile> {
-    return this.apply(
-      await firstValueFrom(
-        this.http.post<AccountProfile>(`${ACCOUNT}/email-change/confirm`, { token }),
-      ),
+    return this.owned(
+      firstValueFrom(this.http.post<AccountProfile>(`${ACCOUNT}/email-change/confirm`, { token })),
+      (profile) => this.apply(profile),
     );
   }
 
   async cancelEmailChange(): Promise<AccountProfile> {
-    return this.apply(
-      await firstValueFrom(this.http.delete<AccountProfile>(`${ACCOUNT}/email-change`)),
+    return this.owned(
+      firstValueFrom(this.http.delete<AccountProfile>(`${ACCOUNT}/email-change`)),
+      (profile) => this.apply(profile),
     );
   }
 
@@ -144,25 +159,27 @@ export class AccountService {
   // --------------------------------------------------------------- sessions
 
   async loadSessions(): Promise<void> {
-    const generation = this.generation;
-    const response = await firstValueFrom(
-      this.http.get<AccountSessionList>(`${ACCOUNT}/sessions`),
+    await this.owned(
+      firstValueFrom(this.http.get<AccountSessionList>(`${ACCOUNT}/sessions`)),
+      (response) => this.sessions.set(response.items),
     );
-    if (generation === this.generation) {
-      this.sessions.set(response.items);
-    }
   }
 
   async revokeSession(id: string): Promise<void> {
-    await firstValueFrom(this.http.delete<SessionRevocation>(`${ACCOUNT}/sessions/${id}`));
-    this.sessions.update((items) => items.filter((item) => item.id !== id));
+    await this.owned(
+      firstValueFrom(this.http.delete<SessionRevocation>(`${ACCOUNT}/sessions/${id}`)),
+      () => this.sessions.update((items) => items.filter((item) => item.id !== id)),
+    );
   }
 
   async revokeOtherSessions(): Promise<number> {
+    const generation = this.generation;
     const result = await firstValueFrom(
       this.http.post<SessionRevocation>(`${ACCOUNT}/sessions/revoke-others`, {}),
     );
-    this.sessions.update((items) => items.filter((item) => item.current));
+    if (generation === this.generation) {
+      this.sessions.update((items) => items.filter((item) => item.current));
+    }
     return result.revoked_sessions;
   }
 
@@ -174,21 +191,22 @@ export class AccountService {
 
   /** Confirms enrolment and returns the recovery codes, which are shown once. */
   async confirmTotp(code: string): Promise<string[]> {
-    const response = await firstValueFrom(
-      this.http.post<RecoveryCodesResponse>(`${ACCOUNT}/totp/confirm`, { code }),
+    const response = await this.owned(
+      firstValueFrom(this.http.post<RecoveryCodesResponse>(`${ACCOUNT}/totp/confirm`, { code })),
+      () => this.mfaOverride.set(true),
     );
-    this.mfaOverride.set(true);
     return response.recovery_codes;
   }
 
   async disableTotp(password: string): Promise<void> {
     // `HttpClient.delete` only sends a body when one is given explicitly.
-    this.apply(
-      await firstValueFrom(
-        this.http.delete<AccountProfile>(`${ACCOUNT}/totp`, { body: { password } }),
-      ),
+    await this.owned(
+      firstValueFrom(this.http.delete<AccountProfile>(`${ACCOUNT}/totp`, { body: { password } })),
+      (profile) => {
+        this.apply(profile);
+        this.mfaOverride.set(false);
+      },
     );
-    this.mfaOverride.set(false);
   }
 
   async regenerateRecoveryCodes(password: string): Promise<string[]> {
@@ -201,12 +219,10 @@ export class AccountService {
   // --------------------------------------------------------------- passkeys
 
   async loadPasskeys(): Promise<void> {
-    const generation = this.generation;
-    const response = await firstValueFrom(this.http.get<PasskeyList>(`${ACCOUNT}/passkeys`));
-    if (generation === this.generation) {
+    await this.owned(firstValueFrom(this.http.get<PasskeyList>(`${ACCOUNT}/passkeys`)), (response) => {
       this.passkeys.set(response.items);
       this.passkeysLoaded.set(true);
-    }
+    });
   }
 
   /** Adding a passkey re-checks the password: the credential outlives this session. */
@@ -221,6 +237,7 @@ export class AccountService {
     credential: RegisteredCredentialJson,
     name: string,
   ): Promise<Passkey> {
+    const generation = this.generation;
     const created = await firstValueFrom(
       this.http.post<Passkey>(`${ACCOUNT}/passkeys`, {
         challenge_token: challengeToken,
@@ -228,22 +245,26 @@ export class AccountService {
         name: name || null,
       }),
     );
-    this.passkeys.update((items) => [created, ...items]);
-    this.passkeysLoaded.set(true);
+    if (generation === this.generation) {
+      this.passkeys.update((items) => [created, ...items]);
+      this.passkeysLoaded.set(true);
+    }
     return created;
   }
 
   async renamePasskey(id: string, name: string): Promise<void> {
-    const updated = await firstValueFrom(
-      this.http.patch<Passkey>(`${ACCOUNT}/passkeys/${id}`, { name }),
+    await this.owned(
+      firstValueFrom(this.http.patch<Passkey>(`${ACCOUNT}/passkeys/${id}`, { name })),
+      (updated) => this.passkeys.update((items) => items.map((item) => (item.id === id ? updated : item))),
     );
-    this.passkeys.update((items) => items.map((item) => (item.id === id ? updated : item)));
   }
 
   async removePasskey(id: string, password: string): Promise<void> {
     // `HttpClient.delete` only sends a body when one is given explicitly.
-    await firstValueFrom(this.http.delete(`${ACCOUNT}/passkeys/${id}`, { body: { password } }));
-    this.passkeys.update((items) => items.filter((item) => item.id !== id));
+    await this.owned(
+      firstValueFrom(this.http.delete(`${ACCOUNT}/passkeys/${id}`, { body: { password } })),
+      () => this.passkeys.update((items) => items.filter((item) => item.id !== id)),
+    );
   }
 
   /**

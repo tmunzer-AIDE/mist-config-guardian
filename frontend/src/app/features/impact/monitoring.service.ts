@@ -95,16 +95,27 @@ export class MonitoringService {
   }
 
   /**
-   * Forget everything read so far.
+   * Forget what was read for the organization being left.
    *
    * A single-session answer still in flight is dropped, since nothing newer
    * would supersede it. A list read is not: the read for the organization
    * being switched to may already be in flight, and it is the latest.
    */
-  reset(): void {
+  forgetOrganization(): void {
     this.sessionRequest += 1;
     this.sessions.set([]);
     this.total.set(0);
     this.resolved.set(null);
+  }
+
+  /**
+   * Forget everything, including reads still in flight.
+   *
+   * Used when a session ends: unlike an organization switch, nothing newer is
+   * on its way, and an answer landing afterwards would be the previous user's.
+   */
+  reset(): void {
+    this.loadRequest += 1;
+    this.forgetOrganization();
   }
 }

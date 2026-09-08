@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 
+import { AccountService } from '../features/account/account.service';
 import { AuthService, CurrentUser } from '../core/auth.service';
 import { NotificationService } from '../core/notification.service';
 import { OrganizationContextService } from '../core/organization-context.service';
@@ -75,5 +76,62 @@ describe('AppHeader sign-out', () => {
     expect(notifications.unread()).toBe(0);
     // Historical mode belonged to that session too.
     expect(time.isHistorical()).toBe(false);
+  });
+
+  it('forgets the session even when the server cannot be told', async () => {
+    // The logout request can fail — offline, or refused. The session is over on
+    // this device either way, and leaving the user in a shell full of their
+    // caches is the worse outcome.
+    const auth = TestBed.inject(AuthService);
+    const organizations = TestBed.inject(OrganizationContextService);
+    auth.applyUser(USER);
+    const loaded = organizations.load();
+    httpMock.expectOne('/api/v1/organizations').flush({
+      items: [{ id: 'org-1', name: 'Northwind Retail' }],
+      total: 1,
+    });
+    await loaded;
+
+    const signOut = (fixture.componentInstance as unknown as { signOut: () => Promise<void> }).signOut();
+    httpMock.expectOne('/api/v1/auth/logout').flush({ detail: 'boom' }, { status: 500, statusText: 'Server Error' });
+    await signOut;
+
+    expect(auth.isAuthenticated()).toBe(false);
+    expect(organizations.all()).toEqual([]);
+  });
+
+  it('discards an account response that outlived the session that asked', async () => {
+    // A profile update from the user leaving would otherwise be merged into
+    // whoever signs in next: their name, their email, their preferences.
+    const auth = TestBed.inject(AuthService);
+    const account = TestBed.inject(AccountService);
+    auth.applyUser(USER);
+    const updating = account.updateProfile({ display_name: 'Ama Osei' });
+    const inFlight = httpMock.expectOne('/api/v1/account/profile');
+
+    const signOut = (fixture.componentInstance as unknown as { signOut: () => Promise<void> }).signOut();
+    httpMock.expectOne('/api/v1/auth/logout').flush({});
+    await signOut;
+
+    // User B signs in, and only now does user A's update answer.
+    auth.applyUser({ ...USER, id: 'user-b', email: 'b@northwind.example', display_name: 'Bea' });
+    inFlight.flush({
+      id: USER.id,
+      email: USER.email,
+      display_name: 'Ama Osei',
+      role: 'administrator',
+      is_active: true,
+      status: 'active',
+      preferences: { timezone: 'UTC', clock: '24h', landing_page: 'overview' },
+      mfa_enabled: false,
+      passkey_count: 0,
+      pending_email_change: null,
+      password_changed_at: null,
+      last_login_at: null,
+    });
+    await updating;
+
+    expect(auth.user()?.email).toBe('b@northwind.example');
+    expect(auth.user()?.display_name).toBe('Bea');
   });
 });

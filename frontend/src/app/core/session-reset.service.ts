@@ -2,6 +2,7 @@ import { inject, Injectable } from '@angular/core';
 
 import { AccountService } from '../features/account/account.service';
 import { MonitoringService } from '../features/impact/monitoring.service';
+import { AiAssistService } from '../features/history/ai-assist.service';
 import { AuthService } from './auth.service';
 import { ChangeGroupService } from './change-group.service';
 import { NotificationService } from './notification.service';
@@ -32,6 +33,7 @@ export class SessionResetService {
   private readonly timeline = inject(TimelineService);
   private readonly monitoring = inject(MonitoringService);
   private readonly account = inject(AccountService);
+  private readonly ai = inject(AiAssistService);
   private readonly search = inject(SearchService);
   private readonly time = inject(TimeContextService);
 
@@ -44,6 +46,9 @@ export class SessionResetService {
     this.timeline.reset();
     this.monitoring.reset();
     this.account.reset();
+    // Resolved once per session, and administrator-only: a viewer must not
+    // inherit the previous administrator's answer about what AI can do.
+    this.ai.reset();
     this.search.reset();
     this.time.returnToNow();
   }

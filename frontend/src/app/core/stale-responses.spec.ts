@@ -224,6 +224,28 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(notifications.items()[0].read_at).not.toBeNull();
   });
 
+  it('monitoring drops a list read that outlived its session', async () => {
+    // Switching organizations keeps the read for the organization being moved
+    // to, which is the newest. Ending a session keeps nothing: an answer after
+    // it is the previous user's.
+    const monitoring = TestBed.inject(MonitoringService);
+    const switching = monitoring.load('org-a');
+    const duringSwitch = pending('/api/v1/organizations/org-a/monitoring')[0];
+    monitoring.forgetOrganization();
+    duringSwitch.flush({ items: [{ id: 's-a' }], total: 1 });
+    await switching;
+    expect(monitoring.sessions().map((item) => item.id)).toEqual(['s-a']);
+
+    const ending = monitoring.load('org-a');
+    const duringSignOut = pending('/api/v1/organizations/org-a/monitoring')[0];
+    monitoring.reset();
+    duringSignOut.flush({ items: [{ id: 's-b' }], total: 1 });
+    await ending;
+
+    expect(monitoring.sessions()).toEqual([]);
+    expect(monitoring.total()).toBe(0);
+  });
+
   it('monitoring keeps the latest page and the latest resolved session', async () => {
     const monitoring = TestBed.inject(MonitoringService);
     const older = monitoring.load('org-a');

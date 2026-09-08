@@ -263,12 +263,26 @@ export class ImpactPage {
 
   protected readonly changeGroupId = computed(() => this.selected()?.change_group_id ?? null);
 
+  /**
+   * Monitoring is live evidence with no historical projection.
+   *
+   * Every session, incident, sample and assessment on this page describes what
+   * monitoring knows now. There is no versioned record to reconstruct any of
+   * it at a past instant, so rather than present today's evidence under a
+   * historical banner the page says it has nothing to show there.
+   */
+  protected readonly historical = computed(() => this.time.isHistorical());
+
   constructor() {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       this.organizations.revision();
       const status = this.statusFilter();
       const severity = this.severityFilter();
+      if (this.time.isHistorical()) {
+        untracked(() => this.monitoring.reset());
+        return;
+      }
       if (!organizationId) {
         return;
       }
@@ -318,7 +332,7 @@ export class ImpactPage {
         this.linkFor = organizationId;
         this.foreignLink = linked || null;
         untracked(() => {
-          this.monitoring.reset();
+          this.monitoring.forgetOrganization();
           this.picked.set(null);
           if (linked) {
             void this.router.navigate([], {
