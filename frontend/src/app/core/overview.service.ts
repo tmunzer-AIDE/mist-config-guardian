@@ -57,6 +57,11 @@ export interface OrganizationOverview {
   historical?: boolean;
 }
 
+/** What an Overview read describes: one organization, over one window, ending at one instant. */
+function scopeKey(organizationId: string, range: TimeRange, asOf: Date | null): string {
+  return `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
+}
+
 /** A badge writer's right to write: what it read, when, and in what order. */
 interface BadgeClaim {
   scope: string;
@@ -77,6 +82,8 @@ export class OverviewService {
   // organization and range on screen. A slow answer for a previous
   // organization must not overwrite the current one.
   private loadRequest = 0;
+  /** The scope the read model on screen describes. */
+  private modelScope = '';
 
   /**
    * What the badge currently describes, and how many times it has been
@@ -105,7 +112,7 @@ export class OverviewService {
 
   /** Take the badge for a scope, and return the claim an answer must still hold. */
   private claimBadge(organizationId: string, range: TimeRange, asOf: Date | null): BadgeClaim {
-    this.badgeScope = `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
+    this.badgeScope = scopeKey(organizationId, range, asOf);
     return { scope: this.badgeScope, epoch: this.badgeEpoch, sequence: ++this.badgeIssued };
   }
 
@@ -122,6 +129,17 @@ export class OverviewService {
   }
 
   async load(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<OrganizationOverview> {
+    const scope = scopeKey(organizationId, range, asOf);
+    if (scope !== this.modelScope) {
+      // A replacement, not a refresh. What is on screen describes another
+      // organization, window or instant, and the shell only hides it while the
+      // read is in flight: after a failure the skeleton goes and it would be
+      // visible again — today's safety net, approvals and failed restores
+      // sitting under a historical banner. A refresh of the same scope keeps
+      // its last good model, which a failure does not invalidate.
+      this.modelScope = scope;
+      this.overview.set(null);
+    }
     const request = ++this.loadRequest;
     const claim = this.claimBadge(organizationId, range, asOf);
     let params = new HttpParams().set('range', range);
@@ -183,6 +201,7 @@ export class OverviewService {
 
   reset(): void {
     this.loadRequest += 1;
+    this.modelScope = '';
     this.clearBadge();
     this.overview.set(null);
   }

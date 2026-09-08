@@ -201,6 +201,55 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(overview.unrecovered()).toBe(5);
   });
 
+  it('a failed replacement leaves no trace of the scope it was replacing', async () => {
+    // The shell hides the model while a read is in flight, but drops that
+    // skeleton once the read fails. Retained, the previous scope's model
+    // becomes visible again — today's safety net, approvals and failed
+    // restores sitting under a historical banner.
+    const overview = TestBed.inject(OverviewService);
+    const live = overview.load('org-a', '24h');
+    pending('/api/v1/organizations/org-a/overview')[0].flush({
+      counts: { unrecovered: 2 },
+      change_groups: [],
+      safety_net: [{ key: 'backup', label: 'Backup 4m behind', status: 'ok', detail: '14:18Z' }],
+    });
+    await live;
+    expect(overview.overview()).not.toBeNull();
+
+    const past = overview.load('org-a', '24h', new Date('2026-09-01T00:00:00Z'));
+    // Gone before the answer, not because of it.
+    expect(overview.overview()).toBeNull();
+    pending('/api/v1/organizations/org-a/overview')[0].flush(
+      { detail: 'boom' },
+      { status: 500, statusText: 'Server Error' },
+    );
+    await expect(past).rejects.toBeDefined();
+
+    expect(overview.overview()).toBeNull();
+  });
+
+  it('a failed refresh of the same scope keeps the model it had', async () => {
+    // Nothing about the scope changed, so the last good answer still describes
+    // it; a transient failure is no reason to blank the page.
+    const overview = TestBed.inject(OverviewService);
+    const first = overview.load('org-a', '24h');
+    pending('/api/v1/organizations/org-a/overview')[0].flush({
+      counts: { unrecovered: 2 },
+      change_groups: [],
+    });
+    await first;
+
+    const refresh = overview.load('org-a', '24h');
+    expect(overview.overview()).not.toBeNull();
+    pending('/api/v1/organizations/org-a/overview')[0].flush(
+      { detail: 'boom' },
+      { status: 500, statusText: 'Server Error' },
+    );
+    await expect(refresh).rejects.toBeDefined();
+
+    expect(overview.overview()).not.toBeNull();
+  });
+
   it('an older reading of a live count does not revert a newer one', async () => {
     // Two successful answers for the same live scope are observations at
     // different moments, not the same fact twice. The full read holds its
