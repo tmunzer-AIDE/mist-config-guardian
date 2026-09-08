@@ -98,13 +98,21 @@ questions:
         type: string
         required: true
         label: MongoDB username
-        description: The account the bundled MongoDB creates and then requires. Only needed when MongoDB is bundled.
+        description: >-
+          The account the bundled MongoDB creates and then requires. Set at
+          first install only: changing it later does not rename the account
+          MongoDB already has.
       - variable: secrets.mongodbRootPassword
         default: ""
         type: password
         required: true
         label: MongoDB password
-        description: "Goes into a connection URI, so use only letters, digits and -._~ . Generate with: openssl rand -hex 32"
+        description: >-
+          Goes into a connection URI, so use only letters, digits and -._~ .
+          Generate with `openssl rand -hex 32`. Set at first install only:
+          MongoDB keeps this in its data directory, so changing it here on an
+          existing volume makes the database unreachable. See the README to
+          rotate it.
       - variable: secrets.redisPassword
         default: ""
         type: password

@@ -69,6 +69,31 @@ percent-encoding: letters, digits, and any of `-._~`. The URIs are assembled
 inside the pod from the Secret, so no password is written to a ConfigMap or
 into the rendered manifest.
 
+#### Rotating the MongoDB credentials
+
+**`MONGODB_ROOT_USERNAME` and `MONGODB_ROOT_PASSWORD` are set at first install
+only.** MongoDB creates the account when its data directory is empty and then
+keeps it there. On a release that already has a volume, changing them in the
+Secret changes what the application presents and not what the database expects:
+the probes stop authenticating, and the pod restarts until it is put back.
+
+The chart cannot rotate the password for you — doing so needs the *old* one,
+which the Secret no longer holds once you have edited it. Rotate in this order
+instead:
+
+```bash
+kubectl exec -it deploy/<release>-mist-config-guardian-mongodb --   mongosh --quiet -u <username> -p <old password> --authenticationDatabase admin   --eval 'db.getSiblingDB("admin").changeUserPassword("<username>", "<new password>")'
+```
+
+Then update `MONGODB_ROOT_PASSWORD` in the Secret and restart the application:
+
+```bash
+kubectl rollout restart deploy -l app.kubernetes.io/instance=<release>
+```
+
+`REDIS_PASSWORD` has no such constraint: Redis reads it at every start, so
+changing it in the Secret and upgrading is enough.
+
 For evaluation environments, the form can create this Secret by enabling
 `secrets.create`. External secret management is recommended for production
 because chart-managed secret values are retained in Helm release data.

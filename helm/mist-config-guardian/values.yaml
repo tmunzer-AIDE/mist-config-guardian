@@ -69,6 +69,13 @@ secrets:
   #
   # Both passwords are placed in a connection URI, so keep them to characters
   # that need no percent-encoding: letters, digits, and any of -._~
+  #
+  # The MongoDB pair is read only when the data directory is empty, which means
+  # at first install. On a release that already has a volume, changing them
+  # here changes what the application presents and not what MongoDB expects,
+  # and the database becomes unreachable at the next restart. Rotating them is
+  # a two-step operation an operator performs deliberately; the README has it.
+  # The Redis password is read at every start, so it rotates with an upgrade.
   mongodbRootUsername: ""
   mongodbRootPassword: ""
   redisPassword: ""
