@@ -201,6 +201,30 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(overview.unrecovered()).toBe(5);
   });
 
+  it('an older reading of a live count does not revert a newer one', async () => {
+    // Two successful answers for the same live scope are observations at
+    // different moments, not the same fact twice. The full read holds its
+    // count while it continues through summaries, approvals and snapshots, so
+    // it can finish well after a counts-only read that saw a later number.
+    const overview = TestBed.inject(OverviewService);
+    const full = overview.load('org-a', '24h');
+    const badges = overview.loadBadges('org-a', '24h');
+    const [whole, countsOnly] = pending('/api/v1/organizations/org-a/overview');
+
+    // The later-issued read answers first, having seen the count move to 4.
+    countsOnly.flush({ counts: { unrecovered: 4 } });
+    await badges;
+    expect(overview.unrecovered()).toBe(4);
+
+    // The earlier read now finishes, carrying the 3 it observed before that.
+    whole.flush({ counts: { unrecovered: 3 }, change_groups: [] });
+    await full;
+
+    expect(overview.unrecovered()).toBe(4);
+    // Its own read model is still applied: that is ordered separately.
+    expect(overview.overview()).not.toBeNull();
+  });
+
   it('a count for a scope nobody is looking at any more is still refused', async () => {
     // Same-scope answers are both valid; a different scope's is not.
     const overview = TestBed.inject(OverviewService);

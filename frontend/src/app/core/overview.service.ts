@@ -57,10 +57,11 @@ export interface OrganizationOverview {
   historical?: boolean;
 }
 
-/** A badge writer's right to write: the scope it read, and the epoch it read in. */
+/** A badge writer's right to write: what it read, when, and in what order. */
 interface BadgeClaim {
   scope: string;
   epoch: number;
+  sequence: number;
 }
 
 /** The Overview page's purpose-built read model, plus the shell's nav badge. */
@@ -83,27 +84,41 @@ export class OverviewService {
    *
    * The badge has two writers — the full read carries a count, and the shell
    * reads counts alone — and on the Overview route both run for the same
-   * organization, window and instant. A single sequence shared between them
-   * made the later-issued request cancel the earlier one even then, so a
-   * counts-only success followed by a full-read failure left the badge at
-   * zero. Ordering is not the question here: the question is whether an
-   * answer still describes what is on screen. Two answers for the same scope
-   * are both valid, and either may write.
+   * organization, window and instant. Three things decide whether an answer
+   * may be written, and each is needed:
+   *
+   * - the epoch, so a clear stops everything already in flight;
+   * - the scope, so an answer for an organization, window or instant nobody
+   *   is looking at any more is refused;
+   * - the order, because two successful answers for the same live scope are
+   *   observations at different moments, not the same fact twice: the count
+   *   moves, and an older reading must not revert a newer one.
+   *
+   * Only a written answer advances the order. A failure says nothing about
+   * the count, so it leaves the last reading standing rather than making
+   * everything before it look old.
    */
   private badgeScope = '';
   private badgeEpoch = 0;
+  private badgeIssued = 0;
+  private badgeApplied = 0;
 
   /** Take the badge for a scope, and return the claim an answer must still hold. */
   private claimBadge(organizationId: string, range: TimeRange, asOf: Date | null): BadgeClaim {
     this.badgeScope = `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
-    return { scope: this.badgeScope, epoch: this.badgeEpoch };
+    return { scope: this.badgeScope, epoch: this.badgeEpoch, sequence: ++this.badgeIssued };
   }
 
-  /** Write a count if its claim still holds: same scope, and not cleared since. */
+  /** Write a count if its claim still holds, and record that it is the reading shown. */
   private writeBadge(claim: BadgeClaim, unrecovered: number): void {
-    if (claim.epoch === this.badgeEpoch && claim.scope === this.badgeScope) {
-      this.unrecovered.set(unrecovered);
+    if (claim.epoch !== this.badgeEpoch || claim.scope !== this.badgeScope) {
+      return;
     }
+    if (claim.sequence <= this.badgeApplied) {
+      return;
+    }
+    this.badgeApplied = claim.sequence;
+    this.unrecovered.set(unrecovered);
   }
 
   async load(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<OrganizationOverview> {
@@ -133,6 +148,7 @@ export class OverviewService {
   clearBadge(): void {
     this.badgeEpoch += 1;
     this.badgeScope = '';
+    this.badgeApplied = 0;
     this.unrecovered.set(0);
   }
 
@@ -158,10 +174,10 @@ export class OverviewService {
       );
       this.writeBadge(claim, response.counts.unrecovered);
     } catch {
-      // A failed read says nothing about the count, so it writes nothing. The
-      // badge is zeroed when the scope it described goes, not when one of the
-      // two reads for the current scope happens to fail — the other may have
-      // already answered correctly.
+      // A failed read says nothing about the count, so it writes nothing and
+      // does not count as a newer reading. The badge is zeroed when the scope
+      // it described goes, not when one of the two reads for the current scope
+      // happens to fail — the other may have already answered correctly.
     }
   }
 
