@@ -22,6 +22,7 @@ from mist_config_guardian_backend.models.restore import (
     RestoreStatus,
 )
 from mist_config_guardian_backend.models.snapshot import (
+    SnapshotError,
     SnapshotKind,
     SnapshotManifest,
     SnapshotStatus,
@@ -55,6 +56,8 @@ def _organization(  # noqa: PLR0913 - a fixture builder mirrors the document's f
     verified: datetime | None = datetime(2026, 9, 6, 9, 12, tzinfo=UTC),
     credential_error: str | None = None,
     cron: str = "0 */12 * * *",
+    onboarded: datetime = NOW,
+    initial_snapshot: datetime | None = None,
 ) -> Organization:
     return Organization.model_construct(
         id=organization_id,
@@ -73,11 +76,11 @@ def _organization(  # noqa: PLR0913 - a fixture builder mirrors the document's f
         webhook_secret_rotated_at=None,
         webhook_last_received_at=webhook_received,
         webhook_last_signature_valid=True,
-        initial_snapshot_completed_at=None,
+        initial_snapshot_completed_at=initial_snapshot,
         reconciliation_cron=cron,
         configuration_retention_days=180,
         monitoring_retention_days=30,
-        created_at=NOW,
+        created_at=onboarded,
         updated_at=NOW,
     )
 
@@ -87,12 +90,14 @@ def _snapshot(
     kind: SnapshotKind = SnapshotKind.RECONCILIATION,
     completed_at: datetime | None = datetime(2026, 9, 7, 14, 18, tzinfo=UTC),
     objects: int = 1284,
+    status: SnapshotStatus = SnapshotStatus.COMPLETED,
+    errors: int = 0,
 ) -> SnapshotManifest:
     return SnapshotManifest.model_construct(
         id=PydanticObjectId(),
         organization_id=ORGANIZATION_ID,
         kind=kind,
-        status=SnapshotStatus.COMPLETED,
+        status=status,
         active=False,
         started_at=completed_at,
         completed_at=completed_at,
@@ -100,7 +105,7 @@ def _snapshot(
         created_versions=0,
         unchanged_objects=objects,
         deleted_objects=0,
-        errors=[],
+        errors=[SnapshotError(object_type="wlans", message="boom") for _ in range(errors)],
         created_at=completed_at or NOW,
         updated_at=completed_at or NOW,
     )
@@ -341,6 +346,38 @@ def test_safety_net_matches_the_designs_healthy_organization() -> None:
     assert (rows[3].label, rows[3].status, rows[3].detail) == ("Service token verified", "ok", "06 SEP")
 
 
+def test_a_failed_backup_is_reported_however_recent_the_last_success_was() -> None:
+    """Reporting the last success instead would leave the row green while every
+    run since had been failing."""
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW),
+            latest_snapshot=_snapshot(status=SnapshotStatus.FAILED),
+            latest_reconciliation=_snapshot(),
+            now=NOW,
+        )
+    )
+
+    backup = next(row for row in rows if row.key == "backup")
+    assert (backup.label, backup.status) == ("Last backup failed", "warn")
+
+
+def test_a_partial_backup_is_not_a_backup() -> None:
+    """Some objects captured and others given up on leaves the record incomplete."""
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW),
+            latest_snapshot=_snapshot(status=SnapshotStatus.PARTIAL, errors=2),
+            latest_reconciliation=_snapshot(),
+            now=NOW,
+        )
+    )
+
+    backup = next(row for row in rows if row.key == "backup")
+    assert backup.label == "Last backup incomplete · 2 errors"
+    assert backup.status == "warn"
+
+
 def test_safety_net_reports_a_webhook_gap_with_its_interval() -> None:
     rows = build_safety_net(
         SafetyNetInput(
@@ -405,11 +442,11 @@ def test_safety_net_flags_an_overdue_reconciliation() -> None:
 
 
 def test_safety_net_flags_a_reconciliation_that_never_ran_once_its_cadence_has_passed() -> None:
-    """With nothing to measure from, the clock runs from the snapshot the organization has."""
+    """With nothing to measure from, the clock runs from the organization's own start."""
     rows = build_safety_net(
         SafetyNetInput(
-            organization=_organization(webhook_received=NOW),
-            latest_snapshot=_snapshot(completed_at=NOW - timedelta(days=3)),
+            organization=_organization(webhook_received=NOW, initial_snapshot=NOW - timedelta(days=3)),
+            latest_snapshot=_snapshot(),
             latest_reconciliation=None,
             now=NOW,
         )
@@ -420,10 +457,26 @@ def test_safety_net_flags_a_reconciliation_that_never_ran_once_its_cadence_has_p
     assert reconciliation.status == "warn"
 
 
+def test_a_manual_snapshot_does_not_postpone_the_never_reconciled_warning() -> None:
+    """Taking a backup by hand is not reconciling; the deadline is not its to move."""
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW, onboarded=NOW - timedelta(days=3)),
+            # A manual snapshot taken moments ago.
+            latest_snapshot=_snapshot(completed_at=NOW),
+            latest_reconciliation=None,
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert (reconciliation.label, reconciliation.status) == ("Reconciliation never completed", "warn")
+
+
 def test_a_reconciliation_not_yet_due_is_on_schedule_even_though_none_has_run() -> None:
     rows = build_safety_net(
         SafetyNetInput(
-            organization=_organization(webhook_received=NOW),
+            organization=_organization(webhook_received=NOW, initial_snapshot=NOW),
             latest_snapshot=_snapshot(),
             latest_reconciliation=None,
             now=NOW,

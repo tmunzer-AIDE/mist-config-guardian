@@ -40,6 +40,10 @@ from mist_config_guardian_backend.services.change_groups import (
     resolve_window,
 )
 
+# A snapshot attempt that finished, however it finished. The newest of these
+# is what the safety net reports: a failure is news, not something to skip.
+_TERMINAL_SNAPSHOT_STATUSES = (SnapshotStatus.COMPLETED, SnapshotStatus.PARTIAL, SnapshotStatus.FAILED)
+
 FEED_LIMIT = 50
 APPROVAL_LIMIT = 10
 FAILED_RESTORE_LIMIT = 10
@@ -246,12 +250,16 @@ class BeanieOverviewReader:
         )
 
     async def latest_snapshot(self, organization_id: PydanticObjectId) -> SnapshotManifest | None:
-        """Return the newest completed snapshot of any kind."""
+        """Return the newest snapshot attempt that finished, whatever it finished as.
+
+        A failure is the news: reporting the last success instead would leave
+        the safety net green while every run since had been failing.
+        """
         return (
             await SnapshotManifest.find(
                 {
                     "organization_id": organization_id,
-                    "status": {"$in": [SnapshotStatus.COMPLETED.value, SnapshotStatus.PARTIAL.value]},
+                    "status": {"$in": [item.value for item in _TERMINAL_SNAPSHOT_STATUSES]},
                 }
             )
             .sort("-created_at")
@@ -259,13 +267,13 @@ class BeanieOverviewReader:
         )
 
     async def latest_reconciliation(self, organization_id: PydanticObjectId) -> SnapshotManifest | None:
-        """Return the newest completed scheduled reconciliation."""
+        """Return the newest scheduled reconciliation that finished, whatever as."""
         return (
             await SnapshotManifest.find(
                 {
                     "organization_id": organization_id,
                     "kind": SnapshotKind.RECONCILIATION.value,
-                    "status": {"$in": [SnapshotStatus.COMPLETED.value, SnapshotStatus.PARTIAL.value]},
+                    "status": {"$in": [item.value for item in _TERMINAL_SNAPSHOT_STATUSES]},
                 }
             )
             .sort("-created_at")
@@ -349,7 +357,14 @@ def build_safety_net(source: SafetyNetInput) -> list[SafetyNetItemResponse]:
             _reconciliation_row(
                 organization,
                 source.latest_reconciliation,
-                since=_snapshot_instant(source.latest_snapshot) or as_utc(organization.created_at),
+                # When no reconciliation has run, the clock starts where the
+                # organization did. A manual snapshot is not a reconciliation
+                # and must not push the deadline back by being taken.
+                since=(
+                    as_utc(organization.initial_snapshot_completed_at)
+                    if organization.initial_snapshot_completed_at is not None
+                    else as_utc(organization.created_at)
+                ),
                 now=now,
             )
         )
@@ -358,13 +373,34 @@ def build_safety_net(source: SafetyNetInput) -> list[SafetyNetItemResponse]:
 
 
 def _backup_row(snapshot: SnapshotManifest | None, now: datetime) -> SafetyNetItemResponse:
+    """Report the newest finished snapshot attempt.
+
+    Only a completed run is a backup. A failed one, and a partial one that
+    captured some objects and gave up on others, both leave the record
+    incomplete and are reported as such however recent they are.
+    """
     captured = _snapshot_instant(snapshot)
-    if captured is None:
+    if snapshot is None or captured is None:
         return SafetyNetItemResponse(
             key="backup",
             label="No snapshot recorded",
             status="warn",
             detail="—",
+        )
+    if snapshot.status is SnapshotStatus.FAILED:
+        return SafetyNetItemResponse(
+            key="backup",
+            label="Last backup failed",
+            status="warn",
+            detail=format_clock(captured),
+        )
+    if snapshot.status is SnapshotStatus.PARTIAL:
+        errors = len(snapshot.errors)
+        return SafetyNetItemResponse(
+            key="backup",
+            label=f"Last backup incomplete · {errors} error{'' if errors == 1 else 's'}",
+            status="warn",
+            detail=format_clock(captured),
         )
     behind = now - captured
     return SafetyNetItemResponse(
@@ -572,6 +608,7 @@ class OverviewService:
             organization_id,
             groups,
             viewer_email=viewer_email,
+            historical=historical,
         )
         if historical:
             # Change history has a past; pending approvals, failed restores and
@@ -625,9 +662,12 @@ class OverviewService:
         )
         return OverviewCountsResponse(
             change_groups=groups.change_groups,
-            impacting=groups.impacting,
+            # Impact and recovery are today's knowledge about a change, not a
+            # property of the window it happened in; counting them under a past
+            # instant would report a verdict reached after it.
+            impacting=0 if historical else groups.impacting,
             mine=groups.mine,
-            unrecovered=groups.unrecovered,
+            unrecovered=0 if historical else groups.unrecovered,
             # Approvals and failed restores are live state with no past.
             pending_approvals=0 if historical else await self._reader.pending_approval_count(organization_id),
             failed_restores=0 if historical else await self._reader.failed_restore_count(organization_id),
