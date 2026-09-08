@@ -94,7 +94,15 @@ export class MonitoringService {
     }
   }
 
+  /**
+   * Forget everything read so far.
+   *
+   * A single-session answer still in flight is dropped, since nothing newer
+   * would supersede it. A list read is not: the read for the organization
+   * being switched to may already be in flight, and it is the latest.
+   */
   reset(): void {
+    this.sessionRequest += 1;
     this.sessions.set([]);
     this.total.set(0);
     this.resolved.set(null);

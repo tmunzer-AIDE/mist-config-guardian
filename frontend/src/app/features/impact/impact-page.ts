@@ -104,6 +104,10 @@ export class ImpactPage {
   protected readonly filters = STATUS_FILTERS;
   protected readonly statusFilter = signal<StatusFilter>('all');
   private readonly picked = signal<string | null>(null);
+  /** The organization the deep link and its resolved session belong to. */
+  private linkFor: string | null = null;
+  /** A linked identifier from another organization, ignored until the router replaces it. */
+  private foreignLink: string | null = null;
 
   protected readonly severityFilter = computed<SeverityFilter>(() => {
     const requested = this.severity();
@@ -278,12 +282,44 @@ export class ImpactPage {
       );
     });
 
-    // Resolve a deep link that points outside the loaded page.
+    // Resolve a deep link that points outside the loaded page. The link, and
+    // the session it resolved to, belong to the organization it was opened under.
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
-      const wanted = this.picked() ?? this.session();
+      const linked = this.session();
+      const picked = this.picked();
+      if (!organizationId) {
+        return;
+      }
+      if (this.linkFor === null) {
+        // A link opened cold arrives before any organization is established;
+        // the one that then loads is the one it was written under.
+        this.linkFor = organizationId;
+      }
+      if (this.linkFor !== organizationId) {
+        // Under another organization the identifier names nothing. The session
+        // resolved for it, the rows read with it, the pick and the parameter go
+        // now, before a read for it can be issued, and the identifier is
+        // ignored until the router has replaced it.
+        this.linkFor = organizationId;
+        this.foreignLink = linked || null;
+        untracked(() => {
+          this.monitoring.reset();
+          this.picked.set(null);
+          if (linked) {
+            void this.router.navigate([], {
+              relativeTo: this.route,
+              queryParams: { session: null },
+              queryParamsHandling: 'merge',
+              replaceUrl: true,
+            });
+          }
+        });
+        return;
+      }
+      const wanted = picked ?? (linked === this.foreignLink ? '' : linked);
       const known = this.monitoring.sessions().some((item) => item.id === wanted);
-      if (!organizationId || !wanted || known) {
+      if (!wanted || known) {
         return;
       }
       if (untracked(() => this.monitoring.resolved()?.id) === wanted) {

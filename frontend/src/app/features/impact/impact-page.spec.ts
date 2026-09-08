@@ -1,9 +1,10 @@
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { AuthService } from '../../core/auth.service';
+import { OrganizationContextService } from '../../core/organization-context.service';
 import { TimeContextService } from '../../core/time-context.service';
 import { ImpactPage } from './impact-page';
 import {
@@ -219,6 +220,58 @@ describe('ImpactPage', () => {
     fixture = TestBed.createComponent(ImpactPage);
     monitoring = TestBed.inject(MonitoringService);
     monitoring.reset();
+  });
+
+  it('forgets a session resolved for another organization when switching', async () => {
+    // The resolved session is keyed by identifier alone. Under the next
+    // organization the same identifier would keep rendering the previous
+    // organization's device, incidents and metrics.
+    const http = TestBed.inject(HttpTestingController);
+    const organizations = TestBed.inject(OrganizationContextService);
+    const loaded = organizations.load();
+    http.expectOne('/api/v1/organizations').flush({
+      items: [
+        { id: 'org-1', name: 'Northwind Retail' },
+        { id: 'org-2', name: 'Contoso' },
+      ],
+      total: 2,
+    });
+    await loaded;
+
+    fixture.componentRef.setInput('session', 's-old');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/monitoring')
+      .flush({ items: [QUIET], total: 1 });
+    http
+      .expectOne('/api/v1/organizations/org-1/monitoring/s-old')
+      .flush(session({ id: 's-old', device_name: 'NW-AP-OLD' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(text()).toContain('NW-AP-OLD');
+
+    organizations.select('org-2');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    // Gone before the new organization answers, and never read under it.
+    expect(text()).not.toContain('NW-AP-OLD');
+    http.expectNone('/api/v1/organizations/org-2/monitoring/s-old');
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/monitoring')
+      .flush({ items: [session({ id: 's-new', device_name: 'CT-AP-NEW' })], total: 1 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text()).toContain('CT-AP-NEW');
+    expect(text()).not.toContain('NW-AP-OLD');
+    const dropped = navigations.some(
+      (entry) => (entry.extras?.['queryParams'] as { session?: string | null } | undefined)?.session === null,
+    );
+    expect(dropped).toBe(true);
+    http.verify();
   });
 
   it('lists every session and narrows the list from the status chips', async () => {
