@@ -144,6 +144,61 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(notifications.unread()).toBe(3);
   });
 
+  it('timeline shows no markers rather than the previous ones when a read fails', async () => {
+    const timeline = TestBed.inject(TimelineService);
+    const first = timeline.load('org-a', '24h');
+    pending('/api/v1/organizations/org-a/point-in-time/markers')[0].flush({
+      items: [{ at: '2026-09-08T08:00:00Z', severity: 'critical', change_group_id: 'g-a', label: 'a' }],
+    });
+    await first;
+    expect(timeline.markers().length).toBe(1);
+
+    // Switching clears the track at once, before the new read answers.
+    const second = timeline.load('org-b', '24h');
+    expect(timeline.markers()).toEqual([]);
+    pending('/api/v1/organizations/org-b/point-in-time/markers')[0].flush(
+      { detail: 'boom' },
+      { status: 500, statusText: 'Server Error' },
+    );
+    await second;
+
+    expect(timeline.markers()).toEqual([]);
+  });
+
+  it('notifications belong to one organization, whichever operation answers', async () => {
+    const notifications = TestBed.inject(NotificationService);
+    const first = notifications.load('org-a');
+    pending('/api/v1/organizations/org-a/notifications')[0].flush({
+      items: [{ id: 'n-a', read_at: null }],
+      total: 1,
+      unread: 4,
+    });
+    await first;
+    expect(notifications.items().length).toBe(1);
+
+    // The switch empties the drawer and badge at once: the previous
+    // organization's notifications are not this organization's.
+    const second = notifications.load('org-b');
+    expect(notifications.items()).toEqual([]);
+    expect(notifications.unread()).toBe(0);
+
+    // A mark-read for the organization just left answers late; it must not
+    // edit what is on screen now.
+    const late = notifications.markRead('org-a', 'n-a');
+    pending('/api/v1/organizations/org-a/notifications/n-a/read')[0].flush({});
+    await late;
+
+    pending('/api/v1/organizations/org-b/notifications')[0].flush({
+      items: [{ id: 'n-b', read_at: null }],
+      total: 1,
+      unread: 2,
+    });
+    await second;
+
+    expect(notifications.items().map((item) => item.id)).toEqual(['n-b']);
+    expect(notifications.unread()).toBe(2);
+  });
+
   it('monitoring keeps the latest page and the latest resolved session', async () => {
     const monitoring = TestBed.inject(MonitoringService);
     const older = monitoring.load('org-a');

@@ -1,4 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  DestroyRef,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core';
 import { Router } from '@angular/router';
 
 import { ChangeGroupSummary } from '../../core/change-group.model';
@@ -26,6 +35,9 @@ export class OverviewPage {
   private readonly auth = inject(AuthService);
   protected readonly overview = inject(OverviewService);
   protected readonly time = inject(TimeContextService);
+
+  /** The read on screen; a superseded one reports nothing. */
+  private scope = new AbortController();
 
   protected readonly filter = signal<FeedFilter>('all');
   protected readonly filters: FeedFilter[] = ['all', 'impacting', 'mine'];
@@ -97,10 +109,20 @@ export class OverviewPage {
       if (!organizationId) {
         return;
       }
-      void untracked(() =>
-        this.ui.track('Loading overview', () => this.overview.load(organizationId, range, asOf)),
-      );
+      untracked(() => {
+        // A read the page has moved on from must not hold the shell skeleton
+        // up or raise a banner about a window nobody is looking at.
+        this.scope.abort();
+        this.scope = new AbortController();
+        void this.ui.track(
+          'Loading overview',
+          () => this.overview.load(organizationId, range, asOf),
+          this.scope.signal,
+        );
+      });
     });
+
+    inject(DestroyRef).onDestroy(() => this.scope.abort());
   }
 
   protected approvalMeta(requestedByEmail: string, requestedAt: string): string {
@@ -139,15 +161,18 @@ export class OverviewPage {
   }
 
   private toCard(group: ChangeGroupSummary) {
+    // A past view withholds the outcome, so the card says so rather than
+    // wearing the neutral tone that would read as "no impact".
+    const known = group.impact_known !== false;
     const tone = toneOf(group.impact_severity);
-    const prominent = group.impact_severity === 'critical';
+    const prominent = known && group.impact_severity === 'critical';
     return {
       group,
       id: group.id,
       time: formatTime(new Date(group.occurred_at)),
       tone,
       prominent,
-      level: group.impact_label,
+      level: known ? group.impact_label : 'IMPACT NOT SHOWN',
       title: group.title,
       summary: group.summary,
       audit: `AUDIT ${shortAudit(group.audit_id)}`,

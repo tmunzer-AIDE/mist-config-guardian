@@ -28,20 +28,38 @@ export class TimelineService {
 
   /** Only the latest read describes the track; a slow answer for a previous organization must not. */
   private request = 0;
+  /** The organization the markers on the track belong to. */
+  private owner: string | null = null;
 
   async load(organizationId: string, range: TimeRange): Promise<void> {
+    if (this.owner !== organizationId) {
+      // The track is drawn from one organization's changes. Clearing here
+      // rather than on the answer means the previous organization's markers
+      // are gone even if this read fails or never answers.
+      this.owner = organizationId;
+      this.markers.set([]);
+    }
     const request = ++this.request;
     const params = new HttpParams().set('range', range);
-    const response = await firstValueFrom(
-      this.http.get<TimelineResponse>(orgPath(organizationId, '/point-in-time/markers'), { params }),
-    );
-    if (request === this.request) {
-      this.markers.set(response.items);
+    try {
+      const response = await firstValueFrom(
+        this.http.get<TimelineResponse>(orgPath(organizationId, '/point-in-time/markers'), { params }),
+      );
+      if (request === this.request) {
+        this.markers.set(response.items);
+      }
+    } catch {
+      // A failed read leaves an empty track rather than markers that no longer
+      // describe anything on screen.
+      if (request === this.request) {
+        this.markers.set([]);
+      }
     }
   }
 
   reset(): void {
     this.request += 1;
+    this.owner = null;
     this.markers.set([]);
   }
 }
