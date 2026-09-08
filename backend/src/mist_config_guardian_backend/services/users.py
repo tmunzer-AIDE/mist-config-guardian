@@ -219,6 +219,8 @@ class UserService:
             is_active=True,
             status=UserStatus.ACTIVE,
             password_hash=user.password_hash,
+            display_name=user.display_name,
+            password_changed_at=user.password_changed_at,
         )
         return user
 
@@ -230,14 +232,24 @@ class UserService:
         display_name: str | None = None,
         role: UserRole | None = None,
     ) -> User:
-        """Change a user's display name and role within the last-admin rules."""
+        """Change a user's display name and role within the last-admin rules.
+
+        Only what the patch supplied is written. Naming both fields every time
+        put back whatever this request happened to load: a rename that started
+        before an administrator was demoted, and finished after, restored the
+        role it had read on the way in.
+        """
         user = await self._require_user(user_id)
+        changes: dict[str, object] = {}
         if role is not None and role is not user.role:
             await self._guard_administrator_removal(user, actor=actor)
             user.role = role
+            changes["role"] = role
         if display_name is not None and display_name.strip():
             user.display_name = display_name.strip()
-        await write_user_fields(user, role=user.role, display_name=user.display_name)
+            changes["display_name"] = user.display_name
+        if changes:
+            await write_user_fields(user, **changes)
         return user
 
     async def deactivate(self, user_id: PydanticObjectId, *, actor: User) -> User:

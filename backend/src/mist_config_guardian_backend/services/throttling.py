@@ -191,14 +191,23 @@ class ThrottleService:
         the threshold then bounds completed serial failures rather than
         attempts admitted. The count is given back by :meth:`succeeded` and
         :meth:`release`, so a reservation that is not a failure does not
-        linger.
+        linger — including every scope counted for an attempt that a later
+        scope then refuses.
         """
+        reserved: list[Scope] = []
         for scope in scopes:
             count = await self._store.record(scope.key, self._window)
             if count > scope.limit:
+                # The attempt is refused here, so it never happens, and the
+                # scopes already counted for it are given back. Charging them
+                # anyway let a stranger who had spent their own address budget
+                # go on spending an account's: enough refused requests and the
+                # account was locked out by someone who never sent a password.
+                await self.release(*reserved)
                 live = await self._store.failures(scope.key)
                 remaining = max(1, int((live[1] - utc_now()).total_seconds())) if live else 1
                 raise ThrottledError(remaining)
+            reserved.append(scope)
 
     async def failed(self, *scopes: Scope) -> None:
         """Count one failure against every scope, outside a reservation."""
