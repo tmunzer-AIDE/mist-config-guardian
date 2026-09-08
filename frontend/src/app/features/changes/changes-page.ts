@@ -73,15 +73,26 @@ export class ChangesPage {
    *  actor, and a mirroring effect would fetch once more after correcting
    *  itself on the first pass. */
   protected readonly actorFilter = computed(() => this.actor() ?? null);
-  protected readonly severities: { value: SeverityFilter; label: string }[] = [
+  private readonly allSeverities: { value: SeverityFilter; label: string }[] = [
     { value: 'any', label: 'Impact: any' },
     { value: 'critical', label: 'Critical' },
     { value: 'warning', label: 'Warning' },
     { value: 'none', label: 'No impact' },
   ];
 
+  /**
+   * Impact is today's verdict on a change, held in one mutable column. A past
+   * window cannot be filtered by it — the rows would be the ones judged
+   * critical now, offered as the critical changes of then — so the chips are
+   * not offered there, and the API refuses the combination outright.
+   */
+  protected readonly severities = computed(() =>
+    this.time.isHistorical() ? this.allSeverities.slice(0, 1) : this.allSeverities,
+  );
+
   protected readonly selectedId = signal<string | null>(null);
   private selectedFor: string | null = null;
+  private detailRequest = 0;
   protected readonly detailPending = signal(false);
 
   /** Ties each row's `aria-controls` to the inline detail panel. */
@@ -188,7 +199,8 @@ export class ChangesPage {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
-      const severity = this.severity();
+      // A historical window carries no severity filter; the API refuses one.
+      const severity = this.time.isHistorical() ? 'any' : this.severity();
       const actor = this.actorFilter();
       const asOf = this.time.asOf();
       if (!organizationId) {
@@ -311,13 +323,20 @@ export class ChangesPage {
    * Failures still surface in the shell's error banner.
    */
   private async loadDetail(organizationId: string, id: string): Promise<void> {
+    const request = ++this.detailRequest;
     this.detailPending.set(true);
     try {
-      await this.changeGroups.load(organizationId, id);
+      await this.changeGroups.load(organizationId, id, this.time.asOf());
     } catch (cause) {
-      this.ui.fail(cause, 'Loading change group');
+      // A read for a row the user has already moved off must not clear the
+      // spinner belonging to the current one, nor raise a banner about it.
+      if (request === this.detailRequest) {
+        this.ui.fail(cause, 'Loading change group');
+      }
     } finally {
-      this.detailPending.set(false);
+      if (request === this.detailRequest) {
+        this.detailPending.set(false);
+      }
     }
   }
 }

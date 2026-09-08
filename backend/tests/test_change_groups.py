@@ -43,6 +43,7 @@ from mist_config_guardian_backend.services.change_groups import (
     ChangeGroupProjector,
     ChangeGroupService,
     actor_matches,
+    build_criteria,
     build_devices_label,
     build_impact_label,
     build_title,
@@ -1429,3 +1430,90 @@ def test_a_creation_is_never_described_as_a_field_change() -> None:
     title = build_title([_changed("wlans", "New-WLAN", ["rf_template_id"], event="created")], None)
 
     assert title == "Organization WLAN created · New-WLAN"
+
+
+# ----------------------------------------------------- the past, on the server
+
+
+async def test_a_historical_summary_withholds_the_reach_of_the_change_too() -> None:
+    """Devices and sites accumulate from monitoring sessions as they arrive.
+
+    Reporting today's reach under a past instant claims a spread that was not
+    known then, and that will keep growing after it.
+    """
+    store = _MemoryChangeGroupStore()
+    group = _group()
+    group.affected_devices = [
+        AffectedDevice(device_mac="aa", device_name="SEA-AP-101", device_type=DeviceType.AP, site_mist_id=SEATTLE)
+    ]
+    group.affected_site_ids = [SEATTLE]
+    store.groups.append(group)
+
+    [past] = await ChangeGroupService(store).summarize(
+        ORGANIZATION_ID,
+        [group],
+        viewer_email="j.mercer@northwind.example",
+        historical=True,
+    )
+
+    assert past.device_count == 0
+    assert past.devices_label == ""
+    assert past.affected_site_ids == []
+
+
+async def test_a_historical_detail_withholds_the_evidence_and_the_assessment() -> None:
+    """Expanding a past row must not reveal the verdict reached after it."""
+    store = _critical_fixture()
+    await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
+    group = store.groups[0]
+    assert group.id is not None
+    service = ChangeGroupService(store)
+
+    live = await service.get_group(ORGANIZATION_ID, group.id, viewer_email="j.mercer@northwind.example")
+    past = await service.get_group(
+        ORGANIZATION_ID,
+        group.id,
+        viewer_email="j.mercer@northwind.example",
+        historical=True,
+    )
+
+    assert live is not None
+    assert past is not None
+    assert live.evidence
+    assert live.deterministic_assessment
+    # The record of what changed survives; the verdict on it does not.
+    assert past.changed_objects == live.changed_objects
+    assert past.message == live.message
+    assert past.impact_known is False
+    assert past.evidence == []
+    assert past.deterministic_assessment is None
+    assert past.affected_devices == []
+    assert past.baseline_confidence is BaselineConfidence.NONE
+
+
+def test_a_past_window_is_not_filtered_by_todays_severity() -> None:
+    """The rows would be the ones judged critical now, offered as then's."""
+    live = build_criteria(ORGANIZATION_ID, ChangeGroupFilters(severity="critical"))
+    past = build_criteria(ORGANIZATION_ID, ChangeGroupFilters(severity="critical", as_of=NOW))
+
+    assert live["impact_severity"] == ImpactSeverity.CRITICAL.value
+    assert "impact_severity" not in past
+
+
+async def test_the_list_endpoint_refuses_a_severity_filter_at_a_past_instant() -> None:
+    """Refused rather than quietly ignored: a client must not believe it applied."""
+    app = _app(ChangeGroupService(_MemoryChangeGroupStore()))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        refused = await client.get(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/change-groups",
+            params={"range": "24h", "severity": "critical", "as_of": NOW.isoformat()},
+        )
+        allowed = await client.get(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/change-groups",
+            params={"range": "24h", "severity": "any", "as_of": NOW.isoformat()},
+        )
+
+    assert refused.status_code == 400
+    assert "past point in time" in refused.json()["detail"]
+    assert allowed.status_code == 200

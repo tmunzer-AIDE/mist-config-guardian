@@ -40,7 +40,12 @@ export class OverviewPage {
   private scope = new AbortController();
 
   protected readonly filter = signal<FeedFilter>('all');
-  protected readonly filters: FeedFilter[] = ['all', 'impacting', 'mine'];
+  private readonly allFilters: FeedFilter[] = ['all', 'impacting', 'mine'];
+
+  /** Impacting selects on an outcome a past view does not have, so it is not offered there. */
+  protected readonly filters = computed<FeedFilter[]>(() =>
+    this.historical() ? this.allFilters.filter((option) => option !== 'impacting') : this.allFilters,
+  );
 
   protected readonly organization = this.organizations.selected;
 
@@ -53,6 +58,12 @@ export class OverviewPage {
     }
     const day = formatDate(new Date(model.range_end));
     const groups = `${formatCount(model.counts.change_groups)} change group${model.counts.change_groups === 1 ? '' : 's'}`;
+    // Impact is not reconstructable for a past instant, so it is not counted
+    // there. "0 with unrecovered impact" would report an absence of harm that
+    // was never established.
+    if (model.historical) {
+      return `${day} · ${groups} · impact not shown · times UTC`;
+    }
     return `${day} · ${groups} · ${model.counts.unrecovered} with unrecovered impact · times UTC`;
   });
 
@@ -61,7 +72,9 @@ export class OverviewPage {
     if (!model) {
       return [];
     }
-    const active = this.filter();
+    // A filter chosen before travelling back selects on something now
+    // withheld; it falls back to showing everything rather than nothing.
+    const active = model.historical && this.filter() === 'impacting' ? 'all' : this.filter();
     return model.change_groups
       .filter((group) => {
         if (active === 'impacting') {

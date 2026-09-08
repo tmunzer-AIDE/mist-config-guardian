@@ -3,7 +3,7 @@
     <h1 class="cg-page-title">Change timeline</h1>
     <p class="head-sub">{{ subtitle() }}</p>
     <div class="cg-pills head-filters" role="group" aria-label="Change filter">
-      @for (option of filters; track option) {
+      @for (option of filters(); track option) {
         <button
           class="cg-pill"
           type="button"

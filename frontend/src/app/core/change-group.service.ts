@@ -76,10 +76,13 @@ export class ChangeGroupService {
   }
 
   /** Fetch the evidence, changed objects, and assessment for one group. */
-  async load(organizationId: string, id: string): Promise<ChangeGroupDetail> {
+  async load(organizationId: string, id: string, asOf: Date | null = null): Promise<ChangeGroupDetail> {
     const request = ++this.detailRequest;
+    // The instant travels with the read: expanded from a past view the panel
+    // must withhold the same fields the row does.
+    const params = asOf ? new HttpParams().set('as_of', asOf.toISOString()) : undefined;
     const response = await firstValueFrom(
-      this.http.get<ChangeGroupDetail>(orgPath(organizationId, `/change-groups/${id}`)),
+      this.http.get<ChangeGroupDetail>(orgPath(organizationId, `/change-groups/${id}`), { params }),
     );
     if (request === this.detailRequest) {
       this.detail.set(response);

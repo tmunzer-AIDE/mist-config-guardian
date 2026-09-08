@@ -7308,7 +7308,7 @@
     },
     "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}": {
       "get": {
-        "description": "Return one change group with its objects, devices, and evidence.",
+        "description": "Return one change group with its objects, devices, and evidence.\n\nExpanded from a past view it withholds the same fields the list does, and\nthe evidence and assessment besides: those narrate an outcome reached\nafter the instant being viewed.",
         "operationId": "read_change_group_api_v1_organizations__organization_id__change_groups__change_group_id__get",
         "parameters": [
           {
@@ -7325,6 +7325,23 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
             }
           }
         ],
