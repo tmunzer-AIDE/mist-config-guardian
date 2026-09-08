@@ -81,6 +81,7 @@ export class ChangesPage {
   ];
 
   protected readonly selectedId = signal<string | null>(null);
+  private selectedFor: string | null = null;
   protected readonly detailPending = signal(false);
 
   /** Ties each row's `aria-controls` to the inline detail panel. */
@@ -209,7 +210,7 @@ export class ChangesPage {
     // A deep link arrives as a query parameter; selecting a row writes one back.
     effect(() => {
       const fromUrl = this.group() ?? null;
-      untracked(() => this.selectedId.set(fromUrl));
+      untracked(() => this.selectGroup(fromUrl));
     });
 
     effect(() => {
@@ -219,13 +220,34 @@ export class ChangesPage {
         untracked(() => this.changeGroups.clearDetail());
         return;
       }
+      if (this.selectedFor !== organizationId) {
+        // The group was selected under another organization; here it names
+        // nothing. It goes, and the parameter with it, before a read for it
+        // can fail or the detail cached for it can show.
+        untracked(() => {
+          this.selectedId.set(null);
+          this.changeGroups.clearDetail();
+          void this.router.navigate([], {
+            queryParams: { group: null },
+            queryParamsHandling: 'merge',
+            replaceUrl: true,
+          });
+        });
+        return;
+      }
       void untracked(() => this.loadDetail(organizationId, id));
     });
   }
 
+  /** Record which organization a selection was made under, so a switch can tell it is foreign. */
+  private selectGroup(id: string | null): void {
+    this.selectedFor = this.organizations.selected()?.id ?? null;
+    this.selectedId.set(id);
+  }
+
   protected async select(id: string): Promise<void> {
     const next = this.selectedId() === id ? null : id;
-    this.selectedId.set(next);
+    this.selectGroup(next);
     await this.router.navigate([], {
       queryParams: { group: next },
       queryParamsHandling: 'merge',

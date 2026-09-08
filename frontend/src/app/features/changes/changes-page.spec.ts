@@ -84,6 +84,9 @@ describe('ChangesPage', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(async () => {
+    // The stub is shared across tests; one that switches organization must not
+    // leak that into the next.
+    organizationStub.selected.set({ id: ORGANIZATION_ID, name: 'Northwind Retail', status: 'verified' });
     await TestBed.configureTestingModule({
       imports: [ChangesPage],
       providers: [
@@ -185,6 +188,36 @@ describe('ChangesPage', () => {
 
     expect(text('.empty-title')).toEqual(['No changes in this window']);
     expect(text('.table-foot')).toEqual(['No change groups in this window']);
+  });
+
+  it('drops a selected group, and its parameter, when the organization changes', async () => {
+    // The group belongs to the organization it was selected under. Under
+    // another it would show cached detail and issue a read that can only fail.
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput('group', MONDAY_WARNING.id);
+    await load([MONDAY_CRITICAL, MONDAY_WARNING]);
+    httpMock.expectOne(`${INDEX_URL}/${MONDAY_WARNING.id}`).flush(detail(MONDAY_WARNING));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(text('.panel-title')).toEqual([MONDAY_WARNING.title]);
+
+    organizationStub.selected.set({ id: 'org-2', name: 'Contoso', status: 'verified' });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    httpMock
+      .expectOne((candidate) => candidate.url === '/api/v1/organizations/org-2/change-groups')
+      .flush({ items: [], total: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    httpMock.expectNone(`/api/v1/organizations/org-2/change-groups/${MONDAY_WARNING.id}`);
+    expect(text('.panel-title')).toEqual([]);
+    expect(navigate).toHaveBeenCalledWith([], {
+      queryParams: { group: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   });
 
   it('compares a changed object under the slot names History reads', async () => {

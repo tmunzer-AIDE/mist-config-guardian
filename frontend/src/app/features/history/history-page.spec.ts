@@ -17,6 +17,7 @@ import { HistoryPage } from './history-page';
 class Blank {}
 
 const ORGANIZATION = { id: 'org-1', name: 'Northwind Retail' } as unknown as Organization;
+const OTHER_ORGANIZATION = { id: 'org-2', name: 'Contoso' } as unknown as Organization;
 
 const SETTINGS: AiSettings = {
   enabled: true,
@@ -211,6 +212,35 @@ describe('HistoryPage', () => {
     expect(reload.request.params.get('from_version_id')).toBe('v-1');
     expect(reload.request.params.get('to_version_id')).toBe('v-3');
     reload.flush(diff());
+  });
+
+  it('forgets the object and versions on screen when the organization changes', async () => {
+    // Identifiers belong to the organization they were read from; under
+    // another they name nothing, and reads for them can only fail.
+    const fixture = await open([version('v-2', 2), version('v-1', 1)], diff());
+    http.expectOne((request) => request.url === '/api/v1/organizations/org-1/diff').flush(diff());
+    await settle(fixture);
+
+    const organizations = TestBed.inject(OrganizationContextService);
+    const reloaded = organizations.load(true);
+    http.expectOne('/api/v1/organizations').flush({ items: [ORGANIZATION, OTHER_ORGANIZATION], total: 2 });
+    await reloaded;
+    organizations.select('org-2');
+    await settle(fixture);
+
+    http.expectNone((request) => request.url.startsWith('/api/v1/organizations/org-2/objects/obj-1'));
+    http.expectNone((request) => request.url === '/api/v1/organizations/org-2/diff');
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/objects')
+      .flush({ items: [object('obj-9', 'Contoso-Guest')], total: 1 });
+    await settle(fixture);
+    // The new organization's own first object is what gets read next.
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/objects/obj-9/versions')
+      .flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    expect(ui.error()).toBeNull();
   });
 
   it('moves the selection with j and k, but never from inside a text field', async () => {

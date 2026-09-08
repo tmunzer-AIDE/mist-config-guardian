@@ -111,6 +111,8 @@ export class HistoryPage {
   private readonly versions = signal<ConfigurationVersion[]>([]);
   protected readonly selectedObjectId = signal<string | null>(null);
   private objectsRequest = 0;
+  /** The organization the object list was last read for; selections are valid only under it. */
+  private loadedOrganization: string | null = null;
   protected readonly versionAId = signal<string | null>(null);
   protected readonly versionBId = signal<string | null>(null);
 
@@ -336,15 +338,23 @@ export class HistoryPage {
       if (!organizationId) {
         return;
       }
-      void untracked(() =>
-        this.ui.track('Loading configuration objects', () => this.loadObjects(organizationId, includeDeleted)),
-      );
+      untracked(() => {
+        if (this.loadedOrganization !== null && this.loadedOrganization !== organizationId) {
+          // The object and versions on screen belong to the organization they
+          // were read from; under another they are identifiers of nothing, and
+          // reads for them can only fail. They go before the new list is asked for.
+          this.resetSelection();
+        }
+        this.loadedOrganization = organizationId;
+        void this.ui.track('Loading configuration objects', () => this.loadObjects(organizationId, includeDeleted));
+      });
     });
 
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const objectId = this.selectedObjectId();
-      if (!organizationId || !objectId) {
+      // A selection is read only under the organization it was made in.
+      if (!organizationId || !objectId || this.loadedOrganization !== organizationId) {
         return;
       }
       void untracked(() => this.loadVersions(organizationId, objectId));
@@ -354,7 +364,7 @@ export class HistoryPage {
       const organizationId = this.organizations.selected()?.id;
       const from = this.versionAId();
       const to = this.versionBId();
-      if (!organizationId || !from || !to) {
+      if (!organizationId || !from || !to || this.loadedOrganization !== organizationId) {
         return;
       }
       void untracked(() => this.loadDiff(organizationId, from, to));
@@ -393,11 +403,16 @@ export class HistoryPage {
     if (id === this.selectedObjectId()) {
       return;
     }
+    this.resetSelection();
+    this.selectedObjectId.set(id);
+  }
+
+  private resetSelection(): void {
     this.versions.set([]);
     this.versionAId.set(null);
     this.versionBId.set(null);
     this.clearDiff();
-    this.selectedObjectId.set(id);
+    this.selectedObjectId.set(null);
   }
 
   // ---------------------------------------------------------------- versions
