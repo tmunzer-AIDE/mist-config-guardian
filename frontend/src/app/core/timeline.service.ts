@@ -26,15 +26,22 @@ export class TimelineService {
 
   readonly markers = signal<TimelineMarker[]>([]);
 
+  /** Only the latest read describes the track; a slow answer for a previous organization must not. */
+  private request = 0;
+
   async load(organizationId: string, range: TimeRange): Promise<void> {
+    const request = ++this.request;
     const params = new HttpParams().set('range', range);
     const response = await firstValueFrom(
       this.http.get<TimelineResponse>(orgPath(organizationId, '/point-in-time/markers'), { params }),
     );
-    this.markers.set(response.items);
+    if (request === this.request) {
+      this.markers.set(response.items);
+    }
   }
 
   reset(): void {
+    this.request += 1;
     this.markers.set([]);
   }
 }

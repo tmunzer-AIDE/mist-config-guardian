@@ -4,8 +4,10 @@ import { TestBed } from '@angular/core/testing';
 
 import { MonitoringService } from '../features/impact/monitoring.service';
 import { ChangeGroupService } from './change-group.service';
+import { NotificationService } from './notification.service';
 import { OverviewService } from './overview.service';
 import { SearchService } from './search.service';
+import { TimelineService } from './timeline.service';
 
 /**
  * Every organization-scoped loader keeps only the answer to its latest request.
@@ -90,6 +92,56 @@ describe('organization-scoped loaders under reordered answers', () => {
 
     expect(search.results().map((item) => item.id)).toEqual(['o-1']);
     expect(search.searching()).toBe(false);
+  });
+
+  it('timeline markers follow the latest organization', async () => {
+    const timeline = TestBed.inject(TimelineService);
+    const older = timeline.load('org-a', '24h');
+    const newer = timeline.load('org-b', '24h');
+    const [a, b] = [
+      ...pending('/api/v1/organizations/org-a/point-in-time/markers'),
+      ...pending('/api/v1/organizations/org-b/point-in-time/markers'),
+    ];
+
+    b.flush({ items: [{ at: '2026-09-08T09:00:00Z', severity: 'none', change_group_id: 'g-b', label: 'b' }] });
+    await newer;
+    a.flush({ items: [{ at: '2026-09-08T08:00:00Z', severity: 'critical', change_group_id: 'g-a', label: 'a' }] });
+    await older;
+
+    expect(timeline.markers().map((marker) => marker.change_group_id)).toEqual(['g-b']);
+  });
+
+  it('notification items, badge and loading state follow the latest organization', async () => {
+    const notifications = TestBed.inject(NotificationService);
+    const olderList = notifications.load('org-a');
+    const newerList = notifications.load('org-b');
+    const [la, lb] = [
+      ...pending('/api/v1/organizations/org-a/notifications'),
+      ...pending('/api/v1/organizations/org-b/notifications'),
+    ];
+    lb.flush({ items: [{ id: 'n-b', read_at: null }], total: 1, unread: 1 });
+    await newerList;
+    expect(notifications.loading()).toBe(false);
+    la.flush({ items: [{ id: 'n-a' }, { id: 'n-a2' }], total: 2, unread: 7 });
+    await olderList;
+
+    expect(notifications.items().map((item) => item.id)).toEqual(['n-b']);
+    expect(notifications.unread()).toBe(1);
+    expect(notifications.loading()).toBe(false);
+
+    // The badge count is read on its own and races the same way.
+    const olderCount = notifications.refreshUnread('org-a');
+    const newerCount = notifications.refreshUnread('org-b');
+    const [ca, cb] = [
+      ...pending('/api/v1/organizations/org-a/notifications/unread-count'),
+      ...pending('/api/v1/organizations/org-b/notifications/unread-count'),
+    ];
+    cb.flush({ unread: 3 });
+    await newerCount;
+    ca.flush({ unread: 9 });
+    await olderCount;
+
+    expect(notifications.unread()).toBe(3);
   });
 
   it('monitoring keeps the latest page and the latest resolved session', async () => {

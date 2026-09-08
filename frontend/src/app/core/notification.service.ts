@@ -35,25 +35,40 @@ export class NotificationService {
   readonly unread = signal(0);
   readonly loading = signal(false);
 
+  // The drawer list and the badge count are read separately and answered in
+  // any order; each keeps only its latest answer, so a slow answer for a
+  // previous organization cannot replace the current one's items, badge or
+  // loading state.
+  private listRequest = 0;
+  private countRequest = 0;
+
   async load(organizationId: string, unreadOnly = false): Promise<void> {
+    const request = ++this.listRequest;
     this.loading.set(true);
     try {
       const params = new HttpParams().set('unread_only', unreadOnly).set('limit', 50);
       const response = await firstValueFrom(
         this.http.get<NotificationList>(orgPath(organizationId, '/notifications'), { params }),
       );
-      this.items.set(response.items);
-      this.unread.set(response.unread);
+      if (request === this.listRequest) {
+        this.items.set(response.items);
+        this.unread.set(response.unread);
+      }
     } finally {
-      this.loading.set(false);
+      if (request === this.listRequest) {
+        this.loading.set(false);
+      }
     }
   }
 
   async refreshUnread(organizationId: string): Promise<void> {
+    const request = ++this.countRequest;
     const response = await firstValueFrom(
       this.http.get<{ unread: number }>(orgPath(organizationId, '/notifications/unread-count')),
     );
-    this.unread.set(response.unread);
+    if (request === this.countRequest) {
+      this.unread.set(response.unread);
+    }
   }
 
   async markRead(organizationId: string, id: string): Promise<void> {
@@ -72,7 +87,10 @@ export class NotificationService {
   }
 
   reset(): void {
+    this.listRequest += 1;
+    this.countRequest += 1;
     this.items.set([]);
     this.unread.set(0);
+    this.loading.set(false);
   }
 }
