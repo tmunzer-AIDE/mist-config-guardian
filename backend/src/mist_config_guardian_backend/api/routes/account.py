@@ -58,7 +58,7 @@ from mist_config_guardian_backend.services.sessions import SessionService
 from mist_config_guardian_backend.services.throttling import (
     ThrottleService,
     get_throttle_service,
-    guard_or_raise,
+    reserve_or_raise,
 )
 from mist_config_guardian_backend.services.users import InvalidPasswordError, UserAlreadyExistsError
 
@@ -91,9 +91,8 @@ async def _confirm_password(user: User, password: str, throttle: ThrottleService
     leisure; the limit shared with sign-in applies here.
     """
     scope = throttle.user(_require_persisted(user))
-    await guard_or_raise(throttle, scope)
+    await reserve_or_raise(throttle, scope)
     if not verify_password(password, user.password_hash):
-        await throttle.failed(scope)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The password you entered is incorrect")
     await throttle.succeeded(scope)
 
@@ -131,7 +130,7 @@ async def request_email_change(
     still be completed; in production an operator must deliver it out of band.
     """
     scope = throttle.user(_require_persisted(user))
-    await guard_or_raise(throttle, scope)
+    await reserve_or_raise(throttle, scope)
     try:
         updated, token = await accounts.request_email_change(
             user,
@@ -139,7 +138,6 @@ async def request_email_change(
             password=payload.password.get_secret_value(),
         )
     except InvalidPasswordError as exc:
-        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     except UserAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -201,7 +199,7 @@ async def change_password(  # noqa: PLR0913, PLR0917 - one dependency per collab
 ) -> PasswordChangeResponse:
     """Replace the account password and sign every other session out."""
     scope = throttle.user(_require_persisted(user))
-    await guard_or_raise(throttle, scope)
+    await reserve_or_raise(throttle, scope)
     try:
         updated = await accounts.change_password(
             user,
@@ -209,7 +207,6 @@ async def change_password(  # noqa: PLR0913, PLR0917 - one dependency per collab
             new_password=payload.new_password.get_secret_value(),
         )
     except InvalidPasswordError as exc:
-        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     await throttle.succeeded(scope)
 
@@ -300,13 +297,12 @@ async def confirm_totp(
 ) -> RecoveryCodesResponse:
     """Confirm authenticator enrollment and return recovery codes exactly once."""
     scope = throttle.user(_require_persisted(user))
-    await guard_or_raise(throttle, scope)
+    await reserve_or_raise(throttle, scope)
     try:
         codes = await mfa.confirm_totp_enrollment(user, payload.code)
     except (TotpAlreadyEnrolledError, PendingEnrollmentError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidMfaCodeError as exc:
-        await throttle.failed(scope)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except MfaError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -323,11 +319,10 @@ async def disable_totp(
 ) -> ProfileResponse:
     """Remove the account's authenticator enrollment after re-entering the password."""
     scope = throttle.user(_require_persisted(user))
-    await guard_or_raise(throttle, scope)
+    await reserve_or_raise(throttle, scope)
     try:
         updated = await mfa.disable_totp(user, payload.password.get_secret_value())
     except InvalidPasswordError as exc:
-        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     except TotpNotEnrolledError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -344,11 +339,10 @@ async def regenerate_recovery_codes(
 ) -> RecoveryCodesResponse:
     """Replace the account's recovery codes and return them exactly once."""
     scope = throttle.user(_require_persisted(user))
-    await guard_or_raise(throttle, scope)
+    await reserve_or_raise(throttle, scope)
     try:
         codes = await mfa.regenerate_recovery_codes(user, payload.password.get_secret_value())
     except InvalidPasswordError as exc:
-        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     except TotpNotEnrolledError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

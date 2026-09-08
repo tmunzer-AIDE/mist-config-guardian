@@ -47,7 +47,11 @@ class ThrottleStore(Protocol):
         ...
 
     async def record(self, key: str, window: timedelta) -> int:
-        """Count one failure against a key, opening a window if none is running."""
+        """Count one attempt against a key, opening a window if none is running."""
+        ...
+
+    async def release(self, key: str) -> None:
+        """Give back one counted attempt that turned out not to be a failure."""
         ...
 
     async def clear(self, key: str) -> None:
@@ -73,12 +77,23 @@ class MemoryThrottleStore:
         return bucket
 
     async def record(self, key: str, window: timedelta) -> int:
-        """Count one failure."""
+        """Count one attempt."""
         live = await self.failures(key)
         count = (live[0] if live is not None else 0) + 1
         expires_at = live[1] if live is not None else self._now() + window
         self._buckets[key] = (count, expires_at)
         return count
+
+    async def release(self, key: str) -> None:
+        """Give back one counted attempt."""
+        live = await self.failures(key)
+        if live is None:
+            return
+        remaining = live[0] - 1
+        if remaining <= 0:
+            self._buckets.pop(key, None)
+        else:
+            self._buckets[key] = (remaining, live[1])
 
     async def clear(self, key: str) -> None:
         """Forget a key."""
@@ -100,7 +115,11 @@ class DatabaseThrottleStore:
         return bucket.failures, bucket.expires_at
 
     async def record(self, key: str, window: timedelta) -> int:
-        """Count one failure atomically, opening a window on first failure."""
+        """Count one attempt atomically, opening a window on the first.
+
+        The increment and the count that decides admission are one operation,
+        so two requests cannot both read a below-limit value and both proceed.
+        """
         now = utc_now()
         document = await ThrottleBucket.get_pymongo_collection().find_one_and_update(
             {"key": key},
@@ -113,6 +132,13 @@ class DatabaseThrottleStore:
             return_document=ReturnDocument.AFTER,
         )
         return int(document["failures"])
+
+    async def release(self, key: str) -> None:
+        """Give back one counted attempt that turned out not to be a failure."""
+        await ThrottleBucket.get_pymongo_collection().update_one(
+            {"key": key, "failures": {"$gt": 0}},
+            {"$inc": {"failures": -1}, "$set": {"updated_at": utc_now()}},
+        )
 
     async def clear(self, key: str) -> None:
         """Forget a key."""
@@ -156,19 +182,37 @@ class ThrottleService:
         return Scope(f"address:{host}", self._settings.sign_in_failures_per_address)
 
     # ---------------------------------------------------------------- actions
-    async def guard(self, *scopes: Scope) -> None:
-        """Refuse the attempt when any scope has reached its limit."""
+    async def reserve(self, *scopes: Scope) -> None:
+        """Count an attempt before it is made, refusing it if that exceeds a limit.
+
+        Counting first is what makes the limit hold. Reading the count, doing
+        the expensive credential check, and only then recording a failure lets
+        any number of requests read the same below-limit value and all proceed:
+        the threshold then bounds completed serial failures rather than
+        attempts admitted. The count is given back by :meth:`succeeded` and
+        :meth:`release`, so a reservation that is not a failure does not
+        linger.
+        """
         for scope in scopes:
-            live = await self._store.failures(scope.key)
-            if live is None or live[0] < scope.limit:
-                continue
-            remaining = max(1, int((live[1] - utc_now()).total_seconds()))
-            raise ThrottledError(remaining)
+            count = await self._store.record(scope.key, self._window)
+            if count > scope.limit:
+                live = await self._store.failures(scope.key)
+                remaining = max(1, int((live[1] - utc_now()).total_seconds())) if live else 1
+                raise ThrottledError(remaining)
 
     async def failed(self, *scopes: Scope) -> None:
-        """Count one failure against every scope."""
+        """Count one failure against every scope, outside a reservation."""
         for scope in scopes:
             await self._store.record(scope.key, self._window)
+
+    async def release(self, *scopes: Scope) -> None:
+        """Give back reservations an attempt did not spend as a failure.
+
+        Used for the per-address scope, where one address serves many people
+        and a success must not count towards their shared limit.
+        """
+        for scope in scopes:
+            await self._store.release(scope.key)
 
     async def succeeded(self, *scopes: Scope) -> None:
         """Forget the failures of scopes a success vindicates.
@@ -189,10 +233,10 @@ def throttled(error: ThrottledError) -> HTTPException:
     )
 
 
-async def guard_or_raise(throttle: ThrottleService, *scopes: Scope) -> None:
-    """Apply :meth:`ThrottleService.guard` inside a route."""
+async def reserve_or_raise(throttle: ThrottleService, *scopes: Scope) -> None:
+    """Apply :meth:`ThrottleService.reserve` inside a route."""
     try:
-        await throttle.guard(*scopes)
+        await throttle.reserve(*scopes)
     except ThrottledError as exc:
         raise throttled(exc) from exc
 

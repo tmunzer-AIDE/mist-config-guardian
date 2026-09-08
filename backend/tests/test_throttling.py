@@ -40,12 +40,30 @@ async def test_a_scope_is_refused_once_it_reaches_its_limit() -> None:
     scope = service.account("Someone@Example.com")
 
     for _ in range(3):
-        await service.guard(scope)
-        await service.failed(scope)
+        await service.reserve(scope)
 
     with pytest.raises(ThrottledError) as caught:
-        await service.guard(scope)
+        await service.reserve(scope)
     assert caught.value.retry_after > 0
+
+
+async def test_an_attempt_is_counted_before_it_is_made() -> None:
+    """The count decides admission, so it has to happen first.
+
+    Reading a count, checking a password, and only then recording a failure
+    lets any number of concurrent attempts read the same below-limit value and
+    all proceed — the limit then bounds completed serial failures rather than
+    attempts admitted.
+    """
+    service = ThrottleService(_settings(sign_in_failures_per_account=2), MemoryThrottleStore())
+    scope = service.account("someone@example.com")
+
+    # Two attempts are admitted; nothing has been reported as failing yet.
+    await service.reserve(scope)
+    await service.reserve(scope)
+
+    with pytest.raises(ThrottledError):
+        await service.reserve(scope)
 
 
 async def test_the_account_scope_is_case_insensitive_and_trimmed() -> None:
@@ -54,40 +72,54 @@ async def test_the_account_scope_is_case_insensitive_and_trimmed() -> None:
     assert service.account(" Someone@Example.com ") == service.account("someone@example.com")
 
 
-async def test_a_success_forgets_the_failures_before_it() -> None:
+async def test_a_success_forgets_the_attempts_before_it() -> None:
     service = ThrottleService(_settings(sign_in_failures_per_account=2), MemoryThrottleStore())
     scope = service.account("someone@example.com")
-    await service.failed(scope)
-    await service.failed(scope)
+    await service.reserve(scope)
+    await service.reserve(scope)
 
     await service.succeeded(scope)
 
-    await service.guard(scope)
+    await service.reserve(scope)
 
 
-async def test_failures_expire_with_their_window() -> None:
+async def test_a_release_gives_back_one_attempt() -> None:
+    """One address serves many people, so a success must not spend their share."""
+    service = ThrottleService(_settings(sign_in_failures_per_address=2), MemoryThrottleStore())
+    scope = Scope("address:203.0.113.7", 2)
+
+    await service.reserve(scope)
+    await service.release(scope)
+    await service.reserve(scope)
+    await service.reserve(scope)
+
+    with pytest.raises(ThrottledError):
+        await service.reserve(scope)
+
+
+async def test_attempts_expire_with_their_window() -> None:
     clock = _Clock()
     service = ThrottleService(
         _settings(sign_in_failures_per_account=1, sign_in_throttle_window_minutes=15),
         MemoryThrottleStore(clock),
     )
     scope = service.account("someone@example.com")
-    await service.failed(scope)
+    await service.reserve(scope)
     with pytest.raises(ThrottledError):
-        await service.guard(scope)
+        await service.reserve(scope)
 
     clock.now += timedelta(minutes=16)
 
-    await service.guard(scope)
+    await service.reserve(scope)
 
 
 async def test_each_scope_counts_on_its_own() -> None:
     service = ThrottleService(_settings(sign_in_failures_per_account=1), MemoryThrottleStore())
-    await service.failed(Scope("account:a", 1))
+    await service.reserve(Scope("account:a", 1))
 
-    await service.guard(Scope("account:b", 1))
+    await service.reserve(Scope("account:b", 1))
     with pytest.raises(ThrottledError):
-        await service.guard(Scope("account:a", 1))
+        await service.reserve(Scope("account:a", 1))
 
 
 # -------------------------------------------------------------------- api

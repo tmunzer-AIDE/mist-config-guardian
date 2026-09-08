@@ -38,7 +38,7 @@ from mist_config_guardian_backend.services.sessions import CsrfError, SessionSer
 from mist_config_guardian_backend.services.throttling import (
     ThrottleService,
     get_throttle_service,
-    guard_or_raise,
+    reserve_or_raise,
 )
 from mist_config_guardian_backend.services.users import (
     BootstrapClosedError,
@@ -93,16 +93,19 @@ async def login(  # noqa: PLR0913, PLR0917 - one dependency per collaborating se
     """
     account = throttle.account(form.username)
     address = throttle.address(request)
-    await guard_or_raise(throttle, account, address)
+    # Counted before the password is checked, not after it fails: reading a
+    # count and acting on it later lets concurrent attempts all pass the same
+    # below-limit reading.
+    await reserve_or_raise(throttle, account, address)
     user = await users.authenticate(form.username, form.password)
     if user is None:
-        await throttle.failed(account, address)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_INVALID_CREDENTIALS,
             headers={"WWW-Authenticate": "Bearer"},
         )
     await throttle.succeeded(account)
+    await throttle.release(address)
     if user.totp is not None:
         return MfaChallengeResponse(
             challenge_token=await mfa.issue_login_challenge(user),
@@ -150,17 +153,16 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
 
     address = throttle.address(request)
     second_factor = throttle.second_factor(challenge.user_id)
-    await guard_or_raise(throttle, address, second_factor)
+    await reserve_or_raise(throttle, address, second_factor)
     if not await mfa.record_login_attempt(challenge.handle):
-        await throttle.failed(address, second_factor)
         raise rejected
 
     user = await users.get_by_id(challenge.user_id)
     if user is None or not user.is_active or not await mfa.verify_second_factor(user, payload.code):
-        await throttle.failed(address, second_factor)
         raise rejected
     await mfa.consume_login_challenge(challenge.handle)
     await throttle.succeeded(second_factor)
+    await throttle.release(address)
     return await _complete_sign_in(
         user,
         request=request,
@@ -175,12 +177,21 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
 
 @router.post("/passkey/options")
 async def passkey_authentication_options(
+    request: Request,
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> PasskeyAuthenticationOptionsResponse:
     """Start a passwordless sign-in and return its WebAuthn options.
 
     The challenge itself stays on the server; the returned token only names it.
+    Starting a ceremony therefore allocates a record per call, which an
+    anonymous caller could repeat without limit, so beginning one is counted
+    against the address the way completing one already is.
     """
+    address = throttle.address(request)
+    # Reserved and kept: starting a ceremony is itself the work being limited,
+    # so a successful start counts like any other.
+    await reserve_or_raise(throttle, address)
     options, challenge_token = await passkeys.begin_authentication()
     return PasskeyAuthenticationOptionsResponse(challenge_token=challenge_token, options=options)
 
@@ -205,20 +216,20 @@ async def verify_passkey_authentication(  # noqa: PLR0913, PLR0917 - one depende
     without the step-up that a verified assertion would have granted.
     """
     address = throttle.address(request)
-    await guard_or_raise(throttle, address)
+    await reserve_or_raise(throttle, address)
     try:
         authenticated = await passkeys.complete_authentication(
             challenge_token=payload.challenge_token,
             credential=payload.credential,
         )
     except (PasskeyError, ChallengeTokenError, WebAuthnError) as exc:
-        await throttle.failed(address)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="That passkey could not be verified",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     user = authenticated.user
+    await throttle.release(address)
     if not authenticated.user_verified and user.totp is not None:
         return MfaChallengeResponse(
             challenge_token=await mfa.issue_login_challenge(user),
