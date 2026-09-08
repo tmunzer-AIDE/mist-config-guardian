@@ -115,6 +115,37 @@ async def capture_safety_snapshot(
     return entries
 
 
+_MISSING = object()
+
+
+def _at_path(value: object, path: str) -> object:
+    """Read one of the locations :func:`find_unavailable_secrets` reports."""
+    for part in path.split("."):
+        if isinstance(value, Mapping):
+            if part not in value:
+                return _MISSING
+            value = value[part]
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if not part.lstrip("-").isdigit() or not -len(value) <= int(part) < len(value):
+                return _MISSING
+            value = value[int(part)]
+        else:
+            return _MISSING
+    return value
+
+
+def _usable_secret(value: object) -> bool:
+    """Whether a value is a secret that could actually be written back.
+
+    The same three things :func:`find_unavailable_secrets` calls unusable —
+    absent, empty, or all asterisks — plus the one it cannot see, a field that
+    is not there at all.
+    """
+    if value is _MISSING or value is None or value == "":
+        return False
+    return not (isinstance(value, str) and set(value) == {"*"})
+
+
 def _without_paths(value: object, paths: frozenset[str], *, path: str = "") -> object:
     """Drop exactly the named locations, leaving same-named fields elsewhere.
 
@@ -302,6 +333,16 @@ class RestoreCompensationService:
         over a backup key that had been rotated since, and put the old one
         back: no mask, nothing for authorization to catch, and a working
         credential overwritten with a stale one.
+
+        And left out only where the stored version actually holds the secret
+        the live read could not give. Dropping a masked location from both
+        sides makes "the stored version has this secret" and "the stored
+        version has no such field" look alike, and the second is not a source
+        of anything: preferring it writes the object back without the field at
+        all, through a replacement `PUT`, with nothing masked for
+        authorization to refuse. Where the stored version cannot supply a
+        masked secret the live snapshot is kept instead, mask and all, so the
+        plan is refused rather than quietly dropping a credential.
         """
         definition = get_definition(action.scope, action.object_type)
         if definition is None:
@@ -318,6 +359,14 @@ class RestoreCompensationService:
             )
             return False
         masked = frozenset(find_unavailable_secrets(live, definition.sensitive_fields))
+        unsourced = sorted(path for path in masked if not _usable_secret(_at_path(plaintext, path)))
+        if unsourced:
+            logger.warning(
+                "Stored version %s cannot supply the masked secrets %s, so the live snapshot is kept",
+                stored.id,
+                ", ".join(unsourced),
+            )
+            return False
         ignored = definition.ignored_fields
         return canonicalize(_without_paths(live, masked), ignored_fields=ignored) == canonicalize(
             _without_paths(plaintext, masked), ignored_fields=ignored

@@ -34,6 +34,7 @@ from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
+from mist_config_guardian_backend.services.restore_authorization import find_unavailable_secrets
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
@@ -505,6 +506,58 @@ async def test_a_mask_on_one_secret_still_recovers_it_when_the_rest_agrees(
     # The masked one comes from the stored version; the other is unchanged.
     assert servers[0]["secret"] == "primary-shared-secret"
     assert servers[1]["secret"] == "backup-shared-secret"
+
+
+async def test_a_stored_version_without_the_masked_secret_is_not_a_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A version that never held the secret cannot supply it.
+
+    Dropping the masked location from both sides made "the stored version has
+    this secret" and "the stored version has no such field" look alike. The
+    second was then preferred, and the object went back through a replacement
+    write without the field at all — nothing masked, so nothing for
+    authorization to refuse, and the credential silently gone.
+    """
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    without_psk: dict[str, object] = {"name": "Corp", "enabled": True}
+    stored = _stored_version(
+        protect_configuration(without_psk, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(without_psk, ignored_fields=IGNORED),
+    )
+    entry = _entry({**without_psk, "psk": "********"}, stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    revealed = reveal_configuration(inverse.protected_configuration, vault)
+    # The live snapshot is kept, mask and all, which is what makes the plan
+    # fail closed instead of writing the object back without its key.
+    assert revealed["psk"] == "********"
+    assert find_unavailable_secrets(revealed, definition.sensitive_fields) == {"psk"}
+
+
+async def test_a_stored_version_whose_secret_is_itself_masked_is_not_a_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A snapshot taken while Mist was masking holds no more than the live read."""
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    masked: dict[str, object] = {"name": "Corp", "enabled": True, "psk": "********"}
+    stored = _stored_version(
+        protect_configuration(masked, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(masked, ignored_fields=IGNORED),
+    )
+    entry = _entry(dict(masked), stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    assert find_unavailable_secrets(
+        reveal_configuration(inverse.protected_configuration, vault),
+        definition.sensitive_fields,
+    ) == {"psk"}
 
 
 async def test_a_stored_version_that_has_drifted_is_not_paired_with(
