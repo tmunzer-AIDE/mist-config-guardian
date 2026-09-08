@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     influxdb_token: SecretStr = SecretStr("")
 
     access_token_expire_minutes: int = 30
-    bootstrap_admin_token: SecretStr = SecretStr("development-only-bootstrap-token")
+    # Deliberately empty. A default that works is a credential published in
+    # the repository: the first caller to reach a fresh deployment and send it
+    # becomes the global administrator. Bootstrap stays closed until an
+    # operator sets a value of their own.
+    bootstrap_admin_token: SecretStr = SecretStr("")
     credential_encryption_key: SecretStr = SecretStr("development-only-encryption-key")
     webhook_max_body_bytes: int = 1_048_576
     delegated_credential_ttl_minutes: int = 15

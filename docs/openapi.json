@@ -6494,7 +6494,7 @@
     },
     "/api/v1/auth/passkey/options": {
       "post": {
-        "description": "Start a passwordless sign-in and return its WebAuthn options.\n\nThe challenge itself stays on the server; the returned token only names it.",
+        "description": "Start a passwordless sign-in and return its WebAuthn options.\n\nThe challenge itself stays on the server; the returned token only names it.\nStarting a ceremony therefore allocates a record per call, which an\nanonymous caller could repeat without limit, so beginning one is counted\nagainst the address the way completing one already is.",
         "operationId": "passkey_authentication_options_api_v1_auth_passkey_options_post",
         "responses": {
           "200": {
