@@ -39,12 +39,16 @@ from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationService,
     capture_safety_snapshot,
 )
-from mist_config_guardian_backend.services.restore_planner import RestoreOperationState
+from mist_config_guardian_backend.services.restore_planner import (
+    RestoreOperationState,
+    SafetySnapshotEntry,
+)
 from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash,
     legacy_configuration_hash,
 )
-from mist_config_guardian_backend.snapshots.secrets import is_protected
+from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.secrets import is_protected, protect_configuration
 
 ORGANIZATION_ID = PydanticObjectId()
 OPERATION_ID = PydanticObjectId()
@@ -287,32 +291,52 @@ async def test_a_plan_whose_expected_hash_predates_the_key_still_detects_drift(
         await capture_safety_snapshot(client, _organization(), operation, _vault())
 
 
-async def test_the_snapshot_digest_matches_the_generation_of_the_version_it_pairs_with(
+async def test_compensation_finds_the_stored_secrets_after_the_digest_is_migrated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Compensation compares this digest with the stored version's own.
+    """The keyed hash migrates in the background, including between a restore
+    failing and its reversal being built.
 
-    Two digests only answer that question when they are of the same generation,
-    and a stored version may well predate the key. Recording the stored digest
-    verbatim keeps the later comparison between like and like, which is what
-    lets compensation put the real secrets back instead of the masked values a
-    live read returns.
+    Comparing the snapshot's digest with the one now stored beside the version
+    reads a migration as a changed configuration. The reversal then falls back
+    to the live read, and what a live read holds for a secret is the mask Mist
+    returns — so undoing a failed restore would set the secret to `********`.
     """
-    legacy = legacy_configuration_hash(CORP_WLAN, ignored_fields=IGNORED)
-
-    async def _legacy_stored(_logical_id):
-        return _stored_version(CORP_WLAN, legacy)
-
-    monkeypatch.setattr(
-        "mist_config_guardian_backend.services.restore_compensation.latest_version",
-        _legacy_stored,
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    stored = _stored_version(
+        protect_configuration(CORP_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        # Already rewritten by the backfill.
+        configuration_hash(CORP_WLAN, ignored_fields=IGNORED),
     )
-    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash=legacy)])
-    client = _FakeMistClient({"mist-0": dict(CORP_WLAN)})
+    entry = SafetySnapshotEntry(
+        logical_object_id=stored.logical_object_id,
+        order=0,
+        action=RestoreActionType.UPDATE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        existed=True,
+        configuration=protect_configuration(CORP_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        # Captured before the backfill reached that version.
+        configuration_hash=legacy_configuration_hash(CORP_WLAN, ignored_fields=IGNORED),
+        pre_version_id=stored.id,
+    )
 
-    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+    async def _stored_by_id(_version_id: object) -> ObjectVersion:
+        return stored
 
-    assert entries[0].configuration_hash == legacy
+    monkeypatch.setattr(ObjectVersion, "get", _stored_by_id)
+    service = RestoreCompensationService(_MemoryStateStore(), vault)
+
+    inverse = await service._invert(_action(0, RestoreActionType.UPDATE), entry, 0)  # noqa: SLF001
+
+    # Both hold the same plaintext but were encrypted separately, so the
+    # ciphertext says which one the reversal will actually write.
+    assert inverse.protected_configuration == stored.configuration
+    assert inverse.protected_configuration != entry.configuration
 
 
 async def test_a_stored_version_that_has_drifted_is_not_paired_with(

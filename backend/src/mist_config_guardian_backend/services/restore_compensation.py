@@ -7,8 +7,11 @@ the same pass that revalidates live state, so nothing is written before the
 inverse of every planned write is known.
 """
 
+import logging
+
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.integrations.mist_mutation import (
     MistMutationClient,
     MistMutationError,
@@ -22,7 +25,10 @@ from mist_config_guardian_backend.models.restore import (
     RestoreStatus,
 )
 from mist_config_guardian_backend.models.snapshot import ObjectVersion
-from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.security.credentials import (
+    CredentialDecryptionError,
+    CredentialVault,
+)
 from mist_config_guardian_backend.services.approvals import compute_plan_hash
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
@@ -38,7 +44,9 @@ from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash_matches,
 )
 from mist_config_guardian_backend.snapshots.registry import get_definition
-from mist_config_guardian_backend.snapshots.secrets import protect_configuration
+from mist_config_guardian_backend.snapshots.secrets import protect_configuration, reveal_configuration
+
+logger = logging.getLogger(__name__)
 
 
 class RestoreCompensationError(ValueError):
@@ -95,43 +103,13 @@ async def capture_safety_snapshot(
                         sensitive_fields=definition.sensitive_fields,
                     )
                 ),
-                configuration_hash=_entry_digest(
-                    stored,
-                    current,
-                    ignored_fields=definition.ignored_fields,
+                configuration_hash=(
+                    None if current is None else configuration_hash(current, ignored_fields=definition.ignored_fields)
                 ),
                 pre_version_id=(None if stored is None or stored.is_deleted else stored.id),
             )
         )
     return entries
-
-
-def _entry_digest(
-    stored: ObjectVersion | None,
-    current: dict[str, object] | None,
-    *,
-    ignored_fields: frozenset[str],
-) -> str | None:
-    """Digest a live read so it stays comparable with the stored version.
-
-    Compensation asks one question of this digest later: is the stored version
-    the same configuration as what was live, so its real secrets can be used
-    instead of the masked values a live read returns? Two digests only answer
-    that when they are of the same generation, and the stored one may predate
-    the keyed hash. Recording the stored digest verbatim when it already
-    describes this configuration keeps the later comparison between like and
-    like; anything else is digested in the current generation, and by
-    construction will not match.
-    """
-    if current is None:
-        return None
-    if stored is not None and configuration_hash_matches(
-        stored.configuration_hash,
-        current,
-        ignored_fields=ignored_fields,
-    ):
-        return stored.configuration_hash
-    return configuration_hash(current, ignored_fields=ignored_fields)
 
 
 def _validate_live_state(
@@ -164,8 +142,13 @@ def _validate_live_state(
 class RestoreCompensationService:
     """Build the inverse of a partly applied restore from its safety snapshot."""
 
-    def __init__(self, store: RestoreStateStore | None = None) -> None:
+    def __init__(
+        self,
+        store: RestoreStateStore | None = None,
+        vault: CredentialVault | None = None,
+    ) -> None:
         self._store = store or get_restore_state_store()
+        self._vault = vault or CredentialVault(get_settings())
 
     async def create_compensation_plan(
         self,
@@ -267,8 +250,41 @@ class RestoreCompensationService:
             RestoreOperation.organization_id == compensation.organization_id,
         )
 
-    @staticmethod
+    def _describes(
+        self,
+        entry: SafetySnapshotEntry,
+        action: RestoreAction,
+        stored: ObjectVersion,
+    ) -> bool:
+        """Whether the stored version is the configuration the snapshot recorded.
+
+        The snapshot's digest is compared with the stored version's *contents*,
+        not with the digest written beside them. Those two digests can belong
+        to different generations through no fault of either: the keyed hash is
+        migrated in the background, and a version referenced by a snapshot may
+        be rewritten between the restore failing and its reversal being built.
+        Comparing digest to digest read that as a changed configuration and
+        fell back to the live values — which for a secret is the mask Mist
+        returns, and writing that back would set the secret to `********`.
+        """
+        if entry.configuration_hash is None:
+            return False
+        definition = get_definition(action.scope, action.object_type)
+        ignored = frozenset() if definition is None else definition.ignored_fields
+        try:
+            plaintext = reveal_configuration(stored.configuration, self._vault)
+        except CredentialDecryptionError:
+            # Nothing can be said about a version whose secrets will not
+            # decrypt, and guessing is how masked values get written back.
+            logger.warning(
+                "Cannot confirm stored version %s against its safety snapshot: its secrets do not decrypt",
+                stored.id,
+            )
+            return False
+        return configuration_hash_matches(entry.configuration_hash, plaintext, ignored_fields=ignored)
+
     async def _invert(
+        self,
         action: RestoreAction,
         entry: SafetySnapshotEntry,
         order: int,
@@ -280,7 +296,7 @@ class RestoreCompensationService:
             stored = await ObjectVersion.get(entry.pre_version_id)
             # The stored version carries the real protected secrets; the live
             # read that produced the snapshot only ever sees masked values.
-            if stored is not None and stored.configuration_hash == entry.configuration_hash:
+            if stored is not None and self._describes(entry, action, stored):
                 configuration = dict(stored.configuration)
 
         if action.action is RestoreActionType.CREATE:
