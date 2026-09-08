@@ -65,33 +65,58 @@ spec:
           env:
             - name: MONGO_INITDB_DATABASE
               value: {{ .Values.config.mongodbDatabase | quote }}
+            # Naming a root user is what turns authentication on: the entrypoint
+            # creates the user and starts mongod with --auth, so an anonymous
+            # connection from anywhere in the cluster is refused.
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mist-config-guardian.secretName" . }}
+                  key: MONGODB_ROOT_USERNAME
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mist-config-guardian.secretName" . }}
+                  key: MONGODB_ROOT_PASSWORD
           ports:
             - name: mongodb
               containerPort: 27017
           startupProbe:
             exec:
               command:
-                - mongosh
-                - --quiet
-                - --eval
-                - db.adminCommand('ping').ok
+                - sh
+                - -c
+                - >-
+                  mongosh --quiet
+                  --username "$MONGO_INITDB_ROOT_USERNAME"
+                  --password "$MONGO_INITDB_ROOT_PASSWORD"
+                  --authenticationDatabase admin
+                  --eval "db.adminCommand('ping').ok"
             periodSeconds: 5
             failureThreshold: 30
           livenessProbe:
             exec:
               command:
-                - mongosh
-                - --quiet
-                - --eval
-                - db.adminCommand('ping').ok
+                - sh
+                - -c
+                - >-
+                  mongosh --quiet
+                  --username "$MONGO_INITDB_ROOT_USERNAME"
+                  --password "$MONGO_INITDB_ROOT_PASSWORD"
+                  --authenticationDatabase admin
+                  --eval "db.adminCommand('ping').ok"
             periodSeconds: 20
           readinessProbe:
             exec:
               command:
-                - mongosh
-                - --quiet
-                - --eval
-                - db.adminCommand('ping').ok
+                - sh
+                - -c
+                - >-
+                  mongosh --quiet
+                  --username "$MONGO_INITDB_ROOT_USERNAME"
+                  --password "$MONGO_INITDB_ROOT_PASSWORD"
+                  --authenticationDatabase admin
+                  --eval "db.adminCommand('ping').ok"
             periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false

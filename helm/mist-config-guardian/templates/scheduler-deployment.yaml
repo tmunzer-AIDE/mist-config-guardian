@@ -37,6 +37,8 @@ spec:
                 name: {{ include "mist-config-guardian.fullname" . }}
             - secretRef:
                 name: {{ include "mist-config-guardian.secretName" . }}
+          env:
+            {{- include "mist-config-guardian.datastoreEnv" . | trim | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

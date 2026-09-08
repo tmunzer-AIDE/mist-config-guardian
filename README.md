@@ -45,16 +45,57 @@ The application is served at `http://localhost:8080`.
 ## Helm
 
 The chart includes `questions.yaml` for guided installation in Rancher-compatible
-catalog UIs. Configure the container images, external MongoDB, Redis, and
-InfluxDB services, networking, and application secrets through the form.
+catalog UIs. Configure the container images, the datastores, networking, and
+application secrets through the form.
+
+MongoDB, Redis, and InfluxDB are deployed with the release by default. Set
+`mongodb.enabled`, `redis.enabled`, or `influxdb.enabled` to `false` to point
+the application at an existing service through `config` instead.
 
 By default, the chart reads sensitive settings from the Secret named by
 `existingSecret`. It must contain `SECRET_KEY`, `BOOTSTRAP_ADMIN_TOKEN`,
-`CREDENTIAL_ENCRYPTION_KEY`, and `INFLUXDB_TOKEN`.
+`CREDENTIAL_ENCRYPTION_KEY`, and `INFLUXDB_TOKEN`, plus the datastore
+credentials for whichever datastores are bundled:
+
+| Key | Required when |
+|---|---|
+| `MONGODB_ROOT_USERNAME` | `mongodb.enabled` |
+| `MONGODB_ROOT_PASSWORD` | `mongodb.enabled` |
+| `REDIS_PASSWORD` | `redis.enabled` |
+
+Each bundled datastore refuses unauthenticated connections. Both passwords are
+placed in a connection URI, so keep them to characters that need no
+percent-encoding: letters, digits, and any of `-._~`. The URIs are assembled
+inside the pod from the Secret, so no password is written to a ConfigMap or
+into the rendered manifest.
 
 For evaluation environments, the form can create this Secret by enabling
 `secrets.create`. External secret management is recommended for production
 because chart-managed secret values are retained in Helm release data.
+
+### Network policy
+
+`networkPolicy.enabled` (on by default) denies every connection to every pod in
+the release, then allows only the ones the application needs: the API, workers,
+and scheduler reach the three datastores, and the browser reaches the frontend
+and the API. Nothing else in the cluster can open a connection to MongoDB,
+Redis, or InfluxDB.
+
+Narrow the browser-facing rule to your ingress controller with
+`networkPolicy.webIngressFrom`, which takes a list of `NetworkPolicyPeer`. It is
+empty by default, meaning any source, because a controller's namespace and
+labels differ between clusters.
+
+Outbound traffic is unrestricted unless `networkPolicy.egress.enabled` is set.
+It is off by default because the API and workers call the Mist cloud and, when
+configured, an AI provider, and this chart cannot know what those resolve to.
+When it is on, the pods may resolve DNS, reach their own datastores, and open
+connections to `networkPolicy.egress.allowedDestinations` — by default the
+public internet with the private ranges excluded.
+
+**These objects require a CNI that enforces NetworkPolicy.** On a cluster
+without one they are accepted and ignored, and the datastore passwords are then
+the only thing standing between an unrelated pod and the data.
 
 AI-assisted impact analysis is configured after deployment from the
 Administration page. Its provider API key is encrypted before it is stored.

@@ -62,10 +62,22 @@ spec:
         - name: redis
           image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
           imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          env:
+            # redis-cli reads REDISCLI_AUTH, so the probes below authenticate
+            # without the password ever appearing in a command line, and the
+            # server reads the same value through $(...), which Kubernetes
+            # expands in the container rather than in the rendered manifest.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mist-config-guardian.secretName" . }}
+                  key: REDIS_PASSWORD
           args:
             - redis-server
             - --appendonly
             - "yes"
+            - --requirepass
+            - $(REDISCLI_AUTH)
           ports:
             - name: redis
               containerPort: 6379

@@ -62,6 +62,16 @@ secrets:
   bootstrapAdminToken: ""
   credentialEncryptionKey: ""
   influxdbToken: ""
+  # The bundled MongoDB and Redis refuse unauthenticated connections, so these
+  # are required whenever those datastores are enabled. An externally managed
+  # Secret must carry the same keys: MONGODB_ROOT_USERNAME,
+  # MONGODB_ROOT_PASSWORD and REDIS_PASSWORD.
+  #
+  # Both passwords are placed in a connection URI, so keep them to characters
+  # that need no percent-encoding: letters, digits, and any of -._~
+  mongodbRootUsername: ""
+  mongodbRootPassword: ""
+  redisPassword: ""
 
 config:
   environment: production
@@ -80,6 +90,36 @@ config:
 resources: {}
 frontendResources: {}
 workerResources: {}
+
+# Every pod in this release refuses connections it was not sent, and each
+# allowance below names one that it was. Requires a CNI that enforces
+# NetworkPolicy; on a cluster without one these objects are inert, and the
+# datastore passwords above are then the only thing standing in the way.
+networkPolicy:
+  enabled: true
+  # Where the browser-facing traffic is allowed to come from. Empty means any
+  # source, because an ingress controller's namespace and labels differ from
+  # cluster to cluster. Narrow it to the controller once you know them, e.g.
+  #   webIngressFrom:
+  #     - namespaceSelector:
+  #         matchLabels:
+  #           kubernetes.io/metadata.name: ingress-nginx
+  webIngressFrom: []
+  egress:
+    # Off by default: the API and workers call the Mist cloud and, when it is
+    # configured, an AI provider, and the addresses those resolve to are not
+    # something this chart can know. Turn it on once the allowances below
+    # describe your network, or the application will lose the internet.
+    enabled: false
+    # CIDRs the API and workers may open connections to, minus the private
+    # ranges, so a compromised pod cannot reach the rest of the cluster.
+    allowedDestinations:
+      - cidr: 0.0.0.0/0
+        except:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - 169.254.0.0/16
 
 ingress:
   enabled: false
