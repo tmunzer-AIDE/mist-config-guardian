@@ -110,6 +110,7 @@ export class HistoryPage {
   private readonly objects = signal<ConfigurationObject[]>([]);
   private readonly versions = signal<ConfigurationVersion[]>([]);
   protected readonly selectedObjectId = signal<string | null>(null);
+  private objectsRequest = 0;
   protected readonly versionAId = signal<string | null>(null);
   protected readonly versionBId = signal<string | null>(null);
 
@@ -634,7 +635,13 @@ export class HistoryPage {
   // ---------------------------------------------------------------- loading
 
   private async loadObjects(organizationId: string, includeDeleted: boolean): Promise<void> {
+    const request = ++this.objectsRequest;
     const response = await this.history.objects(organizationId, { includeDeleted });
+    // A slow answer for a previous organization or filter must not replace the
+    // list on screen.
+    if (request !== this.objectsRequest) {
+      return;
+    }
     this.objects.set(response.items);
     this.objectsLoaded.set(true);
     const current = this.selectedObjectId();

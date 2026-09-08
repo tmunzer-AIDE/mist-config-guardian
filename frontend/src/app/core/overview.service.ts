@@ -64,26 +64,40 @@ export class OverviewService {
   /** Change groups with unrecovered impact — drives the sidebar Changes badge. */
   readonly unrecovered = signal(0);
 
+  // Answers arrive in any order; only the latest request describes the
+  // organization and range on screen. A slow answer for a previous
+  // organization must not overwrite the current one.
+  private loadRequest = 0;
+  private badgeRequest = 0;
+
   async load(organizationId: string, range: TimeRange): Promise<OrganizationOverview> {
+    const request = ++this.loadRequest;
     const params = new HttpParams().set('range', range);
     const response = await firstValueFrom(
       this.http.get<OrganizationOverview>(orgPath(organizationId, '/overview'), { params }),
     );
-    this.overview.set(response);
-    this.unrecovered.set(response.counts.unrecovered);
+    if (request === this.loadRequest) {
+      this.overview.set(response);
+      this.unrecovered.set(response.counts.unrecovered);
+    }
     return response;
   }
 
   /** Cheap counts-only fetch used by the shell so navigation badges stay live. */
   async loadBadges(organizationId: string): Promise<void> {
+    const request = ++this.badgeRequest;
     try {
       const params = new HttpParams().set('counts_only', true);
       const response = await firstValueFrom(
         this.http.get<{ counts: OverviewCounts }>(orgPath(organizationId, '/overview'), { params }),
       );
-      this.unrecovered.set(response.counts.unrecovered);
+      if (request === this.badgeRequest) {
+        this.unrecovered.set(response.counts.unrecovered);
+      }
     } catch {
-      this.unrecovered.set(0);
+      if (request === this.badgeRequest) {
+        this.unrecovered.set(0);
+      }
     }
   }
 

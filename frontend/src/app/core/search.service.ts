@@ -30,12 +30,16 @@ export class SearchService {
   readonly results = signal<SearchResult[]>([]);
   readonly searching = signal(false);
 
+  /** Only the latest search describes the results on screen. */
+  private request = 0;
+
   setQuery(value: string): void {
     this.query.set(value);
   }
 
   async run(organizationId: string, query: string, limit = 25): Promise<SearchResult[]> {
     const term = query.trim();
+    const request = ++this.request;
     if (term.length < 2) {
       this.results.set([]);
       return [];
@@ -46,10 +50,14 @@ export class SearchService {
       const response = await firstValueFrom(
         this.http.get<SearchResponse>(orgPath(organizationId, '/search'), { params }),
       );
-      this.results.set(response.items);
+      if (request === this.request) {
+        this.results.set(response.items);
+      }
       return response.items;
     } finally {
-      this.searching.set(false);
+      if (request === this.request) {
+        this.searching.set(false);
+      }
     }
   }
 

@@ -56,10 +56,18 @@ export class MonitoringService {
   }
 
   /** Load a page of sessions into the signals the page renders from. */
+  // Answers arrive in any order; only the latest request of each kind
+  // describes what is on screen, whichever organization it was for.
+  private loadRequest = 0;
+  private sessionRequest = 0;
+
   async load(organizationId: string, query: MonitoringQuery = {}): Promise<MonitoringSessionList> {
+    const request = ++this.loadRequest;
     const response = await firstValueFrom(this.list(organizationId, query));
-    this.sessions.set(response.items);
-    this.total.set(response.total);
+    if (request === this.loadRequest) {
+      this.sessions.set(response.items);
+      this.total.set(response.total);
+    }
     return response;
   }
 
@@ -71,12 +79,17 @@ export class MonitoringService {
    * raising, so the page falls back to its first row.
    */
   async loadSession(organizationId: string, sessionId: string): Promise<MonitoringSession | null> {
+    const request = ++this.sessionRequest;
     try {
       const session = await firstValueFrom(this.get(organizationId, sessionId));
-      this.resolved.set(session);
+      if (request === this.sessionRequest) {
+        this.resolved.set(session);
+      }
       return session;
     } catch {
-      this.resolved.set(null);
+      if (request === this.sessionRequest) {
+        this.resolved.set(null);
+      }
       return null;
     }
   }

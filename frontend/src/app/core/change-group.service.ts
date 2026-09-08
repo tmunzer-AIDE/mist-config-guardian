@@ -42,6 +42,11 @@ export class ChangeGroupService {
   readonly total = signal(0);
   readonly detail = signal<ChangeGroupDetail | null>(null);
 
+  // Answers arrive in any order; only the latest request of each kind
+  // describes what is on screen, whichever organization it was for.
+  private listRequest = 0;
+  private detailRequest = 0;
+
   async list(organizationId: string, query: ChangeGroupQuery): Promise<ChangeGroupPage> {
     let params = new HttpParams().set('range', query.range).set('severity', query.severity ?? 'any');
     if (query.actor) {
@@ -59,20 +64,26 @@ export class ChangeGroupService {
     if (query.asOf) {
       params = params.set('as_of', query.asOf.toISOString());
     }
+    const request = ++this.listRequest;
     const response = await firstValueFrom(
       this.http.get<ChangeGroupPage>(orgPath(organizationId, '/change-groups'), { params }),
     );
-    this.items.set(response.items);
-    this.total.set(response.total);
+    if (request === this.listRequest) {
+      this.items.set(response.items);
+      this.total.set(response.total);
+    }
     return response;
   }
 
   /** Fetch the evidence, changed objects, and assessment for one group. */
   async load(organizationId: string, id: string): Promise<ChangeGroupDetail> {
+    const request = ++this.detailRequest;
     const response = await firstValueFrom(
       this.http.get<ChangeGroupDetail>(orgPath(organizationId, `/change-groups/${id}`)),
     );
-    this.detail.set(response);
+    if (request === this.detailRequest) {
+      this.detail.set(response);
+    }
     return response;
   }
 
