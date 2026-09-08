@@ -24,7 +24,6 @@ export interface ConfigurationVersion {
   version: number;
   event: ConfigurationEvent;
   configuration: Record<string, unknown>;
-  configuration_hash: string;
   changed_fields: string[];
   is_deleted: boolean;
   observed_at: string;

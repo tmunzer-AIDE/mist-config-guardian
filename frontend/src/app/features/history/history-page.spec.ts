@@ -52,7 +52,6 @@ function version(id: string, n: number): ConfigurationVersion {
     version: n,
     event: n === 1 ? 'initial' : 'updated',
     configuration: {},
-    configuration_hash: `hash-${n}`,
     changed_fields: [],
     is_deleted: false,
     observed_at: `2026-09-0${n}T09:12:00Z`,
