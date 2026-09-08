@@ -146,14 +146,17 @@ export class AccountService {
     currentPassword: string,
     newPassword: string,
   ): Promise<PasswordChangeResult> {
-    const result = await firstValueFrom(
-      this.http.post<PasswordChangeResult>(`${ACCOUNT}/password`, {
-        current_password: currentPassword,
-        new_password: newPassword,
-      }),
+    return this.owned(
+      firstValueFrom(
+        this.http.post<PasswordChangeResult>(`${ACCOUNT}/password`, {
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      ),
+      // Changing a password signs the other sessions out; landing late, this
+      // would prune the session list of whoever is signed in now instead.
+      () => this.sessions.update((items) => items.filter((item) => item.current)),
     );
-    this.sessions.update((items) => items.filter((item) => item.current));
-    return result;
   }
 
   // --------------------------------------------------------------- sessions

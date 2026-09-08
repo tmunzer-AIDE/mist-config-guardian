@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 
+import { AiAssistService } from '../features/history/ai-assist.service';
 import { MonitoringService } from '../features/impact/monitoring.service';
 import { ChangeGroupService } from './change-group.service';
 import { NotificationService } from './notification.service';
@@ -222,6 +223,22 @@ describe('organization-scoped loaders under reordered answers', () => {
 
     expect(notifications.unread()).toBe(0);
     expect(notifications.items()[0].read_at).not.toBeNull();
+  });
+
+  it('an AI answer that outlived its session leaves availability alone', async () => {
+    // Availability is resolved once per session from an administrator-only
+    // endpoint. A refusal answering after sign-out would tell the next user
+    // that AI is unconfigured; a success would tell them it is fine.
+    const ai = TestBed.inject(AiAssistService);
+    const refused = ai.summarise({ organization_id: 'org-a', from_version_id: 'v1', to_version_id: 'v2' });
+    const inFlight = pending('/api/v1/ai/diff-summary')[0];
+
+    ai.reset();
+    inFlight.flush({ detail: 'AI assist is not configured' }, { status: 409, statusText: 'Conflict' });
+
+    expect((await refused).status).toBe('unavailable');
+    // The caller is told, but the shared flag belongs to the session that ended.
+    expect(ai.refused()).toBe(false);
   });
 
   it('monitoring drops a list read that outlived its session', async () => {

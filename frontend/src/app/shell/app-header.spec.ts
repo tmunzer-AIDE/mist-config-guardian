@@ -100,6 +100,37 @@ describe('AppHeader sign-out', () => {
     expect(organizations.all()).toEqual([]);
   });
 
+  it('does not prune the next user\'s sessions with the last one\'s password change', async () => {
+    // Changing a password signs the other sessions out. Landing late, this
+    // would filter user B's session list down to its current entry.
+    const auth = TestBed.inject(AuthService);
+    const account = TestBed.inject(AccountService);
+    auth.applyUser(USER);
+    const changing = account.changePassword('old-password-value', 'new-password-value');
+    const inFlight = httpMock.expectOne('/api/v1/account/password');
+
+    const signOut = (fixture.componentInstance as unknown as { signOut: () => Promise<void> }).signOut();
+    httpMock.expectOne('/api/v1/auth/logout').flush({});
+    await signOut;
+
+    // User B signs in and loads their sessions.
+    auth.applyUser({ ...USER, id: 'user-b', email: 'b@northwind.example', display_name: 'Bea' });
+    const listing = account.loadSessions();
+    httpMock.expectOne('/api/v1/account/sessions').flush({
+      items: [
+        { id: 'b-current', current: true },
+        { id: 'b-phone', current: false },
+      ],
+      total: 2,
+    });
+    await listing;
+
+    inFlight.flush({ password_changed_at: '2026-09-08T09:00:00Z', revoked_sessions: 3 });
+    await changing;
+
+    expect(account.sessions().map((item) => item.id)).toEqual(['b-current', 'b-phone']);
+  });
+
   it('discards an account response that outlived the session that asked', async () => {
     // A profile update from the user leaving would otherwise be merged into
     // whoever signs in next: their name, their email, their preferences.

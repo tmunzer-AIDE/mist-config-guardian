@@ -151,25 +151,31 @@ export class AiAssistService {
   }
 
   async summarise(request: AiSummaryRequest): Promise<AiOutcome<AiDiffSummary>> {
+    // Availability is session state: a summary asked for before a sign-out
+    // must not report on it afterwards, whether it succeeds or is refused.
+    const generation = this.generation;
     try {
       const value = await firstValueFrom(
         this.http.post<AiDiffSummary>(`${API_ROOT}/ai/diff-summary`, request),
       );
-      this.refusedState.set(false);
+      if (generation === this.generation) {
+        this.refusedState.set(false);
+      }
       return { status: 'ok', value };
     } catch (cause) {
-      return this.degrade(cause);
+      return this.degrade(cause, generation);
     }
   }
 
   async followUp(request: AiFollowupRequest): Promise<AiOutcome<AiDiffFollowup>> {
+    const generation = this.generation;
     try {
       const value = await firstValueFrom(
         this.http.post<AiDiffFollowup>(`${API_ROOT}/ai/diff-followup`, request),
       );
       return { status: 'ok', value };
     } catch (cause) {
-      return this.degrade(cause);
+      return this.degrade(cause, generation);
     }
   }
 
@@ -180,10 +186,12 @@ export class AiAssistService {
     this.refusedState.set(false);
   }
 
-  private degrade<T>(cause: unknown): AiOutcome<T> {
+  private degrade<T>(cause: unknown, generation: number): AiOutcome<T> {
     if (cause instanceof HttpErrorResponse) {
       if (cause.status === 409) {
-        this.refusedState.set(true);
+        if (generation === this.generation) {
+          this.refusedState.set(true);
+        }
         return {
           status: 'unavailable',
           message: 'AI assist is not configured for this deployment.',
