@@ -19,6 +19,7 @@ from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.session import UserSession
 from mist_config_guardian_backend.models.user import TotpEnrollment, User, UserRole, WebAuthnCredential
 from mist_config_guardian_backend.security import webauthn as webauthn_security
+from mist_config_guardian_backend.security.auth import hash_password
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.security.totp import (
     RECOVERY_CODE_COUNT,
@@ -47,6 +48,7 @@ from mist_config_guardian_backend.services.mfa import (
 from mist_config_guardian_backend.services.sessions import SessionService
 
 BASE_URL = "http://test"
+SIGN_IN_PASSWORD = "a-long-enough-password"
 
 
 def _settings() -> Settings:
@@ -62,7 +64,7 @@ def _user() -> User:
         id=PydanticObjectId(),
         email="operator@example.com",
         display_name="Operator",
-        password_hash="unused",
+        password_hash=hash_password(SIGN_IN_PASSWORD),
         role=UserRole.OPERATOR,
         is_active=True,
         totp=None,
@@ -418,7 +420,7 @@ async def test_enrolled_account_must_answer_a_challenge_before_a_session_starts(
     app, _users, sessions = _sign_in_app(user, "a-long-enough-password")
 
     async with _client(app) as client:
-        enrolled = await client.post("/api/v1/account/totp/enroll")
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": SIGN_IN_PASSWORD})
         secret = enrolled.json()["secret"]
         confirmed = await client.post(
             "/api/v1/account/totp/confirm",
@@ -452,7 +454,7 @@ async def test_recovery_code_completes_a_sign_in_exactly_once() -> None:
     app, _users, sessions = _sign_in_app(user, "a-long-enough-password")
 
     async with _client(app) as client:
-        enrolled = await client.post("/api/v1/account/totp/enroll")
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": SIGN_IN_PASSWORD})
         secret = enrolled.json()["secret"]
         confirmed = await client.post(
             "/api/v1/account/totp/confirm",
@@ -496,7 +498,7 @@ async def test_mfa_login_rejects_a_forged_challenge_token() -> None:
 
 async def _challenged(client: httpx.AsyncClient) -> tuple[str, str]:
     """Enroll an authenticator, then sign in as far as the challenge; return (secret, token)."""
-    enrolled = await client.post("/api/v1/account/totp/enroll")
+    enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": SIGN_IN_PASSWORD})
     secret = enrolled.json()["secret"]
     await client.post("/api/v1/account/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
     challenged = await client.post(

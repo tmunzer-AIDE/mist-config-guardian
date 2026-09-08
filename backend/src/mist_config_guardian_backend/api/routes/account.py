@@ -31,7 +31,6 @@ from mist_config_guardian_backend.schemas.account import (
     TotpConfirmRequest,
     TotpEnrollmentResponse,
 )
-from mist_config_guardian_backend.security.auth import verify_password
 from mist_config_guardian_backend.security.webauthn import WebAuthnError
 from mist_config_guardian_backend.services.account import (
     AccountService,
@@ -54,6 +53,7 @@ from mist_config_guardian_backend.services.passkeys import (
     PasskeyService,
     get_passkey_service,
 )
+from mist_config_guardian_backend.services.reauthentication import confirm_password
 from mist_config_guardian_backend.services.sessions import SessionService
 from mist_config_guardian_backend.services.throttling import (
     ThrottleService,
@@ -82,19 +82,6 @@ def _require_persisted(user: User) -> PydanticObjectId:
 
 def _wrong_password(exc: InvalidPasswordError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
-
-
-async def _confirm_password(user: User, password: str, throttle: ThrottleService) -> None:
-    """Check a re-entered password, counting a wrong one against the account.
-
-    A stolen session must not be able to guess the password it lacks at
-    leisure; the limit shared with sign-in applies here.
-    """
-    scope = throttle.user(_require_persisted(user))
-    await reserve_or_raise(throttle, scope)
-    if not verify_password(password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The password you entered is incorrect")
-    await throttle.succeeded(scope)
 
 
 # --------------------------------------------------------------------- profile
@@ -269,11 +256,20 @@ async def revoke_session(
 # ------------------------------------------------------------------------ totp
 @router.post("/totp/enroll")
 async def enroll_totp(
+    payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> TotpEnrollmentResponse:
-    """Start authenticator enrollment and return its secret exactly once."""
+    """Start authenticator enrollment and return its secret exactly once.
+
+    Gated on the password, as disabling an authenticator already is. Without
+    it a stolen session could enrol a factor of its own choosing on an account
+    that had none, turning temporary access into durable control and locking
+    the owner out of their own password sign-in.
+    """
+    await confirm_password(user, payload.password.get_secret_value(), throttle)
     try:
         started = await mfa.begin_totp_enrollment(user)
     except TotpAlreadyEnrolledError as exc:
@@ -380,7 +376,7 @@ async def passkey_registration_options(
     and short-lived. The challenge stays on the server; the returned token
     only names it.
     """
-    await _confirm_password(user, payload.password.get_secret_value(), throttle)
+    await confirm_password(user, payload.password.get_secret_value(), throttle)
     try:
         options, challenge_token = await passkeys.begin_registration(user)
     except (PasskeyError, WebAuthnError) as exc:
@@ -431,7 +427,7 @@ async def delete_passkey(
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> None:
     """Remove one of the signed-in user's passkeys after re-entering the password."""
-    await _confirm_password(user, payload.password.get_secret_value(), throttle)
+    await confirm_password(user, payload.password.get_secret_value(), throttle)
     try:
         await passkeys.delete(user, credential_id)
     except PasskeyNotFoundError as exc:

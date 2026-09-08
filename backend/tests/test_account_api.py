@@ -357,13 +357,13 @@ async def test_totp_enroll_then_confirm_returns_recovery_codes_once() -> None:
     app.dependency_overrides[require_viewer] = _signed_in(user)
 
     async with _client(app) as client:
-        enrolled = await client.post("/api/v1/account/totp/enroll")
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
         secret = enrolled.json()["secret"]
         confirmed = await client.post(
             "/api/v1/account/totp/confirm",
             json={"code": pyotp.TOTP(secret).now()},
         )
-        again = await client.post("/api/v1/account/totp/enroll")
+        again = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
 
     assert enrolled.status_code == 200
     assert enrolled.json()["otpauth_uri"].startswith("otpauth://totp/")
@@ -383,7 +383,7 @@ async def test_totp_confirm_rejects_a_wrong_code() -> None:
     app.dependency_overrides[require_viewer] = _signed_in(user)
 
     async with _client(app) as client:
-        await client.post("/api/v1/account/totp/enroll")
+        await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
         response = await client.post("/api/v1/account/totp/confirm", json={"code": "000000"})
 
     assert response.status_code == 400
@@ -396,7 +396,7 @@ async def test_totp_removal_and_recovery_code_rotation_need_the_password() -> No
     app.dependency_overrides[require_viewer] = _signed_in(user)
 
     async with _client(app) as client:
-        enrolled = await client.post("/api/v1/account/totp/enroll")
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
         secret = enrolled.json()["secret"]
         first = await client.post(
             "/api/v1/account/totp/confirm",

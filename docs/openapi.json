@@ -412,8 +412,19 @@
             "maxLength": 255,
             "title": "Model",
             "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
           }
         },
+        "required": [
+          "password"
+        ],
         "title": "AiSettingsUpdate",
         "type": "object"
       },
@@ -2621,6 +2632,14 @@
             "title": "Monitoring Retention Days",
             "type": "integer"
           },
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
           "reconciliation_cron": {
             "default": "0 2 * * *",
             "maxLength": 120,
@@ -2638,7 +2657,8 @@
           }
         },
         "required": [
-          "service_token"
+          "service_token",
+          "password"
         ],
         "title": "OrganizationCreateRequest",
         "type": "object"
@@ -4319,6 +4339,14 @@
       "ServiceTokenUpdateRequest": {
         "description": "Replace the organization's read-only service token.",
         "properties": {
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
           "service_token": {
             "format": "password",
             "maxLength": 2048,
@@ -4329,7 +4357,8 @@
           }
         },
         "required": [
-          "service_token"
+          "service_token",
+          "password"
         ],
         "title": "ServiceTokenUpdateRequest",
         "type": "object"
@@ -5224,6 +5253,24 @@
         ],
         "title": "WebhookSecretResponse",
         "type": "object"
+      },
+      "WebhookSecretRotateRequest": {
+        "description": "Rotate the organization's webhook signing secret.\n\nThe new secret is returned once, so this asks for the password the way\nevery other credential change does.",
+        "properties": {
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "WebhookSecretRotateRequest",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -5981,8 +6028,18 @@
     },
     "/api/v1/account/totp/enroll": {
       "post": {
-        "description": "Start authenticator enrollment and return its secret exactly once.",
+        "description": "Start authenticator enrollment and return its secret exactly once.\n\nGated on the password, as disabling an authenticator already is. Without\nit a stolen session could enrol a factor of its own choosing on an account\nthat had none, turning temporary access into durable control and locking\nthe owner out of their own password sign-in.",
         "operationId": "enroll_totp_api_v1_account_totp_enroll_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordConfirmationRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -5993,6 +6050,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -6225,7 +6292,7 @@
         ]
       },
       "put": {
-        "description": "Update AI provider settings, keeping the stored key when none is sent.",
+        "description": "Update AI provider settings, keeping the stored key when none is sent.\n\nThese settings hold a provider API key, so this is a credential change and\nasks for the password like one.",
         "operationId": "update_ai_settings_api_v1_ai_settings_put",
         "requestBody": {
           "content": {
@@ -9552,6 +9619,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookSecretRotateRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

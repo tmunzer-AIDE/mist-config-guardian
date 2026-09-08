@@ -51,6 +51,9 @@ class AiSettingsUpdate(BaseModel):
     clear_api_key: bool = False
     max_response_tokens: int = Field(default=1500, ge=256, le=32_000)
     automatic_summaries: bool = False
+    # These settings hold a provider API key, so changing them is a credential
+    # change and is confirmed like one.
+    password: SecretStr = Field(min_length=1, max_length=1024)
 
     @model_validator(mode="after")
     def validate_provider(self) -> "AiSettingsUpdate":

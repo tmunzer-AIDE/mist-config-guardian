@@ -28,6 +28,7 @@ from mist_config_guardian_backend.schemas.diff import (
     DiffChangeKind,
     DiffEntry,
 )
+from mist_config_guardian_backend.security.auth import hash_password
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services import ai_assist
 from mist_config_guardian_backend.services.ai_assist import (
@@ -41,6 +42,7 @@ from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
 )
 from mist_config_guardian_backend.services.diff import diff_configurations
+from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 
 BASE_URL = "https://ai.example.test/v1"
 COMPLETIONS_URL = f"{BASE_URL}/chat/completions"
@@ -65,12 +67,15 @@ def _clear_summary_cache() -> None:
     ai_assist._SUMMARY_CACHE.clear()  # noqa: SLF001 - process-local cache reset between tests
 
 
+ADMIN_PASSWORD = "a-long-enough-password"
+
+
 def _administrator() -> User:
     return User.model_construct(
         id=PydanticObjectId(),
         email="admin@example.com",
         display_name="Admin",
-        password_hash="unused",
+        password_hash=hash_password(ADMIN_PASSWORD),
         role=UserRole.ADMINISTRATOR,
         is_active=True,
     )
@@ -81,7 +86,7 @@ def _viewer() -> User:
         id=PydanticObjectId(),
         email="viewer@example.com",
         display_name="Viewer",
-        password_hash="unused",
+        password_hash=hash_password(ADMIN_PASSWORD),
         role=UserRole.VIEWER,
         is_active=True,
     )
@@ -422,6 +427,7 @@ def _settings_app(service: object) -> object:
     app = create_app(Settings(environment="test", database_enabled=False))
     app.dependency_overrides[get_application_configuration_service] = lambda: service
     app.dependency_overrides[require_administrator] = _administrator
+    app.dependency_overrides[require_fresh_mfa] = _administrator
     return app
 
 
@@ -445,6 +451,7 @@ async def test_update_ai_settings_encrypts_the_key_and_never_returns_it(
                 "api_key": "provider-secret-key",
                 "max_response_tokens": 900,
                 "automatic_summaries": True,
+                "password": ADMIN_PASSWORD,
             },
         )
 
@@ -477,6 +484,7 @@ async def test_update_ai_settings_keeps_the_stored_key_when_blank(monkeypatch: p
             base_url="https://ai.example.test/v1",
             model="test-model",
             api_key=SecretStr("   "),
+            password=SecretStr(ADMIN_PASSWORD),
         )
     )
 

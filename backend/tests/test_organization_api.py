@@ -13,6 +13,10 @@ from mist_config_guardian_backend.models.organization import (
 )
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.schemas.organization import OrganizationCreateRequest
+from mist_config_guardian_backend.security.auth import hash_password
+from mist_config_guardian_backend.services.mfa import require_fresh_mfa
+
+ADMIN_PASSWORD = "a-long-enough-password"
 
 
 def _administrator() -> User:
@@ -20,7 +24,7 @@ def _administrator() -> User:
         id=PydanticObjectId(),
         email="admin@example.com",
         display_name="Admin",
-        password_hash="unused",
+        password_hash=hash_password(ADMIN_PASSWORD),
         role=UserRole.ADMINISTRATOR,
         is_active=True,
     )
@@ -64,6 +68,7 @@ async def test_create_organization_never_returns_token() -> None:
     service = _FakeOrganizationService()
     app.dependency_overrides[get_organization_service] = lambda: service
     app.dependency_overrides[require_administrator] = _administrator
+    app.dependency_overrides[require_fresh_mfa] = _administrator
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -71,6 +76,7 @@ async def test_create_organization_never_returns_token() -> None:
             json={
                 "cloud_region": "global_01",
                 "service_token": "read-only-token-value",
+                "password": ADMIN_PASSWORD,
             },
         )
 

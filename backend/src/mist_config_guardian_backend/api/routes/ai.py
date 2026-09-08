@@ -40,6 +40,9 @@ from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
 )
 from mist_config_guardian_backend.services.diff import diff_configurations
+from mist_config_guardian_backend.services.mfa import require_fresh_mfa
+from mist_config_guardian_backend.services.reauthentication import confirm_password
+from mist_config_guardian_backend.services.throttling import ThrottleService, get_throttle_service
 
 router = APIRouter(prefix="/ai")
 
@@ -79,9 +82,16 @@ async def update_ai_settings(
         ApplicationConfigurationService,
         Depends(get_application_configuration_service),
     ],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> AiSettingsResponse:
-    """Update AI provider settings, keeping the stored key when none is sent."""
+    """Update AI provider settings, keeping the stored key when none is sent.
+
+    These settings hold a provider API key, so this is a credential change and
+    asks for the password like one.
+    """
+    await confirm_password(administrator, request.password.get_secret_value(), throttle)
     try:
         return await settings.update_ai_settings(request)
     except ApplicationConfigurationError as exc:
