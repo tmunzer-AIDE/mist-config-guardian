@@ -1118,7 +1118,10 @@ def build_criteria(
     elif filters.severity == "none":
         criteria["impact_severity"] = {"$in": [ImpactSeverity.NONE.value, ImpactSeverity.INFO.value]}
     if filters.actor:
-        criteria["actor"] = {"$regex": re.escape(filters.actor), "$options": "i"}
+        # The actor filter selects one person, so it is anchored equality: an
+        # unanchored pattern for "admin" would also return "admin2" and
+        # "sysadmin". Fuzzy matching belongs to the free-text query below.
+        criteria["actor"] = {"$regex": f"^{re.escape(filters.actor)}$", "$options": "i"}
     if filters.query:
         pattern = re.escape(filters.query)
         criteria["$or"] = [

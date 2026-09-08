@@ -803,6 +803,27 @@ async def test_list_filters_by_severity() -> None:
     assert await audits("none") == ["i", "n"]
 
 
+async def test_the_actor_filter_does_not_bleed_into_longer_names() -> None:
+    """Selecting `admin` must not also return `admin2` and `sysadmin`."""
+    store = _MemoryChangeGroupStore()
+    store.groups.extend(
+        [
+            _group(audit_id="A1", actor="admin"),
+            _group(audit_id="A2", actor="admin2"),
+            _group(audit_id="A3", actor="sysadmin"),
+        ]
+    )
+
+    items, total = await ChangeGroupService(store).list_groups(
+        ORGANIZATION_ID,
+        ChangeGroupFilters(actor="admin"),
+        viewer_email="x@example.com",
+    )
+
+    assert total == 1
+    assert [item.audit_id for item in items] == ["A1"]
+
+
 async def test_list_filters_by_actor_and_free_text() -> None:
     store = _MemoryChangeGroupStore()
     store.groups.extend(
@@ -816,10 +837,18 @@ async def test_list_filters_by_actor_and_free_text() -> None:
 
     by_actor, _ = await service.list_groups(
         ORGANIZATION_ID,
-        ChangeGroupFilters(actor="osei"),
+        ChangeGroupFilters(actor="A.Osei"),
         viewer_email="x@example.com",
     )
     assert [item.audit_id for item in by_actor] == ["4C810AE"]
+
+    # The actor filter names one person; a fragment is a free-text concern.
+    by_fragment, _ = await service.list_groups(
+        ORGANIZATION_ID,
+        ChangeGroupFilters(actor="osei"),
+        viewer_email="x@example.com",
+    )
+    assert by_fragment == []
 
     by_audit, _ = await service.list_groups(
         ORGANIZATION_ID,
