@@ -32,7 +32,12 @@ export interface LoginChallenge {
   methods: string[];
 }
 
-export type LoginResult = { mfa_required: false; user: CurrentUser } | LoginChallenge;
+export interface LoginSuccess {
+  mfa_required: false;
+  user: CurrentUser;
+}
+
+export type LoginResult = LoginSuccess | LoginChallenge;
 
 export interface BootstrapAdministrator {
   email: string;
@@ -95,15 +100,18 @@ export class AuthService {
   }
 
   async completeMfa(challengeToken: string, code: string): Promise<CurrentUser> {
-    const user = await firstValueFrom(
-      this.http.post<CurrentUser>(`${API_ROOT}/auth/login/mfa`, {
+    // The endpoint answers with the same envelope as `/auth/login`, so the user
+    // has to be unwrapped from it: storing the envelope itself would leave the
+    // signed-in user with no role and no display name.
+    const response = await firstValueFrom(
+      this.http.post<LoginSuccess>(`${API_ROOT}/auth/login/mfa`, {
         challenge_token: challengeToken,
         code,
       }),
     );
-    this.userState.set(user);
+    this.userState.set(response.user);
     this.resolvedState.set(true);
-    return user;
+    return response.user;
   }
 
   async bootstrapAdministrator(request: BootstrapAdministrator): Promise<CurrentUser> {
