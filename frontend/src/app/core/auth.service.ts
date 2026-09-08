@@ -59,8 +59,18 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly userState = signal<CurrentUser | null>(null);
   private readonly resolvedState = signal(false);
+  /**
+   * Which session this is, counted up whenever one starts or ends.
+   *
+   * A request issued by one session can answer after another has begun. The
+   * number lets a caller tell whether the answer still concerns the session
+   * on screen — a 401 for a session already replaced must not evict the
+   * person who has just signed in.
+   */
+  private readonly sessionState = signal(0);
 
   readonly user = this.userState.asReadonly();
+  readonly session = this.sessionState.asReadonly();
   readonly resolved = this.resolvedState.asReadonly();
   readonly isAuthenticated = computed(() => this.userState() !== null);
   readonly role = computed<UserRole>(() => this.userState()?.role ?? 'viewer');
@@ -81,6 +91,7 @@ export class AuthService {
     } catch {
       this.userState.set(null);
     } finally {
+      this.sessionState.update((value) => value + 1);
       this.resolvedState.set(true);
     }
   }
@@ -94,6 +105,7 @@ export class AuthService {
     );
     if (!response.mfa_required) {
       this.userState.set(response.user);
+      this.sessionState.update((value) => value + 1);
       this.resolvedState.set(true);
     }
     return response;
@@ -110,6 +122,7 @@ export class AuthService {
       }),
     );
     this.userState.set(response.user);
+    this.sessionState.update((value) => value + 1);
     this.resolvedState.set(true);
     return response.user;
   }
@@ -123,6 +136,7 @@ export class AuthService {
       await firstValueFrom(this.http.post(`${API_ROOT}/auth/logout`, {}));
     } finally {
       this.userState.set(null);
+      this.sessionState.update((value) => value + 1);
     }
   }
 
@@ -135,6 +149,7 @@ export class AuthService {
    */
   forgetSession(): void {
     this.userState.set(null);
+    this.sessionState.update((value) => value + 1);
     this.resolvedState.set(true);
   }
 

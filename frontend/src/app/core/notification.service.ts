@@ -109,6 +109,10 @@ export class NotificationService {
     if (!this.owns(organizationId)) {
       return;
     }
+    // Any read already in flight was issued before this acknowledgement and
+    // describes state without it; its answer would put the badge back up.
+    this.listRequest += 1;
+    this.countRequest += 1;
     this.items.update((list) =>
       list.map((item) => (item.id === id ? { ...item, read_at: new Date().toISOString() } : item)),
     );
@@ -120,6 +124,8 @@ export class NotificationService {
     if (!this.owns(organizationId)) {
       return;
     }
+    this.listRequest += 1;
+    this.countRequest += 1;
     const now = new Date().toISOString();
     this.items.update((list) => list.map((item) => ({ ...item, read_at: item.read_at ?? now })));
     this.unread.set(0);

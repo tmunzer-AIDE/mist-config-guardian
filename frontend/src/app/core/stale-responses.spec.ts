@@ -199,6 +199,31 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(notifications.unread()).toBe(2);
   });
 
+  it('an acknowledgement is not undone by a read that predates it', async () => {
+    const notifications = TestBed.inject(NotificationService);
+    const listed = notifications.load('org-a');
+    pending('/api/v1/organizations/org-a/notifications')[0].flush({
+      items: [{ id: 'n-1', read_at: null }],
+      total: 1,
+      unread: 1,
+    });
+    await listed;
+
+    // A refresh is issued, then the badge is cleared before it answers.
+    const refresh = notifications.refreshUnread('org-a');
+    const acknowledged = notifications.markRead('org-a', 'n-1');
+    pending('/api/v1/organizations/org-a/notifications/n-1/read')[0].flush({});
+    await acknowledged;
+    expect(notifications.unread()).toBe(0);
+
+    // The refresh answers with the count as it was before the acknowledgement.
+    pending('/api/v1/organizations/org-a/notifications/unread-count')[0].flush({ unread: 1 });
+    await refresh;
+
+    expect(notifications.unread()).toBe(0);
+    expect(notifications.items()[0].read_at).not.toBeNull();
+  });
+
   it('monitoring keeps the latest page and the latest resolved session', async () => {
     const monitoring = TestBed.inject(MonitoringService);
     const older = monitoring.load('org-a');

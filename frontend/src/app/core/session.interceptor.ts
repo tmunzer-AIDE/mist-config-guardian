@@ -5,6 +5,7 @@ import { catchError, throwError } from 'rxjs';
 
 import { readCookie } from './api';
 import { AuthService } from './auth.service';
+import { SessionResetService } from './session-reset.service';
 import { TimeContextService } from './time-context.service';
 
 const CSRF_COOKIE = 'cg_csrf';
@@ -47,7 +48,12 @@ export const sessionInterceptor: HttpInterceptorFn = (request, next) => {
   }
 
   const auth = inject(AuthService);
+  const reset = inject(SessionResetService);
   const router = inject(Router);
+  // Which session issued this request. A request can outlive the session that
+  // made it: without this, a 401 answering after someone has signed in again
+  // would throw the new session out on the old one's behalf.
+  const issuedBy = auth.session();
 
   return next(request.clone({ withCredentials: true, setHeaders: headers })).pipe(
     catchError((cause: unknown) => {
@@ -60,10 +66,11 @@ export const sessionInterceptor: HttpInterceptorFn = (request, next) => {
         cause instanceof HttpErrorResponse &&
         cause.status === 401 &&
         !AUTH_ENDPOINTS.test(request.url) &&
-        auth.isAuthenticated()
+        auth.isAuthenticated() &&
+        auth.session() === issuedBy
       ) {
         const next = router.url;
-        auth.forgetSession();
+        reset.clear();
         void router.navigate(['/login'], {
           queryParams: next && next !== '/login' ? { next } : {},
         });

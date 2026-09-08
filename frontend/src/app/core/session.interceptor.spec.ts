@@ -4,6 +4,8 @@ import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 
 import { AuthService, CurrentUser } from './auth.service';
+import { NotificationService } from './notification.service';
+import { OrganizationContextService } from './organization-context.service';
 import { sessionInterceptor } from './session.interceptor';
 
 const USER: CurrentUser = {
@@ -96,6 +98,52 @@ describe('sessionInterceptor', () => {
     await fail('/api/v1/organizations/org-1/overview');
 
     expect(navigations).toEqual([]);
+  });
+
+  it('does not evict a session that started after the failing request', async () => {
+    // The old session's read answers after someone has signed in again. It
+    // says nothing about the new session and must not end it.
+    auth.applyUser(USER);
+    const pending = request('/api/v1/organizations/org-1/overview');
+    const stale = httpMock.expectOne('/api/v1/organizations/org-1/overview');
+
+    // A new session begins while that read is in flight.
+    const signIn = auth.login(USER.email, 'correct horse');
+    httpMock.expectOne('/api/v1/auth/login').flush({ mfa_required: false, user: USER });
+    await signIn;
+
+    stale.flush({ detail: 'Not authenticated' }, { status: 401, statusText: 'Unauthorized' });
+    await pending;
+
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(navigations).toEqual([]);
+  });
+
+  it('forgets what the signed-out session owned, not just its authentication', async () => {
+    // The organization list and the notification feed were read as that user,
+    // for organizations the next one may not be able to see.
+    const organizations = TestBed.inject(OrganizationContextService);
+    const notifications = TestBed.inject(NotificationService);
+    auth.applyUser(USER);
+    const loaded = organizations.load();
+    httpMock.expectOne('/api/v1/organizations').flush({
+      items: [{ id: 'org-1', name: 'Northwind Retail' }],
+      total: 1,
+    });
+    await loaded;
+    const feed = notifications.load('org-1');
+    httpMock
+      .expectOne((candidate) => candidate.url === '/api/v1/organizations/org-1/notifications')
+      .flush({ items: [{ id: 'n1', read_at: null }], total: 1, unread: 1 });
+    await feed;
+    expect(organizations.all().length).toBe(1);
+    expect(notifications.items().length).toBe(1);
+
+    await fail('/api/v1/organizations/org-1/overview');
+
+    expect(organizations.all()).toEqual([]);
+    expect(notifications.items()).toEqual([]);
+    expect(notifications.unread()).toBe(0);
   });
 
   it('passes other failures through untouched', async () => {
