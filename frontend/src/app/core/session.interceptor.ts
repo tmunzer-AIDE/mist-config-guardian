@@ -1,13 +1,26 @@
-import { HttpInterceptorFn } from '@angular/common/http';
+import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
+import { Router } from '@angular/router';
+import { catchError, throwError } from 'rxjs';
 
 import { readCookie } from './api';
+import { AuthService } from './auth.service';
 import { TimeContextService } from './time-context.service';
 
 const CSRF_COOKIE = 'cg_csrf';
 const CSRF_HEADER = 'X-CSRF-Token';
 const AS_OF_HEADER = 'X-Config-Guardian-As-Of';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * Endpoints whose own answer is 401.
+ *
+ * Signing in with the wrong password, or resolving a session that turns out
+ * not to exist, is answered by the page that asked. Treating those as a
+ * revoked session would sign the user out of a sign-in attempt, and — since
+ * the redirect target itself calls them — could loop.
+ */
+const AUTH_ENDPOINTS = /^\/api\/v\d+\/auth\//;
 
 /**
  * Attach the session cookie, the double-submit CSRF token, and the historical
@@ -33,5 +46,29 @@ export const sessionInterceptor: HttpInterceptorFn = (request, next) => {
     headers[AS_OF_HEADER] = asOf.toISOString();
   }
 
-  return next(request.clone({ withCredentials: true, setHeaders: headers }));
+  const auth = inject(AuthService);
+  const router = inject(Router);
+
+  return next(request.clone({ withCredentials: true, setHeaders: headers })).pipe(
+    catchError((cause: unknown) => {
+      // The server says this session is gone — revoked from another device,
+      // expired, or signed out elsewhere. Staying in the authenticated shell
+      // would leave every page failing with no way out, so the browser agrees
+      // and returns to sign-in. Only while it still believes it is signed in,
+      // which makes this happen once rather than on every failing request.
+      if (
+        cause instanceof HttpErrorResponse &&
+        cause.status === 401 &&
+        !AUTH_ENDPOINTS.test(request.url) &&
+        auth.isAuthenticated()
+      ) {
+        const next = router.url;
+        auth.forgetSession();
+        void router.navigate(['/login'], {
+          queryParams: next && next !== '/login' ? { next } : {},
+        });
+      }
+      return throwError(() => cause);
+    }),
+  );
 };

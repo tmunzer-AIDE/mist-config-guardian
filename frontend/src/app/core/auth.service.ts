@@ -126,6 +126,18 @@ export class AuthService {
     }
   }
 
+  /**
+   * Drop the session the browser believes it holds, without calling the API.
+   *
+   * Used when the server has already rejected the session — revoked from
+   * another device, expired, or signed out elsewhere. Calling `logout` would
+   * only produce a second failing request.
+   */
+  forgetSession(): void {
+    this.userState.set(null);
+    this.resolvedState.set(true);
+  }
+
   /** Apply a profile update returned by the account API. */
   applyUser(user: CurrentUser): void {
     this.userState.set(user);
