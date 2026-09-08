@@ -145,6 +145,37 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(notifications.unread()).toBe(3);
   });
 
+  it('the change badge has one owner, whichever read produced it', async () => {
+    // The full Overview read carries a count and the shell reads counts alone.
+    // With a sequence each, clearing the badge invalidated only one of them.
+    const overview = TestBed.inject(OverviewService);
+    const full = overview.load('org-a', '24h');
+    const inFlight = pending('/api/v1/organizations/org-a/overview')[0];
+
+    overview.clearBadge();
+    inFlight.flush({ counts: { unrecovered: 9 }, change_groups: [] });
+    await full;
+
+    expect(overview.unrecovered()).toBe(0);
+    // The page's own read model is not the badge and is unaffected.
+    expect(overview.overview()).not.toBeNull();
+  });
+
+  it('the badge is read over the window the Changes link will show', async () => {
+    // Asking over the backend's default while the page reads another window
+    // put two different numbers into the same signal.
+    const overview = TestBed.inject(OverviewService);
+    const badges = overview.loadBadges('org-a', '7d');
+    const request = pending('/api/v1/organizations/org-a/overview')[0];
+
+    expect(request.request.params.get('range')).toBe('7d');
+    expect(request.request.params.get('counts_only')).toBe('true');
+    request.flush({ counts: { unrecovered: 2 } });
+    await badges;
+
+    expect(overview.unrecovered()).toBe(2);
+  });
+
   it('timeline shows no markers rather than the previous ones when a read fails', async () => {
     const timeline = TestBed.inject(TimelineService);
     const first = timeline.load('org-a', '24h');

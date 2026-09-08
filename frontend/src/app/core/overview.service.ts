@@ -70,10 +70,15 @@ export class OverviewService {
   // organization and range on screen. A slow answer for a previous
   // organization must not overwrite the current one.
   private loadRequest = 0;
+  // The badge has two writers — the full read carries a count, and the shell
+  // reads counts alone — so they share one sequence. With a sequence each,
+  // clearing the badge invalidated only one of them and the other could
+  // repopulate it.
   private badgeRequest = 0;
 
   async load(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<OrganizationOverview> {
     const request = ++this.loadRequest;
+    const badge = ++this.badgeRequest;
     let params = new HttpParams().set('range', range);
     if (asOf) {
       params = params.set('as_of', asOf.toISOString());
@@ -83,31 +88,39 @@ export class OverviewService {
     );
     if (request === this.loadRequest) {
       this.overview.set(response);
+    }
+    if (badge === this.badgeRequest) {
       this.unrecovered.set(response.counts.unrecovered);
     }
     return response;
   }
 
-  /** Cheap counts-only fetch used by the shell so navigation badges stay live. */
   /**
    * Forget the change badge without touching the Overview's own read model.
    *
-   * The count is an outcome. When the instant moves it stops describing what
-   * is on screen, and a slow or hanging re-read would otherwise leave it
-   * asserting harm under a historical banner.
+   * The count is an outcome for one organization, range and instant. When any
+   * of those move it stops describing what is on screen, and a slow or hanging
+   * re-read would otherwise leave it asserting harm that belongs elsewhere.
    */
   clearBadge(): void {
     this.badgeRequest += 1;
     this.unrecovered.set(0);
   }
 
-  async loadBadges(organizationId: string, asOf: Date | null = null): Promise<void> {
+  /**
+   * Cheap counts-only read that keeps the navigation badges live.
+   *
+   * It takes the same range as the full read: the badge sits beside the
+   * Changes link, and clicking through must not show a different number
+   * because the shell asked over a different window.
+   */
+  async loadBadges(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<void> {
     const request = ++this.badgeRequest;
     try {
       // The unrecovered count is an outcome; the server withholds it for a
       // past instant, and the badge disappears with it rather than asserting
       // that nothing went wrong then.
-      let params = new HttpParams().set('counts_only', true);
+      let params = new HttpParams().set('counts_only', true).set('range', range);
       if (asOf) {
         params = params.set('as_of', asOf.toISOString());
       }

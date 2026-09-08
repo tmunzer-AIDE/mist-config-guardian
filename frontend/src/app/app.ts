@@ -38,8 +38,8 @@ export class App {
   private readonly router = inject(Router);
 
   protected readonly drawerOpen = signal(false);
-  /** The instant the shell's outcome data on screen was read for. */
-  private shownAsOf: string | null = null;
+  /** The organization, window and instant the shell's outcome data was read for. */
+  private shownScope: string | null = null;
   private readonly currentUrl = signal(this.router.url);
 
   protected readonly buildLabel = computed(() => {
@@ -93,12 +93,15 @@ export class App {
         return;
       }
       untracked(() => {
-        const moved = (asOf?.toISOString() ?? null) !== this.shownAsOf;
-        this.shownAsOf = asOf?.toISOString() ?? null;
-        if (moved) {
+        // The markers and the badge describe one organization over one window
+        // ending at one instant. Any of the three moving makes what is on
+        // screen wrong, not merely out of date.
+        const scope = `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
+        if (scope !== this.shownScope) {
+          this.shownScope = scope;
           // Cleared here, not when the re-reads answer: a request that is slow
-          // or never answers would otherwise leave today's severities and
-          // today's badge sitting under the historical banner.
+          // or never answers would otherwise leave the previous scope's
+          // severities and badge on screen under the new one.
           this.timeline.reset();
           this.overview.clearBadge();
         }
@@ -107,7 +110,7 @@ export class App {
         await Promise.allSettled([
           this.notifications.refreshUnread(organizationId),
           this.timeline.load(organizationId, range),
-          this.overview.loadBadges(organizationId, asOf),
+          this.overview.loadBadges(organizationId, range, asOf),
           this.health.load(),
         ]);
       });
