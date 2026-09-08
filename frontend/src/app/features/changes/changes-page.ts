@@ -181,9 +181,14 @@ export class ChangesPage {
         versions: versionRange(object),
         fields: fieldSummary(object),
       })),
+      // A past view withholds the assessment, which is not the same as the
+      // change never having had one: saying so would describe a group that
+      // does have a live assessment falsely.
       assessment:
-        detail.deterministic_assessment ??
-        'No deterministic assessment was recorded for this change group.',
+        detail.impact_known === false
+          ? 'The assessment of this change is not shown at a past instant.'
+          : (detail.deterministic_assessment ??
+            'No deterministic assessment was recorded for this change group.'),
       evidence: detail.evidence.map((item, index) => ({
         key: index,
         label: item.label,

@@ -89,6 +89,18 @@ export class OverviewService {
   }
 
   /** Cheap counts-only fetch used by the shell so navigation badges stay live. */
+  /**
+   * Forget the change badge without touching the Overview's own read model.
+   *
+   * The count is an outcome. When the instant moves it stops describing what
+   * is on screen, and a slow or hanging re-read would otherwise leave it
+   * asserting harm under a historical banner.
+   */
+  clearBadge(): void {
+    this.badgeRequest += 1;
+    this.unrecovered.set(0);
+  }
+
   async loadBadges(organizationId: string, asOf: Date | null = null): Promise<void> {
     const request = ++this.badgeRequest;
     try {

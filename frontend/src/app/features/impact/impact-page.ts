@@ -350,6 +350,13 @@ export class ImpactPage {
       if (!wanted || known) {
         return;
       }
+      if (this.time.isHistorical()) {
+        // The list is empty here by design, so a link to a session outside it
+        // would resolve every time — and the monitoring endpoint answers with
+        // the session as it stands now, which is the whole thing this page
+        // stops showing at a past instant.
+        return;
+      }
       if (untracked(() => this.monitoring.resolved()?.id) === wanted) {
         return;
       }

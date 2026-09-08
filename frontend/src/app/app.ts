@@ -38,6 +38,8 @@ export class App {
   private readonly router = inject(Router);
 
   protected readonly drawerOpen = signal(false);
+  /** The instant the shell's outcome data on screen was read for. */
+  private shownAsOf: string | null = null;
   private readonly currentUrl = signal(this.router.url);
 
   protected readonly buildLabel = computed(() => {
@@ -90,6 +92,17 @@ export class App {
       if (!organizationId) {
         return;
       }
+      untracked(() => {
+        const moved = (asOf?.toISOString() ?? null) !== this.shownAsOf;
+        this.shownAsOf = asOf?.toISOString() ?? null;
+        if (moved) {
+          // Cleared here, not when the re-reads answer: a request that is slow
+          // or never answers would otherwise leave today's severities and
+          // today's badge sitting under the historical banner.
+          this.timeline.reset();
+          this.overview.clearBadge();
+        }
+      });
       void untracked(async () => {
         await Promise.allSettled([
           this.notifications.refreshUnread(organizationId),

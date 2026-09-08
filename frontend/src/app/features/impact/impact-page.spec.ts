@@ -438,6 +438,31 @@ describe('ImpactPage', () => {
     expect(all('.act-buttons button').length).toBe(2);
   });
 
+  it('resolves no session at a past instant, however the link arrives', async () => {
+    // With an organization selected and a session named in the URL, the
+    // resolver would fetch it by identifier — and that endpoint answers with
+    // the session as it stands now, under the historical banner.
+    const http = TestBed.inject(HttpTestingController);
+    const organizations = TestBed.inject(OrganizationContextService);
+    const loaded = organizations.load();
+    http.expectOne('/api/v1/organizations').flush({
+      items: [{ id: 'org-1', name: 'Northwind Retail' }],
+      total: 1,
+    });
+    await loaded;
+    historical = true;
+
+    fixture.componentRef.setInput('session', 's-linked');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    http.expectNone('/api/v1/organizations/org-1/monitoring/s-linked');
+    http.expectNone((request) => request.url === '/api/v1/organizations/org-1/monitoring');
+    expect(text()).toContain('Monitoring evidence is live');
+    http.verify();
+  });
+
   it('shows nothing at a past instant, because monitoring has no past', async () => {
     // Every session, incident and sample here describes what monitoring knows
     // now. There is no versioned record to reconstruct it from, so the page
