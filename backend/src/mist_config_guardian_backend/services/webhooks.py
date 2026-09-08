@@ -122,10 +122,17 @@ class WebhookIngestionService:
                 raise RuntimeError(msg)
             result.receipt_ids.append(receipt.id)
 
-        organization.webhook_last_received_at = utc_now()
+        # Health bookkeeping names only its own fields. Saving the whole
+        # organization would carry the encrypted webhook secret this request
+        # read back over a rotation completed since, restoring the credential
+        # the rotation was meant to retire.
+        now = utc_now()
+        await Organization.get_pymongo_collection().update_one(
+            {"_id": organization.id},
+            {"$set": {"webhook_last_received_at": now, "webhook_last_signature_valid": True, "updated_at": now}},
+        )
+        organization.webhook_last_received_at = now
         organization.webhook_last_signature_valid = True
-        organization.touch()
-        await organization.save()
         return result
 
     @staticmethod

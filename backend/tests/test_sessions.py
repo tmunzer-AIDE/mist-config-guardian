@@ -1,6 +1,8 @@
 """Cookie session issue, CSRF, and revocation tests."""
 
+from datetime import timedelta
 from http.cookies import SimpleCookie
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -12,6 +14,7 @@ from fastapi import Request, Response
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.main import create_app
+from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.session import UserSession
 from mist_config_guardian_backend.models.user import User, UserRole, WebAuthnCredential
 from mist_config_guardian_backend.services.sessions import CsrfError, SessionService
@@ -82,6 +85,48 @@ class _FakeStore:
         self.sessions: list[UserSession] = []
 
 
+class _FakeCollection:
+    """Applies the conditional field updates the session service issues.
+
+    The service writes single fields under a predicate rather than saving
+    whole documents, so the double has to honour the predicate: that is the
+    behaviour under test, not an implementation detail.
+    """
+
+    def __init__(self, store: "_FakeStore") -> None:
+        self._store = store
+
+    def _matching(self, criteria: dict[str, Any]) -> list[UserSession]:
+        return [
+            session
+            for session in self._store.sessions
+            if all(_field_matches(session, key, value) for key, value in criteria.items())
+        ]
+
+    async def update_one(self, criteria: dict[str, Any], update: dict[str, Any]) -> Any:
+        matched = self._matching(criteria)[:1]
+        _apply(matched, update)
+        return SimpleNamespace(modified_count=len(matched), matched_count=len(matched))
+
+    async def update_many(self, criteria: dict[str, Any], update: dict[str, Any]) -> Any:
+        matched = self._matching(criteria)
+        _apply(matched, update)
+        return SimpleNamespace(modified_count=len(matched), matched_count=len(matched))
+
+
+def _field_matches(session: UserSession, key: str, expected: Any) -> bool:
+    actual = session.id if key == "_id" else getattr(session, key, None)
+    if isinstance(expected, dict) and "$ne" in expected:
+        return actual != expected["$ne"]
+    return actual == expected
+
+
+def _apply(sessions: list[UserSession], update: dict[str, Any]) -> None:
+    for session in sessions:
+        for field, value in update.get("$set", {}).items():
+            setattr(session, field, value)
+
+
 @pytest.fixture
 def store(monkeypatch: pytest.MonkeyPatch) -> _FakeStore:
     """Replace the session collection with an in-memory list."""
@@ -106,8 +151,10 @@ def store(monkeypatch: pytest.MonkeyPatch) -> _FakeStore:
     async def _get(user_id: PydanticObjectId) -> User | None:
         return fake.user if fake.user.id == user_id else None
 
-    def _collection(*_args: object, **_kwargs: object) -> None:
-        return None
+    collection = _FakeCollection(fake)
+
+    def _collection(*_args: object, **_kwargs: object) -> _FakeCollection:
+        return collection
 
     monkeypatch.setattr(UserSession, "get_pymongo_collection", _collection)
     monkeypatch.setattr(UserSession, "insert", _insert)
@@ -302,3 +349,47 @@ async def test_logout_without_a_session_is_idempotent(store: _FakeStore) -> None
 
     assert response.status_code == 200
     assert response.json() == {"signed_out": True}
+
+
+async def test_activity_cannot_bring_a_revoked_session_back(store: _FakeStore) -> None:
+    """Touching a session saved the whole document, `revoked_at` included.
+
+    A request that read the session while it was live would write that
+    `None` back over a revocation completed since, and the stolen cookie
+    would work again.
+    """
+    service = SessionService(_settings())
+    response = Response()
+    session = await service.start(
+        store.user,
+        response=response,
+        user_agent="Mozilla/5.0",
+        ip_address="203.0.113.7",
+        mfa_verified=False,
+    )
+    # The request holds this copy, with revoked_at still None.
+    stale = session.model_copy(deep=True)
+    stale.last_seen_at = utc_now() - timedelta(minutes=5)
+
+    assert await service.revoke(store.user.id, session.id) is True
+    await service._touch(stale)  # noqa: SLF001 - the private path the request takes
+
+    assert store.sessions[0].revoked_at is not None
+
+
+async def test_revoking_every_session_is_one_write(store: _FakeStore) -> None:
+    """Per-document saves left each one open to the same race."""
+    service = SessionService(_settings())
+    for _ in range(3):
+        await service.start(
+            store.user,
+            response=Response(),
+            user_agent="Mozilla/5.0",
+            ip_address="203.0.113.7",
+            mfa_verified=False,
+        )
+
+    revoked = await service.revoke_all(store.user.id)
+
+    assert revoked == 3
+    assert all(session.revoked_at is not None for session in store.sessions)

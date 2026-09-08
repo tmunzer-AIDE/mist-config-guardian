@@ -13,7 +13,7 @@ from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.user import User, UserRole, UserStatus
+from mist_config_guardian_backend.models.user import User, UserRole, UserStatus, write_user_fields
 from mist_config_guardian_backend.schemas.auth import BootstrapAdminRequest
 from mist_config_guardian_backend.security.auth import hash_password, verify_password
 
@@ -73,6 +73,13 @@ class UserService:
             raise BootstrapClosedError(msg)
 
         expected = self._settings.bootstrap_admin_token.get_secret_value()
+        if not expected:
+            # No token configured, so there is no correct answer and the route
+            # cannot be used. Refused as closed rather than as a wrong guess:
+            # an unconfigured deployment is not one attempt away from handing
+            # out its first administrator.
+            msg = "Administrator bootstrap is disabled until BOOTSTRAP_ADMIN_TOKEN is configured"
+            raise BootstrapClosedError(msg)
         supplied = request.bootstrap_token.get_secret_value()
         if not secrets.compare_digest(supplied, expected):
             msg = "Invalid bootstrap token"
@@ -111,9 +118,7 @@ class UserService:
 
     async def record_login(self, user: User) -> User:
         """Stamp the moment an account most recently signed in."""
-        user.last_login_at = utc_now()
-        user.touch()
-        await user.save()
+        await write_user_fields(user, last_login_at=utc_now())
         return user
 
     # ------------------------------------------------------------ administration
@@ -175,9 +180,11 @@ class UserService:
 
         token = secrets.token_urlsafe(_INVITATION_TOKEN_BYTES)
         user.invitation_token_hash = hash_opaque_token(token)
-        user.invitation_expires_at = utc_now() + timedelta(days=INVITATION_LIFETIME_DAYS)
-        user.touch()
-        await user.save()
+        await write_user_fields(
+            user,
+            invitation_token_hash=user.invitation_token_hash,
+            invitation_expires_at=utc_now() + timedelta(days=INVITATION_LIFETIME_DAYS),
+        )
         return user, token
 
     async def accept_invitation(
@@ -205,12 +212,14 @@ class UserService:
             user.display_name = display_name.strip()
         user.password_hash = hash_password(password)
         user.password_changed_at = utc_now()
-        user.invitation_token_hash = None
-        user.invitation_expires_at = None
-        user.is_active = True
-        user.status = UserStatus.ACTIVE
-        user.touch()
-        await user.save()
+        await write_user_fields(
+            user,
+            invitation_token_hash=None,
+            invitation_expires_at=None,
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            password_hash=user.password_hash,
+        )
         return user
 
     async def update_user(
@@ -228,8 +237,7 @@ class UserService:
             user.role = role
         if display_name is not None and display_name.strip():
             user.display_name = display_name.strip()
-        user.touch()
-        await user.save()
+        await write_user_fields(user, role=user.role, display_name=user.display_name)
         return user
 
     async def deactivate(self, user_id: PydanticObjectId, *, actor: User) -> User:
@@ -238,10 +246,7 @@ class UserService:
         if not user.is_active:
             return user
         await self._guard_administrator_removal(user, actor=actor)
-        user.is_active = False
-        user.status = UserStatus.DEACTIVATED
-        user.touch()
-        await user.save()
+        await write_user_fields(user, is_active=False, status=UserStatus.DEACTIVATED)
         return user
 
     async def activate(self, user_id: PydanticObjectId) -> User:
@@ -250,10 +255,7 @@ class UserService:
         if user.status is UserStatus.INVITED:
             msg = "This account has not accepted its invitation yet"
             raise InvitationError(msg)
-        user.is_active = True
-        user.status = UserStatus.ACTIVE
-        user.touch()
-        await user.save()
+        await write_user_fields(user, is_active=True, status=UserStatus.ACTIVE)
         return user
 
     # ---------------------------------------------------------------- internals

@@ -1,6 +1,7 @@
 """User administration API and last-administrator rule tests."""
 
 import re
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -133,8 +134,18 @@ def users(monkeypatch: pytest.MonkeyPatch) -> _FakeUsers:
     async def _get(user_id: PydanticObjectId) -> User | None:
         return next((item for item in fake.records if item.id == user_id), None)
 
-    def _collection(*_args: object, **_kwargs: object) -> None:
-        return None
+    class _Collection:
+        """Accepts the field-scoped writes `write_user_fields` issues.
+
+        Those name only the fields they change and update the in-memory user
+        themselves, so the double only has to acknowledge them.
+        """
+
+        async def update_one(self, _criteria: dict[str, Any], _update: dict[str, Any]) -> Any:
+            return SimpleNamespace(modified_count=1, matched_count=1)
+
+    def _collection(*_args: object, **_kwargs: object) -> _Collection:
+        return _Collection()
 
     monkeypatch.setattr(User, "get_pymongo_collection", _collection)
     monkeypatch.setattr(User, "insert", _insert)

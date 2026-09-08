@@ -8,7 +8,7 @@ from beanie import Document, PydanticObjectId
 from pydantic import BaseModel, EmailStr, Field
 from pymongo import IndexModel
 
-from mist_config_guardian_backend.models.base import TimestampedModel
+from mist_config_guardian_backend.models.base import TimestampedModel, utc_now
 
 
 class UserRole(StrEnum):
@@ -117,3 +117,24 @@ class WebAuthnCredential(TimestampedModel, Document):
             ),
             IndexModel([("user_id", 1), ("created_at", -1)]),
         ]
+
+
+async def write_user_fields(user: User, **fields: object) -> User:
+    """Write named fields on a user, touching nothing else.
+
+    A whole-document save carries every value the request loaded, `role`,
+    `is_active` and `status` included. A self-service request that read the
+    account before an administrator demoted or deactivated it would put the
+    old values back when it finished — the account keeping authority, or
+    becoming able to sign in again, because its owner changed their display
+    name at the right moment. Naming the fields removes the possibility.
+    """
+    now = utc_now()
+    document: dict[str, object] = {"updated_at": now}
+    for name, value in fields.items():
+        document[name] = value.model_dump(mode="python") if isinstance(value, BaseModel) else value
+    await User.get_pymongo_collection().update_one({"_id": user.id}, {"$set": document})
+    for name, value in fields.items():
+        setattr(user, name, value)
+    user.updated_at = now
+    return user

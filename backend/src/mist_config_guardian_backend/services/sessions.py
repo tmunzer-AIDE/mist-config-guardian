@@ -121,12 +121,22 @@ class SessionService:
         return _aware(session.last_seen_at) + idle_limit > now
 
     async def _touch(self, session: UserSession) -> None:
+        """Record activity without writing anything else this request loaded.
+
+        A whole-document save would carry the ``revoked_at`` of ``None`` this
+        request read back over a revocation that happened since, bringing a
+        revoked session back to life. The write names only the timestamps and
+        applies only while the session is still live.
+        """
         now = utc_now()
         if (now - _aware(session.last_seen_at)) < timedelta(minutes=1):
             return
-        session.last_seen_at = now
-        session.touch()
-        await session.save()
+        result = await UserSession.get_pymongo_collection().update_one(
+            {"_id": session.id, "revoked_at": None},
+            {"$set": {"last_seen_at": now, "updated_at": now}},
+        )
+        if result.modified_count:
+            session.last_seen_at = now
 
     # ------------------------------------------------------------- management
     async def list_for_user(self, user_id: PydanticObjectId) -> list[UserSession]:
@@ -142,17 +152,18 @@ class SessionService:
         return [session for session in sessions if self._is_live(session)]
 
     async def revoke(self, user_id: PydanticObjectId, session_id: PydanticObjectId) -> bool:
-        """Revoke one of a user's own sessions."""
-        session = await UserSession.find_one(
-            UserSession.id == session_id,
-            UserSession.user_id == user_id,
+        """Revoke one of a user's own sessions.
+
+        Revocation is monotonic and written as one conditional field update,
+        so it cannot be undone by another request that read the session while
+        it was still live.
+        """
+        now = utc_now()
+        result = await UserSession.get_pymongo_collection().update_one(
+            {"_id": session_id, "user_id": user_id, "revoked_at": None},
+            {"$set": {"revoked_at": now, "updated_at": now}},
         )
-        if session is None or session.revoked_at is not None:
-            return False
-        session.revoked_at = utc_now()
-        session.touch()
-        await session.save()
-        return True
+        return result.modified_count == 1
 
     async def revoke_all(
         self,
@@ -165,21 +176,25 @@ class SessionService:
             UserSession.user_id == user_id,
             UserSession.revoked_at == None,  # noqa: E711 - Beanie query operator
         )
-        revoked = 0
-        for session in await query.to_list():
-            if except_session_id is not None and session.id == except_session_id:
-                continue
-            session.revoked_at = utc_now()
-            session.touch()
-            await session.save()
-            revoked += 1
-        return revoked
+        del query
+        now = utc_now()
+        criteria: dict[str, object] = {"user_id": user_id, "revoked_at": None}
+        if except_session_id is not None:
+            criteria["_id"] = {"$ne": except_session_id}
+        result = await UserSession.get_pymongo_collection().update_many(
+            criteria,
+            {"$set": {"revoked_at": now, "updated_at": now}},
+        )
+        return int(result.modified_count)
 
     async def mark_mfa_verified(self, session: UserSession) -> None:
         """Record a successful step-up authentication on a session."""
-        session.mfa_verified_at = utc_now()
-        session.touch()
-        await session.save()
+        now = utc_now()
+        await UserSession.get_pymongo_collection().update_one(
+            {"_id": session.id, "revoked_at": None},
+            {"$set": {"mfa_verified_at": now, "updated_at": now}},
+        )
+        session.mfa_verified_at = now
 
     def has_fresh_mfa(self, session: UserSession | None) -> bool:
         """Report whether a session completed step-up inside the allowed window."""

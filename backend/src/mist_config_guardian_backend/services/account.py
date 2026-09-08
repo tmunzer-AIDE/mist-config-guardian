@@ -9,7 +9,7 @@ from fastapi import Depends
 
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.user import PendingEmailChange, User, UserPreferences
+from mist_config_guardian_backend.models.user import PendingEmailChange, User, UserPreferences, write_user_fields
 from mist_config_guardian_backend.schemas.account import ProfileUpdateRequest
 from mist_config_guardian_backend.security.auth import hash_password, verify_password
 from mist_config_guardian_backend.services.users import (
@@ -42,8 +42,7 @@ class AccountService:
             clock=request.clock if request.clock is not None else preferences.clock,
             landing_page=(request.landing_page if request.landing_page is not None else preferences.landing_page),
         )
-        user.touch()
-        await user.save()
+        await write_user_fields(user, display_name=user.display_name, preferences=user.preferences)
         return user
 
     async def request_email_change(
@@ -75,8 +74,7 @@ class AccountService:
             requested_at=now,
             expires_at=now + timedelta(hours=EMAIL_CHANGE_LIFETIME_HOURS),
         )
-        user.touch()
-        await user.save()
+        await write_user_fields(user, pending_email_change=user.pending_email_change)
         return user, token
 
     async def confirm_email_change(self, user: User, token: str) -> User:
@@ -93,10 +91,7 @@ class AccountService:
             msg = "A user with this email already exists"
             raise UserAlreadyExistsError(msg)
 
-        user.email = pending.new_email
-        user.pending_email_change = None
-        user.touch()
-        await user.save()
+        await write_user_fields(user, email=pending.new_email, pending_email_change=None)
         return user
 
     async def cancel_email_change(self, user: User) -> User:
@@ -104,18 +99,17 @@ class AccountService:
         if user.pending_email_change is None:
             msg = "No email change is pending"
             raise EmailChangeError(msg)
-        user.pending_email_change = None
-        user.touch()
-        await user.save()
+        await write_user_fields(user, pending_email_change=None)
         return user
 
     async def change_password(self, user: User, *, current_password: str, new_password: str) -> User:
         """Replace an account password after re-entering the current one."""
         self._require_password(user, current_password)
-        user.password_hash = hash_password(new_password)
-        user.password_changed_at = utc_now()
-        user.touch()
-        await user.save()
+        await write_user_fields(
+            user,
+            password_hash=hash_password(new_password),
+            password_changed_at=utc_now(),
+        )
         return user
 
     @staticmethod

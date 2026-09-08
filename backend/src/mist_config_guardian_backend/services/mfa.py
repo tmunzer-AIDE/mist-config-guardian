@@ -27,7 +27,7 @@ from mist_config_guardian_backend.api.dependencies import (
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.challenge import LoginChallenge, PendingTotpEnrollment
-from mist_config_guardian_backend.models.user import TotpEnrollment, User
+from mist_config_guardian_backend.models.user import TotpEnrollment, User, write_user_fields
 from mist_config_guardian_backend.security.auth import verify_password
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.security.totp import (
@@ -390,8 +390,7 @@ class MfaService:
             recovery_code_hashes=[hash_recovery_code(code) for code in codes],
             recovery_codes_viewed_at=now,
         )
-        user.touch()
-        await user.save()
+        await write_user_fields(user, totp=user.totp)
         return codes
 
     async def disable_totp(self, user: User, password: str) -> User:
@@ -400,9 +399,7 @@ class MfaService:
         if user.totp is None:
             msg = "No authenticator application is enrolled"
             raise TotpNotEnrolledError(msg)
-        user.totp = None
-        user.touch()
-        await user.save()
+        await write_user_fields(user, totp=None)
         await self._store.discard(self._identity(user))
         return user
 
@@ -415,8 +412,7 @@ class MfaService:
         codes = generate_recovery_codes(RECOVERY_CODE_COUNT)
         user.totp.recovery_code_hashes = [hash_recovery_code(code) for code in codes]
         user.totp.recovery_codes_viewed_at = utc_now()
-        user.touch()
-        await user.save()
+        await write_user_fields(user, totp=user.totp)
         return codes
 
     # ----------------------------------------------------------- verification
@@ -434,8 +430,7 @@ class MfaService:
         if remaining is None:
             return False
         user.totp.recovery_code_hashes = remaining
-        user.touch()
-        await user.save()
+        await write_user_fields(user, totp=user.totp)
         return True
 
     async def verify_second_factor(self, user: User, code: str) -> bool:
