@@ -30,6 +30,7 @@ from mist_config_guardian_backend.security.credentials import (
     CredentialVault,
 )
 from mist_config_guardian_backend.services.approvals import compute_plan_hash
+from mist_config_guardian_backend.services.restore_authorization import find_unavailable_secrets
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     RestoreStateStore,
@@ -40,6 +41,7 @@ from mist_config_guardian_backend.services.restore_planner import (
     validate_action_capabilities,
 )
 from mist_config_guardian_backend.snapshots.canonical import (
+    canonicalize,
     configuration_hash,
     configuration_hash_matches,
 )
@@ -256,22 +258,27 @@ class RestoreCompensationService:
         action: RestoreAction,
         stored: ObjectVersion,
     ) -> bool:
-        """Whether the stored version is the configuration the snapshot recorded.
+        """Whether the stored version is the object the snapshot recorded.
 
-        The snapshot's digest is compared with the stored version's *contents*,
-        not with the digest written beside them. Those two digests can belong
-        to different generations through no fault of either: the keyed hash is
-        migrated in the background, and a version referenced by a snapshot may
-        be rewritten between the restore failing and its reversal being built.
-        Comparing digest to digest read that as a changed configuration and
-        fell back to the live values — which for a secret is the mask Mist
-        returns, and writing that back would set the secret to `********`.
+        The two configurations are compared field by field, which is the only
+        comparison that can answer this. A digest could not: the snapshot holds
+        what Mist returned, and Mist returns some secrets as `********`, so a
+        digest of the live read never matches a digest of the stored plaintext
+        for exactly the objects whose secret the stored version is the only
+        source of. Compensation then carried the mask forward, and the plan it
+        built was refused at authorization for requiring a secret it did not
+        have — the safety net failing in the one case it exists for.
+
+        So the masked fields are the ones left out, and everything else has to
+        agree: the ordinary fields, and any secret Mist did return. A secret
+        that came back real and differs is a genuine difference, and the stored
+        version does not describe what was live.
         """
-        if entry.configuration_hash is None:
-            return False
         definition = get_definition(action.scope, action.object_type)
-        ignored = frozenset() if definition is None else definition.ignored_fields
+        if definition is None:
+            return False
         try:
+            live = reveal_configuration(entry.configuration, self._vault)
             plaintext = reveal_configuration(stored.configuration, self._vault)
         except CredentialDecryptionError:
             # Nothing can be said about a version whose secrets will not
@@ -281,7 +288,11 @@ class RestoreCompensationService:
                 stored.id,
             )
             return False
-        return configuration_hash_matches(entry.configuration_hash, plaintext, ignored_fields=ignored)
+        masked = {
+            path.rsplit(".", maxsplit=1)[-1] for path in find_unavailable_secrets(live, definition.sensitive_fields)
+        }
+        comparable = definition.ignored_fields | masked
+        return canonicalize(live, ignored_fields=comparable) == canonicalize(plaintext, ignored_fields=comparable)
 
     async def _invert(
         self,
@@ -294,8 +305,8 @@ class RestoreCompensationService:
         source_version_id = entry.pre_version_id or action.source_version_id
         if entry.pre_version_id is not None:
             stored = await ObjectVersion.get(entry.pre_version_id)
-            # The stored version carries the real protected secrets; the live
-            # read that produced the snapshot only ever sees masked values.
+            # The stored version is where a secret Mist masked on read still
+            # exists, and the snapshot is where everything else was as it stood.
             if stored is not None and self._describes(entry, action, stored):
                 configuration = dict(stored.configuration)
 

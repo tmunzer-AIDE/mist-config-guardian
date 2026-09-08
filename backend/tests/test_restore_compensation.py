@@ -48,7 +48,11 @@ from mist_config_guardian_backend.snapshots.canonical import (
     legacy_configuration_hash,
 )
 from mist_config_guardian_backend.snapshots.registry import get_definition
-from mist_config_guardian_backend.snapshots.secrets import is_protected, protect_configuration
+from mist_config_guardian_backend.snapshots.secrets import (
+    is_protected,
+    protect_configuration,
+    reveal_configuration,
+)
 
 ORGANIZATION_ID = PydanticObjectId()
 OPERATION_ID = PydanticObjectId()
@@ -337,6 +341,80 @@ async def test_compensation_finds_the_stored_secrets_after_the_digest_is_migrate
     # ciphertext says which one the reversal will actually write.
     assert inverse.protected_configuration == stored.configuration
     assert inverse.protected_configuration != entry.configuration
+
+
+async def _inverse_of(entry: SafetySnapshotEntry, stored: ObjectVersion, monkeypatch, vault) -> RestoreAction:
+    async def _stored_by_id(_version_id: object) -> ObjectVersion:
+        return stored
+
+    monkeypatch.setattr(ObjectVersion, "get", _stored_by_id)
+    service = RestoreCompensationService(_MemoryStateStore(), vault)
+    return await service._invert(_action(0, RestoreActionType.UPDATE), entry, 0)  # noqa: SLF001
+
+
+def _entry(configuration: dict[str, object], stored: ObjectVersion, vault: CredentialVault) -> SafetySnapshotEntry:
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    return SafetySnapshotEntry(
+        logical_object_id=stored.logical_object_id,
+        order=0,
+        action=RestoreActionType.UPDATE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        existed=True,
+        configuration=protect_configuration(configuration, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash=configuration_hash(configuration, ignored_fields=IGNORED),
+        pre_version_id=stored.id,
+    )
+
+
+async def test_compensation_recovers_a_secret_mist_would_only_return_masked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one case the stored version exists for is the one that has to work.
+
+    Mist returns some secrets as `********`, so the snapshot holds a mask where
+    the stored version holds the real value. Comparing the two as wholes never
+    matches there, and compensation carried the mask forward — into a plan
+    authorization then refused for requiring a secret it did not have.
+    """
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    stored = _stored_version(
+        protect_configuration(CORP_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(CORP_WLAN, ignored_fields=IGNORED),
+    )
+    # What the live read actually returned when the snapshot was taken.
+    entry = _entry({**CORP_WLAN, "psk": "********"}, stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == "super-secret"
+
+
+async def test_compensation_keeps_a_secret_mist_did_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A secret that came back real and differs is a real difference.
+
+    Leaving every sensitive field out of the comparison would have made this
+    look like the same object and put the older secret back.
+    """
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    stored = _stored_version(
+        protect_configuration(CORP_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(CORP_WLAN, ignored_fields=IGNORED),
+    )
+    entry = _entry({**CORP_WLAN, "psk": "rotated-since"}, stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == "rotated-since"
 
 
 async def test_a_stored_version_that_has_drifted_is_not_paired_with(
