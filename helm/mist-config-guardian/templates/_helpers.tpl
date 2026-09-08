@@ -72,3 +72,16 @@ are named here as well as arriving with the rest of the Secret.
         operator: In
         values: [api, worker, scheduler]
 {{- end }}
+
+{{/*
+A digest of the Secret this release renders, for the pods that read it.
+
+Rotating a credential is only half done when the Secret changes: the pods hold
+their environment from the moment they started, so without this an upgrade
+leaves every one of them using the old value. When the Secret is managed
+elsewhere the chart cannot see its contents, this digest never changes, and
+restarting the pods is the operator's step — the README says so.
+*/}}
+{{- define "mist-config-guardian.secretChecksum" -}}
+{{- include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+{{- end }}

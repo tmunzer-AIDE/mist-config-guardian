@@ -91,8 +91,28 @@ Then update `MONGODB_ROOT_PASSWORD` in the Secret and restart the application:
 kubectl rollout restart deploy -l app.kubernetes.io/instance=<release>
 ```
 
-`REDIS_PASSWORD` has no such constraint: Redis reads it at every start, so
-changing it in the Secret and upgrading is enough.
+#### Rotating the Redis password
+
+`REDIS_PASSWORD` has no such constraint — Redis reads it when the container
+starts — but a changed Secret does not restart anything on its own.
+
+When the chart manages the Secret (`secrets.create`), it does: every pod that
+reads the Secret carries a digest of it, so `helm upgrade` rolls Redis and the
+application together. Expect connection errors for the few seconds the two
+sides are on different passwords.
+
+When the Secret is managed elsewhere the chart cannot see its contents and that
+digest never changes, so the restart is yours to do:
+
+```bash
+kubectl rollout restart deploy -l app.kubernetes.io/instance=<release>
+```
+
+The same digest is on the MongoDB and InfluxDB pods. For MongoDB that is
+deliberate: a password changed in the Secret without the rotation above is a
+mistake, and rolling the pod turns it into an authentication failure you can
+see in the logs straight away rather than one that surfaces at some unrelated
+restart weeks later.
 
 For evaluation environments, the form can create this Secret by enabling
 `secrets.create`. External secret management is recommended for production

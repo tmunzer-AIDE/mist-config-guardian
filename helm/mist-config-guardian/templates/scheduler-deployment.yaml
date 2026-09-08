@@ -16,6 +16,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include "mist-config-guardian.secretChecksum" . }}
       labels:
         app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}

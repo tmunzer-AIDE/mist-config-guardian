@@ -53,6 +53,8 @@ spec:
       app.kubernetes.io/component: influxdb
   template:
     metadata:
+      annotations:
+        checksum/secret: {{ include "mist-config-guardian.secretChecksum" . }}
       labels:
         app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
