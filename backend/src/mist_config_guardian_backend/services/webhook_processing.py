@@ -74,37 +74,57 @@ class WebhookProcessingService:
         if receipt.audit_id:
             await self._add_to_change_group(receipt, payload)
         await AuditVersioningService(self._vault).apply(receipt, payload, organization)
-        await MonitoringEventService(self._vault).handle(receipt, payload, organization)
+        session = await MonitoringEventService(self._vault).handle(receipt, payload, organization)
         # The projection is rebuilt from scratch afterwards, so it does not
         # matter whether the audit event or the device events arrived first, or
         # how many times either was delivered.
-        await self.project(receipt, payload)
+        await self.project(receipt, payload, session=session)
 
         receipt.status = WebhookProcessingStatus.PROCESSED
         receipt.processed_at = utc_now()
         receipt.touch()
         await receipt.save()
 
-    async def project(self, receipt: WebhookReceipt, payload: dict[str, object]) -> None:
-        """Recompute every change-group projection this receipt can affect."""
-        for audit_id in sorted(await self._affected_audit_ids(receipt, payload)):
+    async def project(
+        self,
+        receipt: WebhookReceipt,
+        payload: dict[str, object],
+        *,
+        session: MonitoringSession | None = None,
+    ) -> None:
+        """Recompute every change-group projection this receipt can affect.
+
+        ``session`` is the monitoring session the event handler changed, when
+        the caller ran it. A device event without an audit identifier belongs
+        to whichever administrator action that session was opened for.
+        """
+        for audit_id in sorted(await self._affected_audit_ids(receipt, payload, session)):
             await self._projector.rebuild(receipt.organization_id, audit_id)
 
     @staticmethod
     async def _affected_audit_ids(
         receipt: WebhookReceipt,
         payload: dict[str, object],
+        session: MonitoringSession | None,
     ) -> set[str]:
         if receipt.audit_id:
             return {receipt.audit_id}
-        # A device event that carries no audit identifier still belongs to the
-        # administrator action its session was opened for.
+        if session is not None:
+            return set(session.audit_ids)
         device_mac = WebhookProcessingService._first_string(payload, "mac", "device_mac", "ap_mac")
         if receipt.topic != "device-events" or not device_mac:
             return set()
-        session = await MonitoringSession.find_one(
-            MonitoringSession.organization_id == receipt.organization_id,
-            MonitoringSession.device_mac == device_mac.replace(":", "").replace("-", "").lower(),
+        # Without the handler's answer, choose the way it would: a device has one
+        # active session at most, and the newest is otherwise the one the event
+        # belongs to. An unordered lookup could return a session from months ago
+        # and attribute this evidence to an unrelated change.
+        session = (
+            await MonitoringSession.find(
+                MonitoringSession.organization_id == receipt.organization_id,
+                MonitoringSession.device_mac == device_mac.replace(":", "").replace("-", "").lower(),
+            )
+            .sort("-active", "-created_at")
+            .first_or_none()
         )
         return set(session.audit_ids) if session is not None else set()
 

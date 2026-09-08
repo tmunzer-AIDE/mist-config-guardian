@@ -90,20 +90,26 @@ class MonitoringEventService:
     def __init__(self, vault: CredentialVault) -> None:
         self._vault = vault
 
-    async def handle(
+    async def handle(  # noqa: PLR0911 - one return per class of device event
         self,
         receipt: WebhookReceipt,
         payload: dict[str, object],
         organization: Organization,
-    ) -> None:
-        """Apply one relevant device event."""
+    ) -> MonitoringSession | None:
+        """Apply one relevant device event and return the session it changed.
+
+        The caller rebuilds the change groups that session belongs to. It has to
+        come from here rather than a later lookup: a failure event closes its
+        session, and a device carries a history of sessions, so nothing about
+        the device alone identifies the one this event actually touched.
+        """
         if receipt.topic != "device-events":
-            return
+            return None
         event_type = self._first_string(payload, "type", "event_type")
         device_mac = self._first_string(payload, "mac", "device_mac", "ap_mac")
         site_id = self._first_string(payload, "site_id")
         if not event_type or not device_mac or not site_id:
-            return
+            return None
         event = DeviceEvent(
             event_type=event_type,
             device_mac=device_mac.replace(":", "").replace("-", "").lower(),
@@ -117,22 +123,23 @@ class MonitoringEventService:
         )
 
         if event_type in _PRE_CONFIG_EVENTS:
-            await self._start_or_merge(
+            return await self._start_or_merge(
                 receipt,
                 organization,
                 event,
                 session,
             )
-        elif event_type in _CONFIGURED_EVENTS:
-            await self._mark_configured(
+        if event_type in _CONFIGURED_EVENTS:
+            return await self._mark_configured(
                 receipt,
                 organization,
                 event,
                 session,
             )
-        elif session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
+        if session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
             await self._record_incident(session, event_type)
-        elif session is not None and event_type in _RESOLUTIONS:
+            return session
+        if session is not None and event_type in _RESOLUTIONS:
             resolved_type = _RESOLUTIONS[event_type]
             now = utc_now()
             for incident in session.incidents:
@@ -141,6 +148,8 @@ class MonitoringEventService:
                     incident.resolved_at = now
             session.touch()
             await session.save()
+            return session
+        return None
 
     @staticmethod
     async def _record_incident(
@@ -167,7 +176,7 @@ class MonitoringEventService:
         organization: Organization,
         event: DeviceEvent,
         session: MonitoringSession | None,
-    ) -> None:
+    ) -> MonitoringSession:
         if session is None:
             device_type = device_type_from_event(event.event_type)
             baseline = await self._capture(organization, event.site_id, device_type)
@@ -200,6 +209,7 @@ class MonitoringEventService:
         self._link_receipt(session, receipt)
         session.touch()
         await session.save()
+        return session
 
     async def _mark_configured(
         self,
@@ -207,7 +217,7 @@ class MonitoringEventService:
         organization: Organization,
         event: DeviceEvent,
         session: MonitoringSession | None,
-    ) -> None:
+    ) -> MonitoringSession:
         device_type = device_type_from_event(event.event_type)
         if session is None:
             session = MonitoringSession(
@@ -252,6 +262,7 @@ class MonitoringEventService:
         self._link_receipt(session, receipt)
         session.touch()
         await session.save()
+        return session
 
     async def _capture(
         self,
