@@ -53,6 +53,8 @@ export interface OrganizationOverview {
   failed_restores: FailedRestore[];
   latest_snapshot_at: string | null;
   latest_snapshot_objects: number | null;
+  /** Built as of a past instant: the feed is historical and the live sections are empty. */
+  historical?: boolean;
 }
 
 /** The Overview page's purpose-built read model, plus the shell's nav badge. */
@@ -70,9 +72,12 @@ export class OverviewService {
   private loadRequest = 0;
   private badgeRequest = 0;
 
-  async load(organizationId: string, range: TimeRange): Promise<OrganizationOverview> {
+  async load(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<OrganizationOverview> {
     const request = ++this.loadRequest;
-    const params = new HttpParams().set('range', range);
+    let params = new HttpParams().set('range', range);
+    if (asOf) {
+      params = params.set('as_of', asOf.toISOString());
+    }
     const response = await firstValueFrom(
       this.http.get<OrganizationOverview>(orgPath(organizationId, '/overview'), { params }),
     );

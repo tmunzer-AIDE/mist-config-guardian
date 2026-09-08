@@ -1,5 +1,6 @@
 """Organization overview aggregate endpoint."""
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -25,6 +26,9 @@ class OverviewFilters(BaseModel):
     range: Literal["24h", "7d", "30d"] = "24h"
     # The shell polls the counts on every navigation, so it asks for them alone.
     counts_only: bool = Field(default=False)
+    # Browsing the past: the window ends here, and the sections that only have
+    # a present — approvals, failed restores, the safety net — are omitted.
+    as_of: datetime | None = None
 
 
 @router.get("")
@@ -40,4 +44,5 @@ async def read_overview(
         range_key=filters.range,
         viewer_email=viewer.email,
         counts_only=filters.counts_only,
+        as_of=filters.as_of,
     )

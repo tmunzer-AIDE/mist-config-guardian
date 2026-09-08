@@ -404,6 +404,36 @@ def test_safety_net_flags_an_overdue_reconciliation() -> None:
     assert reconciliation.status == "warn"
 
 
+def test_safety_net_flags_a_reconciliation_that_never_ran_once_its_cadence_has_passed() -> None:
+    """With nothing to measure from, the clock runs from the snapshot the organization has."""
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW),
+            latest_snapshot=_snapshot(completed_at=NOW - timedelta(days=3)),
+            latest_reconciliation=None,
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert reconciliation.label == "Reconciliation never completed"
+    assert reconciliation.status == "warn"
+
+
+def test_a_reconciliation_not_yet_due_is_on_schedule_even_though_none_has_run() -> None:
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW),
+            latest_snapshot=_snapshot(),
+            latest_reconciliation=None,
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert (reconciliation.label, reconciliation.status) == ("Reconciliation on schedule", "ok")
+
+
 def test_safety_net_warns_when_a_configured_webhook_never_delivered() -> None:
     rows = build_safety_net(
         SafetyNetInput(
@@ -549,6 +579,40 @@ async def test_overview_range_widens_the_feed_window() -> None:
     assert sorted(item.audit_id for item in week.change_groups) == ["last-week", "today"]
 
 
+async def test_overview_as_of_ends_the_window_there_and_omits_what_has_no_past() -> None:
+    """Browsing the past shows the changes of the past, not today's operational state."""
+    reader = _MemoryOverviewReader()
+    now = datetime.now(tz=UTC)
+    reader.groups.extend(
+        [
+            _group(audit_id="today", occurred_at=now - timedelta(hours=3)),
+            _group(audit_id="last-week", occurred_at=now - timedelta(days=5)),
+        ]
+    )
+    reader.approvals.append(_approval())
+    reader.failures.append(_restore())
+    reader.snapshot = _snapshot()
+    reader.reconciliation = _snapshot()
+
+    overview = await _service(reader).collect(
+        _organization(webhook_received=now),
+        range_key="7d",
+        viewer_email=VIEWER_EMAIL,
+        as_of=now - timedelta(days=4),
+    )
+
+    assert overview.historical is True
+    assert overview.range_end == now - timedelta(days=4)
+    assert [item.audit_id for item in overview.change_groups] == ["last-week"]
+    assert overview.pending_approvals == []
+    assert overview.failed_restores == []
+    assert overview.safety_net == []
+    assert overview.latest_snapshot_at is None
+    assert (overview.counts.pending_approvals, overview.counts.failed_restores) == (0, 0)
+    # Nothing live was even asked for.
+    assert not {"pending_approvals", "failed_restores", "latest_snapshot", "latest_reconciliation"} & set(reader.calls)
+
+
 async def test_overview_scopes_every_query_to_one_organization() -> None:
     reader = _MemoryOverviewReader()
     reader.groups.append(_group(audit_id="audit-1"))
@@ -598,6 +662,7 @@ async def test_overview_endpoint_returns_the_full_contract() -> None:
         "safety_net",
         "pending_approvals",
         "failed_restores",
+        "historical",
         "latest_snapshot_at",
         "latest_snapshot_objects",
     }

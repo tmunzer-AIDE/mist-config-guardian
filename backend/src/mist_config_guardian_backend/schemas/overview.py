@@ -62,3 +62,6 @@ class OrganizationOverviewResponse(BaseModel):
     failed_restores: list[FailedRestoreResponse] = Field(default_factory=list)
     latest_snapshot_at: datetime | None = None
     latest_snapshot_objects: int | None = None
+    # True when built as of a past instant. The feed and its counts are then
+    # historical; the operational sections have no past and are left empty.
+    historical: bool = False

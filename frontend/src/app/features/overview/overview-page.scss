@@ -334,6 +334,14 @@
   color: var(--ink-soft);
 }
 
+// The note that stands in for the live sections while browsing the past.
+.panel-note {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
 .panel-link {
   margin-top: 12px;
   padding: 11px 0 0;

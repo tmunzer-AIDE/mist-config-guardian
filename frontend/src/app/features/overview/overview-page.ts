@@ -67,6 +67,9 @@ export class OverviewPage {
   protected readonly atNow = computed(() => !this.time.isHistorical() && this.hasChanges());
   protected readonly nowLabel = computed(() => formatTime(new Date()));
 
+  /** Built as of the past: approvals, failed restores and the safety net have no past to show. */
+  protected readonly historical = computed(() => this.overview.overview()?.historical ?? false);
+
   protected readonly pending = computed(() => this.overview.overview()?.pending_approvals ?? []);
   protected readonly failed = computed(() => this.overview.overview()?.failed_restores ?? []);
   protected readonly safety = computed(() => this.overview.overview()?.safety_net ?? []);
@@ -85,13 +88,18 @@ export class OverviewPage {
   );
 
   constructor() {
+    // The as-of instant is an input to the read, not only to the banner: the
+    // server ends the window there and leaves out what has no past.
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
+      const asOf = this.time.asOf();
       if (!organizationId) {
         return;
       }
-      void untracked(() => this.ui.track('Loading overview', () => this.overview.load(organizationId, range)));
+      void untracked(() =>
+        this.ui.track('Loading overview', () => this.overview.load(organizationId, range, asOf)),
+      );
     });
   }
 

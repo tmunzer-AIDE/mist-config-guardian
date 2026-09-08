@@ -90,6 +90,15 @@
     </div>
 
     <aside class="rail">
+      @if (historical()) {
+        <section class="cg-card panel">
+          <h2 class="cg-label panel-title">SAFETY NET</h2>
+          <p class="panel-note">
+            Operational status — the safety net, approvals awaiting review and failed restores — is
+            live and has no past. Return to now to see it.
+          </p>
+        </section>
+      } @else {
       <section class="cg-card panel">
         <h2 class="cg-label panel-title">SAFETY NET</h2>
         <div class="safety">
@@ -140,6 +149,7 @@
             </div>
           }
         </section>
+      }
       }
     </aside>
   </div>

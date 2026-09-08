@@ -345,7 +345,14 @@ def build_safety_net(source: SafetyNetInput) -> list[SafetyNetItemResponse]:
     items = [_backup_row(source.latest_snapshot, now)]
     items.append(_webhook_row(organization, now))
     if source.latest_snapshot is not None:
-        items.append(_reconciliation_row(organization, source.latest_reconciliation, now))
+        items.append(
+            _reconciliation_row(
+                organization,
+                source.latest_reconciliation,
+                since=_snapshot_instant(source.latest_snapshot) or as_utc(organization.created_at),
+                now=now,
+            )
+        )
     items.append(_credential_row(organization))
     return items
 
@@ -403,17 +410,29 @@ def _webhook_row(organization: Organization, now: datetime) -> SafetyNetItemResp
 def _reconciliation_row(
     organization: Organization,
     reconciliation: SnapshotManifest | None,
+    *,
+    since: datetime,
     now: datetime,
 ) -> SafetyNetItemResponse:
+    """Judge the cadence from the last reconciliation, or from ``since`` when none has run.
+
+    A reconciliation that never completed must not read as on schedule
+    forever: with none to measure from, the clock runs from the snapshot the
+    organization does have, or from its onboarding.
+    """
     minutes = cron_cadence_minutes(organization.reconciliation_cron)
     cadence = format_cadence(minutes) if minutes is not None else "—"
-    captured = _snapshot_instant(reconciliation)
-    overdue = (
-        minutes is not None and captured is not None and now - captured > timedelta(minutes=minutes * _OVERDUE_FACTOR)
-    )
+    captured = _snapshot_instant(reconciliation) or since
+    overdue = minutes is not None and now - captured > timedelta(minutes=minutes * _OVERDUE_FACTOR)
+    if overdue and reconciliation is None:
+        label = "Reconciliation never completed"
+    elif overdue:
+        label = "Reconciliation overdue"
+    else:
+        label = "Reconciliation on schedule"
     return SafetyNetItemResponse(
         key="reconciliation",
-        label="Reconciliation overdue" if overdue else "Reconciliation on schedule",
+        label=label,
         status="warn" if overdue else "ok",
         detail=cadence,
     )
@@ -527,20 +546,25 @@ class OverviewService:
         range_key: str,
         viewer_email: str,
         counts_only: bool = False,
+        as_of: datetime | None = None,
     ) -> OrganizationOverviewResponse:
         """Build the Overview read model for one organization and window."""
         if organization.id is None:
             msg = "Persisted organization is missing an identifier"
             raise ValueError(msg)
         organization_id = organization.id
-        start, end = resolve_window(range_key)
-        counts = await self._counts(organization_id, start=start, end=end, viewer_email=viewer_email)
+        historical = as_of is not None
+        start, end = resolve_window(range_key, as_of)
+        counts = await self._counts(
+            organization_id, start=start, end=end, viewer_email=viewer_email, historical=historical
+        )
         if counts_only:
             return OrganizationOverviewResponse(
                 generated_at=utc_now(),
                 range_start=start,
                 range_end=end,
                 counts=counts,
+                historical=historical,
             )
 
         groups = await self._reader.recent_groups(organization_id, start=start, end=end, limit=FEED_LIMIT)
@@ -549,6 +573,18 @@ class OverviewService:
             groups,
             viewer_email=viewer_email,
         )
+        if historical:
+            # Change history has a past; pending approvals, failed restores and
+            # the safety net only have a present. Showing today's under a past
+            # date would present live state as historical.
+            return OrganizationOverviewResponse(
+                generated_at=utc_now(),
+                range_start=start,
+                range_end=end,
+                counts=counts,
+                change_groups=summaries,
+                historical=True,
+            )
         approvals = await self._reader.pending_approvals(organization_id, limit=APPROVAL_LIMIT)
         failures = await self._reader.failed_restores(organization_id, limit=FAILED_RESTORE_LIMIT)
         snapshot = await self._reader.latest_snapshot(organization_id)
@@ -579,6 +615,7 @@ class OverviewService:
         start: datetime,
         end: datetime,
         viewer_email: str,
+        historical: bool = False,
     ) -> OverviewCountsResponse:
         groups = await self._reader.change_group_counts(
             organization_id,
@@ -591,6 +628,7 @@ class OverviewService:
             impacting=groups.impacting,
             mine=groups.mine,
             unrecovered=groups.unrecovered,
-            pending_approvals=await self._reader.pending_approval_count(organization_id),
-            failed_restores=await self._reader.failed_restore_count(organization_id),
+            # Approvals and failed restores are live state with no past.
+            pending_approvals=0 if historical else await self._reader.pending_approval_count(organization_id),
+            failed_restores=0 if historical else await self._reader.failed_restore_count(organization_id),
         )

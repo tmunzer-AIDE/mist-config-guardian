@@ -2680,6 +2680,11 @@
             "title": "Generated At",
             "type": "string"
           },
+          "historical": {
+            "default": false,
+            "title": "Historical",
+            "type": "boolean"
+          },
           "latest_snapshot_at": {
             "anyOf": [
               {
@@ -8204,6 +8209,23 @@
               "default": false,
               "title": "Counts Only",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
             }
           }
         ],
