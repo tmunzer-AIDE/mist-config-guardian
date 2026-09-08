@@ -1,6 +1,12 @@
-import { Routes } from '@angular/router';
+import { inject } from '@angular/core';
+import { RedirectFunction, Router, Routes } from '@angular/router';
 
 import { authGuard, roleGuard } from './core/auth.guard';
+
+/** Send `/<page>/<tab>` to `/<page>?tab=<tab>`, the one route that mounts the page. */
+function tabRedirect(page: string): RedirectFunction {
+  return ({ params }) => inject(Router).createUrlTree([page], { queryParams: { tab: params['tab'] } });
+}
 
 export const routes: Routes = [
   {
@@ -58,17 +64,16 @@ export const routes: Routes = [
   },
   {
     // The shell's organization and user menus link straight to a tab, so the
-    // tab is addressable as a path segment as well as a query parameter.
+    // tab is addressable as a path segment as well. It redirects to the query
+    // form rather than mounting the page a second way: two route entries for
+    // one page would remount it on every tab switch between them, refetching,
+    // closing dialogs and dropping keyboard focus.
     path: 'settings/:tab',
-    canActivate: [authGuard],
-    loadComponent: () => import('./features/settings/settings-page').then((m) => m.SettingsPage),
-    title: 'Settings · Config Guardian',
+    redirectTo: tabRedirect('/settings'),
   },
   {
     path: 'account/:tab',
-    canActivate: [authGuard],
-    loadComponent: () => import('./features/account/account-page').then((m) => m.AccountPage),
-    title: 'Your account · Config Guardian',
+    redirectTo: tabRedirect('/account'),
   },
   { path: '**', redirectTo: '' },
 ];
