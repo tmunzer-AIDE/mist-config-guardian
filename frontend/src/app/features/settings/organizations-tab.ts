@@ -319,8 +319,10 @@ export class OrganizationsTab {
 
   protected closeAdd(): void {
     this.addOpen.set(false);
-    // The token exists only for the request that onboards the organization.
+    // The token and the password exist only for the request that onboards the
+    // organization, which this is not.
     this.addForm.controls.service_token.reset('');
+    this.addForm.controls.password.reset('');
   }
 
   protected async add(): Promise<void> {
@@ -345,7 +347,9 @@ export class OrganizationsTab {
       this.expandedId.set(created.id);
       void this.loadSnapshots(created);
     });
+    // Spent by the request whether or not it succeeded.
     this.addForm.controls.service_token.reset('');
+    this.addForm.controls.password.reset('');
   }
 
   protected addCronLabel(): string {
@@ -451,15 +455,20 @@ export class OrganizationsTab {
 
   protected startTokenEdit(organization: Organization): void {
     this.tokenEditingId.set(organization.id);
+    // Neither field carries over from a previous edit, whether it was
+    // abandoned or belonged to a different organization.
     this.tokenDraft.set('');
+    this.tokenPassword.set('');
     this.error.set('');
     this.notice.set('');
   }
 
   protected cancelTokenEdit(): void {
     this.tokenEditingId.set(null);
-    // The token only ever needs to exist for the request that replaces it.
+    // The token and the password confirming it exist only for the request that
+    // replaces the token, and that request did not happen.
     this.tokenDraft.set('');
+    this.tokenPassword.set('');
   }
 
   protected onTokenInput(event: Event): void {

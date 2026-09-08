@@ -284,6 +284,9 @@ export class AiTab {
     } catch (cause) {
       this.error.set(detailOf(cause));
     } finally {
+      // The password authorises one change. Leaving it in the field let anyone
+      // who reached the unlocked session make the next one without knowing it.
+      this.password.set('');
       this.saving.set('');
     }
   }

@@ -17,6 +17,7 @@ interface TabInternals {
   fetchModels(): Promise<void>;
   modelState(): string;
   modelOptions(): { id: string; detail: string }[];
+  password: { (): string; set(value: string): void };
 }
 
 const STORED: AiSettings = {
@@ -128,6 +129,26 @@ describe('AiTab', () => {
 
     expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('sk-live-abcdefghijkl');
     expect((fixture.nativeElement as HTMLElement).innerHTML).not.toContain('sk-live');
+  });
+
+  it('forgets the password once the change it authorised has been made', async () => {
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+
+    tab.password.set('the-account-password');
+    tab.toggleAutomatic();
+    const saving = tab.saveSettings();
+    const request = http.expectOne('/api/v1/ai/settings');
+
+    expect((request.request.body as { password: string }).password).toBe('the-account-password');
+    request.flush({ ...STORED, automatic_summaries: true });
+    await saving;
+    await fixture.whenStable();
+
+    // A password left in the field authorises the next change too, for whoever
+    // reaches the unlocked session next.
+    expect(tab.password()).toBe('');
+    expect((fixture.nativeElement as HTMLElement).innerHTML).not.toContain('the-account-password');
   });
 
   it('asks for the key to be cleared explicitly rather than by blanking it', async () => {

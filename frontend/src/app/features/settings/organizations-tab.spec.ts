@@ -1,4 +1,10 @@
-import { CRON_PRESETS, nextCronRun, presetForCron } from './organizations-tab';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { TestBed } from '@angular/core/testing';
+
+import { AuthService, CurrentUser } from '../../core/auth.service';
+import { Organization } from '../../core/organization.model';
+import { CRON_PRESETS, OrganizationsTab, nextCronRun, presetForCron } from './organizations-tab';
 
 describe('reconciliation schedule presets', () => {
   it('offers exactly the four intervals the design names', () => {
@@ -61,5 +67,72 @@ describe('nextCronRun', () => {
     expect(nextCronRun('nonsense')).toBeNull();
     expect(nextCronRun('0 2 * *')).toBeNull();
     expect(nextCronRun('0 99 * * *')).toBeNull();
+  });
+});
+
+
+interface TabInternals {
+  startTokenEdit(organization: Organization): void;
+  cancelTokenEdit(): void;
+  closeAdd(): void;
+  tokenPassword: { (): string; set(value: string): void };
+  addForm: { controls: { password: { value: string; setValue(value: string): void } } };
+}
+
+const ADMINISTRATOR: CurrentUser = {
+  id: 'u1',
+  email: 'a.osei@northwind.example',
+  display_name: 'A. Osei',
+  role: 'administrator',
+  is_active: true,
+  status: 'active',
+  preferences: { timezone: 'UTC', clock: '24h', landing_page: 'overview' },
+  mfa_enabled: true,
+  passkey_count: 0,
+};
+
+function organization(id: string): Organization {
+  return { id, name: `Org ${id}` } as Organization;
+}
+
+describe('OrganizationsTab credentials', () => {
+  function tab(): TabInternals {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    TestBed.inject(AuthService).applyUser(ADMINISTRATOR);
+    return TestBed.createComponent(OrganizationsTab)
+      .componentInstance as unknown as TabInternals;
+  }
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  it('does not carry a service-token password into the next edit', () => {
+    const panel = tab();
+
+    panel.startTokenEdit(organization('org-1'));
+    panel.tokenPassword.set('the-account-password');
+    panel.cancelTokenEdit();
+
+    // Abandoning the edit spends nothing, so the password must not survive it:
+    // whoever reaches the session next would otherwise replace a service token
+    // without knowing it.
+    expect(panel.tokenPassword()).toBe('');
+
+    panel.tokenPassword.set('the-account-password');
+    panel.startTokenEdit(organization('org-2'));
+    // Nor does it follow the administrator to another organization.
+    expect(panel.tokenPassword()).toBe('');
+  });
+
+  it('does not keep the onboarding password after the form is dismissed', () => {
+    const panel = tab();
+
+    panel.addForm.controls.password.setValue('the-account-password');
+    panel.closeAdd();
+
+    expect(panel.addForm.controls.password.value).toBe('');
   });
 });
