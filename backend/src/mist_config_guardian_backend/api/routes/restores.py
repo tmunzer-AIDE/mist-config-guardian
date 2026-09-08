@@ -246,7 +246,7 @@ async def execute_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency 
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
     request: RestoreExecuteRequest,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     authorization: Annotated[RestoreAuthorizationService, Depends(get_restore_authorization_service)],
     compensation: Annotated[RestoreCompensationService, Depends(get_restore_compensation_service)],
@@ -268,6 +268,11 @@ async def execute_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency 
             detail="No compensating plan has been created for this restore",
         )
     await _assert_plan_current(store, plan)
+    # Compensation writes to Mist with the same authority a restore does, and
+    # undoes objects the same way, so it clears the same approval policy. The
+    # ordinary execute route enforced it and this one did not, which let one
+    # administrator run a destructive plan the policy says needs two.
+    await _assert_approved(organization, plan, approvals)
     return await _authorize_and_queue(
         organization_id,
         plan,
