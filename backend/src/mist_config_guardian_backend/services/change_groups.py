@@ -11,11 +11,12 @@ Every label in this module is a template filled from measured values. No text
 here comes from an AI provider.
 """
 
+import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol
 
 from beanie import PydanticObjectId
 
@@ -247,8 +248,13 @@ class ChangeGroupStore(Protocol):
     ) -> AuditChangeGroup | None:
         """Return one organization's change group by its own identifier."""
 
-    async def save(self, group: AuditChangeGroup) -> None:
-        """Persist a recomputed projection."""
+    async def save(self, group: AuditChangeGroup) -> bool:
+        """Persist a recomputed projection.
+
+        Returns ``False`` when another writer has saved one since this group
+        was read, in which case this projection was computed from a stale
+        picture and the caller recomputes.
+        """
 
     async def count(self, criteria: Mapping[str, object]) -> int:
         """Count change groups matching a criteria document."""
@@ -355,9 +361,18 @@ class BeanieChangeGroupStore:
             AuditChangeGroup.organization_id == organization_id,
         )
 
-    async def save(self, group: AuditChangeGroup) -> None:
-        """Persist a recomputed projection."""
-        await group.save()
+    async def save(self, group: AuditChangeGroup) -> bool:
+        """Persist a recomputed projection if nobody else has since it was read."""
+        expected = group.projection_revision
+        document = group.model_dump(mode="json", exclude={"id", "projection_revision"})
+        result = await AuditChangeGroup.get_pymongo_collection().update_one(
+            {"_id": group.id, "projection_revision": expected},
+            {"$set": document, "$inc": {"projection_revision": 1}},
+        )
+        if result.matched_count == 0:
+            return False
+        group.projection_revision = expected + 1
+        return True
 
     async def count(self, criteria: Mapping[str, object]) -> int:
         """Count change groups matching a criteria document."""
@@ -789,6 +804,14 @@ def resolve_baseline_confidence(sessions: Sequence[MonitoringSession]) -> Baseli
     return BaselineConfidence.MEDIUM
 
 
+# A rebuild lost the write to a concurrent one and must start over. Distinct
+# from None, which means the group does not exist.
+logger = logging.getLogger(__name__)
+
+_CONTENDED: Any = object()
+_PROJECTION_ATTEMPTS = 3
+
+
 class ChangeGroupProjector:
     """Recompute a change group's stored projection from its sources.
 
@@ -810,7 +833,29 @@ class ChangeGroupProjector:
         organization_id: PydanticObjectId,
         audit_id: str,
     ) -> AuditChangeGroup | None:
-        """Recompute one change group's projection idempotently."""
+        """Recompute one change group's projection idempotently.
+
+        Webhook processing, monitoring completion and backfills all rebuild the
+        same group, and workers run concurrently. Each attempt writes only if
+        the projection is still the one it read; when it is not, the sources
+        have changed underneath and the attempt is made again from them.
+        """
+        for _ in range(_PROJECTION_ATTEMPTS):
+            group = await self._rebuild_once(organization_id, audit_id)
+            if group is not _CONTENDED:
+                return group
+        logger.warning(
+            "Gave up rebuilding the projection for audit %s after %d attempts",
+            audit_id,
+            _PROJECTION_ATTEMPTS,
+        )
+        return None
+
+    async def _rebuild_once(
+        self,
+        organization_id: PydanticObjectId,
+        audit_id: str,
+    ) -> AuditChangeGroup | None:
         group = await self._store.group_by_audit(organization_id, audit_id)
         if group is None:
             return None
@@ -840,7 +885,8 @@ class ChangeGroupProjector:
         group.summary = build_summary(group, evidence, group.recovery_state)
         group.projection_updated_at = utc_now()
         group.touch()
-        await self._store.save(group)
+        if not await self._store.save(group):
+            return _CONTENDED
 
         await self._announce(group)
         return group
@@ -1016,7 +1062,15 @@ class ChangeGroupService:
         criteria = build_criteria(organization_id, filters)
         total = await self._store.count(criteria)
         groups = await self._store.page(criteria, skip=filters.skip, limit=filters.limit)
-        return await self.summarize(organization_id, groups, viewer_email=viewer_email), total
+        return (
+            await self.summarize(
+                organization_id,
+                groups,
+                viewer_email=viewer_email,
+                historical=filters.as_of is not None,
+            ),
+            total,
+        )
 
     async def summarize(
         self,
@@ -1024,15 +1078,26 @@ class ChangeGroupService:
         groups: Sequence[AuditChangeGroup],
         *,
         viewer_email: str,
+        historical: bool = False,
     ) -> list[ChangeGroupSummaryResponse]:
-        """Render change groups as summaries, batching the lookups they share."""
+        """Render change groups as summaries, batching the lookups they share.
+
+        ``historical`` renders the change without its outcome. Impact,
+        recovery and the metrics behind them are single mutable projections
+        that always describe what is known now: a change that has since
+        recovered would read as recovered at an instant days before it did.
+        There is no versioned history to reconstruct them from, so a past view
+        reports what changed and leaves what came of it unsaid.
+        """
         if not groups:
             return []
+        site_ids = sorted({site for group in groups for site in group.affected_site_ids})
+        names = await self._store.site_names(organization_id, site_ids)
+        if historical:
+            return [_summarize(group, [], names, viewer_email, historical=True) for group in groups]
         session_ids = [session_id for group in groups for session_id in group.monitoring_session_ids]
         sessions = await self._store.sessions_by_id(organization_id, session_ids)
         by_session = {session.id: session for session in sessions if session.id is not None}
-        site_ids = sorted({site for group in groups for site in group.affected_site_ids})
-        names = await self._store.site_names(organization_id, site_ids)
         return [
             _summarize(
                 group,
@@ -1138,6 +1203,8 @@ def _summarize(
     sessions: Sequence[MonitoringSession],
     site_names: Mapping[str, str],
     viewer_email: str,
+    *,
+    historical: bool = False,
 ) -> ChangeGroupSummaryResponse:
     movements = measure_movements(sessions)
     incidents = [incident for session in sessions for incident in session.incidents]
@@ -1161,16 +1228,21 @@ def _summarize(
         source=group.source,
         occurred_at=as_utc(group.occurred_at or group.created_at),
         title=build_title(group.changed_objects, group.message),
-        summary=group.summary or "",
+        # The stored summary narrates the outcome, so it is withheld with it.
+        summary="" if historical else (group.summary or ""),
         object_count=len(group.changed_objects),
         device_count=len(group.affected_devices),
         affected_site_ids=list(group.affected_site_ids),
         devices_label=build_devices_label(group.affected_devices, site_names),
-        impact_severity=group.impact_severity,
-        recovery_state=group.recovery_state,
-        impact_label=build_impact_label(group.impact_severity, group.recovery_state, movements),
-        degraded_metrics=list(group.degraded_metrics),
-        metrics=build_metrics(evidence, group.impact_severity, group.recovery_state),
-        monitoring_session_ids=[str(session_id) for session_id in group.monitoring_session_ids],
+        impact_severity=ImpactSeverity.NONE if historical else group.impact_severity,
+        recovery_state=RecoveryState.NOT_APPLICABLE if historical else group.recovery_state,
+        impact_label="" if historical else build_impact_label(group.impact_severity, group.recovery_state, movements),
+        degraded_metrics=[] if historical else list(group.degraded_metrics),
+        metrics=[] if historical else build_metrics(evidence, group.impact_severity, group.recovery_state),
+        # Sessions are live monitoring records; a past view does not link them.
+        monitoring_session_ids=([] if historical else [str(session_id) for session_id in group.monitoring_session_ids]),
+        # False says the outcome was withheld, so a client renders "not shown"
+        # rather than reading the neutral defaults above as "no impact".
+        impact_known=not historical,
         is_mine=actor_matches(group.actor, viewer_email),
     )

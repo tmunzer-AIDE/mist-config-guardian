@@ -819,6 +819,11 @@
             "title": "Id",
             "type": "string"
           },
+          "impact_known": {
+            "default": true,
+            "title": "Impact Known",
+            "type": "boolean"
+          },
           "impact_label": {
             "title": "Impact Label",
             "type": "string"
@@ -973,6 +978,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "impact_known": {
+            "default": true,
+            "title": "Impact Known",
+            "type": "boolean"
           },
           "impact_label": {
             "title": "Impact Label",

@@ -75,6 +75,10 @@ class ChangeGroupSummaryResponse(BaseModel):
     degraded_metrics: list[str] = Field(default_factory=list)
     metrics: list[ChangeMetricResponse] = Field(default_factory=list)
     monitoring_session_ids: list[str] = Field(default_factory=list)
+    # False when the summary was built for a past instant, where impact and
+    # recovery cannot be reported: the neutral values above then mean "not
+    # shown", not "no impact".
+    impact_known: bool = True
     is_mine: bool = False
 
 

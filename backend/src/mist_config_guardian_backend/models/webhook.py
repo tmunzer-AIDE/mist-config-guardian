@@ -144,6 +144,10 @@ class AuditChangeGroup(TimestampedModel, Document):
     degraded_metrics: list[str] = Field(default_factory=list)
     summary: str | None = None
     projection_updated_at: datetime | None = None
+    # Incremented by every projection write. A rebuild reads it, recomputes,
+    # and writes only if it is unchanged, so two workers rebuilding the same
+    # group cannot have the slower one's older picture land last.
+    projection_revision: int = 0
 
     class Settings:
         name = "audit_change_groups"

@@ -344,7 +344,7 @@ function toRow(group: ChangeGroupSummary, occurred: Date): GroupRow {
     actor: group.actor ?? 'Unattributed',
     objects: formatCount(group.object_count),
     devices: group.devices_label,
-    impact: group.impact_label,
+    impact: group.impact_known === false ? 'IMPACT NOT SHOWN' : group.impact_label,
     recovery: RECOVERY_LABEL[group.recovery_state],
     tone: toneOf(group.impact_severity),
   };

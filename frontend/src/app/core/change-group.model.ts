@@ -62,6 +62,12 @@ export interface ChangeGroupSummary {
   degraded_metrics: string[];
   metrics: ChangeMetric[];
   monitoring_session_ids: string[];
+  /**
+   * False when the summary was built for a past instant: impact and recovery
+   * are current knowledge about a change, so a past view withholds them. The
+   * neutral severity that comes with it means "not shown", not "no impact".
+   */
+  impact_known?: boolean;
   is_mine: boolean;
 }
 

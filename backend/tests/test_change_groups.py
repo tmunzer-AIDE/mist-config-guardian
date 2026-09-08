@@ -216,6 +216,7 @@ class _MemoryChangeGroupStore:
         self.logicals: list[LogicalObject] = []
         self.sessions: list[MonitoringSession] = []
         self.saves = 0
+        self.contended = 0
         self.calls: list[str] = []
 
     async def group_by_audit(
@@ -240,11 +241,18 @@ class _MemoryChangeGroupStore:
             None,
         )
 
-    async def save(self, group: AuditChangeGroup) -> None:
+    async def save(self, group: AuditChangeGroup) -> bool:
         self.calls.append("save")
         self.saves += 1
+        # Stands in for the conditional write: a test sets this to make the
+        # first attempts lose the race, as a concurrent worker would.
+        if self.contended > 0:
+            self.contended -= 1
+            return False
+        group.projection_revision += 1
         if group not in self.groups:
             self.groups.append(group)
+        return True
 
     async def count(self, criteria: Mapping[str, object]) -> int:
         self.calls.append("count")
@@ -631,6 +639,70 @@ async def test_rebuild_names_competing_change_groups_at_the_same_site() -> None:
     assert group.evidence[2].label == "Competing changes at this site: 1"
 
 
+async def test_a_rebuild_that_loses_the_write_recomputes_from_the_sources() -> None:
+    """Two workers rebuild the same group; the loser must not simply give up.
+
+    Its projection was computed from a picture that has since changed, so it
+    reads the sources again rather than writing what it already had.
+    """
+    store = _MemoryChangeGroupStore()
+    store.groups.append(_group())
+    store.contended = 2
+
+    group = await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
+
+    assert group is not None
+    # Three writes attempted, two lost; the group was re-read before each.
+    assert store.calls.count("save") == 3
+    assert store.calls.count("group_by_audit") == 3
+    assert group.projection_revision == 1
+
+
+async def test_a_rebuild_that_keeps_losing_gives_up_rather_than_spinning() -> None:
+    store = _MemoryChangeGroupStore()
+    store.groups.append(_group())
+    store.contended = 99
+
+    assert await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1") is None
+    assert store.calls.count("save") == 3
+
+
+async def test_a_historical_summary_withholds_the_outcome_of_the_change() -> None:
+    """Impact and recovery are what is known now, not properties of the past.
+
+    A change that has since recovered would otherwise read as recovered at an
+    instant days before it did.
+    """
+    store = _MemoryChangeGroupStore()
+    group = _group()
+    group.impact_severity = ImpactSeverity.CRITICAL
+    group.recovery_state = RecoveryState.RECOVERED
+    group.degraded_metrics = ["capacity"]
+    group.summary = "Capacity fell 29 points and returned to baseline."
+    group.monitoring_session_ids = [PydanticObjectId()]
+    store.groups.append(group)
+    service = ChangeGroupService(store)
+
+    [live] = await service.summarize(ORGANIZATION_ID, [group], viewer_email="j.mercer@northwind.example")
+    [past] = await service.summarize(
+        ORGANIZATION_ID, [group], viewer_email="j.mercer@northwind.example", historical=True
+    )
+
+    assert live.impact_severity is ImpactSeverity.CRITICAL
+    assert live.impact_known is True
+    # The record of the change survives; the verdict on it does not.
+    assert past.title == live.title
+    assert past.occurred_at == live.occurred_at
+    assert past.object_count == live.object_count
+    assert past.impact_known is False
+    assert past.impact_severity is ImpactSeverity.NONE
+    assert past.recovery_state is RecoveryState.NOT_APPLICABLE
+    assert (past.impact_label, past.summary) == ("", "")
+    assert past.degraded_metrics == []
+    assert past.metrics == []
+    assert past.monitoring_session_ids == []
+
+
 async def test_rebuild_is_idempotent_under_duplicate_and_out_of_order_events() -> None:
     store = _critical_fixture()
     notifier = _RecordingNotifier()
@@ -638,7 +710,10 @@ async def test_rebuild_is_idempotent_under_duplicate_and_out_of_order_events() -
 
     first = await projector.rebuild(ORGANIZATION_ID, "audit-1")
     assert first is not None
-    snapshot = first.model_dump(exclude={"projection_updated_at", "updated_at"})
+    # The revision changes with every write by design; the projected content
+    # is what has to be identical however often the sources are replayed.
+    volatile = {"projection_updated_at", "updated_at", "projection_revision"}
+    snapshot = first.model_dump(exclude=volatile)
 
     # A duplicate delivery of the same audit event: the same version rows arrive
     # again, out of order, and one device event replays.
@@ -651,8 +726,8 @@ async def test_rebuild_is_idempotent_under_duplicate_and_out_of_order_events() -
 
     assert second is not None
     assert third is not None
-    assert second.model_dump(exclude={"projection_updated_at", "updated_at"}) == snapshot
-    assert third.model_dump(exclude={"projection_updated_at", "updated_at"}) == snapshot
+    assert second.model_dump(exclude=volatile) == snapshot
+    assert third.model_dump(exclude=volatile) == snapshot
     assert len(second.changed_objects) == 2
     assert len(second.affected_devices) == 6
     # The notification service deduplicates, but the projector must not stop
