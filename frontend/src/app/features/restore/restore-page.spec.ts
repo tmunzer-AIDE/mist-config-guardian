@@ -1072,6 +1072,39 @@ describe('RestorePage', () => {
     expect(all('.step-button--on')[0].textContent).toContain('2 ·');
   });
 
+  it('forgets the previous organization\'s filters, rows and rail when switching', async () => {
+    // A site filter names a site of the organization it was set under; the
+    // rows, facets and rail were read from it. None may survive the switch,
+    // and the new organization's first read must carry none of them.
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE]), [operation({ id: 'op-old', status: 'completed' })]);
+    button('Site')?.click();
+    await nextTargets(targetList([SEA_VOICE], 1));
+    const select = element().querySelector<HTMLSelectElement>('.site-select');
+    select!.value = 'site-1';
+    select!.dispatchEvent(new Event('change'));
+    const scoped = await nextTargets(targetList([SEA_VOICE], 1));
+    expect(scoped.request.params.get('site_id')).toBe('site-1');
+    expect(all('.target').length).toBe(1);
+    expect(all('.rail .entry').length).toBe(1);
+
+    organizationStub.selected.set({ id: 'org-2', name: 'Contoso', status: 'verified' });
+    fixture.detectChanges();
+    await tick();
+
+    // Cleared before the new organization answers, not after.
+    expect(all('.target').length).toBe(0);
+    expect(all('.rail .entry').length).toBe(0);
+    const read = httpMock.expectOne((request) => request.url === '/api/v1/organizations/org-2/restores/targets');
+    expect(read.request.params.has('site_id')).toBe(false);
+    expect(read.request.params.get('scope')).toBe('all');
+    read.flush(targetList([NW_CORP]));
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores')
+      .flush({ items: [], total: 0 });
+    await settle();
+    expect(all('.target').length).toBe(1);
+  });
+
   it('never lets one poll overlap the next', async () => {
     // A read slower than the interval would otherwise race the following one,
     // and the older answer could land last and turn a completed run back.

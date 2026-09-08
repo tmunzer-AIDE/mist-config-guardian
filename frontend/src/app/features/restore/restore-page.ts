@@ -184,6 +184,8 @@ export class RestorePage {
   /** Their loading and error state is scoped too: a superseded read reports nothing. */
   private targetsScope = new AbortController();
   private railScope = new AbortController();
+  /** The organization the filters, rows, facets and rail belong to. */
+  private filtersFor: string | null = null;
   /** The poll tick in flight, so the interval cannot overlap its own reads. */
   private pollInFlight: AbortSignal | null = null;
 
@@ -254,6 +256,14 @@ export class RestorePage {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       this.organizations.revision();
+      if (organizationId && this.filtersFor !== null && this.filtersFor !== organizationId) {
+        // A site or type filter names something in the organization it was set
+        // under, and the rows, facets and rail were read from it. They go
+        // before this read is built, so the read carries none of them and a
+        // failure cannot leave the previous organization's rows on screen.
+        untracked(() => this.forgetOrganization());
+      }
+      this.filtersFor = organizationId ?? this.filtersFor;
       const query: RestoreTargetQuery = {
         scope: this.scope(),
         siteId: this.siteId() || undefined,
@@ -420,6 +430,21 @@ export class RestorePage {
     this.selection.abort();
     this.selection = new AbortController();
     return this.selection.signal;
+  }
+
+  /** Everything read from, or set for, the previous organization. */
+  private forgetOrganization(): void {
+    this.scope.set('all');
+    this.siteId.set('');
+    this.objectType.set('');
+    this.query.set('');
+    this.targets.set([]);
+    this.matched.set(0);
+    this.catalogTotal.set(0);
+    this.typeFacets.set([]);
+    this.siteFacets.set([]);
+    this.labels.set({});
+    this.history.set([]);
   }
 
   /** Back to an empty picker: the operation, the selection, the change group. */
