@@ -169,13 +169,20 @@ export class RestorePage {
   /** The organization and revision the rail was last read for. */
   private loadedRail: string | null = null;
   /**
-   * Bumped whenever what the page shows changes hands: a link, an operation, a
-   * restart, an organization. A Promise cannot be cancelled, so every async
-   * path captures this before it awaits and drops its result if it has moved.
+   * The selection on screen, as something async work can be scoped to.
+   *
+   * It is replaced whenever what the page shows changes hands: a link, an
+   * operation, a restart, an organization. A Promise cannot be cancelled, so
+   * every async path captures the signal before it awaits and drops its result
+   * if the signal has been aborted since; the shell's loading and error state
+   * are scoped to it as well.
    */
-  private generation = 0;
-  /** Target reads are sequenced on their own: a filter change is not a new selection. */
+  private selection = new AbortController();
+  /** Target and rail reads are sequenced on their own: a filter change is not a new selection. */
   private targetsRequest = 0;
+  private historyRequest = 0;
+  /** The poll tick in flight, so the interval cannot overlap its own reads. */
+  private pollInFlight: AbortSignal | null = null;
 
   protected readonly readOnly = computed(
     () => this.time.isHistorical() || !this.auth.can('operator'),
@@ -344,7 +351,7 @@ export class RestorePage {
     await this.ui.track('Loading recent restores', () => this.loadHistory(organizationId));
   }
 
-  private async applyLink(organizationId: string, link: DeepLink, token: number): Promise<void> {
+  private async applyLink(organizationId: string, link: DeepLink, token: AbortSignal): Promise<void> {
     const versionIds = link.versions
       .split(',')
       .map((value) => value.trim())
@@ -354,8 +361,10 @@ export class RestorePage {
     }
 
     if (link.changeGroup) {
-      await this.ui.track('Loading the change group', () =>
-        this.applyChangeGroup(organizationId, link.changeGroup, token),
+      await this.ui.track(
+        'Loading the change group',
+        () => this.applyChangeGroup(organizationId, link.changeGroup, token),
+        token,
       );
       if (this.stale(token)) {
         return;
@@ -374,12 +383,12 @@ export class RestorePage {
     }
   }
 
-  private stale(token: number): boolean {
-    return token !== this.generation;
+  private stale(signal: AbortSignal): boolean {
+    return signal.aborted;
   }
 
-  /** Forget the operation on screen and everything derived from it. Returns the new generation. */
-  private clearOperation(): number {
+  /** Forget the operation on screen and everything derived from it. Returns the new scope. */
+  private clearOperation(): AbortSignal {
     this.stopPolling();
     this.activeOperation.set(null);
     this.verification.set(null);
@@ -389,11 +398,13 @@ export class RestorePage {
     if (this.currentStep() !== 'targets') {
       this.currentStep.set('targets');
     }
-    return ++this.generation;
+    this.selection.abort();
+    this.selection = new AbortController();
+    return this.selection.signal;
   }
 
   /** Back to an empty picker: the operation, the selection, the change group. */
-  private reset(): number {
+  private reset(): AbortSignal {
     const token = this.clearOperation();
     this.selectedIds.set([]);
     this.changeGroupTitle.set(null);
@@ -423,7 +434,7 @@ export class RestorePage {
    * picker offers the newest version of every object. The selection is therefore
    * carried by id, with the label taken from the group's own object list.
    */
-  private async applyChangeGroup(organizationId: string, groupId: string, token: number): Promise<void> {
+  private async applyChangeGroup(organizationId: string, groupId: string, token: AbortSignal): Promise<void> {
     const detail = await this.changeGroups.load(organizationId, groupId);
     if (this.stale(token)) {
       return;
@@ -464,9 +475,12 @@ export class RestorePage {
   }
 
   private async loadHistory(organizationId: string): Promise<void> {
+    const request = ++this.historyRequest;
     const response = await this.restores.list(organizationId, 0, 10);
-    // A slow answer for a previous organization must not fill this one's rail.
-    if (organizationId !== this.organizations.selected()?.id) {
+    // The initial read, a refresh and the reload after a run can all be in
+    // flight. Only the latest describes the rail on screen; a slow answer for
+    // a previous organization is older by construction.
+    if (request !== this.historyRequest) {
       return;
     }
     this.history.set(response.items ?? []);
@@ -526,6 +540,12 @@ export class RestorePage {
     if (mode === this.mode()) {
       return;
     }
+    // A plan can only take a new mode by being rebuilt from its versions. One
+    // with no versions to rebuild from keeps its mode: the old action list —
+    // deletes included — must not execute under a label it no longer matches.
+    if (this.activeOperation() && this.currentStep() !== 'targets' && this.selectedIds().length === 0) {
+      return;
+    }
     this.mode.set(mode);
     // The plan is mode-specific: an exact plan may delete objects a
     // non-destructive plan leaves alone, so the old action list cannot stand.
@@ -543,6 +563,16 @@ export class RestorePage {
 
   private invalidatePlan(): void {
     this.clearOperation();
+    this.forgetLink();
+  }
+
+  /** The link described a selection the user has now changed; a refresh must not restore it. */
+  private forgetLink(): void {
+    const organizationId = this.organizations.selected()?.id;
+    if (!organizationId || this.appliedLink === linkKey(organizationId, EMPTY_LINK)) {
+      return;
+    }
+    this.canonicalize(organizationId, null, true);
   }
 
   // ---- step 2 -------------------------------------------------------------
@@ -553,10 +583,12 @@ export class RestorePage {
     if (!organizationId || versionIds.length === 0 || this.readOnly() || this.busy()) {
       return;
     }
-    const token = this.generation;
+    const token = this.selection.signal;
     this.busy.set(true);
-    const operation = await this.ui.track('Building a side-effect-free plan', () =>
-      this.restores.createPlan(organizationId, versionIds, this.mode(), this.includeDependencies()),
+    const operation = await this.ui.track(
+      'Building a side-effect-free plan',
+      () => this.restores.createPlan(organizationId, versionIds, this.mode(), this.includeDependencies()),
+      token,
     );
     this.busy.set(false);
     if (!operation || this.stale(token)) {
@@ -591,10 +623,12 @@ export class RestorePage {
     if (this.blockedByPreflight() || this.blockedByApproval()) {
       return;
     }
-    const generation = this.generation;
+    const generation = this.selection.signal;
     this.busy.set(true);
-    const queued = await this.ui.track('Authorizing the restore', () =>
-      this.restores.execute(organizationId, operation.id, token),
+    const queued = await this.ui.track(
+      'Authorizing the restore',
+      () => this.restores.execute(organizationId, operation.id, token),
+      generation,
     );
     this.busy.set(false);
     if (!queued || this.stale(generation)) {
@@ -616,10 +650,12 @@ export class RestorePage {
     if (!organizationId || !operation || this.readOnly() || this.busy()) {
       return;
     }
-    const token = this.generation;
+    const token = this.selection.signal;
     this.busy.set(true);
-    const approval = await this.ui.track('Requesting approval', () =>
-      this.restores.requestApproval(organizationId, operation.id),
+    const approval = await this.ui.track(
+      'Requesting approval',
+      () => this.restores.requestApproval(organizationId, operation.id),
+      token,
     );
     this.busy.set(false);
     if (approval && !this.stale(token)) {
@@ -634,10 +670,12 @@ export class RestorePage {
     if (!organizationId || !operation || !approval || this.busy()) {
       return;
     }
-    const token = this.generation;
+    const token = this.selection.signal;
     this.busy.set(true);
-    const fresh = await this.ui.track('Checking the approval', () =>
-      this.restores.approval(organizationId, approval.id),
+    const fresh = await this.ui.track(
+      'Checking the approval',
+      () => this.restores.approval(organizationId, approval.id),
+      token,
     );
     this.busy.set(false);
     if (fresh && !this.stale(token)) {
@@ -657,8 +695,8 @@ export class RestorePage {
     this.polling.set(true);
     // Each tick carries the generation it was started under. Clearing the
     // interval does not reach a read already in flight; the token does.
-    const token = this.generation;
-    this.pollTimer = setInterval(() => void this.poll(token), POLL_INTERVAL_MS);
+    const selection = this.selection.signal;
+    this.pollTimer = setInterval(() => void this.poll(selection), POLL_INTERVAL_MS);
   }
 
   private stopPolling(): void {
@@ -669,12 +707,29 @@ export class RestorePage {
     this.polling.set(false);
   }
 
-  private async poll(token: number): Promise<void> {
+  private async poll(token: AbortSignal): Promise<void> {
     // A stale tick belongs to an operation no longer shown. It must not touch
     // the timer either: whoever moved on may have started a new one.
     if (this.stale(token)) {
       return;
     }
+    // A read slower than the interval would otherwise overlap the next tick,
+    // and the older answer could land last and turn a completed run back into
+    // a running one.
+    if (this.pollInFlight === token) {
+      return;
+    }
+    this.pollInFlight = token;
+    try {
+      await this.pollOnce(token);
+    } finally {
+      if (this.pollInFlight === token) {
+        this.pollInFlight = null;
+      }
+    }
+  }
+
+  private async pollOnce(token: AbortSignal): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
     const operation = this.activeOperation();
     if (!organizationId || !operation) {
@@ -708,7 +763,7 @@ export class RestorePage {
   }
 
   /** Read the post-run checks, which only a successful run records. */
-  private async afterRun(organizationId: string, operation: RestoreOperation, token: number): Promise<void> {
+  private async afterRun(organizationId: string, operation: RestoreOperation, token: AbortSignal): Promise<void> {
     if (operation.status !== 'completed' && operation.status !== 'compensated') {
       return;
     }
@@ -740,10 +795,12 @@ export class RestorePage {
     if (!organizationId || !operation || this.busy()) {
       return;
     }
-    const token = this.generation;
+    const token = this.selection.signal;
     this.busy.set(true);
-    const next = await this.ui.track('Refreshing the restore', () =>
-      this.restores.get(organizationId, operation.id),
+    const next = await this.ui.track(
+      'Refreshing the restore',
+      () => this.restores.get(organizationId, operation.id),
+      token,
     );
     this.busy.set(false);
     if (!next || this.stale(token)) {
@@ -763,10 +820,12 @@ export class RestorePage {
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
       return;
     }
-    const token = this.generation;
+    const token = this.selection.signal;
     this.busy.set(true);
-    const plan = await this.ui.track('Planning compensation', () =>
-      this.restores.planCompensation(organizationId, operation.id),
+    const plan = await this.ui.track(
+      'Planning compensation',
+      () => this.restores.planCompensation(organizationId, operation.id),
+      token,
     );
     this.busy.set(false);
     if (plan && !this.stale(token)) {
@@ -781,10 +840,12 @@ export class RestorePage {
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
       return;
     }
-    const generation = this.generation;
+    const generation = this.selection.signal;
     this.busy.set(true);
-    const queued = await this.ui.track('Running compensation', () =>
-      this.restores.executeCompensation(organizationId, operation.id, token),
+    const queued = await this.ui.track(
+      'Running compensation',
+      () => this.restores.executeCompensation(organizationId, operation.id, token),
+      generation,
     );
     this.busy.set(false);
     if (!queued || this.stale(generation)) {
@@ -842,6 +903,13 @@ export class RestorePage {
     return operation.status !== 'planned';
   }
 
+  private seedSelection(operation: RestoreOperation): void {
+    const actions = operation.actions ?? [];
+    const versionIds = [...new Set(actions.map((action) => action.source_version_id).filter(Boolean))];
+    this.selectedIds.set(versionIds);
+    this.rememberLabels(actions.map((action) => [action.source_version_id, action.object_name]));
+  }
+
   /** The rail is a navigation: the URL names the operation, and the page follows it. */
   protected async pickOperation(operationId: string): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
@@ -865,8 +933,10 @@ export class RestorePage {
       return false;
     }
     const token = this.clearOperation();
-    const operation = await this.ui.track('Loading the restore operation', () =>
-      this.restores.get(organizationId, operationId),
+    const operation = await this.ui.track(
+      'Loading the restore operation',
+      () => this.restores.get(organizationId, operationId),
+      token,
     );
     if (!operation || this.stale(token)) {
       return false;
@@ -874,6 +944,10 @@ export class RestorePage {
     this.activeOperation.set(operation);
     this.mode.set(operation.mode);
     this.includeDependencies.set(operation.include_dependencies);
+    // The plan's inputs come back with it: changing the mode rebuilds it from
+    // the same versions, and "back to targets" shows what it restores rather
+    // than an empty picker.
+    this.seedSelection(operation);
     if (isRestoreInFlight(operation.status) || isRestoreTerminal(operation.status)) {
       this.currentStep.set('execute');
       if (isRestoreInFlight(operation.status)) {

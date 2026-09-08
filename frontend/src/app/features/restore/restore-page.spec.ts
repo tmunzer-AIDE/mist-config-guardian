@@ -886,6 +886,91 @@ describe('RestorePage', () => {
     httpMock.expectNone(`${OPERATIONS_URL}/op-2`);
   });
 
+  it('rebuilds a reopened plan from its own versions when the mode changes', async () => {
+    // A plan opened from the rail or a link has no picker selection behind it.
+    // Changing its mode must still rebuild it, not relabel the old action list.
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'planned', mode: 'non_destructive' }));
+    await settle();
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
+
+    all<HTMLButtonElement>('.step-button')[2].click();
+    await settle();
+    const exact = element().querySelector<HTMLInputElement>('input[name="authorize-mode"][value="exact"]')!;
+    exact.checked = true;
+    exact.dispatchEvent(new Event('change'));
+    await tick();
+
+    const rebuild = httpMock.expectOne((request) => request.url === PLANS_URL);
+    expect(JSON.stringify(rebuild.request.body)).toContain('v-corp');
+    expect(JSON.stringify(rebuild.request.body)).toContain('exact');
+    rebuild.flush(operation({ id: 'op-2', mode: 'exact' }));
+    await settle();
+
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
+    expect(navigations.at(-1)).toEqual({
+      commands: ['/restore'],
+      extras: { queryParams: { operation: 'op-2' }, replaceUrl: true },
+    });
+  });
+
+  it('never lets one poll overlap the next', async () => {
+    // A read slower than the interval would otherwise race the following one,
+    // and the older answer could land last and turn a completed run back.
+    await openRunning();
+
+    vi.advanceTimersByTime(2000);
+    await tick();
+    vi.advanceTimersByTime(2000);
+    await tick();
+
+    const reads = httpMock.match(`${OPERATIONS_URL}/op-1`);
+    expect(reads.length).toBe(1);
+    reads[0].flush(operation({ status: 'running' }));
+    await settle();
+    expect(text()).toContain('RUNNING');
+  });
+
+  it('keeps the rail on its latest answer whatever order answers arrive in', async () => {
+    await boot();
+
+    organizationStub.revision.update((value) => value + 1);
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    const older = httpMock.expectOne((request) => request.url === OPERATIONS_URL);
+    organizationStub.revision.update((value) => value + 1);
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    const [newer] = httpMock.match((request) => request.url === OPERATIONS_URL);
+
+    newer.flush({ items: [operation({ id: 'op-new', status: 'completed' })], total: 1 });
+    await settle();
+    older.flush({ items: [], total: 0 });
+    await settle();
+
+    expect(all('.rail .entry').length).toBe(1);
+  });
+
+  it('forgets a versions link once the selection it described is edited', async () => {
+    // A refresh must not bring back a selection the user has since changed.
+    fixture.componentRef.setInput('versions', 'v-corp');
+    await boot(targetList([NW_CORP, RF_DENSE]));
+    expect(all('.pill').length).toBe(1);
+
+    element().querySelector<HTMLButtonElement>('.pill-remove')!.click();
+    await settle();
+
+    expect(all('.pill').length).toBe(0);
+    expect(navigations).toEqual([{ commands: ['/restore'], extras: { queryParams: {}, replaceUrl: true } }]);
+  });
+
   it('offers compensation for a failed run and names what it will reverse', async () => {
     fixture.componentRef.setInput('operation', 'op-1');
     fixture.detectChanges();

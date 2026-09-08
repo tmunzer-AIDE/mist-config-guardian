@@ -29,6 +29,36 @@ describe('UiStateService', () => {
     expect(ui.error()?.title).toBe('You are not authorized to perform this action');
   });
 
+  it('stops counting abandoned work at once and keeps its failure to itself', async () => {
+    // The page moved on while the request was in flight: the skeleton must not
+    // wait for an answer nobody wants, and that answer's error is not news.
+    const controller = new AbortController();
+    let reject: (cause: unknown) => void = () => undefined;
+    const pending = ui.track(
+      'Loading the restore operation',
+      () => new Promise<never>((_resolve, fail) => (reject = fail)),
+      controller.signal,
+    );
+    expect(ui.loading()).toBe(true);
+
+    controller.abort();
+    expect(ui.loading()).toBe(false);
+
+    reject(new HttpErrorResponse({ status: 404, error: { detail: 'Restore operation not found' } }));
+    expect(await pending).toBeNull();
+    expect(ui.error()).toBeNull();
+  });
+
+  it('does not start work whose selection is already gone', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const work = vi.fn(() => Promise.resolve('value'));
+
+    expect(await ui.track('Loading', work, controller.signal)).toBeNull();
+    expect(work).not.toHaveBeenCalled();
+    expect(ui.loading()).toBe(false);
+  });
+
   it('reports an unreachable server distinctly', () => {
     ui.fail(new HttpErrorResponse({ status: 0 }), 'Loading overview');
     expect(ui.error()?.title).toBe('The application server is unreachable');

@@ -38,16 +38,38 @@ export class UiStateService {
     }
   }
 
-  /** Run an async unit of work with the shell skeleton shown. */
-  async track<T>(label: string, work: () => Promise<T>): Promise<T | null> {
+  /**
+   * Run an async unit of work with the shell skeleton shown.
+   *
+   * `signal` marks the work as belonging to a selection the page can move on
+   * from. Once it is aborted the work stops holding the skeleton up, and its
+   * failure, if it comes, raises no banner: it is about something the user is
+   * no longer looking at. The promise itself cannot be cancelled, so the
+   * caller still has to ignore its result.
+   */
+  async track<T>(label: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T | null> {
+    if (signal?.aborted) {
+      return null;
+    }
+    let counted = true;
+    const release = (): void => {
+      if (counted) {
+        counted = false;
+        this.end();
+      }
+    };
+    signal?.addEventListener('abort', release, { once: true });
     this.begin(label);
     try {
       return await work();
     } catch (cause) {
-      this.fail(cause, label);
+      if (!signal?.aborted) {
+        this.fail(cause, label);
+      }
       return null;
     } finally {
-      this.end();
+      signal?.removeEventListener('abort', release);
+      release();
     }
   }
 
