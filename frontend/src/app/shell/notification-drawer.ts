@@ -1,6 +1,17 @@
-import { ChangeDetectionStrategy, Component, computed, inject, output } from '@angular/core';
+import {
+  afterNextRender,
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  DestroyRef,
+  ElementRef,
+  inject,
+  output,
+  viewChild,
+} from '@angular/core';
 import { Router } from '@angular/router';
 
+import { rememberFocus, restoreFocus, trapTab } from '../core/focus';
 import { formatTime } from '../core/format';
 import { AppNotification, NotificationService } from '../core/notification.service';
 import { OrganizationContextService } from '../core/organization-context.service';
@@ -27,6 +38,17 @@ export class NotificationDrawer {
   private readonly router = inject(Router);
   private readonly organizations = inject(OrganizationContextService);
   protected readonly notifications = inject(NotificationService);
+
+  private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
+  /** Whatever had focus when the drawer opened — the bell, normally. */
+  private readonly opener = rememberFocus();
+
+  constructor() {
+    // The drawer declares itself modal, so it behaves as one: focus moves in
+    // when it opens, and goes back to the opener when it closes.
+    afterNextRender(() => this.panel().nativeElement.focus());
+    inject(DestroyRef).onDestroy(() => restoreFocus(this.opener));
+  }
 
   protected readonly rows = computed(() =>
     this.notifications.items().map((item) => ({
@@ -56,6 +78,7 @@ export class NotificationDrawer {
   }
 
   protected onKey(event: KeyboardEvent): void {
+    trapTab(event, this.panel().nativeElement);
     if (event.key === 'Escape') {
       this.closed.emit();
     }
