@@ -7,6 +7,7 @@ import { AuthService, CurrentUser } from './auth.service';
 import { NotificationService } from './notification.service';
 import { OrganizationContextService } from './organization-context.service';
 import { sessionInterceptor } from './session.interceptor';
+import { StepUpService } from './step-up.service';
 
 const USER: CurrentUser = {
   id: 'user-1',
@@ -170,5 +171,108 @@ describe('sessionInterceptor', () => {
 
     expect(auth.isAuthenticated()).toBe(true);
     expect(navigations).toEqual([]);
+  });
+
+  // ------------------------------------------------------------- step-up
+
+  const STEP_UP_DETAIL = 'Confirm your authenticator code again before continuing';
+
+  /** Let the promises the interceptor is waiting on settle. */
+  async function settle(): Promise<void> {
+    for (let turn = 0; turn < 8; turn += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it('collects a code and sends the refused request again', async () => {
+    auth.applyUser(USER);
+    const stepUp = TestBed.inject(StepUpService);
+    const url = '/api/v1/organizations';
+    const answered = new Promise((resolve) => http.post(url, {}).subscribe({ next: resolve, error: resolve }));
+
+    httpMock
+      .expectOne(url)
+      .flush({ detail: STEP_UP_DETAIL }, { status: 403, statusText: 'Forbidden' });
+    await settle();
+
+    // The session is still good; it just has not confirmed a code recently.
+    expect(stepUp.asking()).toBe(true);
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(navigations).toEqual([]);
+
+    const confirming = stepUp.submit('123456');
+    httpMock.expectOne('/api/v1/account/mfa/step-up').flush({
+      verified_at: '2026-09-08T12:00:00Z',
+      expires_at: '2026-09-08T12:10:00Z',
+    });
+    await confirming;
+    await settle();
+
+    // The request the person actually made is retried, not abandoned.
+    httpMock.expectOne(url).flush({ id: 'org-1' });
+    expect(await answered).toEqual({ id: 'org-1' });
+    expect(stepUp.asking()).toBe(false);
+  });
+
+  it('asks once when several requests are refused together', async () => {
+    auth.applyUser(USER);
+    const stepUp = TestBed.inject(StepUpService);
+    const first = new Promise((r) => http.post('/api/v1/ai/settings', {}).subscribe({ next: r, error: r }));
+    const second = new Promise((r) => http.post('/api/v1/organizations', {}).subscribe({ next: r, error: r }));
+
+    httpMock
+      .expectOne('/api/v1/ai/settings')
+      .flush({ detail: STEP_UP_DETAIL }, { status: 403, statusText: 'Forbidden' });
+    httpMock
+      .expectOne('/api/v1/organizations')
+      .flush({ detail: STEP_UP_DETAIL }, { status: 403, statusText: 'Forbidden' });
+    await settle();
+
+    expect(stepUp.asking()).toBe(true);
+
+    const confirming = stepUp.submit('123456');
+    httpMock.expectOne('/api/v1/account/mfa/step-up').flush({
+      verified_at: '2026-09-08T12:00:00Z',
+      expires_at: '2026-09-08T12:10:00Z',
+    });
+    await confirming;
+    await settle();
+
+    // One code, both requests continue.
+    httpMock.expectOne('/api/v1/ai/settings').flush({});
+    httpMock.expectOne('/api/v1/organizations').flush({});
+    await first;
+    await second;
+  });
+
+  it('gives the caller its refusal when the prompt is dismissed', async () => {
+    auth.applyUser(USER);
+    const stepUp = TestBed.inject(StepUpService);
+    const answered = request('/api/v1/organizations');
+
+    httpMock
+      .expectOne('/api/v1/organizations')
+      .flush({ detail: STEP_UP_DETAIL }, { status: 403, statusText: 'Forbidden' });
+    await settle();
+
+    stepUp.dismiss();
+
+    expect((await answered as { status: number }).status).toBe(403);
+  });
+
+  it('leaves other refusals alone', async () => {
+    // 403 is also how a role, a wrong password and a historical write are
+    // refused, and a code helps with none of them.
+    auth.applyUser(USER);
+    const stepUp = TestBed.inject(StepUpService);
+    const pending = request('/api/v1/organizations');
+
+    httpMock
+      .expectOne('/api/v1/organizations')
+      .flush({ detail: 'Administrator role required' }, { status: 403, statusText: 'Forbidden' });
+    await pending;
+    await settle();
+
+    expect(stepUp.asking()).toBe(false);
   });
 });

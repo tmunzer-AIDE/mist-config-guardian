@@ -15,13 +15,14 @@ import { AppHeader } from './shell/app-header';
 import { AppSidebar } from './shell/app-sidebar';
 import { AppTimeBar } from './shell/app-time-bar';
 import { NotificationDrawer } from './shell/notification-drawer';
+import { StepUpPrompt } from './shell/step-up-prompt';
 
 /** Pages that participate in point-in-time navigation. */
 const TIME_BAR_ROUTES = ['/', '/changes', '/history', '/impact'];
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, AppSidebar, AppHeader, AppTimeBar, NotificationDrawer],
+  imports: [RouterOutlet, AppSidebar, AppHeader, AppTimeBar, NotificationDrawer, StepUpPrompt],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './app.html',
   styleUrl: './app.scss',

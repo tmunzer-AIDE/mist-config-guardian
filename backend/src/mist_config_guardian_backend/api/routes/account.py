@@ -1,5 +1,6 @@
 """Signed-in account profile, password, MFA, passkey, and session endpoints."""
 
+from datetime import timedelta
 from typing import Annotated
 
 from beanie import PydanticObjectId
@@ -14,6 +15,8 @@ from mist_config_guardian_backend.schemas.account import (
     EmailChangeConfirmRequest,
     EmailChangeRequest,
     EmailChangeResponse,
+    MfaStepUpRequest,
+    MfaStepUpResponse,
     PasskeyListResponse,
     PasskeyRegistrationOptionsResponse,
     PasskeyRegistrationRequest,
@@ -304,6 +307,50 @@ async def confirm_totp(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await throttle.succeeded(scope)
     return RecoveryCodesResponse(recovery_codes=codes, generated_at=utc_now())
+
+
+@router.post("/mfa/step-up")
+async def step_up_mfa(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
+    request: Request,
+    payload: MfaStepUpRequest,
+    user: Annotated[User, Depends(require_viewer)],
+    mfa: Annotated[MfaService, Depends(get_mfa_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
+) -> MfaStepUpResponse:
+    """Renew this session's step-up so a sensitive action can proceed.
+
+    The actions that ask for a recent second factor are reached long after
+    signing in, and the window is short. Without this the only way to satisfy
+    them again was to sign out and back in, which is a worse answer to
+    "confirm it is still you" than asking for the code.
+    """
+    session = _current_session(request)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This request has no browser session to confirm",
+        )
+    if user.totp is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No authenticator application is enrolled",
+        )
+    scope = throttle.second_factor(_require_persisted(user))
+    await reserve_or_raise(throttle, throttle.address(request), scope)
+    if not await mfa.verify_second_factor(user, payload.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That code is not valid",
+        )
+    await throttle.succeeded(scope)
+    await sessions.mark_mfa_verified(session)
+    verified_at = session.mfa_verified_at or utc_now()
+    return MfaStepUpResponse(
+        verified_at=verified_at,
+        expires_at=verified_at + timedelta(minutes=settings.mfa_step_up_window_minutes),
+    )
 
 
 @router.delete("/totp")

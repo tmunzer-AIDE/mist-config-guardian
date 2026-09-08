@@ -119,6 +119,37 @@ class WebAuthnCredential(TimestampedModel, Document):
         ]
 
 
+async def consume_user_recovery_code(user: User, code_hash: str) -> bool:
+    """Spend one recovery code, or report that it was not there to spend.
+
+    The list is edited in the database, not replaced from a copy of it. Writing
+    the whole `totp` object back meant two codes redeemed at once each removed
+    their own from the same starting list, and the second write put the first
+    one back — a single-use code good twice. The same write also undid a
+    disable or a regeneration that landed in between, restoring an enrollment
+    or a set of codes their owner had just retired.
+
+    The stored digest is matched by the database rather than by
+    `hmac.compare_digest`. What that comparison protected against was learning
+    a stored hash by timing; the code itself is not recoverable from its
+    SHA-256, and it is codes, not hashes, that an attacker can submit.
+    """
+    now = utc_now()
+    result = await User.get_pymongo_collection().update_one(
+        {"_id": user.id, "totp.recovery_code_hashes": code_hash},
+        {
+            "$pull": {"totp.recovery_code_hashes": code_hash},
+            "$set": {"updated_at": now},
+        },
+    )
+    if getattr(result, "modified_count", 0) != 1:
+        return False
+    if user.totp is not None:
+        user.totp.recovery_code_hashes = [stored for stored in user.totp.recovery_code_hashes if stored != code_hash]
+    user.updated_at = now
+    return True
+
+
 async def write_user_fields(user: User, **fields: object) -> User:
     """Write named fields on a user, touching nothing else.
 

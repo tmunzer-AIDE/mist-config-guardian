@@ -27,12 +27,16 @@ from mist_config_guardian_backend.api.dependencies import (
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.challenge import LoginChallenge, PendingTotpEnrollment
-from mist_config_guardian_backend.models.user import TotpEnrollment, User, write_user_fields
+from mist_config_guardian_backend.models.user import (
+    TotpEnrollment,
+    User,
+    consume_user_recovery_code,
+    write_user_fields,
+)
 from mist_config_guardian_backend.security.auth import verify_password
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.security.totp import (
     RECOVERY_CODE_COUNT,
-    consume_recovery_code,
     generate_recovery_codes,
     generate_totp_secret,
     hash_recovery_code,
@@ -423,15 +427,15 @@ class MfaService:
         return verify_totp(self._decrypt(user.totp.encrypted_secret), code)
 
     async def consume_recovery_code(self, user: User, code: str) -> bool:
-        """Spend a single-use recovery code, removing it from the account."""
+        """Spend a single-use recovery code, removing it from the account.
+
+        The removal is a conditional edit of the stored list, so a code is
+        spent once however many requests present it together, and a disable or
+        a regeneration that lands first simply leaves nothing to spend.
+        """
         if user.totp is None:
             return False
-        remaining = consume_recovery_code(code, user.totp.recovery_code_hashes)
-        if remaining is None:
-            return False
-        user.totp.recovery_code_hashes = remaining
-        await write_user_fields(user, totp=user.totp)
-        return True
+        return await consume_user_recovery_code(user, hash_recovery_code(code))
 
     async def verify_second_factor(self, user: User, code: str) -> bool:
         """Accept either a valid authenticator code or an unused recovery code."""

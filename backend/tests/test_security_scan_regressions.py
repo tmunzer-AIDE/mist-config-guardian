@@ -12,8 +12,16 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.user import User, UserRole, UserStatus, write_user_fields
+from mist_config_guardian_backend.models.user import (
+    TotpEnrollment,
+    User,
+    UserRole,
+    UserStatus,
+    consume_user_recovery_code,
+    write_user_fields,
+)
 from mist_config_guardian_backend.schemas.auth import BootstrapAdminRequest
+from mist_config_guardian_backend.security.totp import hash_recovery_code
 from mist_config_guardian_backend.services.throttling import (
     MemoryThrottleStore,
     Scope,
@@ -247,3 +255,59 @@ async def test_accepting_an_invitation_persists_everything_it_changed(
     assert reloaded["display_name"] == "Sara Kaur"
     assert reloaded["password_changed_at"] is not None
     assert reloaded["status"] is UserStatus.ACTIVE
+
+
+# ------------------------------------------------------------- recovery codes
+
+
+def _enrolled(hashes: list[str]) -> User:
+    user = _user(role=UserRole.OPERATOR)
+    user.totp = TotpEnrollment(
+        encrypted_secret="v1:not-read-here",
+        confirmed_at=NOW,
+        recovery_code_hashes=list(hashes),
+    )
+    return user
+
+
+async def test_a_recovery_code_is_spent_once_however_many_requests_present_it(
+    user_writes: Any,
+) -> None:
+    """Two requests redeeming the same code must not both succeed.
+
+    Replacing the whole enrollment from a copy of it meant each removed its own
+    code from the same starting list, and the second write put the first one
+    back: a single-use code good twice.
+    """
+    spent = hash_recovery_code("ABCD-EFGH")
+    stored = _enrolled([spent, hash_recovery_code("ZZZZ-YYYY")])
+    user_writes.track(stored)
+    # Each request loads its own copy of the account, as two workers would.
+    first = stored.model_copy(deep=True)
+    second = stored.model_copy(deep=True)
+
+    assert await consume_user_recovery_code(first, spent) is True
+    assert await consume_user_recovery_code(second, spent) is False
+    assert stored.totp is not None
+    assert spent not in stored.totp.recovery_code_hashes
+
+
+async def test_spending_a_recovery_code_cannot_undo_a_disable_it_raced(
+    user_writes: Any,
+) -> None:
+    """The write that spends a code must not carry an enrollment back with it.
+
+    Someone turning the second factor off, while a recovery code was in flight,
+    had it turned back on by the losing request — along with the codes they had
+    just retired.
+    """
+    spent = hash_recovery_code("ABCD-EFGH")
+    stored = _enrolled([spent])
+    user_writes.track(stored)
+    in_flight = stored.model_copy(deep=True)
+
+    # The owner turns the authenticator off while the code is in flight.
+    await write_user_fields(stored, totp=None)
+
+    assert await consume_user_recovery_code(in_flight, spent) is False
+    assert stored.totp is None

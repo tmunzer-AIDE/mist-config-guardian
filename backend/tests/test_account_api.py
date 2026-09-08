@@ -34,7 +34,7 @@ def _settings() -> Settings:
 
 
 def _user() -> User:
-    return User.model_construct(
+    user = User.model_construct(
         id=PydanticObjectId(),
         email="operator@example.com",
         display_name="Operator",
@@ -46,6 +46,10 @@ def _user() -> User:
         password_changed_at=None,
         last_login_at=None,
     )
+    # Recovery codes are spent by a conditional write, so the collection double
+    # has to be able to decide the condition rather than accept every write.
+    User.get_pymongo_collection().track(user)
+    return user
 
 
 def _session(user: User) -> UserSession:
@@ -90,6 +94,14 @@ class _FakeSessions:
     ) -> int:
         self.revoke_all_calls.append((user_id, except_session_id))
         return len([s for s in self.sessions if s.id != except_session_id])
+
+    async def mark_mfa_verified(self, session: UserSession) -> None:
+        session.mfa_verified_at = utc_now()
+
+    def has_fresh_mfa(self, session: UserSession | None) -> bool:
+        if session is None or session.mfa_verified_at is None:
+            return False
+        return session.mfa_verified_at + timedelta(minutes=10) > utc_now()
 
 
 class _FakeQuery:
@@ -375,6 +387,71 @@ async def test_totp_enroll_then_confirm_returns_recovery_codes_once() -> None:
     assert secret not in confirmed.text
     assert user.totp.encrypted_secret not in confirmed.text
     assert again.status_code == 409
+
+
+async def test_a_stale_step_up_can_be_renewed_without_signing_out() -> None:
+    """The window is short and the actions behind it are reached long after signing in.
+
+    Without a way to confirm the code again, an enrolled administrator meeting
+    "confirm your authenticator code again" had only one way to comply: sign
+    out and sign back in.
+    """
+    app = create_app(_settings())
+    user = _user()
+    session = _session(user)
+    sessions = _FakeSessions([session])
+    app.dependency_overrides[require_viewer] = _signed_in(user, session)
+    app.dependency_overrides[get_session_service] = lambda: sessions
+
+    async with _client(app) as client:
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
+        secret = enrolled.json()["secret"]
+        await client.post("/api/v1/account/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
+        # The session signed in before the authenticator existed, so it has
+        # never stepped up.
+        session.mfa_verified_at = None
+        renewed = await client.post(
+            "/api/v1/account/mfa/step-up",
+            json={"code": pyotp.TOTP(secret).now()},
+        )
+
+    assert renewed.status_code == 200
+    assert sessions.has_fresh_mfa(session) is True
+    body = renewed.json()
+    assert body["expires_at"] > body["verified_at"]
+
+
+async def test_a_wrong_step_up_code_leaves_the_session_where_it_was() -> None:
+    app = create_app(_settings())
+    user = _user()
+    session = _session(user)
+    sessions = _FakeSessions([session])
+    app.dependency_overrides[require_viewer] = _signed_in(user, session)
+    app.dependency_overrides[get_session_service] = lambda: sessions
+
+    async with _client(app) as client:
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
+        secret = enrolled.json()["secret"]
+        await client.post("/api/v1/account/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
+        session.mfa_verified_at = None
+        refused = await client.post("/api/v1/account/mfa/step-up", json={"code": "000000"})
+
+    assert refused.status_code == 400
+    assert sessions.has_fresh_mfa(session) is False
+
+
+async def test_step_up_says_so_when_there_is_no_second_factor_to_confirm() -> None:
+    """An account without an authenticator is never asked to step up."""
+    app = create_app(_settings())
+    user = _user()
+    session = _session(user)
+    app.dependency_overrides[require_viewer] = _signed_in(user, session)
+    app.dependency_overrides[get_session_service] = lambda: _FakeSessions([session])
+
+    async with _client(app) as client:
+        response = await client.post("/api/v1/account/mfa/step-up", json={"code": "000000"})
+
+    assert response.status_code == 409
 
 
 async def test_totp_confirm_rejects_a_wrong_code() -> None:

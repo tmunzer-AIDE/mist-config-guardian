@@ -1,11 +1,12 @@
 import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { catchError, throwError } from 'rxjs';
+import { catchError, from, switchMap, throwError } from 'rxjs';
 
 import { readCookie } from './api';
 import { AuthService } from './auth.service';
 import { SessionResetService } from './session-reset.service';
+import { StepUpService } from './step-up.service';
 import { TimeContextService } from './time-context.service';
 
 const CSRF_COOKIE = 'cg_csrf';
@@ -22,6 +23,25 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * the redirect target itself calls them — could loop.
  */
 const AUTH_ENDPOINTS = /^\/api\/v\d+\/auth\//;
+
+/**
+ * The API's answer when a session's step-up has gone stale.
+ *
+ * Matched on the detail rather than the status, because 403 is also how the
+ * API refuses a role, a wrong password, and a write during historical
+ * browsing — none of which a code would help with.
+ */
+const STEP_UP_DETAIL = 'Confirm your authenticator code again before continuing';
+const STEP_UP_ENDPOINT = /^\/api\/v\d+\/account\/mfa\/step-up$/;
+
+function needsStepUp(cause: unknown, url: string): boolean {
+  return (
+    cause instanceof HttpErrorResponse &&
+    cause.status === 403 &&
+    !STEP_UP_ENDPOINT.test(url) &&
+    (cause.error as { detail?: unknown } | null)?.detail === STEP_UP_DETAIL
+  );
+}
 
 /**
  * Attach the session cookie, the double-submit CSRF token, and the historical
@@ -55,8 +75,19 @@ export const sessionInterceptor: HttpInterceptorFn = (request, next) => {
   // would throw the new session out on the old one's behalf.
   const issuedBy = auth.session();
 
-  return next(request.clone({ withCredentials: true, setHeaders: headers })).pipe(
+  const stepUp = inject(StepUpService);
+  const sent = request.clone({ withCredentials: true, setHeaders: headers });
+
+  return next(sent).pipe(
     catchError((cause: unknown) => {
+      // The session is still valid; it just has not confirmed a second factor
+      // recently enough for what was asked. Collect the code and send the
+      // request again, once — a second refusal is the caller's to report.
+      if (needsStepUp(cause, request.url)) {
+        return from(stepUp.request()).pipe(
+          switchMap((renewed) => (renewed ? next(sent) : throwError(() => cause))),
+        );
+      }
       // The server says this session is gone — revoked from another device,
       // expired, or signed out elsewhere. Staying in the authenticated shell
       // would leave every page failing with no way out, so the browser agrees

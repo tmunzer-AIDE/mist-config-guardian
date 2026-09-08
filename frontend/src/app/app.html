@@ -60,6 +60,9 @@
     @if (drawerOpen()) {
       <app-notification-drawer (closed)="drawerOpen.set(false)" />
     }
+
+    <!-- Raised by the interceptor, from wherever the blocked request came. -->
+    <app-step-up-prompt />
   </div>
 } @else {
   <router-outlet />

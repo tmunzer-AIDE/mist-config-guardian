@@ -179,6 +179,19 @@ class RecoveryCodesResponse(BaseModel):
     generated_at: datetime
 
 
+class MfaStepUpRequest(BaseModel):
+    """An authenticator or recovery code that renews a session's step-up."""
+
+    code: str = Field(min_length=1, max_length=32)
+
+
+class MfaStepUpResponse(BaseModel):
+    """When the renewed step-up stops counting as recent."""
+
+    verified_at: datetime
+    expires_at: datetime
+
+
 class MfaStatusResponse(BaseModel):
     """Whether an authenticator is enrolled and how many codes remain."""
 

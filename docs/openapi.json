@@ -2037,6 +2037,43 @@
         "title": "MfaLoginRequest",
         "type": "object"
       },
+      "MfaStepUpRequest": {
+        "description": "An authenticator or recovery code that renews a session's step-up.",
+        "properties": {
+          "code": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "MfaStepUpRequest",
+        "type": "object"
+      },
+      "MfaStepUpResponse": {
+        "description": "When the renewed step-up stops counting as recent.",
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "verified_at": {
+            "format": "date-time",
+            "title": "Verified At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verified_at",
+          "expires_at"
+        ],
+        "title": "MfaStepUpResponse",
+        "type": "object"
+      },
       "MistCloudRegion": {
         "description": "Supported Mist API cloud regions.",
         "enum": [
@@ -5426,6 +5463,57 @@
           }
         ],
         "summary": "Confirm Email Change",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/api/v1/account/mfa/step-up": {
+      "post": {
+        "description": "Renew this session's step-up so a sensitive action can proceed.\n\nThe actions that ask for a recent second factor are reached long after\nsigning in, and the window is short. Without this the only way to satisfy\nthem again was to sign out and back in, which is a worse answer to\n\"confirm it is still you\" than asking for the code.",
+        "operationId": "step_up_mfa_api_v1_account_mfa_step_up_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaStepUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaStepUpResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Step Up Mfa",
         "tags": [
           "Account"
         ]

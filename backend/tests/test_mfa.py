@@ -60,7 +60,7 @@ def _settings() -> Settings:
 
 
 def _user() -> User:
-    return User.model_construct(
+    user = User.model_construct(
         id=PydanticObjectId(),
         email="operator@example.com",
         display_name="Operator",
@@ -69,6 +69,10 @@ def _user() -> User:
         is_active=True,
         totp=None,
     )
+    # Recovery codes are spent by a conditional write, so the collection double
+    # has to be able to decide the condition rather than accept every write.
+    User.get_pymongo_collection().track(user)
+    return user
 
 
 def _service(settings: Settings | None = None) -> MfaService:
