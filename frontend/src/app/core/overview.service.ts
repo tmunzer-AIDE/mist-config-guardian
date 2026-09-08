@@ -3,6 +3,7 @@ import { inject, Injectable, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { orgPath } from './api';
+import { ScopedState } from './scoped-state';
 import { ChangeGroupSummary } from './change-group.model';
 import { TimeRange } from './time-context.service';
 
@@ -62,13 +63,6 @@ function scopeKey(organizationId: string, range: TimeRange, asOf: Date | null): 
   return `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
 }
 
-/** A badge writer's right to write: what it read, when, and in what order. */
-interface BadgeClaim {
-  scope: string;
-  epoch: number;
-  sequence: number;
-}
-
 /** The Overview page's purpose-built read model, plus the shell's nav badge. */
 @Injectable({ providedIn: 'root' })
 export class OverviewService {
@@ -78,70 +72,31 @@ export class OverviewService {
   /** Change groups with unrecovered impact — drives the sidebar Changes badge. */
   readonly unrecovered = signal(0);
 
-  // Answers arrive in any order; only the latest request describes the
-  // organization and range on screen. A slow answer for a previous
-  // organization must not overwrite the current one.
-  private loadRequest = 0;
-  /** The scope the read model on screen describes. */
-  private modelScope = '';
-
   /**
-   * What the badge currently describes, and how many times it has been
-   * invalidated.
-   *
-   * The badge has two writers — the full read carries a count, and the shell
-   * reads counts alone — and on the Overview route both run for the same
-   * organization, window and instant. Three things decide whether an answer
-   * may be written, and each is needed:
-   *
-   * - the epoch, so a clear stops everything already in flight;
-   * - the scope, so an answer for an organization, window or instant nobody
-   *   is looking at any more is refused;
-   * - the order, because two successful answers for the same live scope are
-   *   observations at different moments, not the same fact twice: the count
-   *   moves, and an older reading must not revert a newer one.
-   *
-   * Only a written answer advances the order. A failure says nothing about
-   * the count, so it leaves the last reading standing rather than making
-   * everything before it look old.
+   * The read model and the badge each describe one scope at a time, and are
+   * written by different requests: the full read fills both, while the shell
+   * reads counts alone. Both follow the same rule — see `ScopedState` — and
+   * they keep it separately, because a badge cleared on a scrub says nothing
+   * about the model, and a model replaced on a page change says nothing about
+   * the badge.
    */
-  private badgeScope = '';
-  private badgeEpoch = 0;
-  private badgeIssued = 0;
-  private badgeApplied = 0;
-
-  /** Take the badge for a scope, and return the claim an answer must still hold. */
-  private claimBadge(organizationId: string, range: TimeRange, asOf: Date | null): BadgeClaim {
-    this.badgeScope = scopeKey(organizationId, range, asOf);
-    return { scope: this.badgeScope, epoch: this.badgeEpoch, sequence: ++this.badgeIssued };
-  }
-
-  /** Write a count if its claim still holds, and record that it is the reading shown. */
-  private writeBadge(claim: BadgeClaim, unrecovered: number): void {
-    if (claim.epoch !== this.badgeEpoch || claim.scope !== this.badgeScope) {
-      return;
-    }
-    if (claim.sequence <= this.badgeApplied) {
-      return;
-    }
-    this.badgeApplied = claim.sequence;
-    this.unrecovered.set(unrecovered);
-  }
+  private readonly model = new ScopedState();
+  private readonly badge = new ScopedState();
 
   async load(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<OrganizationOverview> {
     const scope = scopeKey(organizationId, range, asOf);
-    if (scope !== this.modelScope) {
-      // A replacement, not a refresh. What is on screen describes another
-      // organization, window or instant, and the shell only hides it while the
-      // read is in flight: after a failure the skeleton goes and it would be
-      // visible again — today's safety net, approvals and failed restores
-      // sitting under a historical banner. A refresh of the same scope keeps
-      // its last good model, which a failure does not invalidate.
-      this.modelScope = scope;
+    // A replacement, not a refresh. What is on screen describes another
+    // organization, window or instant, and the shell only hides it while the
+    // read is in flight: after a failure the skeleton goes and it would be
+    // visible again — today's safety net, approvals and failed restores
+    // sitting under a historical banner. A refresh of the same scope keeps its
+    // last good model, which a failure does not invalidate.
+    const replacing = this.model.current !== scope;
+    const modelClaim = this.model.claim(scope);
+    if (replacing) {
       this.overview.set(null);
     }
-    const request = ++this.loadRequest;
-    const claim = this.claimBadge(organizationId, range, asOf);
+    const badgeClaim = this.badge.claim(scope);
     let params = new HttpParams().set('range', range);
     if (asOf) {
       params = params.set('as_of', asOf.toISOString());
@@ -149,10 +104,12 @@ export class OverviewService {
     const response = await firstValueFrom(
       this.http.get<OrganizationOverview>(orgPath(organizationId, '/overview'), { params }),
     );
-    if (request === this.loadRequest) {
+    if (this.model.accepts(modelClaim)) {
       this.overview.set(response);
     }
-    this.writeBadge(claim, response.counts.unrecovered);
+    if (this.badge.accepts(badgeClaim)) {
+      this.unrecovered.set(response.counts.unrecovered);
+    }
     return response;
   }
 
@@ -164,9 +121,7 @@ export class OverviewService {
    * re-read would otherwise leave it asserting harm that belongs elsewhere.
    */
   clearBadge(): void {
-    this.badgeEpoch += 1;
-    this.badgeScope = '';
-    this.badgeApplied = 0;
+    this.badge.invalidate();
     this.unrecovered.set(0);
   }
 
@@ -178,7 +133,7 @@ export class OverviewService {
    * because the shell asked over a different window.
    */
   async loadBadges(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<void> {
-    const claim = this.claimBadge(organizationId, range, asOf);
+    const claim = this.badge.claim(scopeKey(organizationId, range, asOf));
     try {
       // The unrecovered count is an outcome; the server withholds it for a
       // past instant, and the badge disappears with it rather than asserting
@@ -190,7 +145,9 @@ export class OverviewService {
       const response = await firstValueFrom(
         this.http.get<{ counts: OverviewCounts }>(orgPath(organizationId, '/overview'), { params }),
       );
-      this.writeBadge(claim, response.counts.unrecovered);
+      if (this.badge.accepts(claim)) {
+        this.unrecovered.set(response.counts.unrecovered);
+      }
     } catch {
       // A failed read says nothing about the count, so it writes nothing and
       // does not count as a newer reading. The badge is zeroed when the scope
@@ -200,9 +157,8 @@ export class OverviewService {
   }
 
   reset(): void {
-    this.loadRequest += 1;
-    this.modelScope = '';
-    this.clearBadge();
+    this.model.invalidate();
     this.overview.set(null);
+    this.clearBadge();
   }
 }

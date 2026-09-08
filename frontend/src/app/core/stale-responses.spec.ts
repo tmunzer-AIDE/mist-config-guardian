@@ -228,6 +228,25 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(overview.overview()).toBeNull();
   });
 
+  it('a failed refresh does not suppress an earlier read still in flight', async () => {
+    // Leaving and quickly returning to the Overview: the first read is still
+    // in flight when the page asks again. If the second fails, the first is
+    // the only answer there will be, and discarding it leaves a blank page.
+    const overview = TestBed.inject(OverviewService);
+    const first = overview.load('org-a', '24h');
+    const second = overview.load('org-a', '24h');
+    const [earlier, later] = pending('/api/v1/organizations/org-a/overview');
+
+    later.flush({ detail: 'boom' }, { status: 500, statusText: 'Server Error' });
+    await expect(second).rejects.toBeDefined();
+
+    earlier.flush({ counts: { unrecovered: 2 }, change_groups: [] });
+    await first;
+
+    expect(overview.overview()).not.toBeNull();
+    expect(overview.unrecovered()).toBe(2);
+  });
+
   it('a failed refresh of the same scope keeps the model it had', async () => {
     // Nothing about the scope changed, so the last good answer still describes
     // it; a transient failure is no reason to blank the page.
