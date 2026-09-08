@@ -22,6 +22,7 @@ from mist_config_guardian_backend.schemas.search import (
     SearchResultResponse,
 )
 from mist_config_guardian_backend.services.change_groups import build_title, object_type_label
+from mist_config_guardian_backend.services.deep_links import deep_link
 
 MINIMUM_QUERY_LENGTH = 2
 DEFAULT_LIMIT = 25
@@ -207,7 +208,7 @@ def _object_results(objects: Sequence[LogicalObject]) -> list[SearchResultRespon
             subtitle=object_type_label(logical.object_type, logical.scope),
             meta=f"v{logical.current_version}" + (" · deleted" if logical.is_deleted else ""),
             target="history",
-            target_params={"object": str(logical.id)},
+            target_params=deep_link("history", object=str(logical.id)),
         )
         for logical in objects
         if logical.id is not None
@@ -232,7 +233,7 @@ def _change_group_results(
                 subtitle=group.audit_id if matched_audit else (group.actor or "Unattributed"),
                 meta=group.impact_severity.value.upper(),
                 target="changes",
-                target_params={"group": str(group.id)},
+                target_params=deep_link("changes", group=str(group.id)),
             )
         )
     return results
@@ -252,7 +253,7 @@ def _actor_results(groups: Sequence[AuditChangeGroup], term: str) -> list[Search
             subtitle="Administrator",
             meta=f"{count} change group{'' if count == 1 else 's'}",
             target="changes",
-            target_params={"actor": actor},
+            target_params=deep_link("changes", actor=actor),
         )
         for actor, count in sorted(counts.items())
     ]
@@ -273,7 +274,7 @@ def _site_results(sites: Sequence[LogicalObject]) -> list[SearchResultResponse]:
             subtitle="Site",
             meta=site.current_mist_id,
             target="history",
-            target_params={"object": str(site.id)},
+            target_params=deep_link("history", object=str(site.id)),
         )
         for site in sites
         if site.id is not None
@@ -296,7 +297,7 @@ def _restore_results(operations: Sequence[RestoreOperation]) -> list[SearchResul
                 subtitle=str(getattr(mode, "value", mode) or "restore").replace("_", " "),
                 meta=str(getattr(status, "value", status) or "").upper(),
                 target="restore",
-                target_params={"operation": str(identifier)},
+                target_params=deep_link("restore", operation=str(identifier)),
             )
         )
     return results

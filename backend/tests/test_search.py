@@ -28,6 +28,7 @@ from mist_config_guardian_backend.models.webhook import (
     ChangedObjectRef,
     RecoveryState,
 )
+from mist_config_guardian_backend.services.deep_links import CONSUMED_PARAMETERS
 from mist_config_guardian_backend.services.search import PER_KIND_LIMIT, SearchService
 
 ORGANIZATION_ID = PydanticObjectId()
@@ -317,17 +318,10 @@ async def test_sites_match_by_name_and_by_identifier() -> None:
 async def test_every_result_links_with_a_parameter_its_destination_reads() -> None:
     """A result that names an unread parameter silently opens an unfiltered page.
 
-    The browser application decides what each page consumes, so this pins the
-    contract: adding a parameter here without teaching the page to read it is
-    the failure this catches.
+    Results are built through the deep-link registry, so this is a check that
+    every kind of result goes through it rather than around it.
     """
-    consumed = {
-        "changes": {"group", "actor"},
-        "history": {"object", "a", "b"},
-        "impact": {"session", "severity"},
-        "restore": {"versions", "changeGroup", "operation", "step", "compensate"},
-        "settings": {"tab"},
-    }
+    consumed = CONSUMED_PARAMETERS
 
     reader = _reader()
     service = SearchService(reader)
