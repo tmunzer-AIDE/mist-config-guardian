@@ -223,6 +223,7 @@ class _MemoryChangeGroupStore:
         self.sessions: list[MonitoringSession] = []
         self.saves = 0
         self.contended = 0
+        self.searched_sites: list[list[str]] = []
         self.calls: list[str] = []
 
     async def group_by_audit(
@@ -348,6 +349,7 @@ class _MemoryChangeGroupStore:
         exclude_audit_id: str,
     ) -> list[AuditChangeGroup]:
         self.calls.append("groups_touching_sites")
+        self.searched_sites.append(sorted(site_ids))
         wanted = set(site_ids)
         return [
             group
@@ -1566,3 +1568,29 @@ async def test_a_past_free_text_search_does_not_reach_into_the_summary() -> None
         "actor",
         "changed_objects.object_name",
     }
+
+
+async def test_historical_competitors_are_found_by_the_sites_the_audit_named() -> None:
+    """The group's own reach is accumulated from monitoring, and is withheld.
+
+    Searching by it would find competitors through site associations learned
+    after the instant being viewed — the same data, reached a different way.
+    """
+    store = _critical_fixture()
+    await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
+    group = store.groups[0]
+    assert group.id is not None
+    # Monitoring has since associated the change with a second site.
+    group.affected_site_ids = sorted({*group.affected_site_ids, PORTLAND})
+    store.searched_sites.clear()
+
+    await ChangeGroupService(store).get_group(
+        ORGANIZATION_ID,
+        group.id,
+        viewer_email="j.mercer@northwind.example",
+        as_of=NOW,
+    )
+
+    named = {ref.site_mist_id for ref in group.changed_objects if ref.site_mist_id}
+    assert store.searched_sites == [sorted(named)]
+    assert PORTLAND not in store.searched_sites[0]

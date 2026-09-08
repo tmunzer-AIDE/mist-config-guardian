@@ -89,10 +89,16 @@ export class OverviewService {
   }
 
   /** Cheap counts-only fetch used by the shell so navigation badges stay live. */
-  async loadBadges(organizationId: string): Promise<void> {
+  async loadBadges(organizationId: string, asOf: Date | null = null): Promise<void> {
     const request = ++this.badgeRequest;
     try {
-      const params = new HttpParams().set('counts_only', true);
+      // The unrecovered count is an outcome; the server withholds it for a
+      // past instant, and the badge disappears with it rather than asserting
+      // that nothing went wrong then.
+      let params = new HttpParams().set('counts_only', true);
+      if (asOf) {
+        params = params.set('as_of', asOf.toISOString());
+      }
       const response = await firstValueFrom(
         this.http.get<{ counts: OverviewCounts }>(orgPath(organizationId, '/overview'), { params }),
       );

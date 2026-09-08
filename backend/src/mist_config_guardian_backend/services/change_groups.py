@@ -1151,13 +1151,19 @@ class ChangeGroupService:
         sessions = [] if historical else await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
         names = await self._store.site_names(organization_id, group.affected_site_ids)
         start, end = _monitoring_window(group, sessions)
+        sites = list(group.affected_site_ids)
         if as_of is not None:
             # Competing changes are those the viewer could have known about;
             # anything made after the cutoff is not one of them.
             end = min(end, as_utc(as_of))
+            # And they are looked for over the sites the audit itself named.
+            # The group's own reach accumulates from monitoring sessions as
+            # they arrive — it is the field withheld above — so searching by it
+            # would find competitors through associations learned afterwards.
+            sites = sorted({ref.site_mist_id for ref in group.changed_objects if ref.site_mist_id})
         competing = await self._store.groups_touching_sites(
             organization_id,
-            group.affected_site_ids,
+            sites,
             start=start,
             end=end,
             exclude_audit_id=group.audit_id,

@@ -83,6 +83,10 @@ export class App {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
+      // The markers and the change badge are outcome data, so the instant is
+      // an input to them: scrubbing must re-read both, not leave today's
+      // severities painted along a past track.
+      const asOf = this.time.asOf();
       if (!organizationId) {
         return;
       }
@@ -90,7 +94,7 @@ export class App {
         await Promise.allSettled([
           this.notifications.refreshUnread(organizationId),
           this.timeline.load(organizationId, range),
-          this.overview.loadBadges(organizationId),
+          this.overview.loadBadges(organizationId, asOf),
           this.health.load(),
         ]);
       });

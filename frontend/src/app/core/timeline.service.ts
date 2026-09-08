@@ -42,6 +42,9 @@ export class TimelineService {
       this.markers.set([]);
     }
     const request = ++this.request;
+    // The instant reaches this endpoint in the as-of header, which the session
+    // interceptor sets from the current time context. The caller only has to
+    // read that context so the read happens again when it moves.
     const params = new HttpParams().set('range', range);
     try {
       const response = await firstValueFrom(

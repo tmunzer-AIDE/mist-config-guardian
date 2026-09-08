@@ -328,6 +328,11 @@ export class ChangesPage {
    */
   private async loadDetail(organizationId: string, id: string): Promise<void> {
     const request = ++this.detailRequest;
+    // The panel shows what this read returns or nothing. Leaving the previous
+    // detail up would keep a live assessment on screen while a historical read
+    // is in flight — and for good, if it comes back 404 because the change had
+    // not happened at the instant being viewed.
+    this.changeGroups.clearDetail();
     this.detailPending.set(true);
     try {
       await this.changeGroups.load(organizationId, id, this.time.asOf());

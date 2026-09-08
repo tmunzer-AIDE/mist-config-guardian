@@ -4,6 +4,7 @@
       <h1 class="cg-label rail-title">MONITORING SESSIONS · {{ total() }}</h1>
       <div class="rail-filters" role="group" aria-label="Session status filter">
         @for (option of filters; track option) {
+          <!-- Filtering an empty historical list would promise rows to reveal. -->
           <button
             class="cg-chip"
             type="button"
@@ -39,8 +40,14 @@
         </button>
       } @empty {
         <p class="rail-empty">
-          No sessions match this filter. Sessions are created when a configuration change lands on a
-          monitored device.
+          @if (historical()) {
+            Monitoring evidence is live. Sessions, incidents and their samples describe what
+            monitoring knows now, and there is no record of what it knew at an earlier instant.
+            Return to now to see them.
+          } @else {
+            No sessions match this filter. Sessions are created when a configuration change lands on
+            a monitored device.
+          }
         </p>
       }
     </div>

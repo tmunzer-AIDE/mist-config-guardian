@@ -428,12 +428,7 @@ describe('ImpactPage', () => {
     });
   });
 
-  it('withholds a restore in historical mode and below the operator role', async () => {
-    historical = true;
-    await render([CRITICAL], 's1');
-    expect(all('.act-buttons button').length).toBe(1);
-
-    historical = false;
+  it('withholds a restore below the operator role', async () => {
     role = false;
     await render([CRITICAL], 's1');
     expect(all('.act-buttons button').length).toBe(1);
@@ -441,6 +436,19 @@ describe('ImpactPage', () => {
     role = true;
     await render([CRITICAL], 's1');
     expect(all('.act-buttons button').length).toBe(2);
+  });
+
+  it('shows nothing at a past instant, because monitoring has no past', async () => {
+    // Every session, incident and sample here describes what monitoring knows
+    // now. There is no versioned record to reconstruct it from, so the page
+    // says so rather than presenting today's evidence under a past banner.
+    historical = true;
+    await render([CRITICAL, QUIET], 's1');
+
+    expect(all('.row').length).toBe(0);
+    expect(all('.act-buttons button').length).toBe(0);
+    expect(text()).toContain('Monitoring evidence is live');
+    expect(text()).not.toContain('SEA-AP-101');
   });
 
   it('disables both actions until the session is correlated to a change group', async () => {
