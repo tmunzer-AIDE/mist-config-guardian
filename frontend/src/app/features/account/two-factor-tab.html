@@ -14,7 +14,7 @@
           class="cg-btn cg-btn--primary cg-btn--lg card-action"
           type="button"
           [disabled]="busy()"
-          (click)="startEnrollment()"
+          (click)="openPrompt('enroll')"
         >
           Set up authenticator
         </button>
@@ -148,14 +148,25 @@
   @if (prompt() !== 'none') {
     <section class="cg-card card card--prompt">
       <h2 class="card-title">
-        {{ prompt() === 'disable' ? 'Turn off two-factor authentication' : 'Generate new recovery codes' }}
+        @switch (prompt()) {
+          @case ('enroll') { Set up an authenticator }
+          @case ('disable') { Turn off two-factor authentication }
+          @default { Generate new recovery codes }
+        }
       </h2>
       <p class="card-sub">
-        @if (prompt() === 'disable') {
-          Re-enter your password to confirm. Sign-in will fall back to your password alone unless a
-          passkey is registered.
-        } @else {
-          Re-enter your password to confirm. The set you have now stops working immediately.
+        @switch (prompt()) {
+          @case ('enroll') {
+            Re-enter your password to confirm. An authenticator is a durable second factor, so
+            adding one asks for your password the way removing one does.
+          }
+          @case ('disable') {
+            Re-enter your password to confirm. Sign-in will fall back to your password alone unless a
+            passkey is registered.
+          }
+          @default {
+            Re-enter your password to confirm. The set you have now stops working immediately.
+          }
         }
       </p>
       <div class="field">
@@ -178,7 +189,11 @@
           [disabled]="!passwordValue() || busy()"
           (click)="confirmPrompt()"
         >
-          {{ prompt() === 'disable' ? 'Turn off' : 'Generate' }}
+          @switch (prompt()) {
+            @case ('enroll') { Continue }
+            @case ('disable') { Turn off }
+            @default { Generate }
+          }
         </button>
         <button class="cg-btn cg-btn--lg" type="button" (click)="closePrompt()">Cancel</button>
       </div>

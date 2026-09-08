@@ -109,6 +109,23 @@
         @if (dialog.detail) {
           <p class="modal-note">{{ dialog.detail }}</p>
         }
+        @if (dialog.requiresPassword) {
+          <div class="field">
+            <label class="cg-label" for="confirm-password">Current password</label>
+            <input
+              id="confirm-password"
+              class="cg-input password-input"
+              type="password"
+              autocomplete="current-password"
+              [value]="confirmPassword()"
+              (input)="setConfirmPassword($event)"
+            />
+            <p class="cg-meta">
+              This replaces a credential the deployment authenticates with, so it confirms who is
+              asking rather than who signed in earlier.
+            </p>
+          </div>
+        }
       </div>
       <div class="modal-foot modal-foot--split">
         <button class="cg-btn cg-btn--lg" type="button" [disabled]="confirmBusy()" (click)="closeDialogs()">
@@ -119,7 +136,7 @@
           type="button"
           [class.cg-btn--danger]="dialog.danger"
           [class.cg-btn--primary]="!dialog.danger"
-          [disabled]="confirmBusy()"
+          [disabled]="confirmBusy() || (dialog.requiresPassword && !confirmPassword())"
           (click)="runConfirmed()"
         >
           @if (confirmBusy()) {

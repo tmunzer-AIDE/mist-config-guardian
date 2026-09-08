@@ -38,6 +38,16 @@
             formControlName="service_token"
           />
         </div>
+        <div class="add-field add-field--wide">
+          <label class="cg-label" for="add-password">YOUR CURRENT PASSWORD</label>
+          <input
+            class="cg-input"
+            id="add-password"
+            type="password"
+            autocomplete="current-password"
+            formControlName="password"
+          />
+        </div>
         <div class="add-field add-field--narrow">
           <label class="cg-label" for="add-cfg">CONFIGURATION RETENTION</label>
           <input
@@ -169,11 +179,25 @@
                   The token is verified against the Mist cloud before it is stored, and a write-capable token
                   is refused.
                 </p>
+                <label class="cg-label token-label" [attr.for]="'token-password-' + card.id">
+                  YOUR CURRENT PASSWORD
+                </label>
+                <input
+                  class="cg-input"
+                  type="password"
+                  autocomplete="current-password"
+                  [id]="'token-password-' + card.id"
+                  [value]="tokenPassword()"
+                  (input)="setTokenPassword($event)"
+                />
+                <p class="hint">
+                  Replacing a credential confirms who is asking, not only who signed in earlier.
+                </p>
                 <div class="row-buttons">
                   <button
                     class="cg-btn cg-btn--sm cg-btn--primary"
                     type="button"
-                    [disabled]="!tokenDraft().trim() || isBusy('token-' + card.id)"
+                    [disabled]="!tokenDraft().trim() || !tokenPassword() || isBusy('token-' + card.id)"
                     (click)="replaceToken(card.organization)"
                   >
                     {{ isBusy('token-' + card.id) ? 'Verifying…' : 'Save token' }}

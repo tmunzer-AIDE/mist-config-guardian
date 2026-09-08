@@ -5,7 +5,7 @@ import { TotpEnrollment } from './account.model';
 import { AccountService, detailOf } from './account.service';
 
 type Mode = 'off' | 'enrolling' | 'on';
-type Prompt = 'none' | 'disable' | 'regenerate';
+type Prompt = 'none' | 'enroll' | 'disable' | 'regenerate';
 
 const CODE_PATTERN = /^\d{6}$/;
 
@@ -75,19 +75,9 @@ export class TwoFactorTab {
 
   // ------------------------------------------------------------- enrolment
 
-  protected async startEnrollment(): Promise<void> {
-    if (this.busy()) {
-      return;
-    }
-    this.busy.set(true);
+  private async startEnrollment(password: string): Promise<void> {
     this.reset();
-    try {
-      this.enrollment.set(await this.account.enrollTotp());
-    } catch (cause) {
-      this.error.set(detailOf(cause));
-    } finally {
-      this.busy.set(false);
-    }
+    this.enrollment.set(await this.account.enrollTotp(password));
   }
 
   protected cancelEnrollment(): void {
@@ -149,7 +139,9 @@ export class TwoFactorTab {
     this.busy.set(true);
     this.error.set('');
     try {
-      if (action === 'disable') {
+      if (action === 'enroll') {
+        await this.startEnrollment(password);
+      } else if (action === 'disable') {
         await this.account.disableTotp(password);
         this.codes.set([]);
         this.notice.set('Two-factor authentication is off.');

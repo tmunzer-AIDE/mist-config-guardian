@@ -41,6 +41,11 @@ export class AiTab {
   protected readonly maxTokens = signal(1500);
   protected readonly automaticSummaries = signal(false);
 
+  /** These settings hold a provider key, so saving them confirms who is asking. */
+  protected readonly password = signal('');
+  protected readonly setPassword = (event: Event): void =>
+    this.password.set((event.target as HTMLInputElement).value);
+
   protected readonly keyEditing = signal(false);
   protected readonly keyDraft = signal('');
 
@@ -257,6 +262,7 @@ export class AiTab {
 
   private updateBody(): AiSettingsUpdate {
     return {
+      password: this.password(),
       enabled: this.enabled(),
       base_url: this.baseUrl().trim(),
       model: this.model().trim(),

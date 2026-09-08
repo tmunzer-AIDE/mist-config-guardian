@@ -55,13 +55,33 @@ describe('TwoFactorTab', () => {
     return button(text, '.card--prompt');
   }
 
-  async function enrol(): Promise<void> {
+  function typePassword(value: string): void {
+    const input = element().querySelector<HTMLInputElement>('#totp-password')!;
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  /**
+   * Walk the whole enrolment path: ask, confirm the password, receive a secret.
+   *
+   * Adding an authenticator is a credential change, so the secret is only
+   * issued once the account has proved who is asking.
+   */
+  async function enrol(qrSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25"><path d="M2 2.5h7"/></svg>'): Promise<void> {
     button('Set up authenticator').click();
-    http.expectOne('/api/v1/account/totp/enroll').flush({
+    fixture.detectChanges();
+    typePassword('old-password');
+
+    promptButton('Continue').click();
+    const request = http.expectOne('/api/v1/account/totp/enroll');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ password: 'old-password' });
+    request.flush({
       secret: 'JBSWY3DPEHPK3PXPKLMN2QRS',
       otpauth_uri: 'otpauth://totp/Config%20Guardian:s.kaur@northwind.example?secret=JBSWY3DP',
       issuer: 'Config Guardian',
-      qr_svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25"><path d="M2 2.5h7"/></svg>',
+      qr_svg: qrSvg,
     });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -82,6 +102,18 @@ describe('TwoFactorTab', () => {
     fixture.detectChanges();
   }
 
+  it('will not issue an enrolment secret until the password is confirmed', () => {
+    button('Set up authenticator').click();
+    fixture.detectChanges();
+
+    // Asking opens the prompt and nothing else: no secret exists yet to leak to
+    // whoever is sitting at an unlocked session.
+    expect(element().querySelector('.card--prompt')).not.toBeNull();
+    expect(promptButton('Continue').disabled).toBe(true);
+    expect(element().querySelector('.secret')).toBeNull();
+    http.expectNone('/api/v1/account/totp/enroll');
+  });
+
   it('renders the scannable code the API supplies, plus the key and link', async () => {
     await enrol();
 
@@ -96,15 +128,7 @@ describe('TwoFactorTab', () => {
   });
 
   it('falls back to the key alone when the API sends no code', async () => {
-    button('Set up authenticator').click();
-    http.expectOne('/api/v1/account/totp/enroll').flush({
-      secret: 'JBSWY3DPEHPK3PXPKLMN2QRS',
-      otpauth_uri: 'otpauth://totp/Config%20Guardian:s.kaur@northwind.example?secret=JBSWY3DP',
-      issuer: 'Config Guardian',
-      qr_svg: '',
-    });
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await enrol('');
 
     expect(element().querySelector('.qr')).toBeNull();
     expect(element().querySelector('.secret')?.textContent?.trim()).toBe('JBSW Y3DP EHPK 3PXP KLMN 2QRS');
@@ -181,10 +205,7 @@ describe('TwoFactorTab', () => {
     fixture.detectChanges();
     expect(promptButton('Turn off').disabled).toBe(true);
 
-    const password = element().querySelector<HTMLInputElement>('#totp-password')!;
-    password.value = 'old-password';
-    password.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
+    typePassword('old-password');
 
     promptButton('Turn off').click();
     const request = http.expectOne('/api/v1/account/totp');

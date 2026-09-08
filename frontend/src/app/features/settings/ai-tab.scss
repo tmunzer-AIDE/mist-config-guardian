@@ -214,3 +214,11 @@
   gap: 8px;
   align-items: flex-start;
 }
+
+// The confirmation the save bar asks for, at the width of the fields above it.
+.confirm-field {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+  margin-bottom: 12px;
+}

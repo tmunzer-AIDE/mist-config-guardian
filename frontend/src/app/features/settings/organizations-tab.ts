@@ -189,7 +189,11 @@ export class OrganizationsTab {
     reconciliation_cron: new FormControl('0 2 * * *', { nonNullable: true, validators: [Validators.required] }),
     configuration_retention_days: new FormControl(365, { nonNullable: true }),
     monitoring_retention_days: new FormControl(90, { nonNullable: true }),
+    // A service token is a credential, so onboarding confirms who is asking.
+    password: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
   });
+  /** The password confirming a service-token replacement; never persisted. */
+  protected readonly tokenPassword = signal('');
   protected readonly busy = signal('');
   protected readonly notice = signal('');
   protected readonly error = signal('');
@@ -333,6 +337,7 @@ export class OrganizationsTab {
           reconciliation_cron: value.reconciliation_cron.trim(),
           configuration_retention_days: value.configuration_retention_days,
           monitoring_retention_days: value.monitoring_retention_days,
+          password: value.password,
         }),
       );
       this.closeAdd();
@@ -463,14 +468,23 @@ export class OrganizationsTab {
 
   protected async replaceToken(organization: Organization): Promise<void> {
     const token = this.tokenDraft().trim();
-    if (!token) {
+    const password = this.tokenPassword();
+    if (!token || !password) {
       return;
     }
     await this.run(`token-${organization.id}`, 'Service token replaced and verified.', async () => {
-      this.context.replace(await firstValueFrom(this.api.replaceServiceToken(organization.id, token)));
+      this.context.replace(
+        await firstValueFrom(this.api.replaceServiceToken(organization.id, token, password)),
+      );
       this.cancelTokenEdit();
     });
+    // Both are spent by the request and never outlive it.
     this.tokenDraft.set('');
+    this.tokenPassword.set('');
+  }
+
+  protected setTokenPassword(event: Event): void {
+    this.tokenPassword.set((event.target as HTMLInputElement).value);
   }
 
   protected requestRotate(organization: Organization): void {
@@ -480,8 +494,9 @@ export class OrganizationsTab {
       detail: 'The new secret is displayed once and never again.',
       confirmLabel: 'Rotate secret',
       danger: true,
-      run: async () => {
-        const rotated = await firstValueFrom(this.api.rotateWebhookSecret(organization.id));
+      requiresPassword: true,
+      run: async (password: string) => {
+        const rotated = await firstValueFrom(this.api.rotateWebhookSecret(organization.id, password));
         this.secretRevealed.emit({
           title: 'New webhook secret',
           body: `Copy this into the Mist webhook configuration for ${organization.name} now.`,

@@ -83,7 +83,9 @@ export interface ConfirmRequest {
   detail?: string;
   confirmLabel: string;
   danger: boolean;
-  run: () => Promise<void>;
+  /** True when the action changes a credential and must confirm who is asking. */
+  requiresPassword?: boolean;
+  run: (password: string) => Promise<void>;
 }
 
 /** A value the API returns exactly once and will never show again. */
@@ -146,6 +148,8 @@ export class SettingsPage {
   protected readonly confirm = signal<ConfirmRequest | null>(null);
   protected readonly secret = signal<SecretReveal | null>(null);
   protected readonly confirmBusy = signal(false);
+  /** The password a credential-changing confirmation asks for; never persisted. */
+  protected readonly confirmPassword = signal('');
   protected readonly copyNotice = signal('');
 
   private returnFocus: HTMLElement | null = null;
@@ -231,6 +235,7 @@ export class SettingsPage {
     // Dropping the reference is the only place the one-time secret is held.
     this.secret.set(null);
     this.confirmBusy.set(false);
+    this.confirmPassword.set('');
     this.copyNotice.set('');
   }
 
@@ -239,13 +244,23 @@ export class SettingsPage {
     if (!request || this.confirmBusy()) {
       return;
     }
+    const password = this.confirmPassword();
+    if (request.requiresPassword && !password) {
+      return;
+    }
     this.confirmBusy.set(true);
     try {
-      await request.run();
+      await request.run(password);
       this.closeDialogs();
     } finally {
+      // The password is spent by the request and never outlives it.
+      this.confirmPassword.set('');
       this.confirmBusy.set(false);
     }
+  }
+
+  protected setConfirmPassword(event: Event): void {
+    this.confirmPassword.set((event.target as HTMLInputElement).value);
   }
 
   /**

@@ -188,8 +188,8 @@ export class AccountService {
 
   // ------------------------------------------------------------- two-factor
 
-  enrollTotp(): Promise<TotpEnrollment> {
-    return firstValueFrom(this.http.post<TotpEnrollment>(`${ACCOUNT}/totp/enroll`, {}));
+  enrollTotp(password: string): Promise<TotpEnrollment> {
+    return firstValueFrom(this.http.post<TotpEnrollment>(`${ACCOUNT}/totp/enroll`, { password }));
   }
 
   /** Confirms enrolment and returns the recovery codes, which are shown once. */
