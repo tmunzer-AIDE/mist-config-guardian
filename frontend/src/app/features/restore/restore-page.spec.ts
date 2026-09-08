@@ -125,6 +125,10 @@ describe('RestorePage', () => {
     historical = false;
     role = 'administrator';
     navigations = [];
+    // The stub is shared across tests; one that switches organization must not
+    // leak that into the next.
+    organizationStub.selected.set({ id: ORGANIZATION_ID, name: 'Northwind Retail', status: 'verified' });
+    organizationStub.revision.set(0);
     // Only the poll interval is faked: Angular's zoneless scheduler still needs
     // real microtasks and timeouts to settle the fixture between assertions.
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -503,7 +507,11 @@ describe('RestorePage', () => {
     // rendered page, and not in any URL the page asked the router for.
     expect(element().innerHTML).not.toContain('a-fresh-administrator-token');
     expect(element().querySelector('.token-input')).toBeNull();
-    expect(navigations).toEqual([]);
+    expect(JSON.stringify(navigations)).not.toContain('a-fresh-administrator-token');
+    // The only navigation is the plan becoming the page's canonical URL.
+    expect(navigations).toEqual([
+      { commands: ['/restore'], extras: { queryParams: { operation: 'op-1' }, replaceUrl: true } },
+    ]);
     expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
   });
 
@@ -675,10 +683,10 @@ describe('RestorePage', () => {
     fixture.componentRef.setInput('operation', 'op-2');
     fixture.detectChanges();
     await tick();
-    // The rail refreshes with the link; the operation shown until now is not re-read.
-    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
-    await tick();
+    // The operation shown until now is not re-read; nor is the rail, which
+    // follows the organization rather than the link.
     httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
+    httpMock.expectNone((request) => request.url === OPERATIONS_URL);
     httpMock.expectOne(`${OPERATIONS_URL}/op-2`).flush(operation({ id: 'op-2', status: 'planned' }));
     await settle();
 
@@ -708,6 +716,174 @@ describe('RestorePage', () => {
 
     httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
     expect(text()).toContain('RUNNING');
+  });
+
+  it('drops a late answer for an operation that is no longer the one asked for', async () => {
+    // A Promise cannot be cancelled: the first read is still in flight when the
+    // link moves on, and its answer must not land on the second operation.
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    const late = httpMock.expectOne(`${OPERATIONS_URL}/op-1`);
+
+    fixture.componentRef.setInput('operation', 'op-2');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-2`).flush(operation({ id: 'op-2', status: 'planned' }));
+    await settle();
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
+
+    late.flush(operation({ id: 'op-1', status: 'failed' }));
+    await settle();
+
+    expect(text()).not.toContain('FAILED');
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
+  });
+
+  it('forgets the operation and clears the link when the organization changes', async () => {
+    await openRunning();
+
+    organizationStub.selected.set({ id: 'org-2', name: 'Contoso', status: 'verified' });
+    fixture.detectChanges();
+    await tick();
+    // The other organization's picker and rail load; the link is not read there,
+    // because the identifiers in it belong to the organization that wrote it.
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores/targets')
+      .flush(targetList([]));
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores')
+      .flush({ items: [], total: 0 });
+    await settle();
+    httpMock.expectNone('/api/v1/organizations/org-2/restores/op-1');
+
+    expect(text()).not.toContain('RUNNING');
+    expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
+    expect(navigations).toEqual([{ commands: ['/restore'], extras: { queryParams: {} } }]);
+    // The first organization's poll is gone with its operation.
+    vi.advanceTimersByTime(20_000);
+    await tick();
+    httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
+  });
+
+  it('carries nothing of a finished operation over to the next one opened', async () => {
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'completed' }));
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1/verification`).flush({
+      verified: true,
+      checks: [{ label: 'Object states match the target version', status: 'ok', detail: null }],
+      post_snapshot_id: 'snap-1',
+      monitoring_session_ids: [],
+    });
+    await settle();
+    expect(text()).toContain('VERIFIED');
+
+    fixture.componentRef.setInput('operation', 'op-2');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-2`).flush(operation({ id: 'op-2', status: 'running' }));
+    await settle();
+
+    expect(text()).not.toContain('VERIFIED');
+    expect(text()).not.toContain('Object states match the target version');
+    expect(text()).toContain('RUNNING');
+  });
+
+  it('writes an operation picked from the rail into the URL', async () => {
+    // The rail is a navigation: a refresh must return to the operation picked,
+    // and a later link to the same operation must find the URL already there.
+    await boot(targetList([NW_CORP]), [operation({ id: 'op-9', status: 'completed' })]);
+
+    element().querySelector<HTMLButtonElement>('.rail .entry')!.click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-9`).flush(operation({ id: 'op-9', status: 'planned' }));
+    await settle();
+
+    expect(navigations).toEqual([
+      { commands: ['/restore'], extras: { queryParams: { operation: 'op-9' }, replaceUrl: false } },
+    ]);
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
+  });
+
+  it('clears the operation from the URL when a new restore is started', async () => {
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'completed' }));
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1/verification`).flush({
+      verified: true,
+      checks: [],
+      post_snapshot_id: null,
+      monitoring_session_ids: [],
+    });
+    await settle();
+    expect(text()).toContain('COMPLETED');
+
+    button('New restore')!.click();
+    await settle();
+
+    // A refresh must return to an empty picker, not to the finished operation.
+    expect(navigations).toEqual([{ commands: ['/restore'], extras: { queryParams: {}, replaceUrl: false } }]);
+    expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
+    expect(text()).not.toContain('COMPLETED');
+  });
+
+  it('keeps the picker on the answer to the latest filter, whatever order answers arrive in', async () => {
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE]));
+    const search = element().querySelector<HTMLInputElement>('.search-input')!;
+
+    search.value = 'NW';
+    search.dispatchEvent(new Event('change'));
+    await tick();
+    search.value = 'NW-Corp';
+    search.dispatchEvent(new Event('change'));
+    await tick();
+    const [broad, narrow] = httpMock.match((request) => request.url === TARGETS_URL);
+
+    narrow.flush(targetList([NW_CORP], 1));
+    await settle();
+    expect(all('.target').length).toBe(1);
+
+    // The broader search answers late. It describes a filter no longer on screen.
+    broad.flush(targetList([NW_CORP, RF_DENSE, SEA_VOICE]));
+    await settle();
+    expect(all('.target').length).toBe(1);
+    expect(text()).toContain('Showing 1 of');
+  });
+
+  it('shows nothing rather than a frozen predecessor when the operation named cannot be read', async () => {
+    // The URL says op-2. Leaving op-1 on screen would be wrong whether or not
+    // it kept updating; leaving it on screen and frozen is worse.
+    await openRunning();
+
+    fixture.componentRef.setInput('operation', 'op-2');
+    fixture.detectChanges();
+    await tick();
+    httpMock
+      .expectOne(`${OPERATIONS_URL}/op-2`)
+      .flush({ detail: 'Restore operation not found' }, { status: 404, statusText: 'Not Found' });
+    await settle();
+
+    expect(text()).not.toContain('RUNNING');
+    expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
+    expect(all('.cg-spinner').length).toBe(0);
+    vi.advanceTimersByTime(20_000);
+    await tick();
+    httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
+    httpMock.expectNone(`${OPERATIONS_URL}/op-2`);
   });
 
   it('offers compensation for a failed run and names what it will reverse', async () => {
