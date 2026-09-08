@@ -86,6 +86,29 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def require_secure_session_cookies(self) -> "Settings":
+        """Keep the session cookie off plaintext requests.
+
+        The cookie is the whole session: sent once over HTTP it is readable by
+        anything on the path and replayable until it expires. Production
+        therefore defaults to ``Secure`` rather than inheriting the development
+        default, and refuses to start when it is switched off explicitly.
+
+        ``SameSite=None`` is rejected everywhere without it, because browsers
+        discard such a cookie outright: the deployment would not be insecure so
+        much as broken, in a way that only shows up in a browser.
+        """
+        if self.environment == "production" and not self.session_cookie_secure:
+            if "session_cookie_secure" in self.model_fields_set:
+                msg = "SESSION_COOKIE_SECURE cannot be disabled in production"
+                raise ValueError(msg)
+            self.session_cookie_secure = True
+        if self.session_cookie_same_site == "none" and not self.session_cookie_secure:
+            msg = "SESSION_COOKIE_SAME_SITE='none' requires SESSION_COOKIE_SECURE"
+            raise ValueError(msg)
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:
