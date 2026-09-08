@@ -159,11 +159,11 @@ describe('SettingsPage', () => {
     await fixture.whenStable();
 
     expect(page.active()).toBe('health');
+    // Absolute: a `/settings/<tab>` path segment must not survive the switch.
     expect(navigate).toHaveBeenCalledWith(
-      [],
+      ['/settings'],
       expect.objectContaining({
         queryParams: { tab: 'health' },
-        queryParamsHandling: 'merge',
         replaceUrl: true,
       }),
     );

@@ -85,9 +85,9 @@ describe('AccountPage', () => {
     expect(panels()).toEqual(['passkeys']);
     expect(navigate).toHaveBeenCalledTimes(1);
     const [commands, extras] = navigate.mock.calls[0];
-    expect(commands).toEqual([]);
+    // Absolute: an `/account/<tab>` path segment must not survive the switch.
+    expect(commands).toEqual(['/account']);
     expect(extras?.queryParams).toEqual({ tab: 'passkeys' });
-    expect(extras?.queryParamsHandling).toBe('merge');
     expect(extras?.replaceUrl).toBe(true);
   });
 

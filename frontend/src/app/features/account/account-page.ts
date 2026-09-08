@@ -79,12 +79,10 @@ export class AccountPage {
 
   protected select(tab: AccountTab): void {
     this.selected.set(tab);
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      queryParams: { tab },
-      queryParamsHandling: 'merge',
-      replaceUrl: true,
-    });
+    // Absolute, so a page reached by its path form (`/account/<tab>`) does not
+    // keep that segment: with both present the path wins on reload, and the
+    // page would come back on a different tab than the one shown.
+    void this.router.navigate(['/account'], { queryParams: { tab }, replaceUrl: true });
   }
 
   protected onTabKey(event: KeyboardEvent, index: number): void {
