@@ -15,6 +15,7 @@ from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.notification import (
     Notification,
     NotificationKind,
+    NotificationReadReceipt,
     NotificationSeverity,
     NotificationTarget,
 )
@@ -63,7 +64,7 @@ class _MemoryNotificationStore:
             target=draft.target,
             target_params=dict(draft.target_params),
             mandatory=draft.mandatory,
-            read_at=None,
+            read_by=[],
             dedupe_key=draft.dedupe_key,
             created_at=self._clock,
             updated_at=self._clock,
@@ -87,10 +88,10 @@ class _MemoryNotificationStore:
         ordered = sorted(self._match(criteria), key=lambda item: item.created_at, reverse=True)
         return ordered[skip : skip + limit]
 
-    async def mark_read(self, criteria: Mapping[str, object], read_at: datetime) -> int:
+    async def mark_read(self, criteria: Mapping[str, object], receipt: NotificationReadReceipt) -> int:
         matched = self._match(criteria)
         for item in matched:
-            item.read_at = read_at
+            item.read_by.append(receipt)
         return len(matched)
 
     def _match(self, criteria: Mapping[str, object]) -> list[Notification]:
@@ -99,11 +100,17 @@ class _MemoryNotificationStore:
     @staticmethod
     def _matches(item: Notification, criteria: Mapping[str, object]) -> bool:
         for field, expected in criteria.items():
-            actual = item.id if field == "_id" else getattr(item, field)
+            if field == "read_by.user_id":
+                # MongoDB semantics: `$ne` on an array path holds when no element matches.
+                values: list[object] = [receipt.user_id for receipt in item.read_by]
+            else:
+                values = [item.id if field == "_id" else getattr(item, field)]
             if isinstance(expected, dict):
-                if "$in" in expected and actual not in expected["$in"]:
+                if "$in" in expected and not any(value in expected["$in"] for value in values):
                     return False
-            elif actual != expected:
+                if "$ne" in expected and expected["$ne"] in values:
+                    return False
+            elif expected not in values:
                 return False
         return True
 
@@ -233,18 +240,65 @@ async def test_emitters_set_deep_link_targets() -> None:
         reason="Token revoked",
     )
 
+    # Each link names the parameter its page reads: `group` on Changes,
+    # `operation` on Restore, an existing tab on Settings. The earlier spellings
+    # (`changeGroupId`, `restoreId`, `tab=webhooks`) opened generic pages.
     assert impact is not None
     assert impact.target is NotificationTarget.CHANGES
-    assert impact.target_params == {"changeGroupId": "group-7"}
+    assert impact.target_params == {"group": "group-7"}
     assert impact.mandatory is True
     assert restore is not None
     assert restore.target is NotificationTarget.RESTORE
-    assert restore.target_params == {"restoreId": "restore-2"}
+    assert restore.target_params == {"operation": "restore-2"}
     assert restore.user_id == USER_ID
     assert gap is not None
+    assert gap.target is NotificationTarget.SETTINGS
+    assert gap.target_params == {"tab": "organizations"}
     assert gap.mandatory is True
     assert credential is not None
+    assert credential.target is NotificationTarget.SETTINGS
+    assert credential.target_params == {"tab": "organizations"}
     assert credential.mandatory is True
+
+
+async def test_an_approval_request_opens_the_operation_on_its_authorize_step() -> None:
+    """The approval is loaded from its operation; that is the record to open."""
+    service, _ = _service()
+
+    approval = await service.notify_approval_requested(
+        organization_id=ORGANIZATION_ID,
+        restore_id="restore-3",
+        approval_id="approval-1",
+        requested_by="j.mercer",
+        user_id=USER_ID,
+    )
+
+    assert approval is not None
+    assert approval.target is NotificationTarget.RESTORE
+    assert approval.target_params == {"operation": "restore-3", "step": "authorize"}
+
+
+async def test_a_failed_snapshot_opens_the_organization_that_owns_the_credential() -> None:
+    """History cannot show a snapshot; the credential and schedule live in Settings."""
+    service, _ = _service()
+
+    failed = await service.notify_snapshot_failed(
+        organization_id=ORGANIZATION_ID,
+        reason="Token revoked",
+        manifest_id="manifest-3",
+    )
+    completed = await service.notify_snapshot_completed(
+        organization_id=ORGANIZATION_ID,
+        manifest_id="manifest-4",
+        object_count=12,
+    )
+
+    assert failed is not None
+    assert failed.target is NotificationTarget.SETTINGS
+    assert failed.target_params == {"tab": "organizations"}
+    assert completed is not None
+    assert completed.target is NotificationTarget.HISTORY
+    assert completed.target_params == {}
 
 
 def test_visibility_criteria_includes_organization_wide_notifications() -> None:
@@ -253,7 +307,7 @@ def test_visibility_criteria_includes_organization_wide_notifications() -> None:
     assert criteria == {
         "organization_id": ORGANIZATION_ID,
         "user_id": {"$in": [None, USER_ID]},
-        "read_at": None,
+        "read_by.user_id": {"$ne": USER_ID},
     }
 
 
@@ -323,7 +377,7 @@ async def test_unread_count_and_mark_read_are_scoped_to_the_caller() -> None:
     theirs = next(item for item in store.items if item.title == "Someone else")
     assert theirs.id is not None
     assert await service.mark_read(ORGANIZATION_ID, USER_ID, theirs.id) is False
-    assert theirs.read_at is None
+    assert theirs.read_by == []
 
 
 async def test_mark_read_is_idempotent_for_an_already_read_notification() -> None:
@@ -334,6 +388,8 @@ async def test_mark_read_is_idempotent_for_an_already_read_notification() -> Non
 
     assert await service.mark_read(ORGANIZATION_ID, USER_ID, mine.id) is True
     assert await service.mark_read(ORGANIZATION_ID, USER_ID, mine.id) is True
+    # Acknowledging twice records one receipt, not two.
+    assert [receipt.user_id for receipt in mine.read_by] == [USER_ID]
 
 
 async def test_mark_read_reports_missing_notifications() -> None:
@@ -351,8 +407,37 @@ async def test_mark_all_read_only_touches_visible_unread_notifications() -> None
     assert updated == 2
     assert await service.unread_count(ORGANIZATION_ID, USER_ID) == 0
     theirs = next(item for item in store.items if item.title == "Someone else")
-    assert theirs.read_at is None
+    assert theirs.read_by == []
     assert await service.mark_all_read(ORGANIZATION_ID, USER_ID) == 0
+
+
+async def test_one_member_reading_an_organization_alert_leaves_it_unread_for_the_rest() -> None:
+    """An organization-wide alert is one document seen by everyone.
+
+    A single read flag would let whoever opened it first clear a mandatory
+    credential or snapshot alert for every other administrator.
+    """
+    service, store = _service()
+    await _seed(service)
+    shared = next(item for item in store.items if item.title == "Organization wide")
+    assert shared.id is not None
+
+    assert await service.mark_read(ORGANIZATION_ID, USER_ID, shared.id) is True
+
+    assert await service.unread_count(ORGANIZATION_ID, USER_ID) == 1
+    assert await service.unread_count(ORGANIZATION_ID, OTHER_USER_ID) == 2
+    unread_for_other, _ = await service.list_for(ORGANIZATION_ID, OTHER_USER_ID, unread_only=True)
+    assert [item.title for item in unread_for_other] == ["Someone else", "Organization wide"]
+
+
+async def test_mark_all_read_acknowledges_for_the_caller_only() -> None:
+    service, _ = _service()
+    await _seed(service)
+
+    await service.mark_all_read(ORGANIZATION_ID, USER_ID)
+
+    assert await service.unread_count(ORGANIZATION_ID, USER_ID) == 0
+    assert await service.unread_count(ORGANIZATION_ID, OTHER_USER_ID) == 2
 
 
 # ----------------------------------------------------------------------- api
@@ -395,6 +480,26 @@ async def test_unread_only_filter_is_applied() -> None:
     assert response.status_code == 200
     assert [item["title"] for item in response.json()["items"]] == ["Fresh"]
     assert len(store.items) == 5
+
+
+async def test_the_feed_reports_read_state_for_the_viewer_not_the_document() -> None:
+    service, store = _service()
+    await _seed(service)
+    shared = next(item for item in store.items if item.title == "Organization wide")
+    assert shared.id is not None
+    # Another member has already acknowledged the shared alert.
+    await service.mark_read(ORGANIZATION_ID, OTHER_USER_ID, shared.id)
+    app = _app_with(service)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/v1/organizations/{ORGANIZATION_ID}/notifications")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["unread"] == 2
+    row = next(item for item in payload["items"] if item["title"] == "Organization wide")
+    assert row["read"] is False
+    assert row["read_at"] is None
 
 
 async def test_unread_count_endpoint() -> None:
@@ -476,12 +581,12 @@ async def test_success_emitters_are_informational_and_deduplicated() -> None:
     assert snapshot.mandatory is False
     assert snapshot.severity is NotificationSeverity.OK
     assert snapshot.target is NotificationTarget.HISTORY
-    assert snapshot.target_params == {"manifestId": "manifest-9"}
+    assert snapshot.target_params == {}
     assert restore is not None
     assert restore.mandatory is False
-    assert restore.target_params == {"restoreId": "restore-9"}
+    assert restore.target_params == {"operation": "restore-9"}
     assert approval is not None
-    assert approval.target_params == {"restoreId": "restore-9", "approvalId": "approval-3"}
+    assert approval.target_params == {"operation": "restore-9", "step": "authorize"}
     assert (
         await service.notify_snapshot_completed(
             organization_id=ORGANIZATION_ID,
@@ -529,7 +634,7 @@ async def test_snapshot_failure_without_a_manifest_is_never_deduplicated() -> No
         )
         assert failure is not None
         assert failure.mandatory is True
-        assert failure.target_params == {}
+        assert failure.target_params == {"tab": "organizations"}
 
     assert len(store.items) == 2
 

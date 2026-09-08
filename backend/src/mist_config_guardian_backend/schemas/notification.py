@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from beanie import PydanticObjectId
 from pydantic import BaseModel
 
 from mist_config_guardian_backend.models.notification import (
@@ -28,11 +29,16 @@ class NotificationResponse(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_document(cls, notification: Notification) -> "NotificationResponse":
-        """Convert a persisted notification into its API shape."""
+    def from_document(cls, notification: Notification, *, viewer_id: PydanticObjectId) -> "NotificationResponse":
+        """Convert a persisted notification into its API shape, as one viewer sees it.
+
+        Read state is the viewer's own: an organization-wide alert another
+        member has already acknowledged is still unread here.
+        """
         if notification.id is None:
             msg = "Persisted notification is missing an identifier"
             raise ValueError(msg)
+        read_at = notification.read_at_for(viewer_id)
         return cls(
             id=str(notification.id),
             kind=notification.kind,
@@ -42,8 +48,8 @@ class NotificationResponse(BaseModel):
             target=notification.target,
             target_params=dict(notification.target_params),
             mandatory=notification.mandatory,
-            read=notification.read_at is not None,
-            read_at=notification.read_at,
+            read=read_at is not None,
+            read_at=read_at,
             created_at=notification.created_at,
         )
 

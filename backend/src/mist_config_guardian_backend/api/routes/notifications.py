@@ -59,7 +59,7 @@ async def list_notifications(
     )
     unread = await notifications.unread_count(organization_id, user_id)
     return NotificationListResponse(
-        items=[NotificationResponse.from_document(item) for item in items],
+        items=[NotificationResponse.from_document(item, viewer_id=user_id) for item in items],
         total=total,
         unread=unread,
     )

@@ -19,9 +19,11 @@ from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.notification import (
     Notification,
     NotificationKind,
+    NotificationReadReceipt,
     NotificationSeverity,
     NotificationTarget,
 )
+from mist_config_guardian_backend.services.deep_links import deep_link
 
 _DEFAULT_PAGE_SIZE = 50
 # Dedupe keys are indexed, so an emitter that folds a long failure reason into
@@ -52,22 +54,27 @@ def is_mandatory(kind: NotificationKind, severity: NotificationSeverity) -> bool
 
 def visibility_criteria(
     organization_id: PydanticObjectId,
-    user_id: PydanticObjectId | None,
+    user_id: PydanticObjectId,
     *,
     unread_only: bool = False,
 ) -> dict[str, object]:
     """Build the filter selecting notifications one user may read.
 
     A notification without a ``user_id`` is organization-wide and visible to
-    every member; a notification carrying one is private to that member.
+    every member; a notification carrying one is private to that member. Unread
+    means this member has not acknowledged it, whatever anyone else has done.
     """
     criteria: dict[str, object] = {
         "organization_id": organization_id,
         "user_id": {"$in": [None, user_id]},
     }
     if unread_only:
-        criteria["read_at"] = None
+        criteria["read_by.user_id"] = {"$ne": user_id}
     return criteria
+
+
+def _receipt(user_id: PydanticObjectId) -> NotificationReadReceipt:
+    return NotificationReadReceipt(user_id=user_id, read_at=utc_now())
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +114,8 @@ class NotificationStore(Protocol):
     ) -> list[Notification]:
         """Return one newest-first page of notifications matching the criteria."""
 
-    async def mark_read(self, criteria: Mapping[str, object], read_at: datetime) -> int:
-        """Stamp matching notifications as read and return the modified count."""
+    async def mark_read(self, criteria: Mapping[str, object], receipt: NotificationReadReceipt) -> int:
+        """Record the receipt on matching notifications and return the modified count."""
 
 
 class BeanieNotificationStore:
@@ -148,11 +155,15 @@ class BeanieNotificationStore:
         """Return one newest-first page of notifications matching the criteria."""
         return await Notification.find(dict(criteria)).sort("-created_at").skip(skip).limit(limit).to_list()
 
-    async def mark_read(self, criteria: Mapping[str, object], read_at: datetime) -> int:
-        """Stamp matching notifications as read and return the modified count."""
+    async def mark_read(self, criteria: Mapping[str, object], receipt: NotificationReadReceipt) -> int:
+        """Record the receipt on matching notifications and return the modified count.
+
+        The caller's criteria exclude notifications this member already read,
+        so the push cannot record the same member twice.
+        """
         result = await Notification.get_pymongo_collection().update_many(
             dict(criteria),
-            {"$set": {"read_at": read_at, "updated_at": utc_now()}},
+            {"$push": {"read_by": receipt.model_dump()}, "$set": {"updated_at": utc_now()}},
         )
         return int(result.modified_count)
 
@@ -205,7 +216,7 @@ class NotificationService:
     async def list_for(
         self,
         organization_id: PydanticObjectId,
-        user_id: PydanticObjectId | None,
+        user_id: PydanticObjectId,
         *,
         unread_only: bool = False,
         skip: int = 0,
@@ -220,7 +231,7 @@ class NotificationService:
     async def unread_count(
         self,
         organization_id: PydanticObjectId,
-        user_id: PydanticObjectId | None,
+        user_id: PydanticObjectId,
     ) -> int:
         """Count unread notifications visible to the user."""
         return await self._store.count(visibility_criteria(organization_id, user_id, unread_only=True))
@@ -228,25 +239,27 @@ class NotificationService:
     async def mark_read(
         self,
         organization_id: PydanticObjectId,
-        user_id: PydanticObjectId | None,
+        user_id: PydanticObjectId,
         notification_id: PydanticObjectId,
     ) -> bool:
-        """Mark one visible notification read, reporting whether it exists."""
-        criteria = visibility_criteria(organization_id, user_id)
-        criteria["_id"] = notification_id
-        updated = await self._store.mark_read({**criteria, "read_at": None}, utc_now())
+        """Mark one visible notification read for this member, reporting whether it exists."""
+        unread = visibility_criteria(organization_id, user_id, unread_only=True)
+        unread["_id"] = notification_id
+        updated = await self._store.mark_read(unread, _receipt(user_id))
         if updated:
             return True
-        return await self._store.find_one(criteria) is not None
+        visible = visibility_criteria(organization_id, user_id)
+        visible["_id"] = notification_id
+        return await self._store.find_one(visible) is not None
 
     async def mark_all_read(
         self,
         organization_id: PydanticObjectId,
-        user_id: PydanticObjectId | None,
+        user_id: PydanticObjectId,
     ) -> int:
-        """Mark every unread visible notification read and return the count."""
+        """Mark every notification this member can see read for them, and return the count."""
         criteria = visibility_criteria(organization_id, user_id, unread_only=True)
-        return await self._store.mark_read(criteria, utc_now())
+        return await self._store.mark_read(criteria, _receipt(user_id))
 
     # -------------------------------------------------------------- emitters
     async def notify_snapshot_completed(
@@ -264,7 +277,7 @@ class NotificationService:
             title="Snapshot completed",
             body=f"Captured {object_count} configuration objects.",
             target=NotificationTarget.HISTORY,
-            target_params={"manifestId": manifest_id},
+            target_params=deep_link(NotificationTarget.HISTORY),
             dedupe_key=f"snapshot-completed:{manifest_id}",
         )
 
@@ -275,16 +288,20 @@ class NotificationService:
         reason: str,
         manifest_id: str | None = None,
     ) -> Notification | None:
-        """Raise the mandatory alert for a failed snapshot or reconciliation."""
-        target_params = {"manifestId": manifest_id} if manifest_id else {}
+        """Raise the mandatory alert for a failed snapshot or reconciliation.
+
+        The alert opens the organization's card in Settings rather than
+        History: a snapshot fails because of a credential or a schedule, and
+        both are edited there.
+        """
         return await self.emit(
             organization_id=organization_id,
             kind=NotificationKind.SNAPSHOT,
             severity=NotificationSeverity.CRITICAL,
             title="Snapshot failed",
             body=reason,
-            target=NotificationTarget.HISTORY,
-            target_params=target_params,
+            target=NotificationTarget.SETTINGS,
+            target_params=deep_link(NotificationTarget.SETTINGS, tab="organizations"),
             dedupe_key=f"snapshot-failed:{manifest_id}" if manifest_id else None,
         )
 
@@ -310,7 +327,7 @@ class NotificationService:
             title="Webhook delivery gap detected",
             body=body,
             target=NotificationTarget.SETTINGS,
-            target_params={"tab": "webhooks"},
+            target_params=deep_link(NotificationTarget.SETTINGS, tab="organizations"),
             dedupe_key=f"webhook-gap:{marker}",
         )
 
@@ -328,7 +345,7 @@ class NotificationService:
             title="Mist credential verification failed",
             body=reason,
             target=NotificationTarget.SETTINGS,
-            target_params={"tab": "credentials"},
+            target_params=deep_link(NotificationTarget.SETTINGS, tab="organizations"),
             dedupe_key=f"credential-invalid:{reason}",
         )
 
@@ -348,7 +365,7 @@ class NotificationService:
             title="Restore failed",
             body=reason,
             target=NotificationTarget.RESTORE,
-            target_params={"restoreId": restore_id},
+            target_params=deep_link(NotificationTarget.RESTORE, operation=restore_id),
             user_id=user_id,
             dedupe_key=f"restore-failed:{restore_id}",
         )
@@ -369,7 +386,7 @@ class NotificationService:
             title="Restore completed",
             body=f"Applied {applied_count} configuration objects.",
             target=NotificationTarget.RESTORE,
-            target_params={"restoreId": restore_id},
+            target_params=deep_link(NotificationTarget.RESTORE, operation=restore_id),
             user_id=user_id,
             dedupe_key=f"restore-completed:{restore_id}",
         )
@@ -391,7 +408,7 @@ class NotificationService:
             title="Restore approval requested",
             body=f"{requested_by} requested approval for a restore.",
             target=NotificationTarget.RESTORE,
-            target_params={"restoreId": restore_id, "approvalId": approval_id},
+            target_params=deep_link(NotificationTarget.RESTORE, operation=restore_id, step="authorize"),
             user_id=user_id,
             dedupe_key=f"approval-requested:{approval_id}" if user_id is None else None,
         )
@@ -412,6 +429,6 @@ class NotificationService:
             title="Harmful change detected",
             body=summary,
             target=NotificationTarget.CHANGES,
-            target_params={"changeGroupId": change_group_id},
+            target_params=deep_link(NotificationTarget.CHANGES, group=change_group_id),
             dedupe_key=f"impact-detected:{change_group_id}",
         )
