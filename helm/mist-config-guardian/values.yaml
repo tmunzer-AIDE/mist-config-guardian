@@ -11,6 +11,43 @@ frontendImage:
 replicaCount: 1
 workerReplicaCount: 1
 
+mongodb:
+  enabled: true
+  image:
+    repository: mongo
+    tag: "8"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+  resources: {}
+
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "8-alpine"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources: {}
+
+influxdb:
+  enabled: true
+  image:
+    repository: influxdb
+    tag: "2.7-alpine"
+    pullPolicy: IfNotPresent
+  adminUsername: admin
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+  resources: {}
+
 service:
   type: ClusterIP
   port: 80
@@ -30,6 +67,7 @@ config:
   environment: production
   apiV1Prefix: /api/v1
   corsOrigins: https://guardian.example.com
+  # These endpoints are used only when the corresponding bundled service is disabled.
   mongodbUrl: mongodb://mongodb:27017
   mongodbDatabase: mist_config_guardian
   redisUrl: redis://redis:6379/0

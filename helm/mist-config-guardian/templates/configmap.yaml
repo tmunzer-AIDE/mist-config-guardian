@@ -10,11 +10,11 @@ data:
   ENVIRONMENT: {{ .Values.config.environment | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
-  MONGODB_URL: {{ .Values.config.mongodbUrl | quote }}
+  MONGODB_URL: {{ ternary (printf "mongodb://%s-mongodb:27017" (include "mist-config-guardian.fullname" .)) .Values.config.mongodbUrl .Values.mongodb.enabled | quote }}
   MONGODB_DB_NAME: {{ .Values.config.mongodbDatabase | quote }}
-  REDIS_URL: {{ .Values.config.redisUrl | quote }}
-  CELERY_BROKER_URL: {{ .Values.config.celeryBrokerUrl | quote }}
-  CELERY_RESULT_BACKEND: {{ .Values.config.celeryResultBackend | quote }}
-  INFLUXDB_URL: {{ .Values.config.influxdbUrl | quote }}
+  REDIS_URL: {{ ternary (printf "redis://%s-redis:6379/0" (include "mist-config-guardian.fullname" .)) .Values.config.redisUrl .Values.redis.enabled | quote }}
+  CELERY_BROKER_URL: {{ ternary (printf "redis://%s-redis:6379/1" (include "mist-config-guardian.fullname" .)) .Values.config.celeryBrokerUrl .Values.redis.enabled | quote }}
+  CELERY_RESULT_BACKEND: {{ ternary (printf "redis://%s-redis:6379/2" (include "mist-config-guardian.fullname" .)) .Values.config.celeryResultBackend .Values.redis.enabled | quote }}
+  INFLUXDB_URL: {{ ternary (printf "http://%s-influxdb:8086" (include "mist-config-guardian.fullname" .)) .Values.config.influxdbUrl .Values.influxdb.enabled | quote }}
   INFLUXDB_ORG: {{ .Values.config.influxdbOrg | quote }}
   INFLUXDB_BUCKET: {{ .Values.config.influxdbBucket | quote }}
