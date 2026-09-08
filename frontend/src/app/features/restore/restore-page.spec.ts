@@ -7,6 +7,7 @@ import { Router } from '@angular/router';
 import { AuthService, UserRole } from '../../core/auth.service';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { TimeContextService } from '../../core/time-context.service';
+import { UiStateService } from '../../core/ui-state.service';
 import { RestorePage } from './restore-page';
 import {
   RestoreAction,
@@ -93,6 +94,7 @@ function operation(overrides: Partial<RestoreOperation> = {}): RestoreOperation 
     id: 'op-1',
     mode: 'non_destructive',
     include_dependencies: true,
+    requested_version_ids: ['v-corp'],
     target_at: '2026-09-02T11:40:00Z',
     status: 'planned',
     actions: [action(), action({ logical_object_id: 'lo-2', order: 1, object_name: 'SEA-Voice' })],
@@ -917,6 +919,157 @@ describe('RestorePage', () => {
       commands: ['/restore'],
       extras: { queryParams: { operation: 'op-2' }, replaceUrl: true },
     });
+  });
+
+  it('keeps the old mode, and nothing executable, when a rebuild fails', async () => {
+    // Between asking for the new plan and getting it, and after a failure, no
+    // action list may be executable under a mode it was not built for.
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'planned', mode: 'exact' }));
+    await settle();
+
+    all<HTMLButtonElement>('.step-button')[2].click();
+    await settle();
+    const nonDestructive = element().querySelector<HTMLInputElement>(
+      'input[name="authorize-mode"][value="non_destructive"]',
+    )!;
+    nonDestructive.checked = true;
+    nonDestructive.dispatchEvent(new Event('change'));
+    await tick();
+
+    // While the rebuild is in flight the old plan is already gone.
+    expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
+    httpMock
+      .expectOne((request) => request.url === PLANS_URL)
+      .flush({ detail: 'Planning failed' }, { status: 400, statusText: 'Bad Request' });
+    await settle();
+
+    // Nothing to authorize, and the mode shown is still the one the old plan had.
+    expect(all<HTMLButtonElement>('.step-button')[2].disabled).toBe(true);
+    const exact = element().querySelector<HTMLInputElement>('input[value="exact"]');
+    expect(exact?.checked).toBe(true);
+  });
+
+  it('cannot change the mode of a plan that recorded no inputs', async () => {
+    // An operation planned before the inputs were recorded cannot be rebuilt
+    // faithfully from its action list, so its mode is immutable.
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock
+      .expectOne(`${OPERATIONS_URL}/op-1`)
+      .flush(operation({ status: 'planned', mode: 'exact', requested_version_ids: [] }));
+    await settle();
+
+    all<HTMLButtonElement>('.step-button')[2].click();
+    await settle();
+    const nonDestructive = element().querySelector<HTMLInputElement>(
+      'input[name="authorize-mode"][value="non_destructive"]',
+    )!;
+    nonDestructive.checked = true;
+    nonDestructive.dispatchEvent(new Event('change'));
+    await tick();
+
+    httpMock.expectNone((request) => request.url === PLANS_URL);
+    expect(all('.step-button--on')[0].textContent).toContain('3 ·');
+    // The bound state, not the radio the test itself flipped: the mode is still exact.
+    const marked = all('.mode--on').map((label) => label.querySelector('input')?.getAttribute('value'));
+    expect(marked).toEqual(['exact']);
+  });
+
+  it('lets a superseded picker read fail without raising a banner or holding the skeleton', async () => {
+    const ui = TestBed.inject(UiStateService);
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE]));
+    const search = element().querySelector<HTMLInputElement>('.search-input')!;
+
+    search.value = 'NW';
+    search.dispatchEvent(new Event('change'));
+    await tick();
+    search.value = 'NW-Corp';
+    search.dispatchEvent(new Event('change'));
+    await tick();
+    const [broad, narrow] = httpMock.match((request) => request.url === TARGETS_URL);
+
+    broad.flush({ detail: 'boom' }, { status: 500, statusText: 'Server Error' });
+    await settle();
+    expect(ui.error()).toBeNull();
+    narrow.flush(targetList([NW_CORP], 1));
+    await settle();
+
+    expect(ui.loading()).toBe(false);
+    expect(all('.target').length).toBe(1);
+  });
+
+  it('does not refresh the previous organization rail when a run finishes after a switch', async () => {
+    await openRunning();
+    vi.advanceTimersByTime(2000);
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'completed' }));
+    await tick();
+    const verification = httpMock.expectOne(`${OPERATIONS_URL}/op-1/verification`);
+
+    organizationStub.selected.set({ id: 'org-2', name: 'Contoso', status: 'verified' });
+    fixture.detectChanges();
+    await tick();
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores/targets')
+      .flush(targetList([]));
+    httpMock.expectOne((request) => request.url === '/api/v1/organizations/org-2/restores').flush({
+      items: [],
+      total: 0,
+    });
+    await settle();
+
+    // The old run's continuation lands now: it must not read the old rail.
+    verification.flush({ verified: true, checks: [], post_snapshot_id: null, monitoring_session_ids: [] });
+    await settle();
+    httpMock.expectNone((request) => request.url === OPERATIONS_URL);
+    expect(text()).not.toContain('VERIFIED');
+  });
+
+  it('does not stay busy for a plan build the page moved on from', async () => {
+    // Busy belongs to the selection. A build still in flight when the page
+    // moves to another organization must neither disable the new screen nor
+    // re-enable it later at some arbitrary moment.
+    await boot();
+    all<HTMLInputElement>('.target-box')[0].click();
+    await settle();
+    button('Build restore plan')!.click();
+    await tick();
+    const stale = httpMock.expectOne((request) => request.url === PLANS_URL);
+
+    organizationStub.selected.set({ id: 'org-2', name: 'Contoso', status: 'verified' });
+    fixture.detectChanges();
+    await tick();
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores/targets')
+      .flush(targetList([NW_CORP]));
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores')
+      .flush({ items: [], total: 0 });
+    await settle();
+    stale.flush(operation());
+    await settle();
+
+    all<HTMLInputElement>('.target-box')[0].click();
+    await settle();
+    expect(button('Build restore plan')!.disabled).toBe(false);
+    button('Build restore plan')!.click();
+    await tick();
+    httpMock
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/restores/plans')
+      .flush(operation({ id: 'op-2' }));
+    await settle();
+
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
   });
 
   it('never lets one poll overlap the next', async () => {

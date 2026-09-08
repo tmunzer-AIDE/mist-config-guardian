@@ -181,6 +181,9 @@ export class RestorePage {
   /** Target and rail reads are sequenced on their own: a filter change is not a new selection. */
   private targetsRequest = 0;
   private historyRequest = 0;
+  /** Their loading and error state is scoped too: a superseded read reports nothing. */
+  private targetsScope = new AbortController();
+  private railScope = new AbortController();
   /** The poll tick in flight, so the interval cannot overlap its own reads. */
   private pollInFlight: AbortSignal | null = null;
 
@@ -261,9 +264,15 @@ export class RestorePage {
       if (!organizationId) {
         return;
       }
-      void untracked(() =>
-        this.ui.track('Loading restore targets', () => this.loadTargets(organizationId, query)),
-      );
+      untracked(() => {
+        this.targetsScope.abort();
+        this.targetsScope = new AbortController();
+        void this.ui.track(
+          'Loading restore targets',
+          () => this.loadTargets(organizationId, query),
+          this.targetsScope.signal,
+        );
+      });
     });
 
     // History and the deep links are independent of the filter row. The link
@@ -281,7 +290,13 @@ export class RestorePage {
       untracked(() => this.bootstrap(organizationId, revision, link));
     });
 
-    inject(DestroyRef).onDestroy(() => this.stopPolling());
+    inject(DestroyRef).onDestroy(() => {
+      // Nothing still in flight may report to a page that is gone.
+      this.stopPolling();
+      this.selection.abort();
+      this.targetsScope.abort();
+      this.railScope.abort();
+    });
   }
 
   // ---- loading ------------------------------------------------------------
@@ -348,7 +363,9 @@ export class RestorePage {
       return;
     }
     this.loadedRail = key;
-    await this.ui.track('Loading recent restores', () => this.loadHistory(organizationId));
+    this.railScope.abort();
+    this.railScope = new AbortController();
+    await this.ui.track('Loading recent restores', () => this.loadHistory(organizationId), this.railScope.signal);
   }
 
   private async applyLink(organizationId: string, link: DeepLink, token: AbortSignal): Promise<void> {
@@ -395,6 +412,8 @@ export class RestorePage {
     this.compensationPlan.set(null);
     this.compensating.set(false);
     this.pollExhausted.set(false);
+    // Whatever was busy was busy for the previous selection.
+    this.busy.set(false);
     if (this.currentStep() !== 'targets') {
       this.currentStep.set('targets');
     }
@@ -480,7 +499,7 @@ export class RestorePage {
     // The initial read, a refresh and the reload after a run can all be in
     // flight. Only the latest describes the rail on screen; a slow answer for
     // a previous organization is older by construction.
-    if (request !== this.historyRequest) {
+    if (request !== this.historyRequest || organizationId !== this.organizations.selected()?.id) {
       return;
     }
     this.history.set(response.items ?? []);
@@ -540,20 +559,32 @@ export class RestorePage {
     if (mode === this.mode()) {
       return;
     }
-    // A plan can only take a new mode by being rebuilt from its versions. One
-    // with no versions to rebuild from keeps its mode: the old action list —
-    // deletes included — must not execute under a label it no longer matches.
-    if (this.activeOperation() && this.currentStep() !== 'targets' && this.selectedIds().length === 0) {
+    if (this.activeOperation() && this.currentStep() !== 'targets') {
+      // A plan can only take a new mode by being rebuilt from its versions. One
+      // with no versions to rebuild from keeps its mode: the old action list —
+      // deletes included — must not execute under a label it does not match.
+      if (this.selectedIds().length === 0) {
+        return;
+      }
+      void this.rebuildPlan(mode);
       return;
     }
     this.mode.set(mode);
-    // The plan is mode-specific: an exact plan may delete objects a
-    // non-destructive plan leaves alone, so the old action list cannot stand.
-    if (this.activeOperation() && this.currentStep() !== 'targets') {
-      void this.buildPlan();
-      return;
-    }
     this.invalidatePlan();
+  }
+
+  /**
+   * Replace the plan with one built in another mode.
+   *
+   * The old plan goes before the new one is asked for, and the mode shown
+   * changes only once the new one exists: an exact plan may delete objects a
+   * non-destructive plan leaves alone, so at no point may an action list be
+   * executable under a label it does not match — not while the rebuild is in
+   * flight, and not after it fails.
+   */
+  private async rebuildPlan(mode: RestoreMode): Promise<void> {
+    this.clearOperation();
+    await this.buildPlan(mode);
   }
 
   protected setIncludeDependencies(include: boolean): void {
@@ -577,7 +608,7 @@ export class RestorePage {
 
   // ---- step 2 -------------------------------------------------------------
 
-  protected async buildPlan(): Promise<void> {
+  protected async buildPlan(mode: RestoreMode = this.mode()): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
     const versionIds = this.selectedIds();
     if (!organizationId || versionIds.length === 0 || this.readOnly() || this.busy()) {
@@ -587,15 +618,20 @@ export class RestorePage {
     this.busy.set(true);
     const operation = await this.ui.track(
       'Building a side-effect-free plan',
-      () => this.restores.createPlan(organizationId, versionIds, this.mode(), this.includeDependencies()),
+      () => this.restores.createPlan(organizationId, versionIds, mode, this.includeDependencies()),
       token,
     );
+    if (this.stale(token)) {
+      return;
+    }
     this.busy.set(false);
-    if (!operation || this.stale(token)) {
+    if (!operation) {
       return;
     }
     this.clearOperation();
     this.activeOperation.set(operation);
+    // The mode is the plan's: it is committed with the plan, never ahead of it.
+    this.mode.set(mode);
     this.currentStep.set('plan');
     // The plan is a record now; a refresh should return to it, not to the picker.
     this.canonicalize(organizationId, operation.id, true);
@@ -630,8 +666,11 @@ export class RestorePage {
       () => this.restores.execute(organizationId, operation.id, token),
       generation,
     );
+    if (this.stale(generation)) {
+      return;
+    }
     this.busy.set(false);
-    if (!queued || this.stale(generation)) {
+    if (!queued) {
       return;
     }
     const current = this.clearOperation();
@@ -657,8 +696,11 @@ export class RestorePage {
       () => this.restores.requestApproval(organizationId, operation.id),
       token,
     );
+    if (this.stale(token)) {
+      return;
+    }
     this.busy.set(false);
-    if (approval && !this.stale(token)) {
+    if (approval) {
       this.activeOperation.set({ ...operation, approval });
     }
   }
@@ -677,8 +719,11 @@ export class RestorePage {
       () => this.restores.approval(organizationId, approval.id),
       token,
     );
+    if (this.stale(token)) {
+      return;
+    }
     this.busy.set(false);
-    if (fresh && !this.stale(token)) {
+    if (fresh) {
       this.activeOperation.set({ ...operation, approval: fresh });
     }
   }
@@ -751,6 +796,9 @@ export class RestorePage {
       if (!isRestoreInFlight(next.status)) {
         this.stopPolling();
         await this.afterRun(organizationId, next, token);
+        if (this.stale(token)) {
+          return;
+        }
         // A run that just finished belongs in the rail beside the picker.
         await this.refreshHistory(organizationId);
       }
@@ -802,8 +850,11 @@ export class RestorePage {
       () => this.restores.get(organizationId, operation.id),
       token,
     );
+    if (this.stale(token)) {
+      return;
+    }
     this.busy.set(false);
-    if (!next || this.stale(token)) {
+    if (!next) {
       return;
     }
     this.activeOperation.set(next);
@@ -827,8 +878,11 @@ export class RestorePage {
       () => this.restores.planCompensation(organizationId, operation.id),
       token,
     );
+    if (this.stale(token)) {
+      return;
+    }
     this.busy.set(false);
-    if (plan && !this.stale(token)) {
+    if (plan) {
       this.compensationPlan.set(plan);
       this.compensating.set(true);
     }
@@ -847,8 +901,11 @@ export class RestorePage {
       () => this.restores.executeCompensation(organizationId, operation.id, token),
       generation,
     );
+    if (this.stale(generation)) {
+      return;
+    }
     this.busy.set(false);
-    if (!queued || this.stale(generation)) {
+    if (!queued) {
       return;
     }
     const current = this.clearOperation();
@@ -903,10 +960,18 @@ export class RestorePage {
     return operation.status !== 'planned';
   }
 
+  /**
+   * Put the operation's own inputs back into the picker.
+   *
+   * The requested versions are used as requested, not reconstructed from the
+   * action list: that list drops a chosen version already in effect and adds
+   * dependencies and forced deletes nobody chose. An operation planned before
+   * the inputs were recorded gets an empty selection, which is what makes its
+   * mode immutable (see setMode).
+   */
   private seedSelection(operation: RestoreOperation): void {
+    this.selectedIds.set([...new Set(operation.requested_version_ids ?? [])]);
     const actions = operation.actions ?? [];
-    const versionIds = [...new Set(actions.map((action) => action.source_version_id).filter(Boolean))];
-    this.selectedIds.set(versionIds);
     this.rememberLabels(actions.map((action) => [action.source_version_id, action.object_name]));
   }
 

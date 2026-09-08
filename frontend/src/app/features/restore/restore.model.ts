@@ -71,6 +71,11 @@ export interface RestoreOperation {
   id: string;
   mode: RestoreMode;
   include_dependencies: boolean;
+  /**
+   * The versions the requester chose. Empty on operations planned before it
+   * was recorded; such a plan cannot be rebuilt, so its mode is immutable.
+   */
+  requested_version_ids?: string[];
   target_at: string;
   status: RestoreStatus;
   actions: RestoreAction[];
