@@ -35,12 +35,19 @@ export class OrganizationContextService {
   /** True once organizations were fetched and none exist. */
   readonly isEmpty = computed(() => this.loadedState() && this.items().length === 0);
 
+  /** Which session this list belongs to; a read outliving it is discarded. */
+  private generation = 0;
+
   /** Load the organization list once per session, or again after onboarding. */
   async load(force = false): Promise<void> {
     if (this.loadedState() && !force) {
       return;
     }
+    const generation = this.generation;
     const response = await firstValueFrom(this.organizations.list());
+    if (generation !== this.generation) {
+      return;
+    }
     this.items.set(response.items);
     this.loadedState.set(true);
     const current = this.selectedIdState();
@@ -75,6 +82,9 @@ export class OrganizationContextService {
 
   /** Forget cached state on sign-out so the next user starts clean. */
   reset(): void {
+    // A list read for the forgotten session must not land afterwards and offer
+    // the previous user's organizations to the next one.
+    this.generation += 1;
     this.items.set([]);
     this.loadedState.set(false);
     this.selectedIdState.set(null);

@@ -1,5 +1,6 @@
 import { inject, Injectable } from '@angular/core';
 
+import { AccountService } from '../features/account/account.service';
 import { MonitoringService } from '../features/impact/monitoring.service';
 import { AuthService } from './auth.service';
 import { ChangeGroupService } from './change-group.service';
@@ -14,11 +15,12 @@ import { TimelineService } from './timeline.service';
  * Forget everything a session owned.
  *
  * Signing out is not only an authentication change: the organization list,
- * the notification feed, the overview, the change groups, the timeline and
- * the search results were all read as that user, for organizations the next
- * one may not be able to see. One place resets them so a deliberate sign-out
- * and a session the server has revoked leave the application in the same
- * state.
+ * the notification feed, the overview, the change groups, the timeline, the
+ * search results and the account panels were all read as that user, for
+ * organizations the next one may not be able to see. One place resets them so
+ * a deliberate sign-out and a session the server has revoked leave the
+ * application in the same state — and each reset discards its own reads still
+ * in flight, which would otherwise answer into the next session.
  */
 @Injectable({ providedIn: 'root' })
 export class SessionResetService {
@@ -29,6 +31,7 @@ export class SessionResetService {
   private readonly changeGroups = inject(ChangeGroupService);
   private readonly timeline = inject(TimelineService);
   private readonly monitoring = inject(MonitoringService);
+  private readonly account = inject(AccountService);
   private readonly search = inject(SearchService);
   private readonly time = inject(TimeContextService);
 
@@ -40,6 +43,7 @@ export class SessionResetService {
     this.changeGroups.reset();
     this.timeline.reset();
     this.monitoring.reset();
+    this.account.reset();
     this.search.reset();
     this.time.returnToNow();
   }

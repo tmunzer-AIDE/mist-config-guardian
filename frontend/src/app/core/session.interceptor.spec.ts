@@ -146,6 +146,23 @@ describe('sessionInterceptor', () => {
     expect(notifications.unread()).toBe(0);
   });
 
+  it('discards a read that answers after the session it belonged to ended', async () => {
+    // Clearing the signals is not enough: a successful read still in flight
+    // would repopulate them, possibly under whoever signs in next.
+    const organizations = TestBed.inject(OrganizationContextService);
+    auth.applyUser(USER);
+    const loading = organizations.load();
+    const inFlight = httpMock.expectOne('/api/v1/organizations');
+
+    await fail('/api/v1/organizations/org-1/overview');
+    expect(organizations.all()).toEqual([]);
+
+    inFlight.flush({ items: [{ id: 'org-1', name: 'Northwind Retail' }], total: 1 });
+    await loading;
+
+    expect(organizations.all()).toEqual([]);
+  });
+
   it('passes other failures through untouched', async () => {
     auth.applyUser(USER);
 

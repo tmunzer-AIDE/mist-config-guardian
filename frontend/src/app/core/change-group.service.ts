@@ -95,6 +95,11 @@ export class ChangeGroupService {
   }
 
   reset(): void {
+    // Reads issued by the session being forgotten are still in flight; without
+    // moving the sequences, one could answer afterwards and repopulate this —
+    // possibly under whoever signs in next.
+    this.listRequest += 1;
+    this.detailRequest += 1;
     this.items.set([]);
     this.total.set(0);
     this.detail.set(null);

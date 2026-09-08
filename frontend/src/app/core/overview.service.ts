@@ -107,6 +107,8 @@ export class OverviewService {
   }
 
   reset(): void {
+    this.loadRequest += 1;
+    this.badgeRequest += 1;
     this.overview.set(null);
     this.unrecovered.set(0);
   }

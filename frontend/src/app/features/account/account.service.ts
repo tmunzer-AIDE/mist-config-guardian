@@ -39,6 +39,8 @@ export class AccountService {
 
   private readonly mfaOverride = signal<boolean | null>(null);
   private readonly passkeysLoaded = signal(false);
+  /** Which session these panels belong to; a read outliving it is discarded. */
+  private generation = 0;
 
   readonly sessions = signal<AccountSession[]>([]);
   readonly passkeys = signal<Passkey[]>([]);
@@ -65,7 +67,11 @@ export class AccountService {
   // ---------------------------------------------------------------- profile
 
   async loadProfile(): Promise<AccountProfile> {
-    return this.apply(await firstValueFrom(this.http.get<AccountProfile>(`${ACCOUNT}/profile`)));
+    const generation = this.generation;
+    const profile = await firstValueFrom(this.http.get<AccountProfile>(`${ACCOUNT}/profile`));
+    // A read that outlived its session must not fill these panels for whoever
+    // is signed in now.
+    return generation === this.generation ? this.apply(profile) : profile;
   }
 
   async updateProfile(patch: ProfilePatch): Promise<AccountProfile> {
@@ -138,10 +144,13 @@ export class AccountService {
   // --------------------------------------------------------------- sessions
 
   async loadSessions(): Promise<void> {
+    const generation = this.generation;
     const response = await firstValueFrom(
       this.http.get<AccountSessionList>(`${ACCOUNT}/sessions`),
     );
-    this.sessions.set(response.items);
+    if (generation === this.generation) {
+      this.sessions.set(response.items);
+    }
   }
 
   async revokeSession(id: string): Promise<void> {
@@ -192,9 +201,12 @@ export class AccountService {
   // --------------------------------------------------------------- passkeys
 
   async loadPasskeys(): Promise<void> {
+    const generation = this.generation;
     const response = await firstValueFrom(this.http.get<PasskeyList>(`${ACCOUNT}/passkeys`));
-    this.passkeys.set(response.items);
-    this.passkeysLoaded.set(true);
+    if (generation === this.generation) {
+      this.passkeys.set(response.items);
+      this.passkeysLoaded.set(true);
+    }
   }
 
   /** Adding a passkey re-checks the password: the credential outlives this session. */
@@ -232,6 +244,22 @@ export class AccountService {
     // `HttpClient.delete` only sends a body when one is given explicitly.
     await firstValueFrom(this.http.delete(`${ACCOUNT}/passkeys/${id}`, { body: { password } }));
     this.passkeys.update((items) => items.filter((item) => item.id !== id));
+  }
+
+  /**
+   * Forget the signed-in user's own account state.
+   *
+   * The profile, the session list and the passkeys are the most personal
+   * things the application holds, and they belong to whoever was signed in.
+   * Reads still in flight are discarded with them.
+   */
+  reset(): void {
+    this.generation += 1;
+    this.profile.set(null);
+    this.sessions.set([]);
+    this.passkeys.set([]);
+    this.passkeysLoaded.set(false);
+    this.mfaOverride.set(null);
   }
 }
 

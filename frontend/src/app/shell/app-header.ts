@@ -4,6 +4,7 @@ import { Router } from '@angular/router';
 import { AuthService } from '../core/auth.service';
 import { OrganizationContextService } from '../core/organization-context.service';
 import { SearchService } from '../core/search.service';
+import { SessionResetService } from '../core/session-reset.service';
 import { TimeContextService } from '../core/time-context.service';
 
 @Component({
@@ -22,6 +23,7 @@ export class AppHeader {
   private readonly router = inject(Router);
   protected readonly auth = inject(AuthService);
   protected readonly organizations = inject(OrganizationContextService);
+  private readonly reset = inject(SessionResetService);
   protected readonly time = inject(TimeContextService);
   protected readonly search = inject(SearchService);
 
@@ -75,8 +77,12 @@ export class AppHeader {
 
   protected async signOut(): Promise<void> {
     this.closeMenus();
+    // End the session server-side, then forget everything it owned. Resetting
+    // the organization list alone left the previous user's notifications,
+    // overview, change groups, monitoring, search and account panels in place
+    // for whoever signed in next.
     await this.auth.logout();
-    this.organizations.reset();
+    this.reset.clear();
     await this.router.navigate(['/login']);
   }
 

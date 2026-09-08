@@ -62,6 +62,7 @@ export class SearchService {
   }
 
   reset(): void {
+    this.request += 1;
     this.query.set('');
     this.results.set([]);
   }
