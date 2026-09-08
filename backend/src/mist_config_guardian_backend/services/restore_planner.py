@@ -387,6 +387,7 @@ class RestorePlanner:
             requested_by=requested_by,
             mode=mode,
             include_dependencies=include_dependencies,
+            requested_version_ids=list(version_ids),
             target_at=target_at,
             actions=actions,
             warnings=warnings,

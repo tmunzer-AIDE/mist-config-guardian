@@ -107,6 +107,12 @@ class RestoreOperation(TimestampedModel, Document):
     requested_by: PydanticObjectId
     mode: RestoreMode
     include_dependencies: bool = True
+    # The versions the requester chose, as chosen. The action list is derived
+    # from them and is lossy in both directions: a chosen version already in
+    # effect produces no action, and dependency expansion and forced deletes
+    # add actions nobody chose. Rebuilding the plan needs the inputs, not the
+    # output. Empty on operations planned before this was recorded.
+    requested_version_ids: list[PydanticObjectId] = Field(default_factory=list)
     target_at: datetime
     status: RestoreStatus = RestoreStatus.PLANNED
     actions: list[RestoreAction] = Field(default_factory=list)

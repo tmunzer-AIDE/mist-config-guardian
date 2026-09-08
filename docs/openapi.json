@@ -3885,6 +3885,13 @@
             "title": "Preflight Errors",
             "type": "array"
           },
+          "requested_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requested Version Ids",
+            "type": "array"
+          },
           "started_at": {
             "anyOf": [
               {

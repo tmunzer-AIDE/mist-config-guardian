@@ -81,6 +81,9 @@ class RestoreOperationResponse(BaseModel):
     id: str
     mode: RestoreMode
     include_dependencies: bool
+    # The versions the requester chose; empty on operations planned before it
+    # was recorded, which a client must treat as not rebuildable.
+    requested_version_ids: list[str] = Field(default_factory=list)
     target_at: datetime
     status: RestoreStatus
     actions: list[RestoreActionResponse]
@@ -116,6 +119,7 @@ class RestoreOperationResponse(BaseModel):
             id=str(operation.id),
             mode=operation.mode,
             include_dependencies=operation.include_dependencies,
+            requested_version_ids=[str(version_id) for version_id in operation.requested_version_ids],
             target_at=operation.target_at,
             status=operation.status,
             actions=[RestoreActionResponse.from_model(action) for action in operation.actions],
