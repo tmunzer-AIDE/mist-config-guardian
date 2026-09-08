@@ -208,20 +208,22 @@ class UserService:
         if expires_at is None or _aware_expired(expires_at):
             raise InvitationError(invalid)
 
-        if display_name and display_name.strip():
-            user.display_name = display_name.strip()
-        user.password_hash = hash_password(password)
-        user.password_changed_at = utc_now()
-        await write_user_fields(
-            user,
-            invitation_token_hash=None,
-            invitation_expires_at=None,
-            is_active=True,
-            status=UserStatus.ACTIVE,
-            password_hash=user.password_hash,
-            display_name=user.display_name,
-            password_changed_at=user.password_changed_at,
-        )
+        changes: dict[str, object] = {
+            "invitation_token_hash": None,
+            "invitation_expires_at": None,
+            "is_active": True,
+            "status": UserStatus.ACTIVE,
+            "password_hash": hash_password(password),
+            "password_changed_at": utc_now(),
+        }
+        # Only a name the invitation's owner actually chose. Naming the field
+        # unconditionally wrote back the one loaded a moment earlier, so an
+        # administrator who renamed the account in between had their change
+        # undone by someone accepting an invitation to it.
+        chosen = (display_name or "").strip()
+        if chosen:
+            changes["display_name"] = chosen
+        await write_user_fields(user, **changes)
         return user
 
     async def update_user(

@@ -4,6 +4,7 @@ Each test names the attack it refuses, so a later refactor that reopens one
 fails here rather than in a scan.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -110,6 +111,10 @@ class _ReloadableCollection:
         self._document.update(update["$set"])
         return type("Result", (), {"modified_count": 1, "matched_count": 1})()
 
+    def rename(self, display_name: str) -> None:
+        """Someone else changes the stored name while this request is running."""
+        self._document["display_name"] = display_name
+
     def reload(self) -> dict[str, Any]:
         return dict(self._document)
 
@@ -156,6 +161,81 @@ async def test_a_self_service_write_names_only_its_own_fields(monkeypatch: pytes
     # The fields an administrator owns are not in the write at all.
     assert not written & {"role", "is_active", "status"}
     assert user.display_name == "Renamed"
+
+
+class _WaveStore:
+    """A store that holds a wave of requests at one scope until all have counted it.
+
+    Concurrency here is not a matter of luck: every request in the wave counts
+    the account before any of them looks at the address, which is the ordering
+    that leaves an increment behind.
+    """
+
+    def __init__(self, inner: MemoryThrottleStore, hold: str, arriving: int) -> None:
+        self._inner = inner
+        self._hold = hold
+        self._gate = asyncio.Barrier(arriving)
+
+    async def failures(self, key: str) -> tuple[datetime, datetime] | None:
+        return await self._inner.failures(key)  # type: ignore[return-value]
+
+    async def record(self, key: str, window: timedelta) -> int:
+        counted = await self._inner.record(key, window)
+        if key == self._hold:
+            await self._gate.wait()
+        return counted
+
+    async def release(self, key: str) -> None:
+        await self._inner.release(key)
+
+    async def clear(self, key: str) -> None:
+        await self._inner.clear(key)
+
+
+async def test_a_wave_of_refused_requests_leaves_the_account_budget_where_it_was() -> None:
+    """Rolling back only the earlier scopes still charges the account.
+
+    Six requests arriving together each count the account before any of them
+    reaches the exhausted address. Five are refused by the address and give
+    their account attempt back; the sixth is refused by the account itself,
+    having pushed it past its own limit, and kept that one. Repeat the wave and
+    the victim is locked out by someone who never sent a password.
+    """
+    window = timedelta(minutes=15)
+    inner = MemoryThrottleStore()
+    settings = _settings(sign_in_failures_per_account=5, sign_in_failures_per_address=2)
+    account = ThrottleService(settings, inner).account("victim@example.com")
+    address = Scope("address:203.0.113.7", 2)
+    # The attacker has already spent their own address budget.
+    for _ in range(3):
+        await inner.record(address.key, window)
+
+    wave = 6
+    service = ThrottleService(settings, _WaveStore(inner, account.key, wave))
+    refusals = await asyncio.gather(
+        *(service.reserve(account, address) for _ in range(wave)),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(outcome, ThrottledError) for outcome in refusals)
+    # Nothing was spent, because nothing was attempted.
+    assert await inner.failures(account.key) is None
+
+
+async def test_giving_back_a_refusal_does_not_reopen_the_limit() -> None:
+    """The count the failures left is what refuses; the refusal itself is not.
+
+    Returning the attempt that a scope refused must not let the next one
+    through, or the limit would admit an attempt for every one it turned away.
+    """
+    service = ThrottleService(_settings(sign_in_failures_per_account=2), MemoryThrottleStore())
+    scope = service.account("victim@example.com")
+
+    await service.reserve(scope)
+    await service.reserve(scope)
+    for _ in range(5):
+        with pytest.raises(ThrottledError):
+            await service.reserve(scope)
 
 
 async def test_a_refused_attempt_does_not_spend_the_scopes_it_never_used() -> None:
@@ -255,6 +335,46 @@ async def test_accepting_an_invitation_persists_everything_it_changed(
     assert reloaded["display_name"] == "Sara Kaur"
     assert reloaded["password_changed_at"] is not None
     assert reloaded["status"] is UserStatus.ACTIVE
+
+
+async def test_accepting_an_invitation_does_not_write_back_a_name_it_was_not_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Naming the field unconditionally wrote the name loaded a moment earlier.
+
+    An administrator correcting the name on an invited account had the
+    correction undone by whoever accepted the invitation, because acceptance
+    put back the placeholder it had read on the way in.
+    """
+    token = "an-invitation-token"
+    stored = _user(role=UserRole.OPERATOR)
+    stored.display_name = "Invited"
+    stored.status = UserStatus.INVITED
+    stored.is_active = False
+    stored.invitation_token_hash = hash_opaque_token(token)
+    stored.invitation_expires_at = utc_now() + timedelta(days=1)
+    stored.password_changed_at = None
+
+    collection = _ReloadableCollection(stored)
+    monkeypatch.setattr(User, "get_pymongo_collection", lambda: collection)
+
+    async def _find_one(_criteria: dict[str, Any]) -> User:
+        loaded = stored.model_copy(deep=True)
+        # An administrator renames the account between the read and the write.
+        collection.rename("Sara Kaur-Mercer")
+        return loaded
+
+    monkeypatch.setattr(User, "find_one", _find_one)
+
+    await UserService(_settings()).accept_invitation(
+        token=token,
+        password="a-long-enough-password",
+    )
+
+    reloaded = collection.reload()
+    assert reloaded["display_name"] == "Sara Kaur-Mercer"
+    assert reloaded["status"] is UserStatus.ACTIVE
+    assert reloaded["password_changed_at"] is not None
 
 
 # ------------------------------------------------------------- recovery codes

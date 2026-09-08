@@ -191,21 +191,29 @@ class ThrottleService:
         the threshold then bounds completed serial failures rather than
         attempts admitted. The count is given back by :meth:`succeeded` and
         :meth:`release`, so a reservation that is not a failure does not
-        linger — including every scope counted for an attempt that a later
-        scope then refuses.
+        linger — including every scope counted for a refused attempt, which is
+        an attempt that never happened.
         """
         reserved: list[Scope] = []
         for scope in scopes:
             count = await self._store.record(scope.key, self._window)
             if count > scope.limit:
-                # The attempt is refused here, so it never happens, and the
-                # scopes already counted for it are given back. Charging them
-                # anyway let a stranger who had spent their own address budget
-                # go on spending an account's: enough refused requests and the
-                # account was locked out by someone who never sent a password.
-                await self.release(*reserved)
+                # Read the window before giving anything back: releasing the
+                # last attempt on a scope can close its bucket entirely.
                 live = await self._store.failures(scope.key)
                 remaining = max(1, int((live[1] - utc_now()).total_seconds())) if live else 1
+                # The attempt is refused here, so it never happens, and every
+                # scope counted for it is given back — the one that refused it
+                # included. Keeping any of them let a stranger raise a limit
+                # without ever sending a password: the scopes counted before
+                # the refusal directly, and the refusing scope itself whenever
+                # a wave of requests arrived together, since each counted the
+                # account before any of them looked at the address, and the
+                # one that pushed the account over its own limit kept that
+                # increment. What holds the limit is the count the failures
+                # left, which is untouched: the next attempt records over it
+                # again and is refused again.
+                await self.release(*reserved, scope)
                 raise ThrottledError(remaining)
             reserved.append(scope)
 
