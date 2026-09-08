@@ -542,3 +542,38 @@ async def test_a_login_challenge_dies_after_a_few_wrong_codes() -> None:
 
     assert late.status_code == 401
     assert sessions.started == []
+
+
+async def test_wrong_codes_across_fresh_challenges_lock_the_second_factor() -> None:
+    """Per-challenge and per-address limits alone leave an unbounded code budget.
+
+    A new challenge is a password away, and addresses rotate; the count that
+    matters is the account's, cleared only by a completed second factor.
+    """
+    user = _user()
+    app, _users, sessions = _sign_in_app(user, "a-long-enough-password")
+
+    async with _client(app) as client:
+        secret, token = await _challenged(client)
+        for _ in range(5):
+            await client.post("/api/v1/auth/login/mfa", json={"challenge_token": token, "code": "000000"})
+        # A fresh challenge: the previous one is spent, the account's budget is not reset.
+        challenged = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "operator@example.com", "password": "a-long-enough-password"},
+        )
+        token = challenged.json()["challenge_token"]
+        for _ in range(5):
+            await client.post("/api/v1/auth/login/mfa", json={"challenge_token": token, "code": "000000"})
+        challenged = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "operator@example.com", "password": "a-long-enough-password"},
+        )
+        blocked = await client.post(
+            "/api/v1/auth/login/mfa",
+            json={"challenge_token": challenged.json()["challenge_token"], "code": pyotp.TOTP(secret).now()},
+        )
+
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) > 0
+    assert sessions.started == []

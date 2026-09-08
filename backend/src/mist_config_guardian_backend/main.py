@@ -55,7 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = ConfigGuardianApp(app_settings, lifespan=create_lifespan(app_settings))
     app.state.database = DatabaseManager(app_settings)
     # Outermost, so a historical write is refused before it reaches anything.
-    app.add_middleware(HistoricalContextGuard)
+    app.add_middleware(HistoricalContextGuard, prefix=app_settings.api_v1_prefix)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.parsed_cors_origins,

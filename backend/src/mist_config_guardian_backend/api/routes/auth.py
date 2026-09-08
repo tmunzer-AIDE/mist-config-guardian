@@ -149,16 +149,18 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
         raise rejected from exc
 
     address = throttle.address(request)
-    await guard_or_raise(throttle, address)
+    second_factor = throttle.second_factor(challenge.user_id)
+    await guard_or_raise(throttle, address, second_factor)
     if not await mfa.record_login_attempt(challenge.handle):
-        await throttle.failed(address)
+        await throttle.failed(address, second_factor)
         raise rejected
 
     user = await users.get_by_id(challenge.user_id)
     if user is None or not user.is_active or not await mfa.verify_second_factor(user, payload.code):
-        await throttle.failed(address)
+        await throttle.failed(address, second_factor)
         raise rejected
     await mfa.consume_login_challenge(challenge.handle)
+    await throttle.succeeded(second_factor)
     return await _complete_sign_in(
         user,
         request=request,

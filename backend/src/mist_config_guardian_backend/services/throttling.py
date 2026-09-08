@@ -136,6 +136,15 @@ class ThrottleService:
         """The scope for password confirmations by one signed-in user."""
         return Scope(f"user:{user_id}", self._settings.sign_in_failures_per_account)
 
+    def second_factor(self, user_id: PydanticObjectId) -> Scope:
+        """The scope for second-factor codes tried against one account.
+
+        Separate from the password scope, and cleared only by a completed
+        second factor: fresh challenges and rotating addresses must not add up
+        to an unbounded code budget.
+        """
+        return Scope(f"mfa:{user_id}", self._settings.sign_in_failures_per_account)
+
     def address(self, request: Request) -> Scope:
         """The scope for everything arriving from one client address.
 
