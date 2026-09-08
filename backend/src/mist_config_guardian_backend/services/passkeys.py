@@ -6,6 +6,7 @@ MongoDB-backed one, so a ceremony that starts on one API replica can be
 completed on another.
 """
 
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol
 
 from beanie import PydanticObjectId
@@ -41,6 +42,21 @@ class ChallengeStore(Protocol):
     ) -> webauthn_security.StoredChallenge:
         """Consume a challenge exactly once."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class PasskeyAuthentication:
+    """A verified assertion and whether the authenticator verified its user.
+
+    A passkey proves possession of the device. Only an assertion the
+    authenticator marks as user-verified — a PIN, a fingerprint, a face — also
+    proves presence of the person, which is what makes it count as a second
+    factor. The two are reported separately so sign-in can decide.
+    """
+
+    user: User
+    credential: WebAuthnCredential
+    user_verified: bool
 
 
 class PasskeyError(ValueError):
@@ -141,7 +157,7 @@ class PasskeyService:
         *,
         challenge_token: str,
         credential: dict[str, Any],
-    ) -> tuple[User, WebAuthnCredential]:
+    ) -> PasskeyAuthentication:
         """Verify an assertion and return the account it authenticates."""
         stored = await self._store.take(
             self._handle(challenge_token),
@@ -171,7 +187,23 @@ class PasskeyService:
         record.last_used_at = utc_now()
         record.touch()
         await record.save()
-        return user, record
+        return PasskeyAuthentication(
+            user=user,
+            credential=record,
+            user_verified=bool(getattr(verified, "user_verified", False)),
+        )
+
+    async def revoke_all(self, user_id: PydanticObjectId) -> int:
+        """Remove every passkey an account holds and return how many.
+
+        A passkey is a durable credential that outlives a session. When an
+        account is disabled to contain a compromise, every one of them goes
+        with it; reactivation means enrolling them again.
+        """
+        records = await WebAuthnCredential.find({"user_id": user_id}).to_list()
+        for record in records:
+            await record.delete()
+        return len(records)
 
     # ------------------------------------------------------------- management
     async def rename(

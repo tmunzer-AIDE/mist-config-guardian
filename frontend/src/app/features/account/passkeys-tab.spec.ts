@@ -69,6 +69,13 @@ describe('PasskeysTab', () => {
     );
   }
 
+  function typePassword(value: string): void {
+    const input = element().querySelector<HTMLInputElement>('#passkey-password')!;
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
   describe('without WebAuthn', () => {
     beforeEach(async () => {
       // jsdom exposes no authenticator, which is exactly the case the panel has
@@ -126,6 +133,29 @@ describe('PasskeysTab', () => {
       http.verify();
     });
 
+    it('removes a credential only after re-checking the password', async () => {
+      // Without the password the request is not even made: a stolen session
+      // must not be able to strip the account of its strongest credential.
+      button('Remove')!.click();
+      fixture.detectChanges();
+      http.expectNone('/api/v1/account/passkeys/pk1');
+      expect(element().querySelector('[role="alert"]')?.textContent).toContain('current password');
+
+      typePassword('correct horse');
+      button('Remove')!.click();
+      const request = http.expectOne('/api/v1/account/passkeys/pk1');
+      expect(request.request.method).toBe('DELETE');
+      expect(request.request.body).toEqual({ password: 'correct horse' });
+      request.flush(null, { status: 204, statusText: 'No Content' });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(account.passkeys().map((item) => item.id)).toEqual(['pk2']);
+      // The password is spent by the request and never lingers in the field.
+      expect(element().querySelector<HTMLInputElement>('#passkey-password')!.value).toBe('');
+      http.verify();
+    });
+
     it('reports an empty list as a state, not a failure', async () => {
       account.passkeys.set([]);
       fixture.detectChanges();
@@ -161,12 +191,22 @@ describe('PasskeysTab', () => {
       expect(element().querySelector('.unsupported')).toBeNull();
     });
 
+    it('asks for the password before it asks the browser for anything', async () => {
+      await build();
+
+      expect(button('Add a passkey')!.disabled).toBe(true);
+      typePassword('correct horse');
+      expect(button('Add a passkey')!.disabled).toBe(false);
+    });
+
     it('treats a dismissed ceremony as a note rather than an error', async () => {
       create.mockRejectedValue(new DOMException('The operation was aborted', 'NotAllowedError'));
       await build();
-
+      typePassword('correct horse');
       button('Add a passkey')!.click();
-      http.expectOne('/api/v1/account/passkeys/options').flush({
+      const options = http.expectOne('/api/v1/account/passkeys/options');
+      expect(options.request.body).toEqual({ password: 'correct horse' });
+      options.flush({
         challenge_token: 'ct',
         options: {
           challenge: 'AAAA',

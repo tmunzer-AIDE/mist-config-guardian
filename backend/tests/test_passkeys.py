@@ -136,7 +136,8 @@ def verification(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def _verify_authentication(*_args: Any, **kwargs: Any) -> SimpleNamespace:
         seen["authentication_challenge"] = kwargs["expected_challenge"]
         seen["public_key"] = kwargs["public_key"]
-        return SimpleNamespace(new_sign_count=7)
+        # A test that wants an assertion without user verification sets this first.
+        return SimpleNamespace(new_sign_count=7, user_verified=seen.get("user_verified", True))
 
     monkeypatch.setattr(webauthn_security, "verify_registration", _verify_registration)
     monkeypatch.setattr(webauthn_security, "verify_authentication", _verify_authentication)
@@ -248,16 +249,42 @@ async def test_authentication_returns_the_owning_user(
     )
 
     options, challenge_token = await service.begin_authentication()
-    authenticated, used = await service.complete_authentication(
+    outcome = await service.complete_authentication(
         challenge_token=challenge_token,
         credential={"id": record.credential_id},
     )
 
     assert options["rpId"] == "localhost"
-    assert authenticated is user
-    assert used.sign_count == 7
-    assert used.last_used_at is not None
+    assert outcome.user is user
+    assert outcome.user_verified is True
+    assert outcome.credential.sign_count == 7
+    assert outcome.credential.last_used_at is not None
     assert verification["public_key"] == record.public_key
+
+
+async def test_authentication_reports_when_the_authenticator_did_not_verify_the_user(
+    collection: _FakeCollection,
+    verification: dict[str, Any],
+) -> None:
+    """Possession of the device and presence of the person are different facts."""
+    service = _service()
+    user = _user()
+    collection.users[user.id] = user
+    _options, registration_token = await service.begin_registration(user)
+    record = await service.complete_registration(
+        user,
+        challenge_token=registration_token,
+        credential=_registration_credential(),
+    )
+    verification["user_verified"] = False
+
+    _options, challenge_token = await service.begin_authentication()
+    outcome = await service.complete_authentication(
+        challenge_token=challenge_token,
+        credential={"id": record.credential_id},
+    )
+
+    assert outcome.user_verified is False
 
 
 async def test_authentication_rejects_an_unknown_credential(
@@ -411,3 +438,70 @@ async def test_passkey_sign_in_starts_a_step_up_verified_session(
     assert "cg_session" in verified.headers.get("set-cookie", "")
     assert sessions.started == [True]
     assert replayed.status_code == 401
+
+
+async def _registered(service: PasskeyService, collection: _FakeCollection, user: User) -> WebAuthnCredential:
+    collection.users[user.id] = user
+    _options, registration_token = await service.begin_registration(user)
+    return await service.complete_registration(
+        user,
+        challenge_token=registration_token,
+        credential=_registration_credential(),
+    )
+
+
+def _sign_in_app(service: PasskeyService) -> tuple[Any, _FakeSessionService]:
+    app = create_app(Settings(environment="test", database_enabled=False))
+    sessions = _FakeSessionService()
+    app.dependency_overrides[get_passkey_service] = lambda: service
+    app.dependency_overrides[get_session_service] = lambda: sessions
+    app.dependency_overrides[get_user_service] = _FakeUserService
+    return app, sessions
+
+
+async def _verify(app: Any, credential_id: str) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        options = await client.post("/api/v1/auth/passkey/options")
+        return await client.post(
+            "/api/v1/auth/passkey/verify",
+            json={"challenge_token": options.json()["challenge_token"], "credential": {"id": credential_id}},
+        )
+
+
+async def test_an_unverified_assertion_signs_in_without_the_step_up(
+    collection: _FakeCollection,
+    verification: dict[str, Any],
+) -> None:
+    """Possession alone is not a second factor, so the session gets no MFA stamp."""
+    service = _service()
+    record = await _registered(service, collection, _user())
+    verification["user_verified"] = False
+    app, sessions = _sign_in_app(service)
+
+    verified = await _verify(app, record.credential_id)
+
+    assert verified.status_code == 200
+    assert verified.json()["mfa_required"] is False
+    assert sessions.started == [False]
+
+
+async def test_an_unverified_assertion_for_an_enrolled_account_is_challenged(
+    collection: _FakeCollection,
+    verification: dict[str, Any],
+) -> None:
+    """An authenticator enrollment must not be bypassed by a device alone."""
+    service = _service()
+    user = _user()
+    user.totp = SimpleNamespace(encrypted_secret="x", recovery_code_hashes=[])
+    record = await _registered(service, collection, user)
+    verification["user_verified"] = False
+    app, sessions = _sign_in_app(service)
+
+    verified = await _verify(app, record.credential_id)
+
+    assert verified.status_code == 200
+    assert verified.json()["mfa_required"] is True
+    assert verified.json()["methods"] == ["totp", "recovery_code"]
+    assert "set-cookie" not in verified.headers
+    assert sessions.started == []

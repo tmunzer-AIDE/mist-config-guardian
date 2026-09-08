@@ -223,13 +223,30 @@ async def test_second_factor_accepts_totp_and_spends_recovery_codes() -> None:
 
 
 # ------------------------------------------------------------- challenge token
-def test_login_challenge_round_trip() -> None:
+async def test_login_challenge_round_trip() -> None:
     service = _service()
     user = _user()
 
-    token = service.issue_login_challenge(user)
+    token = await service.issue_login_challenge(user)
+    challenge = service.resolve_login_challenge(token)
 
-    assert service.resolve_login_challenge(token) == user.id
+    assert challenge.user_id == user.id
+    # The token names a live record: the first attempt against it is allowed.
+    assert await service.record_login_attempt(challenge.handle) is True
+
+
+async def test_a_challenge_token_without_a_record_is_rejected() -> None:
+    """A token that only carries a subject would be valid for its whole lifetime."""
+    service = _service()
+    bare = issue_challenge_token(
+        str(_user().id),
+        settings=_settings(),
+        audience=MFA_CHALLENGE_AUDIENCE,
+        lifetime_minutes=5,
+    )
+
+    with pytest.raises(ChallengeTokenError):
+        service.resolve_login_challenge(bare)
 
 
 def test_login_challenge_rejects_another_audience() -> None:
@@ -474,4 +491,54 @@ async def test_mfa_login_rejects_a_forged_challenge_token() -> None:
         )
 
     assert response.status_code == 401
+    assert sessions.started == []
+
+
+async def _challenged(client: httpx.AsyncClient) -> tuple[str, str]:
+    """Enroll an authenticator, then sign in as far as the challenge; return (secret, token)."""
+    enrolled = await client.post("/api/v1/account/totp/enroll")
+    secret = enrolled.json()["secret"]
+    await client.post("/api/v1/account/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
+    challenged = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "operator@example.com", "password": "a-long-enough-password"},
+    )
+    return secret, challenged.json()["challenge_token"]
+
+
+async def test_a_login_challenge_completes_one_sign_in_and_no_more() -> None:
+    """A captured token must not be replayable for as long as it lives."""
+    user = _user()
+    app, _users, sessions = _sign_in_app(user, "a-long-enough-password")
+
+    async with _client(app) as client:
+        secret, token = await _challenged(client)
+        first = await client.post(
+            "/api/v1/auth/login/mfa", json={"challenge_token": token, "code": pyotp.TOTP(secret).now()}
+        )
+        replayed = await client.post(
+            "/api/v1/auth/login/mfa", json={"challenge_token": token, "code": pyotp.TOTP(secret).now()}
+        )
+
+    assert first.status_code == 200
+    assert replayed.status_code == 401
+    assert sessions.started == [True]
+
+
+async def test_a_login_challenge_dies_after_a_few_wrong_codes() -> None:
+    """Six-digit codes can be enumerated; the challenge must not outlast a handful of guesses."""
+    user = _user()
+    app, _users, sessions = _sign_in_app(user, "a-long-enough-password")
+
+    async with _client(app) as client:
+        secret, token = await _challenged(client)
+        for _ in range(5):
+            wrong = await client.post("/api/v1/auth/login/mfa", json={"challenge_token": token, "code": "000000"})
+            assert wrong.status_code == 401
+        # The right code no longer helps: the challenge is spent.
+        late = await client.post(
+            "/api/v1/auth/login/mfa", json={"challenge_token": token, "code": pyotp.TOTP(secret).now()}
+        )
+
+    assert late.status_code == 401
     assert sessions.started == []

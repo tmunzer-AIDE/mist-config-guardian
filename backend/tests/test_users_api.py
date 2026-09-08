@@ -12,6 +12,7 @@ from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.user import User, UserRole, UserStatus
 from mist_config_guardian_backend.security.auth import hash_password, verify_password
+from mist_config_guardian_backend.services.passkeys import get_passkey_service
 from mist_config_guardian_backend.services.users import (
     InvitationError,
     LastAdministratorError,
@@ -361,14 +362,26 @@ async def test_demoting_the_last_administrator_returns_conflict(users: _FakeUser
 
 
 # ------------------------------------------------------------ lifecycle
-async def test_deactivating_a_user_revokes_their_sessions(users: _FakeUsers) -> None:
+class _FakePasskeys:
+    def __init__(self) -> None:
+        self.revoked: list[PydanticObjectId] = []
+
+    async def revoke_all(self, user_id: PydanticObjectId) -> int:
+        self.revoked.append(user_id)
+        return 1
+
+
+async def test_deactivating_a_user_revokes_their_sessions_and_passkeys(users: _FakeUsers) -> None:
+    """A passkey outlives a password; containment has to take it too."""
     app = create_app(_settings())
     sessions = _FakeSessions()
+    passkeys = _FakePasskeys()
     administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
     target = _user(email="operator@example.com", role=UserRole.OPERATOR)
     users.records.extend([administrator, target])
     app.dependency_overrides[get_current_user] = lambda: administrator
     app.dependency_overrides[get_session_service] = lambda: sessions
+    app.dependency_overrides[get_passkey_service] = lambda: passkeys
 
     async with _client(app) as client:
         deactivated = await client.post(f"/api/v1/users/{target.id}/deactivate")
@@ -377,6 +390,7 @@ async def test_deactivating_a_user_revokes_their_sessions(users: _FakeUsers) -> 
     assert deactivated.status_code == 200
     assert deactivated.json()["status"] == "deactivated"
     assert sessions.revoked == [target.id]
+    assert passkeys.revoked == [target.id]
     assert reactivated.json()["status"] == "active"
     assert reactivated.json()["is_active"] is True
 

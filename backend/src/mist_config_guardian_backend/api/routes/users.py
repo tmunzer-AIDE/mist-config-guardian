@@ -20,6 +20,7 @@ from mist_config_guardian_backend.schemas.users import (
     UserSummaryResponse,
     UserUpdateRequest,
 )
+from mist_config_guardian_backend.services.passkeys import PasskeyService, get_passkey_service
 from mist_config_guardian_backend.services.sessions import SessionService
 from mist_config_guardian_backend.services.users import (
     InvitationError,
@@ -167,8 +168,15 @@ async def deactivate_user(
     users: Annotated[UserService, Depends(get_user_service)],
     administrator: Annotated[User, Depends(require_administrator)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
+    passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
 ) -> UserSummaryResponse:
-    """Disable an account and sign out every session it holds."""
+    """Disable an account, sign out every session it holds, and revoke its passkeys.
+
+    Deactivation is the remediation an administrator has when an account is
+    compromised. Sessions end and passkeys — credentials that would otherwise
+    outlive a password change — are removed, so reactivating the account later
+    starts it with the password alone.
+    """
     try:
         user = await users.deactivate(user_id, actor=administrator)
     except UserNotFoundError as exc:
@@ -177,6 +185,7 @@ async def deactivate_user(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if user.id is not None:
         await sessions.revoke_all(user.id)
+        await passkeys.revoke_all(user.id)
     return UserSummaryResponse.from_document(user)
 
 

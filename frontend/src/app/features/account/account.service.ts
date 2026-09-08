@@ -197,9 +197,10 @@ export class AccountService {
     this.passkeysLoaded.set(true);
   }
 
-  registrationOptions(): Promise<PasskeyRegistrationOptions> {
+  /** Adding a passkey re-checks the password: the credential outlives this session. */
+  registrationOptions(password: string): Promise<PasskeyRegistrationOptions> {
     return firstValueFrom(
-      this.http.post<PasskeyRegistrationOptions>(`${ACCOUNT}/passkeys/options`, {}),
+      this.http.post<PasskeyRegistrationOptions>(`${ACCOUNT}/passkeys/options`, { password }),
     );
   }
 
@@ -227,8 +228,9 @@ export class AccountService {
     this.passkeys.update((items) => items.map((item) => (item.id === id ? updated : item)));
   }
 
-  async removePasskey(id: string): Promise<void> {
-    await firstValueFrom(this.http.delete(`${ACCOUNT}/passkeys/${id}`));
+  async removePasskey(id: string, password: string): Promise<void> {
+    // `HttpClient.delete` only sends a body when one is given explicitly.
+    await firstValueFrom(this.http.delete(`${ACCOUNT}/passkeys/${id}`, { body: { password } }));
     this.passkeys.update((items) => items.filter((item) => item.id !== id));
   }
 }

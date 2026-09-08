@@ -35,6 +35,11 @@ from mist_config_guardian_backend.services.passkeys import (
     get_passkey_service,
 )
 from mist_config_guardian_backend.services.sessions import CsrfError, SessionService
+from mist_config_guardian_backend.services.throttling import (
+    ThrottleService,
+    get_throttle_service,
+    guard_or_raise,
+)
 from mist_config_guardian_backend.services.users import (
     BootstrapClosedError,
     InvalidBootstrapTokenError,
@@ -75,6 +80,7 @@ async def login(  # noqa: PLR0913, PLR0917 - one dependency per collaborating se
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
     settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> MfaChallengeResponse | LoginSuccessResponse:
     """Authenticate a local account with an email address and password.
 
@@ -85,16 +91,21 @@ async def login(  # noqa: PLR0913, PLR0917 - one dependency per collaborating se
     ``POST /auth/login/mfa``. Failures are indistinguishable whether or not the
     email address exists.
     """
+    account = throttle.account(form.username)
+    address = throttle.address(request)
+    await guard_or_raise(throttle, account, address)
     user = await users.authenticate(form.username, form.password)
     if user is None:
+        await throttle.failed(account, address)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_INVALID_CREDENTIALS,
             headers={"WWW-Authenticate": "Bearer"},
         )
+    await throttle.succeeded(account)
     if user.totp is not None:
         return MfaChallengeResponse(
-            challenge_token=mfa.issue_login_challenge(user),
+            challenge_token=await mfa.issue_login_challenge(user),
             methods=["totp", "recovery_code"],
         )
     return await _complete_sign_in(
@@ -119,21 +130,35 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
     settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> LoginSuccessResponse:
-    """Complete a sign-in with an authenticator code or a single-use recovery code."""
+    """Complete a sign-in with an authenticator code or a single-use recovery code.
+
+    The challenge is consumed by the sign-in it completes and dies after a few
+    wrong codes, so a captured token cannot be replayed or used to enumerate
+    codes for as long as it lives.
+    """
     rejected = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=_INVALID_SECOND_FACTOR,
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        user_id = mfa.resolve_login_challenge(payload.challenge_token)
+        challenge = mfa.resolve_login_challenge(payload.challenge_token)
     except ChallengeTokenError as exc:
         raise rejected from exc
 
-    user = await users.get_by_id(user_id)
-    if user is None or not user.is_active or not await mfa.verify_second_factor(user, payload.code):
+    address = throttle.address(request)
+    await guard_or_raise(throttle, address)
+    if not await mfa.record_login_attempt(challenge.handle):
+        await throttle.failed(address)
         raise rejected
+
+    user = await users.get_by_id(challenge.user_id)
+    if user is None or not user.is_active or not await mfa.verify_second_factor(user, payload.code):
+        await throttle.failed(address)
+        raise rejected
+    await mfa.consume_login_challenge(challenge.handle)
     return await _complete_sign_in(
         user,
         request=request,
@@ -167,19 +192,36 @@ async def verify_passkey_authentication(  # noqa: PLR0913, PLR0917 - one depende
     sessions: Annotated[SessionService, Depends(get_session_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> LoginSuccessResponse:
-    """Complete a passwordless sign-in by verifying a passkey assertion."""
+    mfa: Annotated[MfaService, Depends(get_mfa_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
+) -> MfaChallengeResponse | LoginSuccessResponse:
+    """Complete a passwordless sign-in by verifying a passkey assertion.
+
+    An assertion the authenticator marked user-verified counts as both factors.
+    One it did not proves possession of the device alone, so an account with
+    an authenticator enrolled is challenged for it, and any account signs in
+    without the step-up that a verified assertion would have granted.
+    """
+    address = throttle.address(request)
+    await guard_or_raise(throttle, address)
     try:
-        user, _credential = await passkeys.complete_authentication(
+        authenticated = await passkeys.complete_authentication(
             challenge_token=payload.challenge_token,
             credential=payload.credential,
         )
     except (PasskeyError, ChallengeTokenError, WebAuthnError) as exc:
+        await throttle.failed(address)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="That passkey could not be verified",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+    user = authenticated.user
+    if not authenticated.user_verified and user.totp is not None:
+        return MfaChallengeResponse(
+            challenge_token=await mfa.issue_login_challenge(user),
+            methods=["totp", "recovery_code"],
+        )
     return await _complete_sign_in(
         user,
         request=request,
@@ -188,7 +230,7 @@ async def verify_passkey_authentication(  # noqa: PLR0913, PLR0917 - one depende
         sessions=sessions,
         passkeys=passkeys,
         settings=settings,
-        mfa_verified=True,
+        mfa_verified=authenticated.user_verified,
     )
 
 

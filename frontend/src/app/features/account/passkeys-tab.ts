@@ -40,6 +40,9 @@ export class PasskeysTab {
   protected readonly error = signal('');
   protected readonly notice = signal('');
   protected readonly busyId = signal('');
+  /** The password that guards a change lives in component state and nowhere else. */
+  private readonly password = signal('');
+  protected readonly passwordValue = this.password.asReadonly();
 
   private readonly renamingId = signal('');
   private readonly draftName = signal('');
@@ -55,15 +58,34 @@ export class PasskeysTab {
 
   // -------------------------------------------------------------- add flow
 
+  protected setPassword(event: Event): void {
+    this.password.set((event.target as HTMLInputElement).value);
+  }
+
+  /** Take the password for one request; it is spent whether or not that request succeeds. */
+  private spendPassword(): string | null {
+    const password = this.password();
+    if (!password) {
+      this.error.set('Enter your current password first: adding or removing a passkey re-checks it.');
+      return null;
+    }
+    this.password.set('');
+    return password;
+  }
+
   protected async add(): Promise<void> {
     if (!this.supported() || this.adding()) {
+      return;
+    }
+    const password = this.spendPassword();
+    if (password === null) {
       return;
     }
     this.adding.set(true);
     this.error.set('');
     this.notice.set('');
     try {
-      const { challenge_token, options } = await this.account.registrationOptions();
+      const { challenge_token, options } = await this.account.registrationOptions(password);
       const created = await navigator.credentials.create({
         publicKey: toCreationOptions(options),
       });
@@ -133,10 +155,14 @@ export class PasskeysTab {
     if (this.busyId()) {
       return;
     }
+    const password = this.spendPassword();
+    if (password === null) {
+      return;
+    }
     this.busyId.set(id);
     this.error.set('');
     try {
-      await this.account.removePasskey(id);
+      await this.account.removePasskey(id, password);
       this.notice.set(`Removed ${name}.`);
     } catch (cause) {
       this.error.set(detailOf(cause));

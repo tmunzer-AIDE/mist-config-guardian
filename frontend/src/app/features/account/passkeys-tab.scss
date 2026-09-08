@@ -155,3 +155,16 @@
 .status-text--bad {
   color: var(--tone-critical-ink);
 }
+
+// The password confirmation sits with the add control it guards, at the
+// width the two-factor panel gives the same field.
+.confirm {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+  margin-bottom: 14px;
+}
+
+.confirm-note {
+  margin: 0;
+}

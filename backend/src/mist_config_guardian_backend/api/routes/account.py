@@ -31,6 +31,7 @@ from mist_config_guardian_backend.schemas.account import (
     TotpConfirmRequest,
     TotpEnrollmentResponse,
 )
+from mist_config_guardian_backend.security.auth import verify_password
 from mist_config_guardian_backend.security.webauthn import WebAuthnError
 from mist_config_guardian_backend.services.account import (
     AccountService,
@@ -54,6 +55,11 @@ from mist_config_guardian_backend.services.passkeys import (
     get_passkey_service,
 )
 from mist_config_guardian_backend.services.sessions import SessionService
+from mist_config_guardian_backend.services.throttling import (
+    ThrottleService,
+    get_throttle_service,
+    guard_or_raise,
+)
 from mist_config_guardian_backend.services.users import InvalidPasswordError, UserAlreadyExistsError
 
 router = APIRouter(prefix="/account")
@@ -76,6 +82,20 @@ def _require_persisted(user: User) -> PydanticObjectId:
 
 def _wrong_password(exc: InvalidPasswordError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+
+
+async def _confirm_password(user: User, password: str, throttle: ThrottleService) -> None:
+    """Check a re-entered password, counting a wrong one against the account.
+
+    A stolen session must not be able to guess the password it lacks at
+    leisure; the limit shared with sign-in applies here.
+    """
+    scope = throttle.user(_require_persisted(user))
+    await guard_or_raise(throttle, scope)
+    if not verify_password(password, user.password_hash):
+        await throttle.failed(scope)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The password you entered is incorrect")
+    await throttle.succeeded(scope)
 
 
 # --------------------------------------------------------------------- profile
@@ -102,6 +122,7 @@ async def request_email_change(
     user: Annotated[User, Depends(require_viewer)],
     accounts: Annotated[AccountService, Depends(get_account_service)],
     settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> EmailChangeResponse:
     """Start a change of the account's email address.
 
@@ -109,6 +130,8 @@ async def request_email_change(
     Outside production the confirmation token is returned here so the change can
     still be completed; in production an operator must deliver it out of band.
     """
+    scope = throttle.user(_require_persisted(user))
+    await guard_or_raise(throttle, scope)
     try:
         updated, token = await accounts.request_email_change(
             user,
@@ -116,11 +139,13 @@ async def request_email_change(
             password=payload.password.get_secret_value(),
         )
     except InvalidPasswordError as exc:
+        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     except UserAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except EmailChangeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await throttle.succeeded(scope)
 
     pending = updated.pending_email_change
     if pending is None:  # pragma: no cover - defensive, the service just set it
@@ -166,14 +191,17 @@ async def cancel_email_change(
 
 # -------------------------------------------------------------------- password
 @router.post("/password")
-async def change_password(
+async def change_password(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
     payload: PasswordChangeRequest,
     request: Request,
     user: Annotated[User, Depends(require_viewer)],
     accounts: Annotated[AccountService, Depends(get_account_service)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> PasswordChangeResponse:
     """Replace the account password and sign every other session out."""
+    scope = throttle.user(_require_persisted(user))
+    await guard_or_raise(throttle, scope)
     try:
         updated = await accounts.change_password(
             user,
@@ -181,7 +209,9 @@ async def change_password(
             new_password=payload.new_password.get_secret_value(),
         )
     except InvalidPasswordError as exc:
+        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
+    await throttle.succeeded(scope)
 
     session = _current_session(request)
     revoked = await sessions.revoke_all(
@@ -266,16 +296,21 @@ async def confirm_totp(
     payload: TotpConfirmRequest,
     user: Annotated[User, Depends(require_viewer)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> RecoveryCodesResponse:
     """Confirm authenticator enrollment and return recovery codes exactly once."""
+    scope = throttle.user(_require_persisted(user))
+    await guard_or_raise(throttle, scope)
     try:
         codes = await mfa.confirm_totp_enrollment(user, payload.code)
     except (TotpAlreadyEnrolledError, PendingEnrollmentError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidMfaCodeError as exc:
+        await throttle.failed(scope)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except MfaError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await throttle.succeeded(scope)
     return RecoveryCodesResponse(recovery_codes=codes, generated_at=utc_now())
 
 
@@ -284,14 +319,19 @@ async def disable_totp(
     payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> ProfileResponse:
     """Remove the account's authenticator enrollment after re-entering the password."""
+    scope = throttle.user(_require_persisted(user))
+    await guard_or_raise(throttle, scope)
     try:
         updated = await mfa.disable_totp(user, payload.password.get_secret_value())
     except InvalidPasswordError as exc:
+        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     except TotpNotEnrolledError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await throttle.succeeded(scope)
     return ProfileResponse.from_document(updated)
 
 
@@ -300,14 +340,19 @@ async def regenerate_recovery_codes(
     payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> RecoveryCodesResponse:
     """Replace the account's recovery codes and return them exactly once."""
+    scope = throttle.user(_require_persisted(user))
+    await guard_or_raise(throttle, scope)
     try:
         codes = await mfa.regenerate_recovery_codes(user, payload.password.get_secret_value())
     except InvalidPasswordError as exc:
+        await throttle.failed(scope)
         raise _wrong_password(exc) from exc
     except TotpNotEnrolledError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await throttle.succeeded(scope)
     return RecoveryCodesResponse(recovery_codes=codes, generated_at=utc_now())
 
 
@@ -327,13 +372,21 @@ async def list_passkeys(
 
 @router.post("/passkeys/options")
 async def passkey_registration_options(
+    payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> PasskeyRegistrationOptionsResponse:
     """Return WebAuthn options for registering a new passkey.
 
-    The challenge stays on the server; the returned token only names it.
+    A passkey is a durable credential, so adding one is gated on the password
+    the way disabling the authenticator is: a stolen session cannot install a
+    credential that would outlive it. The password guards the ceremony as a
+    whole, since the challenge issued here is single-use, bound to this user
+    and short-lived. The challenge stays on the server; the returned token
+    only names it.
     """
+    await _confirm_password(user, payload.password.get_secret_value(), throttle)
     try:
         options, challenge_token = await passkeys.begin_registration(user)
     except (PasskeyError, WebAuthnError) as exc:
@@ -378,10 +431,13 @@ async def rename_passkey(
 @router.delete("/passkeys/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_passkey(
     credential_id: PydanticObjectId,
+    payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> None:
-    """Remove one of the signed-in user's passkeys."""
+    """Remove one of the signed-in user's passkeys after re-entering the password."""
+    await _confirm_password(user, payload.password.get_secret_value(), throttle)
     try:
         await passkeys.delete(user, credential_id)
     except PasskeyNotFoundError as exc:

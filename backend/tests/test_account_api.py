@@ -445,7 +445,8 @@ async def test_passkey_registration_options_do_not_leak_the_challenge() -> None:
 
     async with _client(app) as client:
         listed = await client.get("/api/v1/account/passkeys")
-        options = await client.post("/api/v1/account/passkeys/options")
+        options = await client.post("/api/v1/account/passkeys/options", json={"password": PASSWORD})
+        refused = await client.post("/api/v1/account/passkeys/options", json={"password": "not it"})
 
     assert listed.json() == {"items": [], "total": 0}
     assert options.status_code == 200
@@ -453,3 +454,5 @@ async def test_passkey_registration_options_do_not_leak_the_challenge() -> None:
     assert body["options"]["rp"]["id"] == "localhost"
     assert body["challenge_token"]
     assert body["options"]["challenge"] not in body["challenge_token"]
+    # A stolen session cannot install a durable credential without the password.
+    assert refused.status_code == 403

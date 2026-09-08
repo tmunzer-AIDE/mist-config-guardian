@@ -7,6 +7,7 @@ Note for maintainers: this module imports ``api.dependencies``. Do not import
 it from ``api/dependencies.py`` or the import graph becomes circular.
 """
 
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Protocol
@@ -16,6 +17,7 @@ from beanie import PydanticObjectId
 from beanie.odm.operators.update.general import Set
 from fastapi import Depends, HTTPException, Request, status
 from jwt import InvalidTokenError
+from pymongo import ReturnDocument
 
 from mist_config_guardian_backend.api.dependencies import (
     get_credential_vault,
@@ -24,7 +26,7 @@ from mist_config_guardian_backend.api.dependencies import (
 )
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.challenge import PendingTotpEnrollment
+from mist_config_guardian_backend.models.challenge import LoginChallenge, PendingTotpEnrollment
 from mist_config_guardian_backend.models.user import TotpEnrollment, User
 from mist_config_guardian_backend.security.auth import verify_password
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
@@ -82,24 +84,28 @@ def issue_challenge_token(
     settings: Settings,
     audience: str,
     lifetime_minutes: int,
+    handle: str | None = None,
 ) -> str:
-    """Sign a short-lived, audience-bound token carrying a challenge subject."""
+    """Sign a short-lived, audience-bound token carrying a challenge subject.
+
+    ``handle`` names the server-side record a login challenge is bound to; it
+    is what makes such a token single-use rather than valid for its lifetime.
+    """
     now = datetime.now(UTC)
-    return jwt.encode(
-        {
-            "sub": subject,
-            "iss": _ISSUER,
-            "aud": audience,
-            "iat": now,
-            "exp": now + timedelta(minutes=lifetime_minutes),
-        },
-        settings.secret_key.get_secret_value(),
-        algorithm=_ALGORITHM,
-    )
+    claims: dict[str, object] = {
+        "sub": subject,
+        "iss": _ISSUER,
+        "aud": audience,
+        "iat": now,
+        "exp": now + timedelta(minutes=lifetime_minutes),
+    }
+    if handle is not None:
+        claims["jti"] = handle
+    return jwt.encode(claims, settings.secret_key.get_secret_value(), algorithm=_ALGORITHM)
 
 
-def read_challenge_token(token: str, *, settings: Settings, audience: str) -> str:
-    """Validate a challenge token and return the subject it carries."""
+def read_challenge_claims(token: str, *, settings: Settings, audience: str) -> tuple[str, str | None]:
+    """Validate a challenge token and return its subject and handle."""
     try:
         payload = jwt.decode(
             token,
@@ -109,13 +115,99 @@ def read_challenge_token(token: str, *, settings: Settings, audience: str) -> st
             issuer=_ISSUER,
         )
         subject = payload["sub"]
+        handle = payload.get("jti")
     except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         msg = "This challenge is invalid or has expired"
         raise ChallengeTokenError(msg) from exc
-    if not isinstance(subject, str) or not subject:
+    if not isinstance(subject, str) or not subject or (handle is not None and not isinstance(handle, str)):
         msg = "This challenge is invalid or has expired"
         raise ChallengeTokenError(msg)
-    return subject
+    return subject, handle
+
+
+def read_challenge_token(token: str, *, settings: Settings, audience: str) -> str:
+    """Validate a challenge token and return the subject it carries."""
+    return read_challenge_claims(token, settings=settings, audience=audience)[0]
+
+
+@dataclass(frozen=True)
+class LoginChallengeRef:
+    """The account and server-side record a login challenge token names."""
+
+    user_id: PydanticObjectId
+    handle: str
+
+
+@dataclass
+class _LoginChallengeEntry:
+    user_id: str
+    attempts: int
+    expires_at: datetime
+
+
+class LoginChallengeStorage(Protocol):
+    """The subset of login-challenge storage this service depends on."""
+
+    async def put(self, handle: str, user_id: str, lifetime: timedelta) -> None:
+        """Record a freshly issued challenge."""
+        ...
+
+    async def attempt(self, handle: str) -> int | None:
+        """Count one attempt and return the total, or ``None`` for an unknown or expired handle."""
+        ...
+
+    async def discard(self, handle: str) -> None:
+        """Forget a challenge, whether completed or exhausted."""
+        ...
+
+
+class LoginChallengeStore:
+    """Process-local login challenges for tests and single-process runs."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _LoginChallengeEntry] = {}
+
+    async def put(self, handle: str, user_id: str, lifetime: timedelta) -> None:
+        """Record a freshly issued challenge."""
+        self._entries[handle] = _LoginChallengeEntry(user_id=user_id, attempts=0, expires_at=utc_now() + lifetime)
+
+    async def attempt(self, handle: str) -> int | None:
+        """Count one attempt."""
+        entry = self._entries.get(handle)
+        if entry is None or entry.expires_at <= utc_now():
+            self._entries.pop(handle, None)
+            return None
+        entry.attempts += 1
+        return entry.attempts
+
+    async def discard(self, handle: str) -> None:
+        """Forget a challenge."""
+        self._entries.pop(handle, None)
+
+    def reset(self) -> None:
+        """Forget every challenge."""
+        self._entries.clear()
+
+
+class DatabaseLoginChallengeStore:
+    """Login challenges any API replica can complete."""
+
+    async def put(self, handle: str, user_id: str, lifetime: timedelta) -> None:
+        """Record a freshly issued challenge."""
+        await LoginChallenge(handle=handle, user_id=user_id, expires_at=utc_now() + lifetime).insert()
+
+    async def attempt(self, handle: str) -> int | None:
+        """Count one attempt atomically; the TTL index removes expired records."""
+        document = await LoginChallenge.get_pymongo_collection().find_one_and_update(
+            {"handle": handle, "expires_at": {"$gt": utc_now()}},
+            {"$inc": {"attempts": 1}, "$set": {"updated_at": utc_now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return int(document["attempts"]) if document is not None else None
+
+    async def discard(self, handle: str) -> None:
+        """Forget a challenge."""
+        await LoginChallenge.find(LoginChallenge.handle == handle).delete()
 
 
 @dataclass(frozen=True)
@@ -244,10 +336,12 @@ class MfaService:
         settings: Settings,
         vault: CredentialVault,
         store: PendingEnrollmentStore | None = None,
+        login_challenges: LoginChallengeStorage | None = None,
     ) -> None:
         self._settings = settings
         self._vault = vault
         self._store: PendingEnrollmentStore = store or DatabasePendingTotpEnrollmentStore()
+        self._login_challenges: LoginChallengeStorage = login_challenges or DatabaseLoginChallengeStore()
 
     # ------------------------------------------------------------- enrollment
     async def begin_totp_enrollment(self, user: User) -> TotpEnrollmentStart:
@@ -351,27 +445,49 @@ class MfaService:
         return await self.consume_recovery_code(user, code)
 
     # -------------------------------------------------------------- challenge
-    def issue_login_challenge(self, user: User) -> str:
-        """Issue the short-lived token that pairs a password with its second factor."""
+    async def issue_login_challenge(self, user: User) -> str:
+        """Issue the short-lived token that pairs a password with its second factor.
+
+        The token names a server-side record. Completing the sign-in removes
+        the record and a few wrong codes exhaust it, so the token is good for
+        one sign-in and a bounded number of guesses, not for its lifetime.
+        """
+        identity = self._identity(user)
+        handle = secrets.token_urlsafe(24)
+        await self._login_challenges.put(handle, identity, timedelta(minutes=MFA_CHALLENGE_LIFETIME_MINUTES))
         return issue_challenge_token(
-            self._identity(user),
+            identity,
             settings=self._settings,
             audience=MFA_CHALLENGE_AUDIENCE,
             lifetime_minutes=MFA_CHALLENGE_LIFETIME_MINUTES,
+            handle=handle,
         )
 
-    def resolve_login_challenge(self, token: str) -> PydanticObjectId:
-        """Return the user identifier a login challenge token was issued for."""
-        subject = read_challenge_token(
-            token,
-            settings=self._settings,
-            audience=MFA_CHALLENGE_AUDIENCE,
-        )
+    def resolve_login_challenge(self, token: str) -> LoginChallengeRef:
+        """Return the account and record a login challenge token names."""
+        subject, handle = read_challenge_claims(token, settings=self._settings, audience=MFA_CHALLENGE_AUDIENCE)
+        if handle is None:
+            msg = "This challenge is invalid or has expired"
+            raise ChallengeTokenError(msg)
         try:
-            return PydanticObjectId(subject)
+            return LoginChallengeRef(user_id=PydanticObjectId(subject), handle=handle)
         except (ValueError, TypeError) as exc:
             msg = "This challenge is invalid or has expired"
             raise ChallengeTokenError(msg) from exc
+
+    async def record_login_attempt(self, handle: str) -> bool:
+        """Count one code against a challenge; ``False`` once it is unknown, spent, or exhausted."""
+        attempts = await self._login_challenges.attempt(handle)
+        if attempts is None:
+            return False
+        if attempts > self._settings.mfa_challenge_max_attempts:
+            await self._login_challenges.discard(handle)
+            return False
+        return True
+
+    async def consume_login_challenge(self, handle: str) -> None:
+        """Retire a challenge the sign-in it guarded has completed."""
+        await self._login_challenges.discard(handle)
 
     # --------------------------------------------------------------- internals
     def _decrypt(self, encrypted_secret: str) -> str:

@@ -7,7 +7,12 @@ from mist_config_guardian_backend.models.application_configuration import (
     ApplicationConfiguration,
 )
 from mist_config_guardian_backend.models.approval import RestoreApproval
-from mist_config_guardian_backend.models.challenge import PendingTotpEnrollment, WebAuthnChallenge
+from mist_config_guardian_backend.models.challenge import (
+    LoginChallenge,
+    PendingTotpEnrollment,
+    ThrottleBucket,
+    WebAuthnChallenge,
+)
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.notification import Notification
 from mist_config_guardian_backend.models.organization import Organization
@@ -34,6 +39,8 @@ def document_models() -> list[type[Document]]:
         WebAuthnCredential,
         WebAuthnChallenge,
         PendingTotpEnrollment,
+        LoginChallenge,
+        ThrottleBucket,
         LogicalObject,
         ObjectIncarnation,
         ObjectVersion,
@@ -53,6 +60,7 @@ __all__ = [
     "ApplicationConfiguration",
     "AuditChangeGroup",
     "LogicalObject",
+    "LoginChallenge",
     "MonitoringSession",
     "Notification",
     "ObjectIncarnation",
@@ -63,6 +71,7 @@ __all__ = [
     "RestoreOperation",
     "RestoreOperationStateRecord",
     "SnapshotManifest",
+    "ThrottleBucket",
     "User",
     "UserSession",
     "WebAuthnChallenge",

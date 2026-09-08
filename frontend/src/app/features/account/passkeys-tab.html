@@ -7,12 +7,28 @@
       it.
     </p>
 
+    <div class="confirm">
+      <label class="cg-label" for="passkey-password">Current password</label>
+      <input
+        id="passkey-password"
+        class="cg-input password-input"
+        type="password"
+        autocomplete="current-password"
+        [value]="passwordValue()"
+        (input)="setPassword($event)"
+      />
+      <p class="cg-meta confirm-note">
+        Adding or removing a passkey re-checks your password, because a passkey outlives this
+        session.
+      </p>
+    </div>
+
     @if (supported()) {
       <div class="row">
         <button
           class="cg-btn cg-btn--primary cg-btn--lg"
           type="button"
-          [disabled]="adding()"
+          [disabled]="adding() || !passwordValue()"
           (click)="add()"
         >
           Add a passkey

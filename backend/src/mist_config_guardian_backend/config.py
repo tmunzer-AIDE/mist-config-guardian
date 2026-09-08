@@ -53,6 +53,14 @@ class Settings(BaseSettings):
 
     totp_issuer: str = "Mist Config Guardian"
     mfa_step_up_window_minutes: int = 10
+    # A sign-in challenge dies after this many wrong codes, whatever its lifetime.
+    mfa_challenge_max_attempts: int = 5
+    # Failed sign-ins and password confirmations are counted per account and per
+    # client address inside a fixed window; reaching a limit answers 429 until
+    # the window ends.
+    sign_in_throttle_window_minutes: int = 15
+    sign_in_failures_per_account: int = 10
+    sign_in_failures_per_address: int = 100
 
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "Mist Config Guardian"
