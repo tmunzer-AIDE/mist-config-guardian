@@ -57,6 +57,12 @@ export interface OrganizationOverview {
   historical?: boolean;
 }
 
+/** A badge writer's right to write: the scope it read, and the epoch it read in. */
+interface BadgeClaim {
+  scope: string;
+  epoch: number;
+}
+
 /** The Overview page's purpose-built read model, plus the shell's nav badge. */
 @Injectable({ providedIn: 'root' })
 export class OverviewService {
@@ -70,15 +76,39 @@ export class OverviewService {
   // organization and range on screen. A slow answer for a previous
   // organization must not overwrite the current one.
   private loadRequest = 0;
-  // The badge has two writers — the full read carries a count, and the shell
-  // reads counts alone — so they share one sequence. With a sequence each,
-  // clearing the badge invalidated only one of them and the other could
-  // repopulate it.
-  private badgeRequest = 0;
+
+  /**
+   * What the badge currently describes, and how many times it has been
+   * invalidated.
+   *
+   * The badge has two writers — the full read carries a count, and the shell
+   * reads counts alone — and on the Overview route both run for the same
+   * organization, window and instant. A single sequence shared between them
+   * made the later-issued request cancel the earlier one even then, so a
+   * counts-only success followed by a full-read failure left the badge at
+   * zero. Ordering is not the question here: the question is whether an
+   * answer still describes what is on screen. Two answers for the same scope
+   * are both valid, and either may write.
+   */
+  private badgeScope = '';
+  private badgeEpoch = 0;
+
+  /** Take the badge for a scope, and return the claim an answer must still hold. */
+  private claimBadge(organizationId: string, range: TimeRange, asOf: Date | null): BadgeClaim {
+    this.badgeScope = `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
+    return { scope: this.badgeScope, epoch: this.badgeEpoch };
+  }
+
+  /** Write a count if its claim still holds: same scope, and not cleared since. */
+  private writeBadge(claim: BadgeClaim, unrecovered: number): void {
+    if (claim.epoch === this.badgeEpoch && claim.scope === this.badgeScope) {
+      this.unrecovered.set(unrecovered);
+    }
+  }
 
   async load(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<OrganizationOverview> {
     const request = ++this.loadRequest;
-    const badge = ++this.badgeRequest;
+    const claim = this.claimBadge(organizationId, range, asOf);
     let params = new HttpParams().set('range', range);
     if (asOf) {
       params = params.set('as_of', asOf.toISOString());
@@ -89,9 +119,7 @@ export class OverviewService {
     if (request === this.loadRequest) {
       this.overview.set(response);
     }
-    if (badge === this.badgeRequest) {
-      this.unrecovered.set(response.counts.unrecovered);
-    }
+    this.writeBadge(claim, response.counts.unrecovered);
     return response;
   }
 
@@ -103,7 +131,8 @@ export class OverviewService {
    * re-read would otherwise leave it asserting harm that belongs elsewhere.
    */
   clearBadge(): void {
-    this.badgeRequest += 1;
+    this.badgeEpoch += 1;
+    this.badgeScope = '';
     this.unrecovered.set(0);
   }
 
@@ -115,7 +144,7 @@ export class OverviewService {
    * because the shell asked over a different window.
    */
   async loadBadges(organizationId: string, range: TimeRange, asOf: Date | null = null): Promise<void> {
-    const request = ++this.badgeRequest;
+    const claim = this.claimBadge(organizationId, range, asOf);
     try {
       // The unrecovered count is an outcome; the server withholds it for a
       // past instant, and the badge disappears with it rather than asserting
@@ -127,20 +156,18 @@ export class OverviewService {
       const response = await firstValueFrom(
         this.http.get<{ counts: OverviewCounts }>(orgPath(organizationId, '/overview'), { params }),
       );
-      if (request === this.badgeRequest) {
-        this.unrecovered.set(response.counts.unrecovered);
-      }
+      this.writeBadge(claim, response.counts.unrecovered);
     } catch {
-      if (request === this.badgeRequest) {
-        this.unrecovered.set(0);
-      }
+      // A failed read says nothing about the count, so it writes nothing. The
+      // badge is zeroed when the scope it described goes, not when one of the
+      // two reads for the current scope happens to fail — the other may have
+      // already answered correctly.
     }
   }
 
   reset(): void {
     this.loadRequest += 1;
-    this.badgeRequest += 1;
+    this.clearBadge();
     this.overview.set(null);
-    this.unrecovered.set(0);
   }
 }

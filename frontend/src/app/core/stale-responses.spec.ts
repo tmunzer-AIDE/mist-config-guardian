@@ -161,6 +161,62 @@ describe('organization-scoped loaders under reordered answers', () => {
     expect(overview.overview()).not.toBeNull();
   });
 
+  it('a same-scope failure does not discard a count already read', async () => {
+    // On the Overview route the shell and the page read the same organization,
+    // window and instant. The full read continues through summaries,
+    // approvals, restores and snapshots after the counts are in hand, so it
+    // has failure modes the counts-only read does not. Its failure says
+    // nothing about a count that has already answered correctly.
+    const overview = TestBed.inject(OverviewService);
+    const badges = overview.loadBadges('org-a', '24h');
+    const full = overview.load('org-a', '24h');
+    const [countsOnly, whole] = pending('/api/v1/organizations/org-a/overview');
+
+    countsOnly.flush({ counts: { unrecovered: 3 } });
+    await badges;
+    expect(overview.unrecovered()).toBe(3);
+
+    whole.flush({ detail: 'boom' }, { status: 500, statusText: 'Server Error' });
+    await expect(full).rejects.toBeDefined();
+
+    expect(overview.unrecovered()).toBe(3);
+  });
+
+  it('a same-scope failure does not zero a count already read', async () => {
+    // The inverse ordering: the full read is issued first and succeeds, then
+    // the counts-only read for the same scope fails. Its failure must not
+    // erase a count that is correct.
+    const overview = TestBed.inject(OverviewService);
+    const full = overview.load('org-a', '24h');
+    const badges = overview.loadBadges('org-a', '24h');
+    const [whole, countsOnly] = pending('/api/v1/organizations/org-a/overview');
+
+    whole.flush({ counts: { unrecovered: 5 }, change_groups: [] });
+    await full;
+    expect(overview.unrecovered()).toBe(5);
+
+    countsOnly.flush({ detail: 'boom' }, { status: 500, statusText: 'Server Error' });
+    await badges;
+
+    expect(overview.unrecovered()).toBe(5);
+  });
+
+  it('a count for a scope nobody is looking at any more is still refused', async () => {
+    // Same-scope answers are both valid; a different scope's is not.
+    const overview = TestBed.inject(OverviewService);
+    const stale = overview.loadBadges('org-a', '24h');
+    const current = overview.loadBadges('org-b', '24h');
+    const [a] = pending('/api/v1/organizations/org-a/overview');
+    const [b] = pending('/api/v1/organizations/org-b/overview');
+
+    b.flush({ counts: { unrecovered: 1 } });
+    await current;
+    a.flush({ counts: { unrecovered: 9 } });
+    await stale;
+
+    expect(overview.unrecovered()).toBe(1);
+  });
+
   it('the badge is read over the window the Changes link will show', async () => {
     // Asking over the backend's default while the page reads another window
     // put two different numbers into the same signal.
