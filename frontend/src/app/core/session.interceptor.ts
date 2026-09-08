@@ -83,7 +83,11 @@ export const sessionInterceptor: HttpInterceptorFn = (request, next) => {
       // The session is still valid; it just has not confirmed a second factor
       // recently enough for what was asked. Collect the code and send the
       // request again, once — a second refusal is the caller's to report.
-      if (needsStepUp(cause, request.url)) {
+      //
+      // Only for the session that made the request. A refusal can arrive after
+      // its session has ended, and asking then puts a prompt in front of
+      // whoever signed in since, to release a request that was never theirs.
+      if (needsStepUp(cause, request.url) && auth.session() === issuedBy) {
         return from(stepUp.request()).pipe(
           switchMap((renewed) => (renewed ? next(sent) : throwError(() => cause))),
         );

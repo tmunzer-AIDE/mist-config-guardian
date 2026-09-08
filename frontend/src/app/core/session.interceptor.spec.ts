@@ -299,4 +299,24 @@ describe('sessionInterceptor', () => {
     // Nothing is left to replay: the retry never happens.
     httpMock.verify();
   });
+
+  it('does not put a previous session refusal in front of the next one', async () => {
+    // A refusal can arrive long after the session that asked for it has ended.
+    // Prompting then asks whoever signed in since for a code, to release a
+    // request that was never theirs.
+    auth.applyUser(USER);
+    const abandoned = request('/api/v1/organizations');
+    const refused = httpMock.expectOne('/api/v1/organizations');
+
+    // The session ends and another begins while the request is in flight.
+    await fail('/api/v1/organizations/org-1/overview');
+    auth.applyUser(USER);
+    await settle();
+
+    refused.flush({ detail: STEP_UP_DETAIL }, { status: 403, statusText: 'Forbidden' });
+    await settle();
+
+    expect(TestBed.inject(StepUpService).asking()).toBe(false);
+    expect((await abandoned as { status: number }).status).toBe(403);
+  });
 });
