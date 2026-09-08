@@ -34,8 +34,11 @@ export class AppTimeBar {
   protected readonly ticks = computed<Tick[]>(() =>
     this.timeline.markers().map((marker) => {
       const at = new Date(marker.at);
-      const critical = marker.severity === 'critical';
-      const warning = marker.severity === 'warning';
+      // On a past window the severity is withheld, so the tick is drawn at its
+      // plain height rather than claiming the change was harmless.
+      const known = marker.impact_known !== false;
+      const critical = known && marker.severity === 'critical';
+      const warning = known && marker.severity === 'warning';
       return {
         left: `${(this.time.positionOf(at) * 100).toFixed(2)}%`,
         height: critical ? '28px' : warning ? '22px' : '12px',

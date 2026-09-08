@@ -98,13 +98,14 @@ async def read_change_group(
 
     Expanded from a past view it withholds the same fields the list does, and
     the evidence and assessment besides: those narrate an outcome reached
-    after the instant being viewed.
+    after the instant being viewed. The instant is also a cutoff — a group
+    that had not happened by then answers 404, as it would have.
     """
     detail = await service.get_group(
         _identifier(organization),
         change_group_id,
         viewer_email=viewer.email,
-        historical=filters.as_of is not None,
+        as_of=filters.as_of,
     )
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Change group not found")

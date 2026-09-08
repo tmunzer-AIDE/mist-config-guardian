@@ -4706,6 +4706,11 @@
             "title": "Change Group Id",
             "type": "string"
           },
+          "impact_known": {
+            "default": true,
+            "title": "Impact Known",
+            "type": "boolean"
+          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -7308,7 +7313,7 @@
     },
     "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}": {
       "get": {
-        "description": "Return one change group with its objects, devices, and evidence.\n\nExpanded from a past view it withholds the same fields the list does, and\nthe evidence and assessment besides: those narrate an outcome reached\nafter the instant being viewed.",
+        "description": "Return one change group with its objects, devices, and evidence.\n\nExpanded from a past view it withholds the same fields the list does, and\nthe evidence and assessment besides: those narrate an outcome reached\nafter the instant being viewed. The instant is also a cutoff — a group\nthat had not happened by then answers 404, as it would have.",
         "operationId": "read_change_group_api_v1_organizations__organization_id__change_groups__change_group_id__get",
         "parameters": [
           {

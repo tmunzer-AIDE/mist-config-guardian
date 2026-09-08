@@ -11,6 +11,7 @@ from mist_config_guardian_backend.api.dependencies import get_current_user, requ
 from mist_config_guardian_backend.api.routes.change_groups import get_change_group_service
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.main import create_app
+from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
     ImpactSeverity,
@@ -56,7 +57,11 @@ from mist_config_guardian_backend.services.webhook_processing import WebhookProc
 
 ORGANIZATION_ID = PydanticObjectId()
 OTHER_ORGANIZATION_ID = PydanticObjectId()
-NOW = datetime(2026, 9, 7, 14, 0, tzinfo=UTC)
+# Anchored to the present, not to a fixed date. The service resolves a 24-hour
+# window from `utc_now()`, so a hard-coded instant put every fixture outside it
+# the day after this was written and the suite began failing on the calendar
+# rather than on the code.
+NOW = utc_now().replace(microsecond=0) - timedelta(hours=1)
 SEATTLE = "site-seattle"
 PORTLAND = "site-portland"
 
@@ -1474,7 +1479,7 @@ async def test_a_historical_detail_withholds_the_evidence_and_the_assessment() -
         ORGANIZATION_ID,
         group.id,
         viewer_email="j.mercer@northwind.example",
-        historical=True,
+        as_of=NOW,
     )
 
     assert live is not None
@@ -1517,3 +1522,47 @@ async def test_the_list_endpoint_refuses_a_severity_filter_at_a_past_instant() -
     assert refused.status_code == 400
     assert "past point in time" in refused.json()["detail"]
     assert allowed.status_code == 200
+
+
+async def test_a_group_that_had_not_happened_yet_is_not_found_at_that_instant() -> None:
+    """The instant is a cutoff, not only a mask.
+
+    Without it a caller could name a group created after the instant and still
+    read its actor, its message and everything it changed.
+    """
+    store = _critical_fixture()
+    await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
+    group = store.groups[0]
+    assert group.id is not None
+
+    before = await ChangeGroupService(store).get_group(
+        ORGANIZATION_ID,
+        group.id,
+        viewer_email="j.mercer@northwind.example",
+        as_of=NOW - timedelta(hours=1),
+    )
+
+    assert before is None
+
+
+async def test_a_past_free_text_search_does_not_reach_into_the_summary() -> None:
+    """The summary narrates today's outcome.
+
+    Searching it over a past window answers "recovered", or the name of a
+    degraded metric, through which rows come back — after the summary itself
+    was withheld from them.
+    """
+    live = build_criteria(ORGANIZATION_ID, ChangeGroupFilters(query="recovered"))
+    past = build_criteria(ORGANIZATION_ID, ChangeGroupFilters(query="recovered", as_of=NOW))
+
+    assert {next(iter(clause)) for clause in live["$or"]} == {
+        "audit_id",
+        "actor",
+        "summary",
+        "changed_objects.object_name",
+    }
+    assert {next(iter(clause)) for clause in past["$or"]} == {
+        "audit_id",
+        "actor",
+        "changed_objects.object_name",
+    }

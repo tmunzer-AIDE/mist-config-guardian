@@ -1130,20 +1130,31 @@ class ChangeGroupService:
         group_id: PydanticObjectId,
         *,
         viewer_email: str,
-        historical: bool = False,
+        as_of: datetime | None = None,
     ) -> ChangeGroupDetailResponse | None:
         """Return one change group with its evidence and competing changes.
 
-        ``historical`` withholds everything the list already withholds for a
-        past instant, and the evidence and assessment besides: they are the
-        narrative of an outcome reached after it.
+        ``as_of`` reads the group as it stood at a past instant. It withholds
+        everything the list withholds, and the evidence and assessment
+        besides: they narrate an outcome reached after it. The instant is a
+        cutoff as well as a mask — a group that had not happened yet is not
+        found, and the changes it competed with are only those already made.
         """
+        historical = as_of is not None
         group = await self._store.group_by_id(organization_id, group_id)
         if group is None:
+            return None
+        if as_of is not None and as_utc(group.occurred_at or group.created_at) > as_utc(as_of):
+            # It had not happened at the instant being viewed, so at that
+            # instant there was nothing here to open.
             return None
         sessions = [] if historical else await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
         names = await self._store.site_names(organization_id, group.affected_site_ids)
         start, end = _monitoring_window(group, sessions)
+        if as_of is not None:
+            # Competing changes are those the viewer could have known about;
+            # anything made after the cutoff is not one of them.
+            end = min(end, as_utc(as_of))
         competing = await self._store.groups_touching_sites(
             organization_id,
             group.affected_site_ids,
@@ -1224,12 +1235,18 @@ def build_criteria(
         criteria["actor"] = {"$regex": f"^{re.escape(filters.actor)}$", "$options": "i"}
     if filters.query:
         pattern = re.escape(filters.query)
-        criteria["$or"] = [
+        clauses: list[dict[str, object]] = [
             {"audit_id": {"$regex": pattern, "$options": "i"}},
             {"actor": {"$regex": pattern, "$options": "i"}},
-            {"summary": {"$regex": pattern, "$options": "i"}},
             {"changed_objects.object_name": {"$regex": pattern, "$options": "i"}},
         ]
+        if filters.as_of is None:
+            # The summary narrates today's outcome. Searching it over a past
+            # window would answer "recovered" or the name of a degraded metric
+            # through which rows come back, after the summary itself was
+            # withheld from them.
+            clauses.append({"summary": {"$regex": pattern, "$options": "i"}})
+        criteria["$or"] = clauses
     return criteria
 
 

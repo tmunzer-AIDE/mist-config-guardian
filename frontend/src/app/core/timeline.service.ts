@@ -9,6 +9,8 @@ import { TimeRange } from './time-context.service';
 export interface TimelineMarker {
   at: string;
   severity: 'none' | 'info' | 'warning' | 'critical';
+  /** False on a past window, where the severity is not knowable. */
+  impact_known?: boolean;
   change_group_id: string;
   label: string;
 }

@@ -13,6 +13,9 @@ class TimelineMarkerResponse(BaseModel):
 
     at: datetime
     severity: ImpactSeverity = ImpactSeverity.NONE
+    # False when the marker was drawn for a past window, where the severity is
+    # not knowable: the neutral value above then means "not shown".
+    impact_known: bool = True
     change_group_id: str
     label: str
 

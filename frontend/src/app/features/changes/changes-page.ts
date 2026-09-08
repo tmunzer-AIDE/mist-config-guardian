@@ -228,6 +228,10 @@ export class ChangesPage {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const id = this.selectedId();
+      // The instant is an input to the detail as much as to the table: an
+      // expanded panel read at "now" would otherwise keep showing a live
+      // assessment, its evidence and its devices after travelling back.
+      this.time.asOf();
       if (!organizationId || !id) {
         untracked(() => this.changeGroups.clearDetail());
         return;

@@ -450,7 +450,35 @@ async def test_markers_endpoint_returns_the_contract() -> None:
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {"items", "range_start", "range_end"}
-    assert set(body["items"][0]) == {"at", "severity", "change_group_id", "label"}
+    assert set(body["items"][0]) == {"at", "severity", "impact_known", "change_group_id", "label"}
+    assert body["items"][0]["impact_known"] is True
+
+
+async def test_markers_on_a_past_window_do_not_carry_todays_severity() -> None:
+    """A marker's colour is its severity, which is the verdict reached now.
+
+    Painted along a track of past instants it asserts that verdict at moments
+    at which it had not been reached.
+    """
+    reader = _MemoryPointInTimeReader()
+    reader.groups.append(
+        _group(
+            audit_id="critical",
+            occurred_at=datetime.now(tz=UTC) - timedelta(hours=2),
+            severity=ImpactSeverity.CRITICAL,
+        )
+    )
+    service = PointInTimeService(reader)
+
+    live = await service.markers(ORGANIZATION_ID, range_key="24h")
+    past = await service.markers(ORGANIZATION_ID, range_key="24h", as_of=datetime.now(tz=UTC))
+
+    assert [item.severity for item in live.items] == [ImpactSeverity.CRITICAL]
+    assert live.items[0].impact_known is True
+    assert [item.severity for item in past.items] == [ImpactSeverity.NONE]
+    assert past.items[0].impact_known is False
+    # The change itself is still on the track; only the verdict is withheld.
+    assert past.items[0].label == live.items[0].label
 
 
 async def test_mode_endpoint_reads_the_as_of_header() -> None:

@@ -16,6 +16,7 @@ from typing import Literal, Protocol
 
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.models.monitoring import ImpactSeverity
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.point_in_time import (
@@ -212,11 +213,16 @@ class PointInTimeService:
         """Return every change marker drawn on the shell's time bar."""
         start, end = resolve_window(range_key, as_of)
         groups = await self._reader.markers(organization_id, start=start, end=end, limit=MARKER_LIMIT)
+        # A marker's colour is its severity, which is today's verdict on the
+        # change. Drawn on a past window it would paint that verdict along a
+        # track of instants at which it was not yet reached.
+        historical = as_of is not None
         return TimelineMarkerListResponse(
             items=[
                 TimelineMarkerResponse(
                     at=as_utc(group.occurred_at or group.created_at),
-                    severity=group.impact_severity,
+                    severity=ImpactSeverity.NONE if historical else group.impact_severity,
+                    impact_known=not historical,
                     change_group_id=str(group.id),
                     label=build_title(group.changed_objects, group.message),
                 )
