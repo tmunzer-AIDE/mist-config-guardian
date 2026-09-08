@@ -666,6 +666,50 @@ describe('RestorePage', () => {
     httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
   });
 
+  it('opens another operation when its link arrives while the page is already open', async () => {
+    // The router reuses this component when only the query parameters change,
+    // so a second notification clicked from here must land the way the first did.
+    await openRunning();
+    expect(text()).toContain('RUNNING');
+
+    fixture.componentRef.setInput('operation', 'op-2');
+    fixture.detectChanges();
+    await tick();
+    // The rail refreshes with the link; the operation shown until now is not re-read.
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
+    httpMock.expectOne(`${OPERATIONS_URL}/op-2`).flush(operation({ id: 'op-2', status: 'planned' }));
+    await settle();
+
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
+    expect(text()).not.toContain('RUNNING');
+    // The first operation's poll does not outlive it: left running, it would
+    // read whichever operation is active and poll the planned one forever.
+    expect(all('.cg-spinner').length).toBe(0);
+    vi.advanceTimersByTime(20_000);
+    await tick();
+    httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
+    httpMock.expectNone(`${OPERATIONS_URL}/op-2`);
+  });
+
+  it('does not re-open the linked operation when the organization merely refreshes', async () => {
+    // The same link arriving again is not a new instruction; re-applying it
+    // would reset whatever the user has done since.
+    await openRunning();
+
+    organizationStub.revision.update((value) => value + 1);
+    fixture.detectChanges();
+    await tick();
+    // A refresh re-reads the picker and the rail, and nothing else.
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+
+    httpMock.expectNone(`${OPERATIONS_URL}/op-1`);
+    expect(text()).toContain('RUNNING');
+  });
+
   it('offers compensation for a failed run and names what it will reverse', async () => {
     fixture.componentRef.setInput('operation', 'op-1');
     fixture.detectChanges();

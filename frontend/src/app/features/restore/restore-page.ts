@@ -108,6 +108,15 @@ export class RestorePage {
   /** `?compensate=1` — open compensation for the named operation. */
   readonly compensate = input('', { transform: fromQuery });
 
+  /** Every deep-link input as one value, so a change to any of them is one change. */
+  private readonly deepLink = computed<DeepLink>(() => ({
+    versions: this.versions(),
+    changeGroup: this.changeGroup(),
+    operation: this.operation(),
+    step: this.step(),
+    compensate: this.compensate(),
+  }));
+
   protected readonly currentStep = signal<RestoreStepName>('targets');
 
   // ---- step 1 state -------------------------------------------------------
@@ -147,7 +156,13 @@ export class RestorePage {
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private pollAttempts = 0;
-  private deepLinkApplied = false;
+  /** The deep link last applied, as a key.
+   *
+   *  The router reuses this component when only the query parameters change,
+   *  so a link can arrive while the page is already open and must be applied
+   *  again. A re-run for an organization refresh carries the same link and
+   *  must not re-apply it over whatever the user has done since. */
+  private appliedLink: string | null = null;
 
   protected readonly readOnly = computed(
     () => this.time.isHistorical() || !this.auth.can('operator'),
@@ -231,14 +246,19 @@ export class RestorePage {
       );
     });
 
-    // History and the deep links are independent of the filter row.
+    // History and the deep links are independent of the filter row. The link
+    // is read here, tracked, rather than inside the bootstrap: the router
+    // reuses this component when only the query parameters change, so a
+    // second notification opened from this page has to land the way the
+    // first one did.
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       this.organizations.revision();
+      const link = this.deepLink();
       if (!organizationId) {
         return;
       }
-      void untracked(() => this.bootstrap(organizationId));
+      void untracked(() => this.bootstrap(organizationId, link));
     });
 
     inject(DestroyRef).onDestroy(() => this.stopPolling());
@@ -267,14 +287,17 @@ export class RestorePage {
     this.rememberLabels(items.map((item) => [item.version_id, `${item.name} · v${item.version}`]));
   }
 
-  private async bootstrap(organizationId: string): Promise<void> {
+  private async bootstrap(organizationId: string, link: DeepLink): Promise<void> {
     await this.ui.track('Loading recent restores', () => this.loadHistory(organizationId));
-    if (this.deepLinkApplied) {
+    const key = JSON.stringify(link);
+    if (key === this.appliedLink) {
       return;
     }
-    this.deepLinkApplied = true;
+    // Recorded before the awaits below, so a refresh arriving mid-way does not
+    // apply the same link a second time.
+    this.appliedLink = key;
 
-    const versionIds = this.versions()
+    const versionIds = link.versions
       .split(',')
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
@@ -282,21 +305,18 @@ export class RestorePage {
       this.selectedIds.set(versionIds);
     }
 
-    const group = this.changeGroup();
-    if (group) {
+    if (link.changeGroup) {
       await this.ui.track('Loading the change group', () =>
-        this.applyChangeGroup(organizationId, group),
+        this.applyChangeGroup(organizationId, link.changeGroup),
       );
     }
 
-    const operationId = this.operation();
-    if (operationId) {
-      await this.openOperation(operationId, this.compensate() === '1');
+    if (link.operation) {
+      await this.openOperation(link.operation, link.compensate === '1');
     }
 
-    const requested = this.step();
-    if (isStepName(requested) && this.stepAvailable(requested)) {
-      this.currentStep.set(requested);
+    if (isStepName(link.step) && this.stepAvailable(link.step)) {
+      this.currentStep.set(link.step);
     }
   }
 
@@ -700,6 +720,10 @@ export class RestorePage {
     if (!organizationId) {
       return;
     }
+    // A poll may still be running for the operation shown until now. It reads
+    // whichever operation is active at each tick, so left alone it would keep
+    // polling the new one even once that is terminal.
+    this.stopPolling();
     const operation = await this.ui.track('Loading the restore operation', () =>
       this.restores.get(organizationId, operationId),
     );
@@ -736,6 +760,15 @@ export class RestorePage {
     // yet, and passing its identifier only looked as though it were.
     await this.router.navigate(['/history']);
   }
+}
+
+/** The five query parameters the page reads, normalized by `fromQuery`. */
+interface DeepLink {
+  versions: string;
+  changeGroup: string;
+  operation: string;
+  step: string;
+  compensate: string;
 }
 
 function isStepName(value: string): value is RestoreStepName {
