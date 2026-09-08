@@ -8,6 +8,7 @@ inverse of every planned write is known.
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 
 from beanie import PydanticObjectId
 
@@ -112,6 +113,26 @@ async def capture_safety_snapshot(
             )
         )
     return entries
+
+
+def _without_paths(value: object, paths: frozenset[str], *, path: str = "") -> object:
+    """Drop exactly the named locations, leaving same-named fields elsewhere.
+
+    The paths are the ones :func:`find_unavailable_secrets` reports, so this
+    walks a configuration the same way it does — dotted keys for mappings,
+    dotted indices for sequences — and removes only what it named.
+    """
+    if isinstance(value, Mapping):
+        kept: dict[str, object] = {}
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            if child_path in paths:
+                continue
+            kept[str(key)] = _without_paths(child, paths, path=child_path)
+        return kept
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_without_paths(child, paths, path=f"{path}.{index}") for index, child in enumerate(value)]
+    return value
 
 
 def _validate_live_state(
@@ -269,10 +290,18 @@ class RestoreCompensationService:
         built was refused at authorization for requiring a secret it did not
         have — the safety net failing in the one case it exists for.
 
-        So the masked fields are the ones left out, and everything else has to
-        agree: the ordinary fields, and any secret Mist did return. A secret
+        So the masked locations are the ones left out, and everything else has
+        to agree: the ordinary fields, and any secret Mist did return. A secret
         that came back real and differs is a genuine difference, and the stored
         version does not describe what was live.
+
+        Left out by exact location, not by name. An object can carry the same
+        secret field in more than one place — a primary key and a backup one —
+        and excluding the name would let a mask over the first suppress the
+        comparison of the second. The stored version would then be accepted
+        over a backup key that had been rotated since, and put the old one
+        back: no mask, nothing for authorization to catch, and a working
+        credential overwritten with a stale one.
         """
         definition = get_definition(action.scope, action.object_type)
         if definition is None:
@@ -288,11 +317,11 @@ class RestoreCompensationService:
                 stored.id,
             )
             return False
-        masked = {
-            path.rsplit(".", maxsplit=1)[-1] for path in find_unavailable_secrets(live, definition.sensitive_fields)
-        }
-        comparable = definition.ignored_fields | masked
-        return canonicalize(live, ignored_fields=comparable) == canonicalize(plaintext, ignored_fields=comparable)
+        masked = frozenset(find_unavailable_secrets(live, definition.sensitive_fields))
+        ignored = definition.ignored_fields
+        return canonicalize(_without_paths(live, masked), ignored_fields=ignored) == canonicalize(
+            _without_paths(plaintext, masked), ignored_fields=ignored
+        )
 
     async def _invert(
         self,

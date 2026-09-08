@@ -417,6 +417,96 @@ async def test_compensation_keeps_a_secret_mist_did_return(
     assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == "rotated-since"
 
 
+# An object can carry the same secret field in more than one place.
+NESTED_WLAN: dict[str, object] = {
+    "name": "Corp",
+    "enabled": True,
+    "auth_servers": [
+        {"host": "radius-1.example", "secret": "primary-shared-secret"},
+        {"host": "radius-2.example", "secret": "backup-shared-secret"},
+    ],
+}
+
+
+def _nested(masked_primary: str, backup: str) -> dict[str, object]:
+    """The same object as a live read returned it."""
+    return {
+        "name": "Corp",
+        "enabled": True,
+        "auth_servers": [
+            {"host": "radius-1.example", "secret": masked_primary},
+            {"host": "radius-2.example", "secret": backup},
+        ],
+    }
+
+
+def _nested_pair(
+    live: dict[str, object],
+    vault: CredentialVault,
+) -> tuple[SafetySnapshotEntry, ObjectVersion]:
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    stored = _stored_version(
+        protect_configuration(NESTED_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(NESTED_WLAN, ignored_fields=IGNORED),
+    )
+    entry = SafetySnapshotEntry(
+        logical_object_id=stored.logical_object_id,
+        order=0,
+        action=RestoreActionType.UPDATE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        existed=True,
+        configuration=protect_configuration(live, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash=configuration_hash(live, ignored_fields=IGNORED),
+        pre_version_id=stored.id,
+    )
+    return entry, stored
+
+
+async def test_a_mask_on_one_secret_does_not_excuse_another_that_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Masked locations are left out one at a time, not by field name.
+
+    Excluding the name meant a mask over the first shared secret suppressed the
+    comparison of the second. The stored version was accepted over a backup
+    credential rotated since, and compensation put the old one back — no mask,
+    so nothing for authorization to catch, and a working credential overwritten
+    with a stale one.
+    """
+    vault = _vault()
+    # Mist masked the first server's secret and returned the second, which has
+    # been rotated since the stored version was taken.
+    entry, stored = _nested_pair(_nested("********", "rotated-backup-secret"), vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    revealed = reveal_configuration(inverse.protected_configuration, vault)
+    servers = revealed["auth_servers"]
+    assert isinstance(servers, list)
+    assert servers[1]["secret"] == "rotated-backup-secret"
+
+
+async def test_a_mask_on_one_secret_still_recovers_it_when_the_rest_agrees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Being exact about locations must not stop the recovery from happening."""
+    vault = _vault()
+    entry, stored = _nested_pair(_nested("********", "backup-shared-secret"), vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    revealed = reveal_configuration(inverse.protected_configuration, vault)
+    servers = revealed["auth_servers"]
+    assert isinstance(servers, list)
+    # The masked one comes from the stored version; the other is unchanged.
+    assert servers[0]["secret"] == "primary-shared-secret"
+    assert servers[1]["secret"] == "backup-shared-secret"
+
+
 async def test_a_stored_version_that_has_drifted_is_not_paired_with(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
