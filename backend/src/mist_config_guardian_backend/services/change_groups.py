@@ -364,9 +364,12 @@ class BeanieChangeGroupStore:
     async def save(self, group: AuditChangeGroup) -> bool:
         """Persist a recomputed projection if nobody else has since it was read."""
         expected = group.projection_revision
-        document = group.model_dump(mode="json", exclude={"id", "projection_revision"})
+        # Native BSON. A JSON dump would store every identifier and instant as
+        # a string, and the document would stop matching the typed queries and
+        # the compound index that find it.
+        document = group.model_dump(mode="python", exclude={"id", "projection_revision"})
         result = await AuditChangeGroup.get_pymongo_collection().update_one(
-            {"_id": group.id, "projection_revision": expected},
+            {"_id": group.id, **revision_predicate(expected)},
             {"$set": document, "$inc": {"projection_revision": 1}},
         )
         if result.matched_count == 0:
@@ -812,6 +815,19 @@ _CONTENDED: Any = object()
 _PROJECTION_ATTEMPTS = 3
 
 
+def revision_predicate(expected: int) -> dict[str, object]:
+    """Match one projection revision, counting a missing field as revision zero.
+
+    Groups written before the field existed carry no ``projection_revision``,
+    and a query for ``0`` does not match a missing field. Without this every
+    rebuild of such a group would believe it had lost a race that never
+    happened, and after the retries would give up — permanently.
+    """
+    if expected != 0:
+        return {"projection_revision": expected}
+    return {"$or": [{"projection_revision": 0}, {"projection_revision": {"$exists": False}}]}
+
+
 class ChangeGroupProjector:
     """Recompute a change group's stored projection from its sources.
 
@@ -1114,12 +1130,18 @@ class ChangeGroupService:
         group_id: PydanticObjectId,
         *,
         viewer_email: str,
+        historical: bool = False,
     ) -> ChangeGroupDetailResponse | None:
-        """Return one change group with its evidence and competing changes."""
+        """Return one change group with its evidence and competing changes.
+
+        ``historical`` withholds everything the list already withholds for a
+        past instant, and the evidence and assessment besides: they are the
+        narrative of an outcome reached after it.
+        """
         group = await self._store.group_by_id(organization_id, group_id)
         if group is None:
             return None
-        sessions = await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
+        sessions = [] if historical else await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
         names = await self._store.site_names(organization_id, group.affected_site_ids)
         start, end = _monitoring_window(group, sessions)
         competing = await self._store.groups_touching_sites(
@@ -1129,14 +1151,18 @@ class ChangeGroupService:
             end=end,
             exclude_audit_id=group.audit_id,
         )
-        summary = _summarize(group, sessions, names, viewer_email)
+        summary = _summarize(group, sessions, names, viewer_email, historical=historical)
         return ChangeGroupDetailResponse(
             **summary.model_dump(by_alias=True),
             message=group.message,
             method=group.method,
-            baseline_confidence=group.baseline_confidence,
-            deterministic_assessment=group.deterministic_assessment,
-            evidence=[ChangeEvidenceResponse(label=item.label, severity=item.severity) for item in group.evidence],
+            baseline_confidence=BaselineConfidence.NONE if historical else group.baseline_confidence,
+            deterministic_assessment=None if historical else group.deterministic_assessment,
+            evidence=(
+                []
+                if historical
+                else [ChangeEvidenceResponse(label=item.label, severity=item.severity) for item in group.evidence]
+            ),
             changed_objects=[
                 ChangedObjectResponse(
                     logical_object_id=str(ref.logical_object_id),
@@ -1153,15 +1179,19 @@ class ChangeGroupService:
                 )
                 for ref in group.changed_objects
             ],
-            affected_devices=[
-                AffectedDeviceResponse(
-                    device_mac=device.device_mac,
-                    device_name=device.device_name,
-                    device_type=device.device_type,
-                    site_mist_id=device.site_mist_id,
-                )
-                for device in group.affected_devices
-            ],
+            affected_devices=(
+                []
+                if historical
+                else [
+                    AffectedDeviceResponse(
+                        device_mac=device.device_mac,
+                        device_name=device.device_name,
+                        device_type=device.device_type,
+                        site_mist_id=device.site_mist_id,
+                    )
+                    for device in group.affected_devices
+                ]
+            ),
             competing_change_group_ids=sorted(str(item.id) for item in competing if item.id is not None),
         )
 
@@ -1176,12 +1206,17 @@ def build_criteria(
         "organization_id": organization_id,
         "occurred_at": {"$gte": start, "$lte": end},
     }
-    if filters.severity == "critical":
-        criteria["impact_severity"] = ImpactSeverity.CRITICAL.value
-    elif filters.severity == "warning":
-        criteria["impact_severity"] = ImpactSeverity.WARNING.value
-    elif filters.severity == "none":
-        criteria["impact_severity"] = {"$in": [ImpactSeverity.NONE.value, ImpactSeverity.INFO.value]}
+    # Impact severity is a single mutable column holding today's verdict, so a
+    # past window cannot be filtered by it: the rows returned would be the ones
+    # judged critical now, presented as the critical changes of then. The
+    # caller rejects the combination; this is the guard that makes it true.
+    if filters.as_of is None:
+        if filters.severity == "critical":
+            criteria["impact_severity"] = ImpactSeverity.CRITICAL.value
+        elif filters.severity == "warning":
+            criteria["impact_severity"] = ImpactSeverity.WARNING.value
+        elif filters.severity == "none":
+            criteria["impact_severity"] = {"$in": [ImpactSeverity.NONE.value, ImpactSeverity.INFO.value]}
     if filters.actor:
         # The actor filter selects one person, so it is anchored equality: an
         # unanchored pattern for "admin" would also return "admin2" and
@@ -1231,9 +1266,12 @@ def _summarize(
         # The stored summary narrates the outcome, so it is withheld with it.
         summary="" if historical else (group.summary or ""),
         object_count=len(group.changed_objects),
-        device_count=len(group.affected_devices),
-        affected_site_ids=list(group.affected_site_ids),
-        devices_label=build_devices_label(group.affected_devices, site_names),
+        # Devices and sites are accumulated from monitoring sessions as they
+        # arrive, so they grow after the fact like the outcome does. A past
+        # view would report today's reach, not the reach known then.
+        device_count=0 if historical else len(group.affected_devices),
+        affected_site_ids=[] if historical else list(group.affected_site_ids),
+        devices_label="" if historical else build_devices_label(group.affected_devices, site_names),
         impact_severity=ImpactSeverity.NONE if historical else group.impact_severity,
         recovery_state=RecoveryState.NOT_APPLICABLE if historical else group.recovery_state,
         impact_label="" if historical else build_impact_label(group.impact_severity, group.recovery_state, movements),

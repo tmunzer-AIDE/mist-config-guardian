@@ -29,6 +29,16 @@ class WebhookReceiptNotFoundError(ValueError):
     """Raised when a queued webhook receipt no longer exists."""
 
 
+def _union(field: str, values: list[object]) -> dict[str, object]:
+    """Add values to an array field without duplicating what is already there."""
+    return {"$setUnion": [{"$ifNull": [field, []]}, values]}
+
+
+def _fill(field: str, value: object) -> dict[str, object]:
+    """Set a field only while it is still empty."""
+    return {"$ifNull": [field, value]}
+
+
 class WebhookProcessingService:
     """Decrypt and correlate authenticated webhook receipts."""
 
@@ -167,32 +177,38 @@ class WebhookProcessingService:
                 if group is None:
                     raise
 
-        if receipt.id not in group.receipt_ids:
-            group.receipt_ids.append(receipt.id)
-        # A later delivery of the same audit may be the one that carries the
-        # actor or the message, so fill blanks without overwriting known values.
-        group.actor = group.actor or WebhookProcessingService._first_string(
-            payload,
-            "admin_name",
-            "admin_id",
-            "user",
-        )
-        group.method = group.method or WebhookProcessingService._first_string(payload, "method", "src")
-        group.message = group.message or WebhookProcessingService._first_string(payload, "message")
-        group.occurred_at = group.occurred_at or WebhookProcessingService._event_time(payload)
         site_id = WebhookProcessingService._first_string(payload, "site_id")
-        if site_id and site_id not in group.affected_site_ids:
-            group.affected_site_ids.append(site_id)
-        object_id = WebhookProcessingService._first_string(
-            payload,
-            "object_id",
-            "device_id",
-            "id",
+        object_id = WebhookProcessingService._first_string(payload, "object_id", "device_id", "id")
+        # Merged in place rather than read-modify-saved. A whole-document save
+        # would overwrite whatever a rebuild had computed between this read and
+        # this write, projection and revision included. The revision is
+        # incremented with the merge, so a rebuild already in flight loses its
+        # conditional write and recomputes from these fields instead of
+        # replacing them with the copy it read before they arrived.
+        #
+        # A later delivery of the same audit may be the one carrying the actor
+        # or the message, so blanks are filled without overwriting what is known.
+        await AuditChangeGroup.get_pymongo_collection().update_one(
+            {"_id": group.id},
+            [
+                {
+                    "$set": {
+                        "receipt_ids": _union("$receipt_ids", [receipt.id]),
+                        "actor": _fill(
+                            "$actor",
+                            WebhookProcessingService._first_string(payload, "admin_name", "admin_id", "user"),
+                        ),
+                        "method": _fill("$method", WebhookProcessingService._first_string(payload, "method", "src")),
+                        "message": _fill("$message", WebhookProcessingService._first_string(payload, "message")),
+                        "occurred_at": _fill("$occurred_at", WebhookProcessingService._event_time(payload)),
+                        "affected_site_ids": _union("$affected_site_ids", [site_id] if site_id else []),
+                        "affected_object_ids": _union("$affected_object_ids", [object_id] if object_id else []),
+                        "projection_revision": {"$add": [{"$ifNull": ["$projection_revision", 0]}, 1]},
+                        "updated_at": utc_now(),
+                    }
+                }
+            ],
         )
-        if object_id and object_id not in group.affected_object_ids:
-            group.affected_object_ids.append(object_id)
-        group.touch()
-        await group.save()
 
     @staticmethod
     def _event_time(payload: dict[str, object]) -> datetime | None:
