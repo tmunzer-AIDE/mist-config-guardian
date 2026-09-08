@@ -274,6 +274,29 @@ describe('ImpactPage', () => {
     http.verify();
   });
 
+  it('lets a session named by the URL supersede an earlier row pick', async () => {
+    // A pick writes itself to the URL, so the parameter arriving as the pick
+    // is not news. A parameter arriving from elsewhere — a notification, a
+    // search result — is, and must win rather than be rewritten back.
+    await render([CRITICAL, QUIET]);
+    const page = fixture.componentInstance as unknown as { selectedId: () => string | null };
+
+    all('.row')[1].click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(page.selectedId()).toBe('s2');
+    const picks = navigations.length;
+
+    fixture.componentRef.setInput('session', 's1');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(page.selectedId()).toBe('s1');
+    // Nothing rewrote the URL back to the pick.
+    expect(navigations.length).toBe(picks);
+  });
+
   it('lists every session and narrows the list from the status chips', async () => {
     await render([CRITICAL, QUIET, BLANK]);
 

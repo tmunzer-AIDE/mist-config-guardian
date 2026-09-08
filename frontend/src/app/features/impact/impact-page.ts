@@ -282,6 +282,20 @@ export class ImpactPage {
       );
     });
 
+    // A row pick and the bound `session` parameter both name a selection; the
+    // one that changed most recently wins. A pick writes itself to the URL, so
+    // the parameter arriving as the pick is not news; a parameter arriving
+    // from elsewhere — a notification, a search result — supersedes the pick,
+    // rather than being overridden by it and rewritten back.
+    effect(() => {
+      const linked = this.session();
+      untracked(() => {
+        if (this.picked() !== null && this.picked() !== linked) {
+          this.picked.set(null);
+        }
+      });
+    });
+
     // Resolve a deep link that points outside the loaded page. The link, and
     // the session it resolved to, belong to the organization it was opened under.
     effect(() => {
