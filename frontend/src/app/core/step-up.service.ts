@@ -28,6 +28,15 @@ export class StepUpService {
   readonly busy = signal(false);
 
   private pending: Pending[] = [];
+  /**
+   * Which session is asking.
+   *
+   * A confirmation is in flight for as long as the network takes, and the
+   * session that asked for it can end in the meantime. Advancing this at the
+   * boundary is what lets the answer be recognised as belonging to a session
+   * that is gone.
+   */
+  private generation = 0;
 
   /**
    * Ask for a code and resolve once the answer is known.
@@ -49,17 +58,29 @@ export class StepUpService {
     if (this.busy()) {
       return;
     }
+    // Whose confirmation this is. What comes back describes the session that
+    // sent it: it renewed that session's step-up, or that session's code was
+    // wrong. Once that session has ended the answer describes nothing on
+    // screen, and applying it would release the next session's requests on a
+    // code nobody there entered, or accuse them of mistyping one.
+    const issuedBy = this.generation;
     this.busy.set(true);
     this.error.set('');
     try {
       await firstValueFrom(this.http.post('/api/v1/account/mfa/step-up', { code }));
-      this.settle(true);
+      if (this.generation === issuedBy) {
+        this.settle(true);
+      }
     } catch {
       // Deliberately unspecific, and the prompt stays open: a wrong code is the
       // only thing a person can act on, and the attempts are counted server-side.
-      this.error.set('That code was not accepted. Check your authenticator and try again.');
+      if (this.generation === issuedBy) {
+        this.error.set('That code was not accepted. Check your authenticator and try again.');
+      }
     } finally {
-      this.busy.set(false);
+      if (this.generation === issuedBy) {
+        this.busy.set(false);
+      }
     }
   }
 
@@ -74,9 +95,14 @@ export class StepUpService {
    * The requests waiting here belong to the session that is ending. Left
    * suspended they outlive it: the prompt would come back for whoever signs in
    * next and, on their code, replay the previous session's requests. They are
-   * failed instead, and each caller sees the refusal it already had.
+   * failed instead, and each caller sees the refusal it already had — and a
+   * confirmation still in flight stops being able to answer for anyone.
    */
   reset(): void {
+    // Only a session boundary advances this. Dismissing the prompt does not:
+    // a confirmation still in flight belongs to the session still signed in,
+    // and its answer is as good for a request that queued a moment later.
+    this.generation += 1;
     this.busy.set(false);
     this.settle(false);
   }
