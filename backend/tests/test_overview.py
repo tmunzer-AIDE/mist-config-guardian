@@ -487,6 +487,36 @@ def test_a_reconciliation_not_yet_due_is_on_schedule_even_though_none_has_run() 
     assert (reconciliation.label, reconciliation.status) == ("Reconciliation on schedule", "ok")
 
 
+def test_a_failed_reconciliation_does_not_reset_the_cadence_clock() -> None:
+    """Only a completed run reconciled anything, so only one moves the deadline."""
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW, initial_snapshot=NOW - timedelta(days=3)),
+            latest_snapshot=_snapshot(),
+            # An attempt moments ago that failed.
+            latest_reconciliation=_snapshot(completed_at=NOW, status=SnapshotStatus.FAILED),
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert (reconciliation.label, reconciliation.status) == ("Last reconciliation failed", "warn")
+
+
+def test_a_partial_reconciliation_is_reported_as_incomplete() -> None:
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW),
+            latest_snapshot=_snapshot(),
+            latest_reconciliation=_snapshot(completed_at=NOW, status=SnapshotStatus.PARTIAL),
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert (reconciliation.label, reconciliation.status) == ("Last reconciliation incomplete", "warn")
+
+
 def test_safety_net_warns_when_a_configured_webhook_never_delivered() -> None:
     rows = build_safety_net(
         SafetyNetInput(

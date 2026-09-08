@@ -458,20 +458,25 @@ def _reconciliation_row(
     """
     minutes = cron_cadence_minutes(organization.reconciliation_cron)
     cadence = format_cadence(minutes) if minutes is not None else "—"
-    captured = _snapshot_instant(reconciliation) or since
-    overdue = minutes is not None and now - captured > timedelta(minutes=minutes * _OVERDUE_FACTOR)
-    if overdue and reconciliation is None:
-        label = "Reconciliation never completed"
-    elif overdue:
-        label = "Reconciliation overdue"
-    else:
-        label = "Reconciliation on schedule"
-    return SafetyNetItemResponse(
-        key="reconciliation",
-        label=label,
-        status="warn" if overdue else "ok",
-        detail=cadence,
+    # Only a completed run reconciled anything, so only a completed run moves
+    # the deadline. A failed attempt that reset the clock would report the
+    # schedule as kept by the very run that did not keep it.
+    completed = (
+        reconciliation if reconciliation is not None and reconciliation.status is SnapshotStatus.COMPLETED else None
     )
+    captured = _snapshot_instant(completed) or since
+    overdue = minutes is not None and now - captured > timedelta(minutes=minutes * _OVERDUE_FACTOR)
+    if reconciliation is not None and reconciliation.status is SnapshotStatus.FAILED:
+        label, status = "Last reconciliation failed", "warn"
+    elif reconciliation is not None and reconciliation.status is SnapshotStatus.PARTIAL:
+        label, status = "Last reconciliation incomplete", "warn"
+    elif overdue and completed is None:
+        label, status = "Reconciliation never completed", "warn"
+    elif overdue:
+        label, status = "Reconciliation overdue", "warn"
+    else:
+        label, status = "Reconciliation on schedule", "ok"
+    return SafetyNetItemResponse(key="reconciliation", label=label, status=status, detail=cadence)
 
 
 def _credential_row(organization: Organization) -> SafetyNetItemResponse:
