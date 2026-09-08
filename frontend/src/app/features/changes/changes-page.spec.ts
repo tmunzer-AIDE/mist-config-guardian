@@ -14,7 +14,11 @@ const INDEX_URL = `/api/v1/organizations/${ORGANIZATION_ID}/change-groups`;
 /** Only `selected()` is read by the page, so the context is stubbed rather than
  *  driven through the organization list endpoint. */
 const organizationStub = {
-  selected: signal({ id: ORGANIZATION_ID, name: 'Northwind Retail', status: 'verified' }),
+  selected: signal<{ id: string; name: string; status: string } | null>({
+    id: ORGANIZATION_ID,
+    name: 'Northwind Retail',
+    status: 'verified',
+  }),
 };
 
 function summary(
@@ -188,6 +192,25 @@ describe('ChangesPage', () => {
 
     expect(text('.empty-title')).toEqual(['No changes in this window']);
     expect(text('.table-foot')).toEqual(['No change groups in this window']);
+  });
+
+  it('keeps a group linked before any organization was established', async () => {
+    // A bookmarked, searched or notified link opens cold: the query parameter
+    // is bound before the organization list has loaded. The organization that
+    // then loads is the one the link was written under.
+    organizationStub.selected.set(null);
+    fixture.componentRef.setInput('group', MONDAY_WARNING.id);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    httpMock.expectNone((candidate) => candidate.url.startsWith('/api/v1/organizations/'));
+
+    organizationStub.selected.set({ id: ORGANIZATION_ID, name: 'Northwind Retail', status: 'verified' });
+    await load([MONDAY_CRITICAL, MONDAY_WARNING]);
+    httpMock.expectOne(`${INDEX_URL}/${MONDAY_WARNING.id}`).flush(detail(MONDAY_WARNING));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text('.panel-title')).toEqual([MONDAY_WARNING.title]);
   });
 
   it('drops a selected group, and its parameter, when the organization changes', async () => {

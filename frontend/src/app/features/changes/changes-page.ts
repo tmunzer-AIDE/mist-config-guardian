@@ -220,6 +220,12 @@ export class ChangesPage {
         untracked(() => this.changeGroups.clearDetail());
         return;
       }
+      if (this.selectedFor === null) {
+        // A link opened cold arrives before any organization is established.
+        // It was written under the organization that then loads, so that
+        // organization adopts it rather than discarding it as foreign.
+        this.selectedFor = organizationId;
+      }
       if (this.selectedFor !== organizationId) {
         // The group was selected under another organization; here it names
         // nothing. It goes, and the parameter with it, before a read for it
