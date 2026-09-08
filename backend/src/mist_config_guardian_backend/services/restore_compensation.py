@@ -33,7 +33,10 @@ from mist_config_guardian_backend.services.restore_planner import (
     load_or_build_state,
     validate_action_capabilities,
 )
-from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.canonical import (
+    configuration_hash,
+    configuration_hash_matches,
+)
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import protect_configuration
 
@@ -92,13 +95,43 @@ async def capture_safety_snapshot(
                         sensitive_fields=definition.sensitive_fields,
                     )
                 ),
-                configuration_hash=(
-                    None if current is None else configuration_hash(current, ignored_fields=definition.ignored_fields)
+                configuration_hash=_entry_digest(
+                    stored,
+                    current,
+                    ignored_fields=definition.ignored_fields,
                 ),
                 pre_version_id=(None if stored is None or stored.is_deleted else stored.id),
             )
         )
     return entries
+
+
+def _entry_digest(
+    stored: ObjectVersion | None,
+    current: dict[str, object] | None,
+    *,
+    ignored_fields: frozenset[str],
+) -> str | None:
+    """Digest a live read so it stays comparable with the stored version.
+
+    Compensation asks one question of this digest later: is the stored version
+    the same configuration as what was live, so its real secrets can be used
+    instead of the masked values a live read returns? Two digests only answer
+    that when they are of the same generation, and the stored one may predate
+    the keyed hash. Recording the stored digest verbatim when it already
+    describes this configuration keeps the later comparison between like and
+    like; anything else is digested in the current generation, and by
+    construction will not match.
+    """
+    if current is None:
+        return None
+    if stored is not None and configuration_hash_matches(
+        stored.configuration_hash,
+        current,
+        ignored_fields=ignored_fields,
+    ):
+        return stored.configuration_hash
+    return configuration_hash(current, ignored_fields=ignored_fields)
 
 
 def _validate_live_state(
@@ -123,7 +156,7 @@ def _validate_live_state(
         raise MistMutationError(msg)
     definition = get_definition(action.scope, action.object_type)
     ignored = frozenset() if definition is None else definition.ignored_fields
-    if configuration_hash(current, ignored_fields=ignored) != action.expected_current_hash:
+    if not configuration_hash_matches(action.expected_current_hash, current, ignored_fields=ignored):
         msg = f"{action.object_name} changed after this plan was reviewed"
         raise MistMutationError(msg)
 

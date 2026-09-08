@@ -536,6 +536,28 @@ async def test_object_endpoint_redacts_secrets_and_404s_outside_the_lifetime() -
     assert missing.status_code == 404
 
 
+async def test_object_endpoint_never_publishes_the_configuration_digest() -> None:
+    """The digest is taken over the plaintext this response redacts.
+
+    Returning both hands a reader an offline oracle: they hold every field
+    except the secret, so one hash per guess confirms it. Nothing in the
+    interface ever read the field.
+    """
+    reader = _history()
+    survivor = reader.logicals[0]
+    assert survivor.id is not None
+    app = _app(PointInTimeService(reader))
+    path = f"/api/v1/organizations/{ORGANIZATION_ID}/point-in-time/objects/{survivor.id}"
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(path, params={"at": DAY_TWO.isoformat()})
+
+    body = response.json()
+    assert response.status_code == 200
+    assert "configuration_hash" not in body
+    assert "hash-1" not in response.text
+
+
 async def test_object_endpoint_falls_back_to_the_as_of_header() -> None:
     reader = _history()
     survivor = reader.logicals[0]

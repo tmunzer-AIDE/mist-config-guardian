@@ -2508,7 +2508,7 @@
         "type": "object"
       },
       "ObjectVersionResponse": {
-        "description": "Secret-redacted immutable object version.",
+        "description": "Secret-redacted immutable object version.\n\nThe stored configuration digest is deliberately absent. It is taken over\nthe plaintext, and this response carries the same configuration with its\nsecrets redacted, so publishing the two together would let any reader\nconfirm a guessed secret offline. Nothing in the interface ever displayed\nit; comparison between versions is what the diff endpoint is for.",
         "properties": {
           "actor": {
             "anyOf": [
@@ -2544,10 +2544,6 @@
             "title": "Configuration",
             "type": "object"
           },
-          "configuration_hash": {
-            "title": "Configuration Hash",
-            "type": "string"
-          },
           "event": {
             "$ref": "#/components/schemas/VersionEvent"
           },
@@ -2574,7 +2570,6 @@
           "version",
           "event",
           "configuration",
-          "configuration_hash",
           "changed_fields",
           "is_deleted",
           "observed_at",

@@ -52,6 +52,26 @@ write requires, and the header that makes writes refuse while a client is
 browsing a past point in time. Outside production the same document is browsable
 at `http://localhost:8000/docs`.
 
+### Compatibility changes
+
+`configuration_hash` has been **removed** from the object version responses of
+`GET /api/v1/organizations/{organization_id}/objects/{logical_object_id}/versions`
+and `GET /api/v1/organizations/{organization_id}/point-in-time/objects/{logical_object_id}`.
+
+The digest was taken over the plaintext configuration while those responses
+carry the same configuration with its secrets redacted. Publishing both let any
+reader confirm a guessed secret offline: they hold every other field, so one
+hash per guess is enough. A client that read the field for change detection
+should compare `version` instead, or use the diff endpoint, which reports what
+actually differs.
+
+The stored digest is now a keyed HMAC and carries a `v2:` prefix. It is derived
+from `CREDENTIAL_ENCRYPTION_KEY`, so it shares that key's lifecycle: rotating
+the key means re-encrypting stored secrets and re-hashing alongside them.
+Digests written before this change are still recognised wherever one is
+compared, and the `hashes.backfill_configuration_hashes` worker task rewrites
+them in the background, so no deployment step is required.
+
 ## Interface design
 
 `docs/design/prototype.html` is the approved design. It is a reference artifact,

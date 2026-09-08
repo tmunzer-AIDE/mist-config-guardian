@@ -29,7 +29,7 @@ from mist_config_guardian_backend.models.restore import (
     RestoreOperation,
     RestoreStatus,
 )
-from mist_config_guardian_backend.models.snapshot import ObjectVersion
+from mist_config_guardian_backend.models.snapshot import ObjectVersion, VersionEvent
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
@@ -40,7 +40,10 @@ from mist_config_guardian_backend.services.restore_compensation import (
     capture_safety_snapshot,
 )
 from mist_config_guardian_backend.services.restore_planner import RestoreOperationState
-from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.canonical import (
+    configuration_hash,
+    legacy_configuration_hash,
+)
 from mist_config_guardian_backend.snapshots.secrets import is_protected
 
 ORGANIZATION_ID = PydanticObjectId()
@@ -49,6 +52,7 @@ COMPENSATION_ID = PydanticObjectId()
 ADMINISTRATOR_ID = PydanticObjectId()
 
 CORP_WLAN = {"name": "Corp", "psk": "super-secret", "enabled": True}
+IGNORED = frozenset({"created_time", "modified_time", "last_seen"})
 GUEST_WLAN = {"name": "Guest", "enabled": False}
 
 
@@ -180,7 +184,7 @@ async def test_safety_snapshot_records_the_pre_restore_state(monkeypatch: pytest
         "mist_config_guardian_backend.services.restore_compensation.latest_version",
         _no_stored_version,
     )
-    corp_hash = configuration_hash(CORP_WLAN, ignored_fields=frozenset({"created_time", "modified_time", "last_seen"}))
+    corp_hash = configuration_hash(CORP_WLAN, ignored_fields=IGNORED)
     operation = _operation(
         [
             _action(0, RestoreActionType.CREATE),
@@ -235,6 +239,102 @@ async def test_relaxed_capture_accepts_the_state_a_restore_already_replaced(
     entries = await capture_safety_snapshot(client, _organization(), operation, _vault(), relaxed=True)
 
     assert entries[0].existed is True
+
+
+def _stored_version(configuration: dict[str, object], digest: str) -> ObjectVersion:
+    return ObjectVersion.model_construct(
+        id=PydanticObjectId(),
+        organization_id=ORGANIZATION_ID,
+        logical_object_id=PydanticObjectId(),
+        incarnation_id=PydanticObjectId(),
+        version=1,
+        event=VersionEvent.UPDATED,
+        configuration=dict(configuration),
+        configuration_hash=digest,
+        is_deleted=False,
+    )
+
+
+async def test_a_plan_whose_expected_hash_predates_the_key_still_validates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restore reviewed before the hash was keyed is not made unrunnable by it."""
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        _no_stored_version,
+    )
+    legacy = legacy_configuration_hash(CORP_WLAN, ignored_fields=IGNORED)
+    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash=legacy)])
+    client = _FakeMistClient({"mist-0": dict(CORP_WLAN)})
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert [entry.existed for entry in entries] == [True]
+
+
+async def test_a_plan_whose_expected_hash_predates_the_key_still_detects_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        _no_stored_version,
+    )
+    legacy = legacy_configuration_hash(CORP_WLAN, ignored_fields=IGNORED)
+    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash=legacy)])
+    client = _FakeMistClient({"mist-0": {**CORP_WLAN, "enabled": False}})
+
+    with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
+        await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+
+async def test_the_snapshot_digest_matches_the_generation_of_the_version_it_pairs_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compensation compares this digest with the stored version's own.
+
+    Two digests only answer that question when they are of the same generation,
+    and a stored version may well predate the key. Recording the stored digest
+    verbatim keeps the later comparison between like and like, which is what
+    lets compensation put the real secrets back instead of the masked values a
+    live read returns.
+    """
+    legacy = legacy_configuration_hash(CORP_WLAN, ignored_fields=IGNORED)
+
+    async def _legacy_stored(_logical_id):
+        return _stored_version(CORP_WLAN, legacy)
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        _legacy_stored,
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash=legacy)])
+    client = _FakeMistClient({"mist-0": dict(CORP_WLAN)})
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert entries[0].configuration_hash == legacy
+
+
+async def test_a_stored_version_that_has_drifted_is_not_paired_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a digest that describes the live read is worth copying forward."""
+    stale = legacy_configuration_hash({**CORP_WLAN, "enabled": False}, ignored_fields=IGNORED)
+
+    async def _drifted_stored(_logical_id):
+        return _stored_version({**CORP_WLAN, "enabled": False}, stale)
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        _drifted_stored,
+    )
+    live = configuration_hash(CORP_WLAN, ignored_fields=IGNORED)
+    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash=live)])
+    client = _FakeMistClient({"mist-0": dict(CORP_WLAN)})
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert entries[0].configuration_hash == live
 
 
 async def _no_stored_version(_logical_id):

@@ -53,13 +53,19 @@ class LogicalObjectListResponse(BaseModel):
 
 
 class ObjectVersionResponse(BaseModel):
-    """Secret-redacted immutable object version."""
+    """Secret-redacted immutable object version.
+
+    The stored configuration digest is deliberately absent. It is taken over
+    the plaintext, and this response carries the same configuration with its
+    secrets redacted, so publishing the two together would let any reader
+    confirm a guessed secret offline. Nothing in the interface ever displayed
+    it; comparison between versions is what the diff endpoint is for.
+    """
 
     id: str
     version: int
     event: VersionEvent
     configuration: dict[str, object]
-    configuration_hash: str
     changed_fields: list[str]
     is_deleted: bool
     observed_at: datetime
@@ -77,7 +83,6 @@ class ObjectVersionResponse(BaseModel):
             version=version.version,
             event=version.event,
             configuration=redact_configuration(version.configuration),
-            configuration_hash=version.configuration_hash,
             changed_fields=list(version.changed_fields),
             is_deleted=version.is_deleted,
             observed_at=version.observed_at,
