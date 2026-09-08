@@ -10,7 +10,7 @@ from beanie import PydanticObjectId
 from fastapi import Request
 
 from mist_config_guardian_backend.api.dependencies import get_session_service, require_viewer
-from mist_config_guardian_backend.config import Settings
+from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.session import UserSession
@@ -25,11 +25,12 @@ BASE_URL = "http://test"
 PASSWORD = "a-long-enough-password"
 
 
-def _settings() -> Settings:
+def _settings(**overrides: object) -> Settings:
     return Settings(
         environment="test",
         database_enabled=False,
         secret_key="unit-test-signing-key-that-is-long-enough",
+        **overrides,  # type: ignore[arg-type]
     )
 
 
@@ -438,6 +439,37 @@ async def test_a_wrong_step_up_code_leaves_the_session_where_it_was() -> None:
 
     assert refused.status_code == 400
     assert sessions.has_fresh_mfa(session) is False
+
+
+async def test_a_confirmed_step_up_gives_back_the_shared_address_budget() -> None:
+    """One address serves everyone behind a proxy or an office NAT.
+
+    Keeping the reservation a confirmed code made let an ordinary signed-in
+    user spend that shared budget a code at a time until nobody there could
+    authenticate. The scope is not cleared either — this person's success says
+    nothing about the others sharing the address — only given back.
+    """
+    settings = _settings(sign_in_failures_per_address=1)
+    app = create_app(settings)
+    user = _user()
+    session = _session(user)
+    sessions = _FakeSessions([session])
+    app.dependency_overrides[require_viewer] = _signed_in(user, session)
+    app.dependency_overrides[get_session_service] = lambda: sessions
+    # The throttle reads its limits through the dependency, not the app's own
+    # settings, so the narrowed address budget has to be wired in here.
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    async with _client(app) as client:
+        enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
+        secret = enrolled.json()["secret"]
+        await client.post("/api/v1/account/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
+        first = await client.post("/api/v1/account/mfa/step-up", json={"code": pyotp.TOTP(secret).now()})
+        second = await client.post("/api/v1/account/mfa/step-up", json={"code": pyotp.TOTP(secret).now()})
+
+    assert first.status_code == 200
+    # The address budget is one, and the first success spent none of it.
+    assert second.status_code == 200
 
 
 async def test_step_up_says_so_when_there_is_no_second_factor_to_confirm() -> None:

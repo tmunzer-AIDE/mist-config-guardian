@@ -68,6 +68,19 @@ export class StepUpService {
     this.settle(false);
   }
 
+  /**
+   * Forget an unanswered prompt at a session boundary.
+   *
+   * The requests waiting here belong to the session that is ending. Left
+   * suspended they outlive it: the prompt would come back for whoever signs in
+   * next and, on their code, replay the previous session's requests. They are
+   * failed instead, and each caller sees the refusal it already had.
+   */
+  reset(): void {
+    this.busy.set(false);
+    this.settle(false);
+  }
+
   private settle(renewed: boolean): void {
     const waiting = this.pending;
     this.pending = [];

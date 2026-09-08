@@ -9,6 +9,7 @@ import { NotificationService } from './notification.service';
 import { OrganizationContextService } from './organization-context.service';
 import { OverviewService } from './overview.service';
 import { SearchService } from './search.service';
+import { StepUpService } from './step-up.service';
 import { TimeContextService } from './time-context.service';
 import { TimelineService } from './timeline.service';
 
@@ -21,7 +22,9 @@ import { TimelineService } from './timeline.service';
  * organizations the next one may not be able to see. One place resets them so
  * a deliberate sign-out and a session the server has revoked leave the
  * application in the same state — and each reset discards its own reads still
- * in flight, which would otherwise answer into the next session.
+ * in flight, which would otherwise answer into the next session. That includes
+ * a request suspended behind an unanswered second-factor prompt, which would
+ * otherwise be replayed on the next session's code.
  */
 @Injectable({ providedIn: 'root' })
 export class SessionResetService {
@@ -35,6 +38,7 @@ export class SessionResetService {
   private readonly account = inject(AccountService);
   private readonly ai = inject(AiAssistService);
   private readonly search = inject(SearchService);
+  private readonly stepUp = inject(StepUpService);
   private readonly time = inject(TimeContextService);
 
   clear(): void {
@@ -50,6 +54,9 @@ export class SessionResetService {
     // inherit the previous administrator's answer about what AI can do.
     this.ai.reset();
     this.search.reset();
+    // An unanswered code prompt belongs to the session that is ending, as do
+    // the requests suspended behind it.
+    this.stepUp.reset();
     this.time.returnToNow();
   }
 }

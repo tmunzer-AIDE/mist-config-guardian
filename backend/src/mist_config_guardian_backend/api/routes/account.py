@@ -337,14 +337,21 @@ async def step_up_mfa(  # noqa: PLR0913, PLR0917 - one dependency per collaborat
             status_code=status.HTTP_409_CONFLICT,
             detail="No authenticator application is enrolled",
         )
+    address = throttle.address(request)
     scope = throttle.second_factor(_require_persisted(user))
-    await reserve_or_raise(throttle, throttle.address(request), scope)
+    await reserve_or_raise(throttle, address, scope)
     if not await mfa.verify_second_factor(user, payload.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That code is not valid",
         )
     await throttle.succeeded(scope)
+    # One address serves everyone behind a proxy or an office NAT, so a
+    # confirmed code gives its reservation back rather than clearing the scope:
+    # this person's success says nothing about the others sharing it, and
+    # keeping it would let an ordinary signed-in user spend that shared budget
+    # a code at a time until nobody there could authenticate.
+    await throttle.release(address)
     await sessions.mark_mfa_verified(session)
     verified_at = session.mfa_verified_at or utc_now()
     return MfaStepUpResponse(

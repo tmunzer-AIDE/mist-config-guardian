@@ -275,4 +275,28 @@ describe('sessionInterceptor', () => {
 
     expect(stepUp.asking()).toBe(false);
   });
+
+  it('does not hold a request across a session boundary', async () => {
+    // The prompt and the request behind it belong to the session that is
+    // ending. Left waiting, the prompt would come back for whoever signs in
+    // next and replay this request on their code.
+    auth.applyUser(USER);
+    const stepUp = TestBed.inject(StepUpService);
+    const answered = request('/api/v1/organizations');
+
+    httpMock
+      .expectOne('/api/v1/organizations')
+      .flush({ detail: STEP_UP_DETAIL }, { status: 403, statusText: 'Forbidden' });
+    await settle();
+    expect(stepUp.asking()).toBe(true);
+
+    // A 401 anywhere signs the session out, and the reset runs.
+    await fail('/api/v1/organizations/org-1/overview');
+    await settle();
+
+    expect(stepUp.asking()).toBe(false);
+    expect((await answered as { status: number }).status).toBe(403);
+    // Nothing is left to replay: the retry never happens.
+    httpMock.verify();
+  });
 });
