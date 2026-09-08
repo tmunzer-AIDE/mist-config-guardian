@@ -730,8 +730,11 @@ export class RestorePage {
     await this.router.navigate(['/impact'], { queryParams: { session: sessionId } });
   }
 
-  protected async openSnapshot(snapshotId: string): Promise<void> {
-    await this.router.navigate(['/history'], { queryParams: { snapshot: snapshotId } });
+  protected async openSnapshot(): Promise<void> {
+    // The restored state is the current version of every object it touched, so
+    // History opens on its object list. A snapshot is not addressable there
+    // yet, and passing its identifier only looked as though it were.
+    await this.router.navigate(['/history']);
   }
 }
 

@@ -259,17 +259,24 @@ def _actor_results(groups: Sequence[AuditChangeGroup], term: str) -> list[Search
 
 
 def _site_results(sites: Sequence[LogicalObject]) -> list[SearchResultResponse]:
+    """Open a site in History the same way any other object opens.
+
+    A site is a logical object, so it is addressed by the ``object`` parameter
+    History already selects on; a Mist identifier under its own name would name
+    a filter no page implements and land on an unfiltered list.
+    """
     return [
         SearchResultResponse(
             kind="site",
-            id=site.current_mist_id,
+            id=str(site.id),
             title=site.name or site.current_mist_id,
             subtitle="Site",
             meta=site.current_mist_id,
             target="history",
-            target_params={"site": site.current_mist_id},
+            target_params={"object": str(site.id)},
         )
         for site in sites
+        if site.id is not None
     ]
 
 

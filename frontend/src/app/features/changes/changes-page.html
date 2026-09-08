@@ -2,7 +2,7 @@
   <header class="head">
     <h1 class="cg-page-title">Changes</h1>
     <p class="head-sub">{{ subtitle() }}</p>
-    <div class="head-filters" role="group" aria-label="Impact filter">
+    <div class="head-filters" role="group" aria-label="Filters">
       @for (option of severities; track option.value) {
         <button
           class="cg-chip"
@@ -12,6 +12,17 @@
           (click)="severity.set(option.value)"
         >
           {{ option.label }}
+        </button>
+      }
+      @if (actorFilter(); as name) {
+        <button
+          class="cg-chip cg-chip--on"
+          type="button"
+          [attr.aria-label]="'Clear the filter on ' + name"
+          (click)="clearActor()"
+        >
+          Actor: {{ name }}
+          <span class="chip-dismiss" aria-hidden="true">✕</span>
         </button>
       }
     </div>

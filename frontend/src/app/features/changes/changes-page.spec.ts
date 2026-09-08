@@ -2,7 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting, TestRequest } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 
 import { ChangeGroupDetail, ChangeGroupSummary, ImpactSeverity } from '../../core/change-group.model';
 import { OrganizationContextService } from '../../core/organization-context.service';
@@ -185,5 +185,57 @@ describe('ChangesPage', () => {
 
     expect(text('.empty-title')).toEqual(['No changes in this window']);
     expect(text('.table-foot')).toEqual(['No change groups in this window']);
+  });
+
+  it('compares a changed object under the slot names History reads', async () => {
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput('group', MONDAY_WARNING.id);
+    await load([MONDAY_WARNING]);
+    httpMock.expectOne(`${INDEX_URL}/${MONDAY_WARNING.id}`).flush(detail(MONDAY_WARNING));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    element.querySelector<HTMLButtonElement>('.object-compare')?.click();
+
+    // History names its two slots `a` and `b`, with A the earlier side; sending
+    // `before` and `after` would open an unselected comparison.
+    expect(navigate).toHaveBeenCalledWith(['/history'], {
+      queryParams: { object: 'obj-1', a: 'v14', b: 'v15' },
+    });
+  });
+
+  it('narrows the fetch to the actor named by ?actor= and offers a way out', async () => {
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput('actor', 'j.mercer');
+
+    const request = await load([MONDAY_CRITICAL]);
+
+    expect(request.request.params.get('actor')).toBe('j.mercer');
+    const chip = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '.head-filters .cg-chip:last-child',
+    );
+    expect(chip?.textContent?.trim().startsWith('Actor: j.mercer')).toBe(true);
+
+    chip?.click();
+
+    expect(navigate).toHaveBeenCalledWith([], {
+      queryParams: { actor: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  });
+
+  it('does not offer an actor chip when no actor is named', async () => {
+    await load([MONDAY_CRITICAL]);
+
+    expect(text('.head-filters .cg-chip')).toEqual([
+      'Impact: any',
+      'Critical',
+      'Warning',
+      'No impact',
+    ]);
   });
 });

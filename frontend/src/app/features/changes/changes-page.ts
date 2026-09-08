@@ -63,7 +63,16 @@ export class ChangesPage {
    *  deep-link into this page that way. */
   readonly group = input<string>();
 
+  /** `?actor=<name>`, bound by the router. Global search links an actor here so
+   *  the page opens narrowed to that person's change groups. */
+  readonly actor = input<string>();
+
   protected readonly severity = signal<SeverityFilter>('any');
+
+  /** Derived rather than mirrored: the URL is the only thing that sets an
+   *  actor, and a mirroring effect would fetch once more after correcting
+   *  itself on the first pass. */
+  protected readonly actorFilter = computed(() => this.actor() ?? null);
   protected readonly severities: { value: SeverityFilter; label: string }[] = [
     { value: 'any', label: 'Impact: any' },
     { value: 'critical', label: 'Critical' },
@@ -99,23 +108,27 @@ export class ChangesPage {
     if (shown === 0) {
       return 'No matching change groups';
     }
-    const filtered = this.severity() === 'any' ? '' : ' · filtered';
+    const filtered = this.filtered() ? ' · filtered' : '';
     return `${formatCount(shown)} change group${shown === 1 ? '' : 's'}${filtered}`;
   });
 
   protected readonly footer = computed(() => {
     const shown = this.changeGroups.items().length;
     if (shown === 0) {
-      return this.severity() === 'any'
-        ? 'No change groups in this window'
-        : 'Clear the impact filter to see all groups';
+      return this.filtered() ? 'Clear the filters to see all groups' : 'No change groups in this window';
     }
     return `Showing ${formatCount(shown)} of ${formatCount(this.changeGroups.total())} · click a row for evidence`;
   });
 
+  /** True while the list is narrowed, so an empty table means nothing matched
+   *  rather than nothing happened. */
+  protected readonly filtered = computed(
+    () => this.severity() !== 'any' || this.actorFilter() !== null,
+  );
+
   /** The organization has nothing in the window, rather than nothing matching. */
   protected readonly isEmpty = computed(
-    () => this.changeGroups.items().length === 0 && this.severity() === 'any',
+    () => this.changeGroups.items().length === 0 && !this.filtered(),
   );
 
   protected readonly emptyTitle = computed(() => {
@@ -175,13 +188,20 @@ export class ChangesPage {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
       const severity = this.severity();
+      const actor = this.actorFilter();
       const asOf = this.time.asOf();
       if (!organizationId) {
         return;
       }
       void untracked(() =>
         this.ui.track('Loading changes', () =>
-          this.changeGroups.list(organizationId, { range, severity, asOf, limit: PAGE_SIZE }),
+          this.changeGroups.list(organizationId, {
+            range,
+            severity,
+            actor: actor ?? undefined,
+            asOf,
+            limit: PAGE_SIZE,
+          }),
         ),
       );
     });
@@ -213,6 +233,14 @@ export class ChangesPage {
     });
   }
 
+  protected async clearActor(): Promise<void> {
+    await this.router.navigate([], {
+      queryParams: { actor: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+
   protected async close(): Promise<void> {
     const selected = this.selectedId();
     if (selected) {
@@ -220,13 +248,18 @@ export class ChangesPage {
     }
   }
 
-  /** Deep-link one changed object into History's A/B version comparison. */
+  /** Deep-link one changed object into History's A/B version comparison.
+   *
+   *  History names its two slots `a` and `b`, with A the earlier side, so the
+   *  before and after versions have to be sent under those names to land
+   *  already selected rather than on an unfiltered page.
+   */
   protected async compare(object: ChangedObject): Promise<void> {
     await this.router.navigate(['/history'], {
       queryParams: {
         object: object.logical_object_id,
-        before: object.before_version_id,
-        after: object.after_version_id,
+        a: object.before_version_id,
+        b: object.after_version_id,
       },
     });
   }

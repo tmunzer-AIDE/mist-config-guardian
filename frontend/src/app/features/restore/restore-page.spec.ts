@@ -648,8 +648,10 @@ describe('RestorePage', () => {
 
     button('Open the post-restore snapshot')!.click();
     button('Watch impact')!.click();
+    // History opens on its object list: it has no snapshot-addressable view, so
+    // sending the snapshot identifier would name a parameter nothing reads.
     expect(navigations).toEqual([
-      { commands: ['/history'], extras: { queryParams: { snapshot: 'snap-1' } } },
+      { commands: ['/history'], extras: undefined },
       { commands: ['/impact'], extras: { queryParams: { session: 'sess-1' } } },
     ]);
   });

@@ -1,4 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+  untracked,
+} from '@angular/core';
 import { Router } from '@angular/router';
 
 import { OrganizationContextService } from '../../core/organization-context.service';
@@ -43,6 +52,13 @@ export class SearchPage {
   private readonly ui = inject(UiStateService);
   protected readonly search = inject(SearchService);
 
+  /** `?q=<term>`, bound by the router.
+   *
+   *  The term lives in the URL rather than only in the service, so a results
+   *  page survives a reload and can be handed to someone else.
+   */
+  readonly q = input<string>();
+
   protected readonly kinds = signal<SearchResultKind | 'all'>('all');
   protected readonly query = this.search.query;
 
@@ -72,6 +88,16 @@ export class SearchPage {
   });
 
   constructor() {
+    // The URL is authoritative on arrival; the header writes the same term into
+    // the service before navigating, so this is a no-op for an in-app search.
+    effect(() => {
+      const term = this.q();
+      if (term === undefined) {
+        return;
+      }
+      untracked(() => this.search.setQuery(term));
+    });
+
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const term = this.search.query();

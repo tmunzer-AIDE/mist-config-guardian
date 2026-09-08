@@ -298,15 +298,49 @@ async def test_actors_match_as_both_a_change_and_an_actor_row() -> None:
 
 
 async def test_sites_match_by_name_and_by_identifier() -> None:
-    service = SearchService(_reader())
+    reader = _reader()
+    service = SearchService(reader)
+    seattle = next(logical for logical in reader.objects_ if logical.name == "Seattle-DC")
 
     by_name = await service.search(ORGANIZATION_ID, "Seattle")
     by_id = await service.search(ORGANIZATION_ID, "1234")
 
     site = next(item for item in by_name.items if item.kind == "site")
     assert site.title == "Seattle-DC"
-    assert site.target_params == {"site": SEATTLE}
+    # A site is a logical object, so it opens the way any object opens: naming a
+    # Mist identifier instead would land on an unfiltered History page.
+    assert site.target_params == {"object": str(seattle.id)}
+    assert site.meta == SEATTLE
     assert [item.kind for item in by_id.items if item.kind == "site"] == ["site"]
+
+
+async def test_every_result_links_with_a_parameter_its_destination_reads() -> None:
+    """A result that names an unread parameter silently opens an unfiltered page.
+
+    The browser application decides what each page consumes, so this pins the
+    contract: adding a parameter here without teaching the page to read it is
+    the failure this catches.
+    """
+    consumed = {
+        "changes": {"group", "actor"},
+        "history": {"object", "a", "b"},
+        "impact": {"session", "severity"},
+        "restore": {"versions", "changeGroup", "operation", "step", "compensate"},
+        "settings": {"tab"},
+    }
+
+    reader = _reader()
+    service = SearchService(reader)
+    operation_id = str(reader.restore_operations[0].id)
+    terms = ["NW-", "Seattle", "osei", "9F2A", operation_id[-8:]]
+
+    found = [item for term in terms for item in (await service.search(ORGANIZATION_ID, term)).items]
+
+    assert {item.kind for item in found} == {"object", "change_group", "actor", "site", "audit_id", "restore"}
+    for item in found:
+        assert item.target in consumed, f"{item.kind} links to the unknown page {item.target!r}"
+        unread = set(item.target_params) - consumed[item.target]
+        assert not unread, f"{item.kind} sends {sorted(unread)}, which {item.target} does not read"
 
 
 async def test_restore_operations_match_on_their_identifier() -> None:
