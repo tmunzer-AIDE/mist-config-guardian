@@ -396,6 +396,43 @@ describe('RestorePage', () => {
     expect(text()).toContain('2 selected');
   });
 
+  it('preselects embedded version links without creating a plan until explicitly requested', async () => {
+    fixture.componentRef.setInput('embedded', true);
+    fixture.componentRef.setInput('versions', 'v-corp');
+    await boot();
+
+    expect(pillText()).toEqual(['NW-Corp · v14 ✕']);
+    expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
+    httpMock.expectNone((request) => request.method === 'POST');
+
+    // Query-only navigation on the mounted workspace must also stay read-only.
+    fixture.componentRef.setInput('versions', 'v-rf');
+    await settle();
+    expect(pillText()).toEqual(['Indoor-Dense-6G · v3 ✕']);
+    httpMock.expectNone((request) => request.method === 'POST');
+
+    button('Build restore plan')!.click();
+    await tick();
+    const request = httpMock.expectOne(PLANS_URL);
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.version_ids).toEqual(['v-rf']);
+    request.flush(operation({ requested_version_ids: ['v-rf'] }));
+    await settle();
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    httpMock.expectNone((request) => request.method === 'POST');
+  });
+
+  it('reopens an embedded existing plan without creating another one', async () => {
+    fixture.componentRef.setInput('embedded', true);
+    fixture.componentRef.setInput('versions', 'v-corp');
+    fixture.componentRef.setInput('operation', 'op-1');
+    await boot();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'planned' }));
+    await settle();
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    httpMock.expectNone((request) => request.method === 'POST');
+  });
+
   it('pre-selects the versions a change group replaced, labelled from the group', async () => {
     fixture.componentRef.setInput('changeGroup', 'cg1');
     fixture.detectChanges();

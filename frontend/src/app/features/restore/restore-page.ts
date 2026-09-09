@@ -427,9 +427,7 @@ export class RestorePage {
       }
     }
 
-    if (this.embedded() && versionIds.length === 1 && !link.operation && !link.changeGroup && !this.stale(token)) {
-      await this.buildPlan();
-    }
+    // Navigation preselects inputs; only an explicit action may create a plan.
     if (isStepName(link.step) && this.stepAvailable(link.step)) {
       this.currentStep.set(link.step);
     }

@@ -3,7 +3,9 @@
 The **Objects & versions** navigation entry opens a searchable catalogue, with type,
 site and scope filters computed from the entire organization catalogue. Open an
 object to see its versions. Choose Before and After to compare any two versions,
-or Restore on a version to review its plan in the same page. Legacy `/restore`
+or Restore on a version to preselect it in the same page. Choose **Build restore
+plan** to create and review a plan. Opening, refreshing or navigating between
+version links never creates a plan automatically. Legacy `/restore`
 and `/history/restore` links preserve their context and redirect into this flow.
 Planning does not execute a restore; the existing write authorization, approval
 and execution steps still apply.
