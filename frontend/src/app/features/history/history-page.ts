@@ -22,7 +22,6 @@ import {
   ChangeCard,
   DiffPanel,
   NotableFinding,
-  RawRow,
   SectionView,
 } from './diff-panel';
 import {
@@ -38,6 +37,7 @@ import {
   sectionCountLabel,
 } from './diff.model';
 import { DiffService } from './diff.service';
+import { alignRawLines, RawRow } from './raw-diff';
 import {
   ConfigurationObject,
   ConfigurationVersion,
@@ -377,12 +377,7 @@ export class HistoryPage {
     }
     const before = renderDocument(raw.before);
     const after = renderDocument(raw.after);
-    const length = Math.max(before.length, after.length);
-    return Array.from({ length }, (_, index) => ({
-      index: index + 1,
-      before: before[index] ?? '',
-      after: after[index] ?? '',
-    }));
+    return alignRawLines(before, after);
   });
 
   // ---------------------------------------------------------------------- ai

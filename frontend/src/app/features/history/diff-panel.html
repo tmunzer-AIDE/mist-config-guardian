@@ -108,11 +108,19 @@
   </div>
 }
 
-<div class="raw">
+<ng-template #rawView>
+<div class="raw" [class.raw--fullscreen]="fullScreen()">
   <div class="raw-head">
     <span class="raw-label cg-mono">
       <span aria-hidden="true">{{ rawExpanded() ? '▾' : '▸' }}</span> {{ rawLabel() }}
     </span>
+    @if (rawExpanded() && !rawLoading()) {
+      <span class="raw-legend cg-mono"><span class="removed-key">− removed</span> <span class="added-key">+ added</span></span>
+      <button class="raw-toggle raw-size cg-mono" type="button" (click)="fullScreen() ? shrink() : enlarge()">
+        {{ fullScreen() ? 'EXIT FULL SCREEN' : 'FULL SCREEN' }}
+      </button>
+    }
+    @if (!fullScreen()) {
     <button
       class="raw-toggle cg-mono"
       type="button"
@@ -121,20 +129,37 @@
     >
       {{ rawExpanded() ? 'COLLAPSE' : 'EXPAND' }}
     </button>
+    }
   </div>
 
   @if (rawExpanded()) {
     @if (rawLoading()) {
       <div class="loading-row"><span class="cg-spinner" aria-hidden="true"></span>Loading raw JSON…</div>
     } @else {
-      <div class="raw-grid cg-scroll">
+      <div class="raw-grid cg-scroll" tabindex="0" role="region" aria-label="Raw JSON comparison">
         <div class="raw-col-head cg-mono">A · before</div>
         <div class="raw-col-head cg-mono">B · after</div>
         @for (line of rawRows(); track line.index) {
-          <div class="raw-line cg-mono"><span class="raw-no">{{ line.index }}</span>{{ line.before }}</div>
-          <div class="raw-line cg-mono"><span class="raw-no">{{ line.index }}</span>{{ line.after }}</div>
+          <div class="raw-line cg-mono" [class.raw-line--removed]="line.changed && line.beforeNumber !== null"
+            [class.raw-line--empty]="line.beforeNumber === null">
+            <span class="raw-no">{{ line.beforeNumber }}</span><span class="raw-sign" aria-hidden="true">{{ line.changed && line.beforeNumber !== null ? '−' : ' ' }}</span>
+            @if (line.changed && line.beforeNumber !== null) { <span class="cg-visually-hidden">Removed: </span> }
+            <span>{{ line.before }}</span>
+          </div>
+          <div class="raw-line cg-mono" [class.raw-line--added]="line.changed && line.afterNumber !== null"
+            [class.raw-line--empty]="line.afterNumber === null">
+            <span class="raw-no">{{ line.afterNumber }}</span><span class="raw-sign" aria-hidden="true">{{ line.changed && line.afterNumber !== null ? '+' : ' ' }}</span>
+            @if (line.changed && line.afterNumber !== null) { <span class="cg-visually-hidden">Added: </span> }
+            <span>{{ line.after }}</span>
+          </div>
         }
       </div>
     }
   }
 </div>
+</ng-template>
+
+@if (!fullScreen()) { <ng-container [ngTemplateOutlet]="rawView" /> }
+<dialog #rawDialog class="raw-dialog" aria-label="Full screen JSON comparison" (cancel)="rememberPosition()" (close)="closed()">
+  @if (fullScreen()) { <ng-container [ngTemplateOutlet]="rawView" /> }
+</dialog>

@@ -21,6 +21,13 @@ fields remain visible at every depth, including webhook destinations. This appli
 structured comparisons, comparison JSON and patches. Original stored snapshots
 and restore payloads retain those fields.
 
+The raw JSON comparison aligns matching lines and keeps each version's original
+line numbers. Removed text appears in red with a minus marker; added text appears
+in green with a plus marker. Replacements show both. The taller, resizable viewer
+also opens in a full-screen dialog; Escape returns to the inline view and preserves
+the scroll position. Protected values remain redacted, so identical placeholders
+are not presented as confirmed raw-text changes.
+
 ## Timing
 
 A supported Mist `device-events` configuration trigger immediately starts an

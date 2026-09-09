@@ -1,6 +1,8 @@
-import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
+import { afterNextRender, ChangeDetectionStrategy, Component, ElementRef, inject, Injector, input, output, signal, viewChild } from '@angular/core';
 
 import { Tone } from '../../core/tone';
+import { RawRow } from './raw-diff';
 
 /** One compact change card, shown when the API reports `chips` mode. */
 export interface ChangeCard {
@@ -46,12 +48,6 @@ export interface SectionView {
   more: string;
 }
 
-export interface RawRow {
-  index: number;
-  before: string;
-  after: string;
-}
-
 /**
  * The deterministic body of a comparison: compact change cards or the sectioned
  * view, plus the redacted side-by-side JSON.
@@ -61,7 +57,7 @@ export interface RawRow {
  */
 @Component({
   selector: 'app-diff-panel',
-  imports: [],
+  imports: [NgTemplateOutlet],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './diff-panel.html',
   styleUrl: './diff-panel.scss',
@@ -82,4 +78,34 @@ export class DiffPanel {
   readonly openSection = output<string>();
   readonly expandSection = output<string>();
   readonly toggleRaw = output<void>();
+
+  protected readonly fullScreen = signal(false);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+  private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('rawDialog');
+  private scrollPosition = 0;
+  protected enlarge(): void {
+    this.rememberPosition();
+    this.fullScreen.set(true);
+    this.dialog().nativeElement.showModal();
+    this.restoreView(this.scrollPosition);
+  }
+  protected shrink(): void {
+    this.rememberPosition();
+    this.dialog().nativeElement.close();
+  }
+  protected rememberPosition(): void {
+    this.scrollPosition = this.host.nativeElement.querySelector('.raw-grid')?.scrollTop ?? 0;
+  }
+  protected closed(): void {
+    this.fullScreen.set(false);
+    this.restoreView(this.scrollPosition);
+  }
+  private restoreView(scrollTop: number): void {
+    afterNextRender(() => {
+      const grid = this.host.nativeElement.querySelector('.raw-grid');
+      if (grid) grid.scrollTop = scrollTop;
+      this.host.nativeElement.querySelector<HTMLButtonElement>('.raw-size')?.focus({ preventScroll: true });
+    }, { injector: this.injector });
+  }
 }
