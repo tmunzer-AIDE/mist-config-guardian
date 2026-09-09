@@ -92,3 +92,52 @@ def test_device_restart_and_resource_pressure_are_explained():
         "cpu_stat",
         "memory_stat",
     }
+
+
+def test_power_loss_is_critical_without_client_identity_and_requires_observed_recovery():
+    from mist_config_guardian_backend.services.device_impact import refresh_device_findings  # noqa: PLC0415
+
+    before = DeviceStateObservation(available=["ports"], ports=[{"port_id": "ge-0/0/1", "up": True, "poe_on": True}])
+    down = DeviceStateObservation(available=["ports"], ports=[{"port_id": "ge-0/0/1", "up": False, "poe_on": False}])
+    findings = refresh_device_findings(before, down, [])
+    assert len(findings) == 1
+    assert findings[0].kind == "poe_power_lost"
+    assert findings[0].severity == "critical"
+    assert findings[0].affected_clients == 0
+    for unknown in [
+        DeviceStateObservation(errors={"ports": "HTTP 404"}),
+        DeviceStateObservation(available=["ports"], ports=[{"port_id": "ge-0/0/1"}]),
+        DeviceStateObservation(available=["ports"], ports=[{"port_id": "ge-0/0/1", "poe_on": True}]),
+    ]:
+        assert refresh_device_findings(before, unknown, findings) == findings
+    assert refresh_device_findings(before, before, findings) == []
+
+
+def test_restarts_and_interface_error_increases_are_assessed_per_poll_interval():
+    from mist_config_guardian_backend.services.device_impact import refresh_device_findings  # noqa: PLC0415
+
+    before = DeviceStateObservation(
+        available=["ports", "device"], device={"uptime": 10000}, ports=[{"port_id": "ge-0/0/1", "rx_errors": 0}]
+    )
+    first = DeviceStateObservation(
+        available=["ports", "device"], device={"uptime": 100}, ports=[{"port_id": "ge-0/0/1", "rx_errors": 200}]
+    )
+    findings = refresh_device_findings(before, first, [])
+    assert {finding.kind for finding in findings} == {"device_restarted", "interface_errors"}
+    quiet = DeviceStateObservation(
+        available=["ports", "device"], device={"uptime": 400}, ports=[{"port_id": "ge-0/0/1", "rx_errors": 200}]
+    )
+    assert refresh_device_findings(before, quiet, findings, first) == []
+    unknown = DeviceStateObservation(available=["ports", "device"], ports=[{"port_id": "ge-0/0/1"}])
+    assert refresh_device_findings(before, unknown, findings, first) == findings
+
+
+def test_missing_numeric_fields_do_not_clear_resource_pressure():
+    from mist_config_guardian_backend.services.device_impact import refresh_device_findings  # noqa: PLC0415
+
+    before = DeviceStateObservation(available=["device"], device={"cpu_stat": {"usage": 20}})
+    hot = DeviceStateObservation(available=["device"], device={"cpu_stat": {"usage": 95}})
+    findings = compare_device_states(before, hot)
+    missing = DeviceStateObservation(available=["device"], device={"cpu_stat": {}})
+    assert refresh_device_findings(before, missing, findings) == findings
+    assert refresh_device_findings(before, before, findings) == []

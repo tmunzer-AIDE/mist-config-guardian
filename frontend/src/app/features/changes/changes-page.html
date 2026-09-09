@@ -35,7 +35,7 @@
     </div>
   }
 
-  <div class="stack">
+  <div class="stack" [class.stack--selected]="selectedId() !== null">
     <div class="cg-card table-card">
       <table class="table" role="table" aria-label="Change groups">
         <thead role="rowgroup">

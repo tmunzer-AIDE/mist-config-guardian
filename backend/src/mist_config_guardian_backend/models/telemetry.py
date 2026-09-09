@@ -44,3 +44,6 @@ class DeviceStateComparison(BaseModel):
     due_at: datetime
     followup: DeviceStateObservation | None = None
     findings: list[DeviceStateFinding] = Field(default_factory=list)
+    latest: DeviceStateObservation | None = None
+    current_findings: list[DeviceStateFinding] | None = None
+    recovered_at: datetime | None = None

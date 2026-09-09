@@ -221,7 +221,7 @@ async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for
     await service._poll_session(session, NOW + timedelta(hours=1))  # noqa: SLF001
     assert session.status is MonitoringStatus.COMPLETED
     assert session.active is False
-    assert len(captures) == 1
+    assert len(captures) == 3
     assert all(window["start"] == NOW for window in windows)
     assert windows[-1]["end"] == NOW + timedelta(hours=1)
     assert all(window["device_mac"] == (session.device_mac if scope == "device" else None) for window in windows)
@@ -244,6 +244,10 @@ async def test_legacy_baseline_keeps_site_scope_and_bucket_mean_across_deploymen
     session.baseline = SleObservation.model_validate({"values": {"coverage": 50}})
 
     def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(
+                200, json={"supported": ["coverage", "capacity"], "enabled": ["coverage", "capacity"]}
+            )
         assert f"/sle/site/{session.site_id}/metric/" in request.url.path
         if request.url.path.endswith("/coverage/summary-trend"):
             return httpx.Response(200, json={"sle": {"samples": {"total": [10, 1000], "degraded": [10, 0]}}})
@@ -265,3 +269,70 @@ async def test_legacy_baseline_keeps_site_scope_and_bucket_mean_across_deploymen
     assert session.degraded_metrics == []
     # The legacy baseline has no coverage record for the other requested metrics.
     assert session.impact_severity is ImpactSeverity.INFO
+
+
+async def test_operational_polls_preserve_first_outage_and_record_recovery(monkeypatch):
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from mist_config_guardian_backend.models.monitoring import ImpactSeverity, SleObservation  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion, Organization  # noqa: PLC0415
+    from mist_config_guardian_backend.models.telemetry import (  # noqa: PLC0415
+        DeviceStateComparison,
+        DeviceStateObservation,
+    )
+    from mist_config_guardian_backend.services import monitoring  # noqa: PLC0415
+
+    up = DeviceStateObservation(
+        captured_at=NOW, available=["ports"], ports=[{"port_id": "ge-0/0/1", "up": True, "poe_on": True}]
+    )
+    down = DeviceStateObservation(
+        captured_at=NOW + timedelta(minutes=5),
+        available=["ports"],
+        ports=[{"port_id": "ge-0/0/1", "up": False, "poe_on": False}],
+    )
+    recovered = up.model_copy(update={"captured_at": NOW + timedelta(minutes=10)})
+    captures = iter([down, recovered])
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def capture(self, **_kwargs):
+            return SleObservation(values={"coverage": 99})
+
+    class Telemetry(Client):
+        async def capture(self, **_kwargs):
+            return next(captures)
+
+    monkeypatch.setattr(monitoring, "MistSleClient", Client)
+    monkeypatch.setattr(monitoring, "MistTelemetryClient", Telemetry)
+    monkeypatch.setattr(monitoring, "service_token", AsyncMock(return_value="read-token"))
+    monkeypatch.setattr(
+        Organization,
+        "get",
+        AsyncMock(
+            return_value=Organization.model_construct(id=ORGANIZATION_ID, cloud_region=MistCloudRegion.GLOBAL_01)
+        ),
+    )
+    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    session = _session(MonitoringStatus.MONITORING, [])
+    session.baseline = SleObservation(values={"coverage": 99})
+    session.device_comparisons = [DeviceStateComparison(triggered_at=NOW, baseline=up, due_at=down.captured_at)]
+    service = _service(_RecordingProjector())
+    await service._poll_session(session, down.captured_at)  # noqa: SLF001
+    assert session.impact_severity == ImpactSeverity.CRITICAL
+    await service._poll_session(session, recovered.captured_at)  # noqa: SLF001
+    comparison = session.device_comparisons[0]
+    assert comparison.followup == down
+    assert comparison.findings[0].severity == "critical"
+    assert comparison.latest == recovered
+    assert comparison.current_findings == session.device_findings == []
+    assert comparison.recovered_at == recovered.captured_at
+    assert session.impact_severity == ImpactSeverity.NONE
+    assert session.peak_impact_severity == ImpactSeverity.CRITICAL

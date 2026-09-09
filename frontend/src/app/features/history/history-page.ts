@@ -1,4 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { RestorePage } from '../restore/restore-page';
 import { ObjectFacets } from './history.model';
@@ -18,12 +26,7 @@ import {
   AiDiffSummary,
   formatDurationMs,
 } from './ai-assist.service';
-import {
-  ChangeCard,
-  DiffPanel,
-  NotableFinding,
-  SectionView,
-} from './diff-panel';
+import { ChangeCard, DiffPanel, NotableFinding, SectionView } from './diff-panel';
 import {
   ConfigurationDiff,
   DiffEntry,
@@ -113,22 +116,35 @@ export class HistoryPage {
   protected readonly objectPageSize = OBJECT_PAGE_SIZE;
 
   protected readonly library = signal(!this.route.snapshot.queryParamMap.has('object'));
-  protected readonly routeParams = toSignal(this.route.queryParamMap, { initialValue: this.route.snapshot.queryParamMap });
-  protected readonly restoreOpen = computed(() => this.auth.can('operator') && (
-    this.routeParams().get('restore') === '1' || this.routeParams().has('operation') ||
-    this.routeParams().has('versions') || this.routeParams().has('changeGroup')
-  ));
+  protected readonly routeParams = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+  protected readonly restoreOpen = computed(
+    () =>
+      this.auth.can('operator') &&
+      (this.routeParams().get('restore') === '1' ||
+        this.routeParams().has('operation') ||
+        this.routeParams().has('versions') ||
+        this.routeParams().has('changeGroup')),
+  );
   protected readonly facets = signal<ObjectFacets>({ types: [], sites: [] });
   protected readonly typeFilter = signal('');
   protected readonly siteFilter = signal('');
   protected readonly scopeFilter = signal<'' | 'org' | 'site'>('');
   private facetRequest = 0;
-  protected readonly catalogue = computed(() => this.objects().map(object => ({
-    ...object,
-    typeLabel: object.object_type.replaceAll('_', ' '),
-    siteLabel: object.scope === 'org' ? 'Organization' : this.facets().sites.find(site => site.id === object.site_mist_id)?.name ?? object.site_mist_id ?? 'Unknown site',
-    updated: formatInstant(new Date(object.updated_at)),
-  })));
+  protected readonly catalogue = computed(() =>
+    this.objects().map((object) => ({
+      ...object,
+      typeLabel: object.object_type.replaceAll('_', ' '),
+      siteLabel:
+        object.scope === 'org'
+          ? 'Organization'
+          : (this.facets().sites.find((site) => site.id === object.site_mist_id)?.name ??
+            object.site_mist_id ??
+            'Unknown site'),
+      updated: formatInstant(new Date(object.updated_at)),
+    })),
+  );
 
   protected setFilter(kind: 'type' | 'site' | 'scope', event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
@@ -143,20 +159,53 @@ export class HistoryPage {
   }
 
   protected async closeRestore(): Promise<void> {
-    await this.router.navigate(['/history'], { queryParamsHandling: 'merge', queryParams: {
-      restore: null, versions: null, operation: null, changeGroup: null, step: null, compensate: null,
-    } });
+    await this.router.navigate(['/history'], {
+      queryParamsHandling: 'merge',
+      queryParams: {
+        restore: null,
+        versions: null,
+        operation: null,
+        changeGroup: null,
+        step: null,
+        compensate: null,
+      },
+    });
   }
 
   protected async restoreActivity(): Promise<void> {
-    await this.router.navigate(['/history'], { queryParamsHandling: 'merge', queryParams: {
-      restore: '1', versions: null, operation: null, changeGroup: null, step: null, compensate: null,
-    } });
+    await this.router.navigate(['/history'], {
+      queryParamsHandling: 'merge',
+      queryParams: {
+        restore: '1',
+        versions: null,
+        operation: null,
+        changeGroup: null,
+        step: null,
+        compensate: null,
+      },
+    });
   }
 
   // ------------------------------------------------------------------ state
   /** What is in the search box right now. */
   protected readonly query = signal('');
+  protected readonly sortKey = signal<
+    'updated_at' | 'name' | 'object_type' | 'site_mist_id' | 'current_version'
+  >('updated_at');
+  protected readonly sortDirection = signal<'asc' | 'desc'>('desc');
+  protected readonly objectColumns = [
+    { key: 'name', label: 'Object' },
+    { key: 'object_type', label: 'Type' },
+    { key: 'site_mist_id', label: 'Site / scope' },
+    { key: 'current_version', label: 'Versions' },
+    { key: 'updated_at', label: 'Last captured' },
+  ] as const;
+  protected sortObjects(key: (typeof this.objectColumns)[number]['key']): void {
+    this.sortDirection.set(
+      this.sortKey() === key && this.sortDirection() === 'asc' ? 'desc' : 'asc',
+    );
+    this.sortKey.set(key);
+  }
   /**
    * The term the list on screen was read for.
    *
@@ -359,7 +408,10 @@ export class HistoryPage {
           after: diffValue(entry.after),
           removed: entry.kind === 'REMOVED',
         })),
-        more: hidden > 0 ? `Show ${hidden} more ${hidden === 1 ? 'change' : 'changes'} in ${section.name}` : '',
+        more:
+          hidden > 0
+            ? `Show ${hidden} more ${hidden === 1 ? 'change' : 'changes'} in ${section.name}`
+            : '',
       };
     });
   });
@@ -420,9 +472,14 @@ export class HistoryPage {
       const request = ++this.facetRequest;
       if (!organizationId) return;
       untracked(() => {
-        void this.history.facets(organizationId, includeDeleted).then(facets => {
-          if (request === this.facetRequest) this.facets.set(facets);
-        }).catch(() => { if (request === this.facetRequest) this.facets.set({types: [], sites: []}); });
+        void this.history
+          .facets(organizationId, includeDeleted)
+          .then((facets) => {
+            if (request === this.facetRequest) this.facets.set(facets);
+          })
+          .catch(() => {
+            if (request === this.facetRequest) this.facets.set({ types: [], sites: [] });
+          });
       });
     });
     const params = this.route.snapshot.queryParamMap;
@@ -436,6 +493,8 @@ export class HistoryPage {
       const organizationId = this.organizations.selected()?.id;
       const includeDeleted = this.showDeleted();
       const term = this.searchTerm();
+      this.sortKey();
+      this.sortDirection();
       this.typeFilter();
       this.siteFilter();
       this.scopeFilter();
@@ -655,7 +714,10 @@ export class HistoryPage {
       if (token !== this.diffToken) {
         return;
       }
-      this.sectionEntries.update((current) => ({ ...current, ...indexSections(response.sections) }));
+      this.sectionEntries.update((current) => ({
+        ...current,
+        ...indexSections(response.sections),
+      }));
       if (response.notable.length > 0) {
         this.notableEntries.set(response.notable);
       }
@@ -723,7 +785,10 @@ export class HistoryPage {
     if (!versionId || !this.canRestore()) {
       return;
     }
-    await this.router.navigate(['/history'], { queryParamsHandling: 'merge', queryParams: { restore: '1', versions: versionId, operation: null } });
+    await this.router.navigate(['/history'], {
+      queryParamsHandling: 'merge',
+      queryParams: { restore: '1', versions: versionId, operation: null },
+    });
   }
 
   protected async openAiSettings(): Promise<void> {
@@ -816,6 +881,8 @@ export class HistoryPage {
   ): Promise<void> {
     const request = ++this.objectsRequest;
     const response = await this.history.objects(organizationId, {
+      sort: this.sortKey(),
+      direction: this.sortDirection(),
       includeDeleted,
       objectType: this.typeFilter() || undefined,
       siteId: this.siteFilter() || undefined,
@@ -884,7 +951,10 @@ export class HistoryPage {
       const object = await this.history.object(organizationId, objectId);
       // The rail may have caught up with the object while this was in flight,
       // in which case it describes it and this copy is not needed.
-      if (request === this.objectDetailRequest && !this.objects().some((item) => item.id === objectId)) {
+      if (
+        request === this.objectDetailRequest &&
+        !this.objects().some((item) => item.id === objectId)
+      ) {
         this.offPageObject.set(object);
       }
     } catch {
@@ -950,7 +1020,9 @@ export class HistoryPage {
         this.diff.set(meta);
         const first = meta.sections[0]?.key ?? null;
         // The notable panel and the first open section share one request.
-        const wanted = meta.sections.filter((section) => section.notable > 0).map((section) => section.key);
+        const wanted = meta.sections
+          .filter((section) => section.notable > 0)
+          .map((section) => section.key);
         if (first && !wanted.includes(first)) {
           wanted.unshift(first);
         }

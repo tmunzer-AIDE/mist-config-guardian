@@ -1,7 +1,8 @@
 <div class="page">
   <aside class="rail">
     <div class="rail-head">
-      <h1 class="cg-label rail-title">MONITORING SESSIONS · {{ total() }}</h1>
+      <h1 class="cg-label rail-title">CONFIGURATION CHANGES · {{ groups().length }}</h1>
+      <p class="cg-meta">{{ rows().length }} loaded device windows · {{ total() }} total</p>
       <div class="rail-filters" role="group" aria-label="Session status filter">
         @for (option of filters; track option) {
           <!-- Filtering an empty historical list would promise rows to reveal. -->
@@ -19,25 +20,43 @@
     </div>
 
     <div class="rail-list cg-scroll" (keydown)="onListKey($event)">
-      @for (row of rows(); track row.id) {
-        <button
-          class="row"
-          type="button"
-          [class.row--on]="row.id === selectedId()"
-          [attr.aria-current]="row.id === selectedId() ? 'true' : null"
-          (click)="select(row.id)"
-        >
-          <span class="row-line">
-            <span class="row-device">{{ row.device }}</span>
-            <span class="cg-meta">{{ row.model }}</span>
-            <span class="cg-badge row-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.severity }}</span>
-          </span>
-          <span class="cg-meta row-mac">{{ row.mac }} · {{ row.site }}</span>
-          <span class="row-line">
-            <span class="cg-meta">{{ row.at }}</span>
-            <span class="row-status">{{ row.status }}</span>
-          </span>
-        </button>
+      @for (group of groups(); track group.key) {
+        <details class="change-event" open>
+          <summary class="change-event-head">
+            <strong>{{ group.title }}</strong>
+            <small>{{ group.audit }} · {{ group.rows.length }} device windows</small>
+            @if (group.critical) {
+              <span class="cg-badge cg-badge--crit">{{ group.critical }} critical</span>
+            }
+            @if (group.warning) {
+              <span class="cg-badge cg-badge--warn">{{ group.warning }} warning</span>
+            }
+          </summary>
+          @for (row of group.rows; track row.id) {
+            <button
+              class="row"
+              type="button"
+              [class.row--on]="row.id === selectedId()"
+              [attr.data-session-id]="row.id"
+              [attr.data-audit-id]="group.key"
+              [attr.aria-current]="row.id === selectedId() ? 'true' : null"
+              (click)="select(row.id, group.key)"
+            >
+              <span class="row-line">
+                <span class="row-device">{{ row.device }}</span>
+                <span class="cg-meta">{{ row.model }}</span>
+                <span class="cg-badge row-badge" [class]="'cg-badge cg-badge--' + row.tone">{{
+                  row.severity
+                }}</span>
+              </span>
+              <span class="cg-meta row-mac">{{ row.mac }} · {{ row.site }}</span>
+              <span class="row-line">
+                <span class="cg-meta">{{ row.at }}</span>
+                <span class="row-status">{{ row.status }}</span>
+              </span>
+            </button>
+          }
+        </details>
       } @empty {
         <p class="rail-empty">
           @if (historical()) {
@@ -51,13 +70,20 @@
         </p>
       }
     </div>
+    @if (hasMore()) {
+      <button class="cg-btn" type="button" [disabled]="loadingMore()" (click)="loadMore()">
+        Load more device windows
+      </button>
+    }
   </aside>
 
   @if (detail(); as head) {
     <section class="detail">
       <div>
         <div class="head">
-          <span class="cg-badge" [class]="'cg-badge cg-badge--' + head.tone">{{ head.severity }}</span>
+          <span class="cg-badge" [class]="'cg-badge cg-badge--' + head.tone">{{
+            head.severity
+          }}</span>
           <h2 class="head-device">{{ head.device }}</h2>
           <span class="cg-meta">{{ head.meta }}</span>
           <span class="head-status">{{ head.status }}</span>
@@ -100,28 +126,58 @@
           <span class="cg-badge cg-badge--none">NO SAMPLES</span>
           <h3>No sampled traffic for some SLE metrics</h3>
           <p>{{ noTrafficMetrics().join(', ') }}</p>
-          <p>Mist returned no samples for these metrics in one or both windows. They are excluded from numeric comparisons, not treated as collection failures or 100% success.</p>
+          <p>
+            Mist returned no samples for these metrics in one or both windows. They are excluded
+            from numeric comparisons, not treated as collection failures or 100% success.
+          </p>
         </section>
       }
       @if (collectionErrors().length) {
         <section class="collection-errors" role="status" aria-label="SLE collection problems">
           <span class="cg-badge cg-badge--warn">INCOMPLETE DATA</span>
           <h3>SLE collection is incomplete</h3>
-          <p>Missing SLE data cannot establish that the network is healthy. Check the Mist API scope, permissions and data availability.</p>
-          <details><summary>Show collection errors</summary>
-            <ul>@for (error of collectionErrors(); track $index) { <li>{{ error }}</li> }</ul>
+          <p>
+            Missing SLE data cannot establish that the network is healthy. Check the Mist API scope,
+            permissions and data availability.
+          </p>
+          <details>
+            <summary>Show collection errors</summary>
+            <ul>
+              @for (error of collectionErrors(); track $index) {
+                <li>{{ error }}</li>
+              }
+            </ul>
           </details>
         </section>
       }
 
       @if (selected(); as session) {
+        @if (
+          session.peak_impact_severity &&
+          session.peak_impact_severity !== 'none' &&
+          session.peak_impact_severity !== session.impact_severity
+        ) {
+          <p class="cg-meta">
+            Past peak impact: {{ session.peak_impact_severity }}. The badge above describes the
+            latest assessment within this monitoring window.
+          </p>
+        }
+        @if (session.audit_ids.length > 1) {
+          <p class="cg-meta">
+            Shared monitoring window: {{ session.audit_ids.length }} overlapping changes affected
+            this device. Evidence is shown under each linked change; attribution is not exclusive.
+          </p>
+        }
+        <app-configuration-timeline [session]="session" />
         <app-device-evidence [session]="session" />
       }
 
       @if (state(); as panel) {
         <div class="state" [attr.data-tone]="panel.tone">
           <div class="state-head">
-            <span class="cg-badge" [class]="'cg-badge cg-badge--' + panel.tone">{{ panel.tag }}</span>
+            <span class="cg-badge" [class]="'cg-badge cg-badge--' + panel.tone">{{
+              panel.tag
+            }}</span>
             <div class="state-title">{{ panel.title }}</div>
           </div>
           <p class="state-body">{{ panel.body }}</p>
@@ -137,7 +193,12 @@
           </div>
           <div class="state-foot">
             <p class="state-next">{{ panel.next }}</p>
-            <button class="cg-btn" type="button" [disabled]="!changeGroupId()" (click)="openChangeGroup()">
+            <button
+              class="cg-btn"
+              type="button"
+              [disabled]="!changeGroupId()"
+              (click)="openChangeGroup()"
+            >
               Open the change group
             </button>
           </div>
@@ -167,7 +228,9 @@
                     <div>
                       <div class="metric-head">
                         <span class="metric-name">{{ metric.label }}</span>
-                        <span class="metric-delta" [style.color]="metric.deltaInk">{{ metric.deltaLabel }}</span>
+                        <span class="metric-delta" [style.color]="metric.deltaInk">{{
+                          metric.deltaLabel
+                        }}</span>
                       </div>
                       <div class="track">
                         <span class="track-base" [style.width.%]="metric.baseline"></span>
@@ -194,7 +257,9 @@
                 <div class="incidents">
                   @for (incident of incidents(); track incident.key) {
                     <div class="incident">
-                      <span class="cg-badge" [class]="'cg-badge cg-badge--' + incident.tone">{{ incident.tag }}</span>
+                      <span class="cg-badge" [class]="'cg-badge cg-badge--' + incident.tone">{{
+                        incident.tag
+                      }}</span>
                       <span class="incident-label">{{ incident.label }}</span>
                     </div>
                   }
@@ -230,15 +295,18 @@
                   }
                 </div>
               } @else if (aiError(); as failure) {
-                <p class="ai-note">Optional AI assessment unavailable — {{ failure }}. The evidence above is unaffected.</p>
+                <p class="ai-note">
+                  Optional AI assessment unavailable — {{ failure }}. The evidence above is
+                  unaffected.
+                </p>
               }
 
               @if (hasData()) {
                 <div class="cg-card panel panel--tight">
                   <h3 class="panel-title panel-title--sm">Act on this session</h3>
                   <p class="act-text">
-                    Deep links carry the correlated audit ID, so the change group and the restore plan open
-                    pre-scoped.
+                    Deep links carry the correlated audit ID, so the change group and the restore
+                    plan open pre-scoped.
                   </p>
                   @if (!changeGroupId()) {
                     <p class="act-note">This session is not correlated to a change group yet.</p>
@@ -253,7 +321,12 @@
                       Open the change group
                     </button>
                     @if (canRestore()) {
-                      <button class="cg-btn" type="button" [disabled]="!changeGroupId()" (click)="planRestore()">
+                      <button
+                        class="cg-btn"
+                        type="button"
+                        [disabled]="!changeGroupId()"
+                        (click)="planRestore()"
+                      >
                         Plan a restore
                       </button>
                     }

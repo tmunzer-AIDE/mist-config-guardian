@@ -4,6 +4,8 @@ import pytest
 
 from mist_config_guardian_backend.integrations.mist_sle import extract_sle_value
 
+AP_METRICS = ["time-to-connect", "successful-connect", "throughput", "roaming", "capacity", "coverage", "ap-health"]
+
 
 def test_extract_sle_value_preserves_the_mean_of_rates_used_by_existing_baselines() -> None:
     payload = {
@@ -37,6 +39,8 @@ async def test_sle_requests_exact_24_hour_baseline_for_the_changed_device(httpx_
     start = end - timedelta(hours=24)
 
     def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"supported": AP_METRICS, "enabled": AP_METRICS})
         assert "/sle/ap/00000000-0000-0000-1000-aabbccddeeff/metric/" in request.url.path
         assert request.url.params["start"] == str(int(start.timestamp()))
         assert request.url.params["end"] == str(int(end.timestamp()))
@@ -50,7 +54,7 @@ async def test_sle_requests_exact_24_hour_baseline_for_the_changed_device(httpx_
     assert result.window_start == start
     assert result.window_end == end
     assert result.values["coverage"] == 98
-    assert len(httpx_mock.get_requests()) == 7
+    assert len(httpx_mock.get_requests()) == 8
 
 
 async def test_scope_failure_preserves_http_status_without_disclosing_provider_error_body(httpx_mock):
@@ -98,16 +102,20 @@ async def test_quiet_site_response_is_no_data_rather_than_a_collection_error(buc
     from mist_config_guardian_backend.services.impact_analysis import assess_impact  # noqa: PLC0415
 
     httpx_mock.add_callback(
-        lambda _request: httpx.Response(
-            200,
-            json={
-                "sle": {
-                    "samples": {
-                        "total": buckets[0],
-                        "degraded": buckets[1],
+        lambda request: (
+            httpx.Response(200, json={"supported": AP_METRICS, "enabled": AP_METRICS})
+            if request.url.path.endswith("/metrics")
+            else httpx.Response(
+                200,
+                json={
+                    "sle": {
+                        "samples": {
+                            "total": buckets[0],
+                            "degraded": buckets[1],
+                        }
                     }
-                }
-            },
+                },
+            )
         ),
         is_reusable=True,
     )
@@ -137,7 +145,20 @@ async def test_malformed_200_response_remains_a_collection_error(httpx_mock):
     from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
     from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
 
-    httpx_mock.add_callback(lambda _request: httpx.Response(200, json={"unexpected": "body"}), is_reusable=True)
+    httpx_mock.add_callback(
+        lambda request: (
+            httpx.Response(
+                200,
+                json={
+                    "supported": ["gateway-health", "wan-link-health"],
+                    "enabled": ["gateway-health", "wan-link-health"],
+                },
+            )
+            if request.url.path.endswith("/metrics")
+            else httpx.Response(200, json={"unexpected": "body"})
+        ),
+        is_reusable=True,
+    )
     async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_01) as client:
         observation = await client.capture(site_id="site-1", device_type=DeviceType.GATEWAY)
     assert observation.no_data == []
@@ -199,7 +220,9 @@ async def test_advertised_stc_new_is_collected_and_404_is_still_an_error(httpx_m
     httpx_mock.add_callback(respond, is_reusable=True)
     async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_02) as client:
         result = await client.capture(site_id="site-1", device_type=DeviceType.SWITCH, device_mac="aabbccddeeff")
-    assert result.errors == ["switch-stc-new: HTTP 404 from the SLE endpoint"]
+    assert len(result.errors) == 1
+    assert result.errors[0].startswith("switch-stc-new: HTTP 404 from the SLE endpoint")
+    assert "/sle/switch/00000000-0000-0000-1000-aabbccddeeff/metric/switch-stc-new/summary-trend" in result.errors[0]
     assert result.no_data == []
     assert "must-not-be-disclosed" not in result.model_dump_json()
 
@@ -235,3 +258,27 @@ async def test_failed_or_empty_switch_discovery_cannot_imply_health(httpx_mock, 
     assert message in result.errors[0]
     assert "must-not-be-disclosed" not in result.model_dump_json()
     assert assess_impact(result, result, []).severity == "info"
+
+
+@pytest.mark.parametrize(("family", "metric"), [("ap", "ap-health"), ("gateway", "gateway-health")])
+async def test_all_device_families_use_advertised_metric_names(httpx_mock, family, metric):
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+
+    spelling = metric.replace("-", "_")
+
+    def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"supported": [spelling], "enabled": [spelling]})
+        assert request.url.path.endswith(f"/metric/{spelling}/summary-trend")
+        return httpx.Response(200, json={"sle": {"samples": {"total": [10], "degraded": [1]}}})
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_02) as client:
+        observation = await client.capture(site_id="site-1", device_type=DeviceType(family), device_mac="aabbccddeeff")
+    assert observation.values == {metric: 90}
+    assert observation.errors == []
+    assert len(httpx_mock.get_requests()) == 2

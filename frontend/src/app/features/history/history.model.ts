@@ -38,6 +38,8 @@ export interface ConfigurationVersionList {
 
 /** Query shape for the paged object list. Every field is optional. */
 export interface ObjectQuery {
+  sort?: 'updated_at' | 'name' | 'object_type' | 'site_mist_id' | 'current_version';
+  direction?: 'asc' | 'desc';
   scope?: 'org' | 'site';
   objectType?: string;
   siteId?: string;

@@ -6,30 +6,135 @@
 :host {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-height: 0;
   height: 100%;
 }
-.library-head { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 18px 22px; border-bottom: 1px solid var(--hairline-strong); background: var(--surface-raised); flex: none; }
-.library-head > div { flex: 1; }
-.library-head p { margin: 6px 0 0; color: var(--ink-soft); }
-.library-body { padding: 20px 22px; overflow: auto; flex: 1; }
-.library-filters { display: flex; flex-wrap: wrap; gap: 10px; }
-.library-search { min-width: 230px; flex: 1; }
-.library-filters select { max-width: 280px; }
-.library-table { background: var(--surface-raised); border: 1px solid var(--hairline-strong); border-radius: var(--radius-md); }
-.library-table table { border-collapse: collapse; width: 100%; text-align: left; }
-.library-table th, .library-table td { padding: 13px 16px; border-bottom: 1px solid var(--hairline); }
-.library-table th { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; }
-.library-table small { display: block; color: var(--ink-soft); margin-top: 5px; }
-.object-link { font: 600 13px var(--font-sans); color: var(--brand); background: none; border: 0; cursor: pointer; padding: 0; text-align: left; }
-.deleted-row { opacity: .65; }
-.load-more { margin-top: 16px; }
-.detail-layout { flex: 1; display: grid; grid-template-columns: minmax(220px, 270px) minmax(0, 1fr); min-height: 0; }
-.restore-inline { flex: 1; overflow: auto; min-height: 0; }
-.restore-inline-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 14px 20px; }
-.restore-inline-head h2 { font-size: 18px; margin: 0; }
-.version-restore { margin-top: 10px; }
-
+.library-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--hairline-strong);
+  background: var(--surface-raised);
+  flex: none;
+}
+.library-head > div {
+  flex: 1;
+}
+.library-head p {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+}
+.library-body {
+  padding: 20px 22px;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.library-search {
+  min-width: 230px;
+  flex: 1;
+}
+.library-filters select {
+  max-width: 280px;
+}
+.library-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-md);
+}
+.library-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-raised);
+}
+.sort-heading {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.load-more {
+  flex: none;
+  align-self: center;
+  margin-top: 12px;
+}
+.library-table table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+}
+.library-table th,
+.library-table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+.library-table th {
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+.library-table small {
+  display: block;
+  color: var(--ink-soft);
+  margin-top: 5px;
+}
+.object-link {
+  font: 600 13px var(--font-sans);
+  color: var(--brand);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.deleted-row {
+  opacity: 0.65;
+}
+.load-more {
+  margin-top: 16px;
+}
+.detail-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+  min-height: 0;
+}
+.restore-inline {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.restore-inline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 20px;
+}
+.restore-inline-head h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.version-restore {
+  margin-top: 10px;
+}
 
 // ------------------------------------------------------------------- columns
 .col {
@@ -287,9 +392,15 @@
 
 // -------------------------------------------------------------- narrow view
 @include bp.below(mid) {
-  :host { height: auto; }
-  .detail-layout { grid-template-columns: minmax(0, 1fr); }
-  .library-body { overflow: visible; }
+  :host {
+    height: 100%;
+  }
+  .detail-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .library-body {
+    min-height: 200px;
+  }
 
   .col {
     border-right: 0;
@@ -300,7 +411,6 @@
     max-height: 280px;
   }
 }
-
 
 // ------------------------------------------------- object rail load-more
 .more {

@@ -35,15 +35,19 @@ class ObjectListFilters(BaseModel):
     scope: Literal["org", "site"] | None = None
     include_deleted: bool = False
     q: str | None = None
+    sort: Literal["updated_at", "name", "object_type", "site_mist_id", "current_version"] = "updated_at"
+    direction: Literal["asc", "desc"] = "desc"
     skip: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
 
 
-# Paging needs a total order. `object_type` and `name` do not give one: two
-# objects can share both, and MongoDB is then free to order them differently
-# between the query that fetches one page and the query that fetches the next,
-# which shows an object twice or not at all. The unique `_id` breaks the tie.
-OBJECT_LIST_SORT = ("object_type", "name", "_id")
+# Every supported sort can tie; the unique id keeps pagination deterministic.
+OBJECT_LIST_SORT = ("-updated_at", "_id")
+
+
+def object_list_sort(filters: ObjectListFilters) -> tuple[str, str]:
+    """Sort the entire matching catalogue with a stable pagination tie-breaker."""
+    return (f"{'-' if filters.direction == 'desc' else ''}{filters.sort}", "_id")
 
 
 def object_list_criteria(
@@ -92,7 +96,7 @@ async def list_objects(
 
     query = LogicalObject.find(object_list_criteria(organization_id, filters))
     total = await query.count()
-    objects = await query.sort(*OBJECT_LIST_SORT).skip(filters.skip).limit(filters.limit).to_list()
+    objects = await query.sort(*object_list_sort(filters)).skip(filters.skip).limit(filters.limit).to_list()
     return LogicalObjectListResponse(
         items=[LogicalObjectResponse.from_document(item) for item in objects],
         total=total,

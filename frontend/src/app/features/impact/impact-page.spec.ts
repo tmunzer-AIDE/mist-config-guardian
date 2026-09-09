@@ -324,10 +324,36 @@ describe('ImpactPage', () => {
     expect(navigations.length).toBe(picks);
   });
 
+  it('groups shared audit IDs and keeps unrelated or uncorrelated device changes separate', async () => {
+    await render([CRITICAL, QUIET, {...BLANK, audit_ids:['other-audit']}, {...BLANK, id:'s4', audit_ids:[]}]);
+    expect(all('.change-event').length).toBe(3);
+    expect(all('.change-event')[0].querySelectorAll('.row').length).toBe(2);
+    expect(text()).toContain('Uncorrelated device change');
+  });
+
+  it('keyboard navigation skips devices inside a collapsed change group', async () => {
+    await render([CRITICAL, {...QUIET, audit_ids:['other-audit']}, BLANK]);
+    (all('.change-event')[1] as HTMLDetailsElement).open = false;
+    all('.row')[0].dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown',bubbles:true}));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect((fixture.componentInstance as unknown as {selectedId:()=>string}).selectedId()).toBe('s3');
+  });
+
+  it('opens the audit selected for a shared monitoring window', async () => {
+    await render([{...CRITICAL,audit_ids:['a1','a2'],change_groups:[
+      {id:'g1',audit_id:'a1',title:'First change',occurred_at:null},
+      {id:'g2',audit_id:'a2',title:'Second change',occurred_at:null},
+    ]}]);
+    all('.row')[1].click();
+    fixture.detectChanges();
+    expect((fixture.componentInstance as unknown as {changeGroupId:()=>string}).changeGroupId()).toBe('g2');
+  });
+
   it('lists every session and narrows the list from the status chips', async () => {
     await render([CRITICAL, QUIET, BLANK]);
 
-    expect(text()).toContain('MONITORING SESSIONS · 3');
+    expect(text()).toContain('CONFIGURATION CHANGES · 1');
     expect(all('.row').length).toBe(3);
 
     const failed = all('.cg-chip').find((chip) => chip.textContent?.trim() === 'Failed');

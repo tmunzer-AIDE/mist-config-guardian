@@ -7,6 +7,9 @@ $columns: minmax(0, 0.8fr) minmax(150px, 2.6fr) minmax(0, 1fr) minmax(0, 0.45fr)
 $sunken: rgba(251, 250, 247, 0.55);
 
 .page {
+  height:100%;
+  min-height:0;
+  overflow:hidden;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -68,15 +71,23 @@ $sunken: rgba(251, 250, 247, 0.55);
 }
 
 .stack {
+  flex:1;
+  min-height:0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
+.stack--selected { grid-template-rows:minmax(140px, .45fr) minmax(200px, .55fr); }
+.stack > .panel { min-height:0; overflow:auto; }
+.stack > .panel .panel-head { position:sticky; top:0; z-index:1; background:var(--surface-raised); }
+
 // ------------------------------------------------------------------- table
 .table-card {
-  overflow: hidden;
+  min-height:0;
+  overflow:auto;
 }
+.table thead { position:sticky; top:0; z-index:1; background:var(--surface-sunken); }
 
 // The table keeps its element semantics but lays out on a grid, so every row
 // carries an explicit ARIA role: browsers drop the implicit table roles as

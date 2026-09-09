@@ -85,6 +85,7 @@ class LogicalObject(TimestampedModel, Document):
             ),
             IndexModel([("organization_id", 1), ("site_mist_id", 1)]),
             IndexModel([("organization_id", 1), ("is_deleted", 1)]),
+            IndexModel([("organization_id", 1), ("is_deleted", 1), ("updated_at", -1), ("_id", 1)]),
             # The restore target search resolves each site-scoped object's site
             # name by looking the site up on its Mist id, once per candidate.
             IndexModel([("organization_id", 1), ("object_type", 1), ("current_mist_id", 1)]),
