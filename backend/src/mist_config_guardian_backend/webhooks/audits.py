@@ -102,6 +102,10 @@ def resolve_audit_target(payload: dict[str, object]) -> AuditTarget | None:
     if not match:
         return None
     normalized = match.group(1).replace(" ", "").lower()
+    if normalized == "sitesettings":
+        # Settings are a site singleton. The audit's `id` identifies the
+        # action, not the configuration object, and a site is required.
+        return _target(definitions["settings"], None, site_id, payload) if site_id is not None else None
     key = _OBJECT_ALIASES.get(normalized)
     definition = definitions.get(key or "") or fallback_definitions.get(key or "")
     if definition is None:

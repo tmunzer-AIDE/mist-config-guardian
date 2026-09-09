@@ -102,7 +102,10 @@ class WebhookIngestionService:
                 organization_id=organization_id,
                 topic=topic,
                 event_id=event_id,
-                audit_id=self._string_value(event.get("audit_id")),
+                # Mist audit deliveries identify the administrator action as
+                # `id`; device events refer back to it as `audit_id`.
+                audit_id=self._string_value(event.get("audit_id"))
+                or (self._string_value(event.get("id")) if topic == "audits" else None),
                 payload_hash=payload_hash,
                 encrypted_payload=self._vault.encrypt_for_context(
                     serialized,
