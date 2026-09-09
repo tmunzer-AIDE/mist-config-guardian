@@ -144,3 +144,94 @@ async def test_malformed_200_response_remains_a_collection_error(httpx_mock):
     assert observation.values == {}
     assert len(observation.errors) == 2
     assert all("invalid SLE response" in error for error in observation.errors)
+
+
+@pytest.mark.parametrize("device_mac", [None, "aabbccddeeff"])
+@pytest.mark.parametrize("underscore", [False, True])
+@pytest.mark.parametrize("supports_new", [False, True])
+async def test_switch_discovers_enabled_metrics_before_requesting_summaries(
+    httpx_mock, device_mac, underscore, supports_new
+):
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+    from mist_config_guardian_backend.services.impact_analysis import assess_impact  # noqa: PLC0415
+
+    metrics = ["switch-throughput", "switch-health", "switch-stc"]
+    spellings = [metric.replace("-", "_") if underscore else metric for metric in metrics]
+    root = "/api/v1/sites/site-1/sle/" + (
+        "switch/00000000-0000-0000-1000-aabbccddeeff" if device_mac else "site/site-1"
+    )
+
+    def respond(request):
+        if request.url.path == f"{root}/metrics":
+            supported = [*spellings, "switch-stc-new"] if supports_new else spellings
+            return httpx.Response(200, json={"supported": supported, "enabled": spellings})
+        assert request.url.path in [f"{root}/metric/{metric}/summary-trend" for metric in spellings]
+        return httpx.Response(200, json={"sle": {"samples": {"total": [100], "degraded": [2]}}})
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_02) as client:
+        baseline = await client.capture(site_id="site-1", device_type=DeviceType.SWITCH, device_mac=device_mac)
+        latest = await client.capture(site_id="site-1", device_type=DeviceType.SWITCH, device_mac=device_mac)
+    assert baseline.errors == latest.errors == []
+    assert baseline.values == dict.fromkeys(metrics, 98)
+    assert baseline.no_data == []
+    assert assess_impact(baseline, latest, []).severity == "none"
+    assert len(httpx_mock.get_requests()) == 8
+
+
+async def test_advertised_stc_new_is_collected_and_404_is_still_an_error(httpx_mock):
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+
+    def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"supported": ["switch-stc-new"], "enabled": ["switch-stc-new"]})
+        assert request.url.path.endswith("/metric/switch-stc-new/summary-trend")
+        return httpx.Response(404, json={"secret": "must-not-be-disclosed"})
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_02) as client:
+        result = await client.capture(site_id="site-1", device_type=DeviceType.SWITCH, device_mac="aabbccddeeff")
+    assert result.errors == ["switch-stc-new: HTTP 404 from the SLE endpoint"]
+    assert result.no_data == []
+    assert "must-not-be-disclosed" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "message"),
+    [
+        (404, {}, "HTTP 404"),
+        (403, {"private": "must-not-be-disclosed"}, "HTTP 403"),
+        (200, {}, "invalid"),
+        (200, {"supported": ["switch-stc"], "enabled": "switch-stc"}, "invalid"),
+        (200, {"supported": [None], "enabled": []}, "invalid"),
+        (200, {"supported": [], "enabled": []}, "no supported"),
+        (200, {"supported": ["switch-stc"], "enabled": []}, "no supported"),
+        (200, {"supported": ["../../secrets"], "enabled": ["../../secrets"]}, "no supported"),
+    ],
+)
+async def test_failed_or_empty_switch_discovery_cannot_imply_health(httpx_mock, status, payload, message):
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+    from mist_config_guardian_backend.services.impact_analysis import assess_impact  # noqa: PLC0415
+
+    httpx_mock.add_callback(lambda _request: httpx.Response(status, json=payload))
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_02) as client:
+        result = await client.capture(site_id="site-1", device_type=DeviceType.SWITCH)
+    assert len(httpx_mock.get_requests()) == 1
+    assert result.values == {}
+    assert result.no_data == []
+    assert len(result.errors) == 1
+    assert message in result.errors[0]
+    assert "must-not-be-disclosed" not in result.model_dump_json()
+    assert assess_impact(result, result, []).severity == "info"

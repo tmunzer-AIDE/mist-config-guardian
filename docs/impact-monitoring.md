@@ -21,6 +21,13 @@ fields remain visible at every depth, including webhook destinations. This appli
 structured comparisons, comparison JSON and patches. Original stored snapshots
 and restore payloads retain those fields.
 
+The raw JSON comparison aligns matching lines and keeps each version's original
+line numbers. Removed text appears in red with a minus marker; added text appears
+in green with a plus marker. Replacements show both. The taller, resizable viewer
+also opens in a full-screen dialog; Escape returns to the inline view and preserves
+the scroll position. Protected values remain redacted, so identical placeholders
+are not presented as confirmed raw-text changes.
+
 ## Timing
 
 A supported Mist `device-events` configuration trigger immediately starts an
@@ -30,6 +37,16 @@ state concurrently. The first operational follow-up is due five minutes after th
 initial capture. SLE polls run every five minutes for at least one hour; receipt
 of the configured event guarantees a further hour from that point. A missing
 configured event no longer prevents collection.
+
+Switch collection first calls `/sle/{scope}/{scope_id}/metrics` at the same
+site/device scope. Only recognized switch metrics listed as both supported and
+enabled are requested. This avoids assuming every deployment exposes
+`switch-stc-new`. Advertised underscore/hyphen spellings are used verbatim in
+request paths and normalized to the existing stored metric keys. Discovery
+failures, empty eligible sets and errors for advertised metrics remain explicit
+collection failures; they are never treated as quiet traffic or healthy evidence.
+Existing persisted errors are retained as historical collection evidence.
+See Juniper's [SLE metric discovery reference](https://www.juniper.net/documentation/us/en/software/mist/api/http/api/sites/sles/list-site-sles-metrics).
 
 Source timestamps are accepted from 24 hours before receipt through one minute
 after receipt (clock skew). Missing, malformed or out-of-range timestamps fall

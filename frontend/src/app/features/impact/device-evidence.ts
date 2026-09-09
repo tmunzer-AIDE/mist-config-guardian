@@ -24,6 +24,7 @@ const SOURCES = [
         </p>
         @for (finding of comparison.findings; track $index) {
           <article class="finding" [class.critical]="finding.severity === 'critical'">
+            <span [class]="'cg-badge cg-badge--' + (finding.severity === 'critical' ? 'crit' : 'warn')">{{ finding.severity }}</span>
             <strong>{{ finding.subject }} · {{ finding.before }} → {{ finding.after }}</strong>
             <p>{{ finding.detail }}</p>
           </article>
@@ -48,12 +49,13 @@ const SOURCES = [
     }
   `,
   styles: `
-    :host { display:block; margin: 16px 20px; }
-    .evidence { padding: 18px; }
+    :host { display:flex; flex-direction:column; gap:15px; min-width:0; }
+    .evidence { padding: 20px; }
     h3 { margin:0 0 10px; font-size:16px; }
     .timing { font-size:12px; color:var(--ink-soft); line-height:1.5; }
-    .finding { padding:12px; border-left:3px solid var(--tone-warning-ink); background:var(--tone-warning-wash); margin:10px 0; }
-    .finding.critical { border-color:var(--tone-critical-ink); }
+    .finding { padding:12px; border:1px solid var(--tone-warning-line); border-radius:var(--radius-md); background:var(--tone-warning-wash); margin:10px 0; }
+    .finding .cg-badge { display:table; margin-bottom:8px; text-transform:uppercase; }
+    .finding.critical { border-color:var(--tone-critical-line); background:var(--tone-critical-wash); }
     .finding p { margin:6px 0 0; }
     details { border-top:1px solid var(--hairline); padding:12px 0; }
     summary { cursor:pointer; font-weight:600; } summary span { font-weight:400; color:var(--ink-soft); margin-left:10px; }

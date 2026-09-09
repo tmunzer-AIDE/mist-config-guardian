@@ -29,17 +29,17 @@
     <div class="library-filters">
       <input class="cg-input library-search filter-input" type="search" placeholder="Search by name, type or Mist ID"
         aria-label="Search stored objects" [value]="query()" (input)="setQuery($event)" />
-      <select class="cg-select" aria-label="Object type" [value]="typeFilter()" (change)="setFilter('type', $event)">
-        <option value="">All object types</option>
-        @for (type of facets().types; track type.id) { <option [value]="type.id">{{ type.name }} ({{ type.count }})</option> }
-      </select>
-      <select class="cg-select" aria-label="Site" [value]="siteFilter()" (change)="setFilter('site', $event)">
-        <option value="">All sites</option>
-        @for (site of facets().sites; track site.id) { <option [value]="site.id">{{ site.name }} ({{ site.count }})</option> }
-      </select>
-      <select class="cg-select" aria-label="Scope" [value]="scopeFilter()" (change)="setFilter('scope', $event)">
-        <option value="">All scopes</option><option value="org">Organization</option><option value="site">Site</option>
-      </select>
+        <select class="cg-select" aria-label="Scope" [value]="scopeFilter()" (change)="setFilter('scope', $event)">
+          <option value="">All scopes</option><option value="org">Organization</option><option value="site">Site</option>
+        </select>
+        <select class="cg-select" aria-label="Site" [value]="siteFilter()" (change)="setFilter('site', $event)">
+          <option value="">All sites</option>
+          @for (site of facets().sites; track site.id) { <option [value]="site.id">{{ site.name }} ({{ site.count }})</option> }
+        </select>
+        <select class="cg-select" aria-label="Object type" [value]="typeFilter()" (change)="setFilter('type', $event)">
+          <option value="">All object types</option>
+          @for (type of facets().types; track type.id) { <option [value]="type.id">{{ type.name }} ({{ type.count }})</option> }
+        </select>
       <button class="cg-btn" [attr.aria-pressed]="showDeleted()" (click)="toggleDeleted()">{{ showDeleted() ? 'Including deleted' : 'Show deleted' }}</button>
     </div>
     <p class="cg-meta" role="status">{{ objectCountLabel() }}</p>
