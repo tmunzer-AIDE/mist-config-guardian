@@ -28,7 +28,9 @@ IDENTITY_KEYS: Final = ("id", "_id", "name", "mac", "port_id")
 COMPACT_MODE_LIMIT: Final = 8
 MAX_ENTRIES: Final = 5000
 MAX_NOTABLE: Final = 10
-COMPARISON_IGNORED_FIELDS: Final = frozenset({"created_time", "modified_time"})
+COMPARISON_IGNORED_FIELDS: Final = frozenset(
+    {"created_time", "modified_time", "image1_url", "image2_url", "image3_url", "url", "thumbnail_url"}
+)
 
 _VALUE_DISPLAY_LIMIT: Final = 120
 _INLINE_LIST_LIMIT: Final = 8

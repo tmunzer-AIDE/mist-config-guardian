@@ -48,8 +48,6 @@ export interface OrganizationCreate {
   reconciliation_cron: string;
   configuration_retention_days: number;
   monitoring_retention_days: number;
-  /** Confirms who is onboarding: a service token is a credential. */
-  password: string;
 }
 
 export interface OrganizationUpdate {

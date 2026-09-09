@@ -14,7 +14,6 @@ from mist_config_guardian_backend.models.organization import (
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.schemas.organization import OrganizationCreateRequest
 from mist_config_guardian_backend.security.auth import hash_password
-from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 
 ADMIN_PASSWORD = "a-long-enough-password"
 
@@ -68,7 +67,6 @@ async def test_create_organization_never_returns_token() -> None:
     service = _FakeOrganizationService()
     app.dependency_overrides[get_organization_service] = lambda: service
     app.dependency_overrides[require_administrator] = _administrator
-    app.dependency_overrides[require_fresh_mfa] = _administrator
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -76,7 +74,6 @@ async def test_create_organization_never_returns_token() -> None:
             json={
                 "cloud_region": "global_01",
                 "service_token": "read-only-token-value",
-                "password": ADMIN_PASSWORD,
             },
         )
 
@@ -94,3 +91,23 @@ async def test_list_organizations_requires_authentication() -> None:
         response = await client.get("/api/v1/organizations")
 
     assert response.status_code == 401
+
+
+async def test_operator_cannot_save_admin_settings_without_a_password():
+    from mist_config_guardian_backend.api.dependencies import get_current_user  # noqa: PLC0415
+
+    app = create_app(Settings(environment="test", database_enabled=False))
+    operator = _administrator()
+    operator.role = UserRole.OPERATOR
+    app.dependency_overrides[get_current_user] = lambda: operator
+    org_id = str(PydanticObjectId())
+    paths = [
+        ("POST", "/api/v1/organizations", {"cloud_region": "global_01", "service_token": "read-only-token"}),
+        ("PUT", f"/api/v1/organizations/{org_id}/service-token", {"service_token": "read-only-token"}),
+        ("POST", f"/api/v1/organizations/{org_id}/webhook-secret/rotate", {}),
+        ("PUT", "/api/v1/ai/settings", {"enabled": False}),
+    ]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for method, path, body in paths:
+            response = await client.request(method, path, json=body)
+            assert response.status_code == 403, (path, response.text)

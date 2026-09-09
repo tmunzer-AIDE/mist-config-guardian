@@ -1,6 +1,7 @@
 """A device event is attributed to the session it actually changed."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from beanie import PydanticObjectId
@@ -13,14 +14,17 @@ from mist_config_guardian_backend.models.monitoring import (
     ImpactSeverity,
     MonitoringSession,
     MonitoringStatus,
+    SleObservation,
 )
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
     OrganizationStatus,
 )
+from mist_config_guardian_backend.models.telemetry import DeviceStateObservation
 from mist_config_guardian_backend.models.webhook import WebhookProcessingStatus, WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services import monitoring
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
 from mist_config_guardian_backend.services.webhook_processing import WebhookProcessingService
 
@@ -112,6 +116,8 @@ def _install_active_session(monkeypatch: pytest.MonkeyPatch, session: Monitoring
     """Answer the handler's lookup for the device's active session, and swallow saves."""
 
     async def find_one(*_args: object, **_kwargs: object) -> MonitoringSession | None:
+        if len(_args) == 1 and isinstance(_args[0], dict) and "receipt_ids" in _args[0]:
+            return session if session and _args[0]["receipt_ids"] in session.receipt_ids else None
         return session
 
     async def save(self: MonitoringSession, *_args: object, **_kwargs: object) -> MonitoringSession:
@@ -229,3 +235,53 @@ async def test_projection_without_a_device_address_rebuilds_nothing(monkeypatch:
     await WebhookProcessingService(vault=None, projector=projector).project(_receipt(), {})  # type: ignore[arg-type]
 
     assert projector.rebuilt == []
+
+
+async def test_prechange_captures_immediately_and_monitors_without_a_configured_event(monkeypatch):
+    _install_active_session(monkeypatch, None)
+    monkeypatch.setattr(MonitoringSession, "get_pymongo_collection", classmethod(lambda _cls: None))
+    monkeypatch.setattr(MonitoringSession, "insert", AsyncMock())
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW)
+    initial = DeviceStateObservation(captured_at=NOW)
+    handler = _handler()
+    baseline = AsyncMock(return_value=SleObservation())
+    telemetry = AsyncMock(return_value=initial)
+    monkeypatch.setattr(handler, "_capture", baseline)
+    monkeypatch.setattr(handler, "_capture_state", telemetry)
+    receipt = _receipt()
+    session = await handler.handle(
+        receipt,
+        {
+            "type": "AP_CONFIG_CHANGED_BY_USER",
+            "mac": MAC,
+            "site_id": "site-1",
+            "timestamp": NOW.timestamp(),
+        },
+        _organization(),
+    )
+    assert session.status is MonitoringStatus.MONITORING
+    assert session.monitoring_ends_at == NOW + timedelta(hours=1)
+    assert session.next_poll_at == NOW + timedelta(minutes=5)
+    assert session.device_comparisons[0].baseline is initial
+    assert session.device_comparisons[0].due_at == NOW + timedelta(minutes=5)
+    assert baseline.await_args.args[1:] == ("site-1", DeviceType.AP, MAC, NOW)
+    telemetry.assert_awaited_once()
+
+
+async def test_overlapping_triggers_capture_separately_and_receipt_retries_are_idempotent(monkeypatch):
+    session = _session(status=MonitoringStatus.MONITORING, audit_ids=["audit-7"])
+    _install_active_session(monkeypatch, session)
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW)
+    handler = _handler()
+    telemetry = AsyncMock(return_value=DeviceStateObservation(captured_at=NOW))
+    monkeypatch.setattr(handler, "_capture_state", telemetry)
+    payload = {"type": "AP_CONFIG_CHANGED_BY_USER", "mac": MAC, "site_id": "site-1"}
+    receipt = _receipt()
+    await handler.handle(receipt, payload, _organization())
+    await handler.handle(receipt, payload, _organization())
+    await handler.handle(_receipt(), payload, _organization())
+    assert len(session.device_comparisons) == 2
+    assert telemetry.await_count == 2
+    assert len(session.receipt_ids) == 2
+    assert session.monitoring_ends_at == NOW + timedelta(hours=1)
+    assert len(session.warnings) == 1

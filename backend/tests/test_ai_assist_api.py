@@ -42,7 +42,6 @@ from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
 )
 from mist_config_guardian_backend.services.diff import diff_configurations
-from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 
 BASE_URL = "https://ai.example.test/v1"
 COMPLETIONS_URL = f"{BASE_URL}/chat/completions"
@@ -427,7 +426,6 @@ def _settings_app(service: object) -> object:
     app = create_app(Settings(environment="test", database_enabled=False))
     app.dependency_overrides[get_application_configuration_service] = lambda: service
     app.dependency_overrides[require_administrator] = _administrator
-    app.dependency_overrides[require_fresh_mfa] = _administrator
     return app
 
 
@@ -451,7 +449,6 @@ async def test_update_ai_settings_encrypts_the_key_and_never_returns_it(
                 "api_key": "provider-secret-key",
                 "max_response_tokens": 900,
                 "automatic_summaries": True,
-                "password": ADMIN_PASSWORD,
             },
         )
 
@@ -484,7 +481,6 @@ async def test_update_ai_settings_keeps_the_stored_key_when_blank(monkeypatch: p
             base_url="https://ai.example.test/v1",
             model="test-model",
             api_key=SecretStr("   "),
-            password=SecretStr(ADMIN_PASSWORD),
         )
     )
 
@@ -688,7 +684,6 @@ async def test_ai_settings_allow_a_keyless_self_hosted_provider(monkeypatch: pyt
             enabled=True,
             base_url=BASE_URL,
             model="local-model",
-            password=SecretStr(ADMIN_PASSWORD),
         )
     )
     assert result.enabled is True

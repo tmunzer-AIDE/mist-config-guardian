@@ -49,6 +49,7 @@ class OpenAiCompatibleImpactProvider(AbstractAsyncContextManager["OpenAiCompatib
             "metric_deltas": assessment.metric_deltas,
             "degraded_metrics": assessment.degraded_metrics,
             "incident_types": assessment.incident_types,
+            "device_findings": assessment.device_findings,
         }
         try:
             response = await self._client.post(

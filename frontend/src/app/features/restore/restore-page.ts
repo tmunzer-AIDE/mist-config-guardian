@@ -101,6 +101,7 @@ export class RestorePage {
 
   // ---- deep links, bound by the router's component input binding ----------
   /** `?versions=a,b,c` — pre-select these object versions. */
+  readonly embedded = input(false);
   readonly versions = input('', { transform: fromQuery });
   /** `?changeGroup=<id>` — pre-select the versions that group replaced. */
   readonly changeGroup = input('', { transform: fromQuery });
@@ -426,6 +427,9 @@ export class RestorePage {
       }
     }
 
+    if (this.embedded() && versionIds.length === 1 && !link.operation && !link.changeGroup && !this.stale(token)) {
+      await this.buildPlan();
+    }
     if (isStepName(link.step) && this.stepAvailable(link.step)) {
       this.currentStep.set(link.step);
     }
@@ -486,8 +490,9 @@ export class RestorePage {
   private canonicalize(organizationId: string, operationId: string | null, replaceUrl = false): void {
     this.appliedLink = linkKey(organizationId, { ...EMPTY_LINK, operation: operationId ?? '' });
     this.appliedOrganization = organizationId;
-    void this.router.navigate(['/history/restore'], {
-      queryParams: operationId ? { operation: operationId } : {},
+    void this.router.navigate(['/history'], {
+      queryParamsHandling: 'merge',
+      queryParams: { restore: '1', versions: null, changeGroup: null, step: null, compensate: null, operation: operationId },
       replaceUrl,
     });
   }

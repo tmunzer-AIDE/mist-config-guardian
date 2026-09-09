@@ -95,6 +95,10 @@
         }
       </div>
 
+      @if (selected(); as session) {
+        <app-device-evidence [session]="session" />
+      }
+
       @if (state(); as panel) {
         <div class="state" [attr.data-tone]="panel.tone">
           <div class="state-head">

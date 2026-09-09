@@ -1,4 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { RestorePage } from '../restore/restore-page';
+import { ObjectFacets } from './history.model';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { AuthService } from '../../core/auth.service';
@@ -89,7 +92,7 @@ interface VersionRow {
  */
 @Component({
   selector: 'app-history-page',
-  imports: [AiAssistStrip, DiffPanel],
+  imports: [AiAssistStrip, DiffPanel, RestorePage],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './history-page.html',
   styleUrl: './history-page.scss',
@@ -108,6 +111,48 @@ export class HistoryPage {
 
   protected readonly questionMaxLength = AI_QUESTION_MAX_LENGTH;
   protected readonly objectPageSize = OBJECT_PAGE_SIZE;
+
+  protected readonly library = signal(!this.route.snapshot.queryParamMap.has('object'));
+  protected readonly routeParams = toSignal(this.route.queryParamMap, { initialValue: this.route.snapshot.queryParamMap });
+  protected readonly restoreOpen = computed(() => this.auth.can('operator') && (
+    this.routeParams().get('restore') === '1' || this.routeParams().has('operation') ||
+    this.routeParams().has('versions') || this.routeParams().has('changeGroup')
+  ));
+  protected readonly facets = signal<ObjectFacets>({ types: [], sites: [] });
+  protected readonly typeFilter = signal('');
+  protected readonly siteFilter = signal('');
+  protected readonly scopeFilter = signal<'' | 'org' | 'site'>('');
+  private facetRequest = 0;
+  protected readonly catalogue = computed(() => this.objects().map(object => ({
+    ...object,
+    typeLabel: object.object_type.replaceAll('_', ' '),
+    siteLabel: object.scope === 'org' ? 'Organization' : this.facets().sites.find(site => site.id === object.site_mist_id)?.name ?? object.site_mist_id ?? 'Unknown site',
+    updated: formatInstant(new Date(object.updated_at)),
+  })));
+
+  protected setFilter(kind: 'type' | 'site' | 'scope', event: Event): void {
+    const value = (event.target as HTMLSelectElement).value;
+    if (kind === 'type') this.typeFilter.set(value);
+    if (kind === 'site') this.siteFilter.set(value);
+    if (kind === 'scope') this.scopeFilter.set(value as '' | 'org' | 'site');
+  }
+
+  protected async browseObjects(): Promise<void> {
+    this.library.set(true);
+    await this.closeRestore();
+  }
+
+  protected async closeRestore(): Promise<void> {
+    await this.router.navigate(['/history'], { queryParamsHandling: 'merge', queryParams: {
+      restore: null, versions: null, operation: null, changeGroup: null, step: null, compensate: null,
+    } });
+  }
+
+  protected async restoreActivity(): Promise<void> {
+    await this.router.navigate(['/history'], { queryParamsHandling: 'merge', queryParams: {
+      restore: '1', versions: null, operation: null, changeGroup: null, step: null, compensate: null,
+    } });
+  }
 
   // ------------------------------------------------------------------ state
   /** What is in the search box right now. */
@@ -374,6 +419,17 @@ export class HistoryPage {
   );
 
   constructor() {
+    effect(() => {
+      const organizationId = this.organizations.selected()?.id;
+      const includeDeleted = this.showDeleted();
+      const request = ++this.facetRequest;
+      if (!organizationId) return;
+      untracked(() => {
+        void this.history.facets(organizationId, includeDeleted).then(facets => {
+          if (request === this.facetRequest) this.facets.set(facets);
+        }).catch(() => { if (request === this.facetRequest) this.facets.set({types: [], sites: []}); });
+      });
+    });
     const params = this.route.snapshot.queryParamMap;
     this.selectedObjectId.set(params.get('object'));
     this.versionAId.set(params.get('a'));
@@ -385,6 +441,9 @@ export class HistoryPage {
       const organizationId = this.organizations.selected()?.id;
       const includeDeleted = this.showDeleted();
       const term = this.searchTerm();
+      this.typeFilter();
+      this.siteFilter();
+      this.scopeFilter();
       this.organizations.revision();
       if (!organizationId) {
         return;
@@ -395,6 +454,8 @@ export class HistoryPage {
           // were read from; under another they are identifiers of nothing, and
           // reads for them can only fail. They go before the new list is asked for.
           this.resetSelection();
+          this.siteFilter.set('');
+          this.library.set(true);
         }
         this.loadedOrganization = organizationId;
         void this.ui.track('Loading configuration objects', () =>
@@ -495,6 +556,7 @@ export class HistoryPage {
   }
 
   protected selectObject(id: string): void {
+    this.library.set(false);
     if (id === this.selectedObjectId()) {
       return;
     }
@@ -537,7 +599,7 @@ export class HistoryPage {
       this.exportOpen.set(false);
       return;
     }
-    if (event.key !== 'j' && event.key !== 'k') {
+    if (this.library() || this.restoreOpen() || (event.key !== 'j' && event.key !== 'k')) {
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey || isEditable(event.target)) {
@@ -661,12 +723,12 @@ export class HistoryPage {
     }
   }
 
-  protected async restoreVersion(): Promise<void> {
-    const versionId = this.versionBId();
+  protected async restoreVersion(selectedVersionId?: string): Promise<void> {
+    const versionId = selectedVersionId ?? this.versionBId();
     if (!versionId || !this.canRestore()) {
       return;
     }
-    await this.router.navigate(['/history/restore'], { queryParams: { versions: versionId } });
+    await this.router.navigate(['/history'], { queryParamsHandling: 'merge', queryParams: { restore: '1', versions: versionId, operation: null } });
   }
 
   protected async openAiSettings(): Promise<void> {
@@ -760,6 +822,9 @@ export class HistoryPage {
     const request = ++this.objectsRequest;
     const response = await this.history.objects(organizationId, {
       includeDeleted,
+      objectType: this.typeFilter() || undefined,
+      siteId: this.siteFilter() || undefined,
+      scope: this.scopeFilter() || undefined,
       q: term || undefined,
       skip,
       limit: OBJECT_PAGE_SIZE,

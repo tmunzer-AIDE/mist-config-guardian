@@ -1,3 +1,4 @@
+import { DeviceEvidence } from './device-evidence';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 
@@ -82,7 +83,7 @@ const SEVERITIES: ImpactSeverity[] = ['none', 'info', 'warning', 'critical'];
  */
 @Component({
   selector: 'app-impact-page',
-  imports: [SleChart],
+  imports: [DeviceEvidence, SleChart],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './impact-page.html',
   styleUrl: './impact-page.scss',

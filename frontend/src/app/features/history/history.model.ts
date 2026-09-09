@@ -38,6 +38,7 @@ export interface ConfigurationVersionList {
 
 /** Query shape for the paged object list. Every field is optional. */
 export interface ObjectQuery {
+  scope?: 'org' | 'site';
   objectType?: string;
   siteId?: string;
   includeDeleted?: boolean;
@@ -79,4 +80,9 @@ export function eventTone(event: ConfigurationEvent): Tone {
     return 'ok';
   }
   return event === 'initial' ? 'none' : 'warn';
+}
+
+export interface ObjectFacets {
+  types: { id: string; name: string; count: number }[];
+  sites: { id: string; name: string; count: number }[];
 }

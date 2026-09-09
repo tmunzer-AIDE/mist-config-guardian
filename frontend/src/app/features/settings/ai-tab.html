@@ -73,7 +73,7 @@
             <button
               class="cg-btn cg-btn--sm cg-btn--primary"
               type="button"
-              [disabled]="!keyDraft().trim() || !password() || isSaving('key')"
+              [disabled]="!keyDraft().trim() || isSaving('key')"
               (click)="saveKey()"
             >
               {{ isSaving('key') ? 'Saving…' : 'Save key' }}
@@ -215,25 +215,10 @@
       @if (incomplete()) {
         <p class="warn">A base URL and a model are required while AI Assist is enabled.</p>
       }
-      <div class="confirm-field">
-        <label class="cg-label" for="ai-password">YOUR CURRENT PASSWORD</label>
-        <input
-          class="cg-input"
-          id="ai-password"
-          type="password"
-          autocomplete="current-password"
-          [value]="password()"
-          (input)="setPassword($event)"
-        />
-        <p class="hint">
-          These settings hold a provider key, so saving them confirms who is asking rather than who
-          signed in earlier.
-        </p>
-      </div>
       <button
         class="cg-btn cg-btn--lg cg-btn--primary"
         type="button"
-        [disabled]="!dirty() || incomplete() || !password() || isSaving('settings')"
+        [disabled]="!dirty() || incomplete() || isSaving('settings')"
         (click)="saveSettings()"
       >
         {{ isSaving('settings') ? 'Saving…' : 'Save provider settings' }}

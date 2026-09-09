@@ -1,7 +1,7 @@
 """Configuration object and immutable version history endpoints."""
 
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -32,6 +32,7 @@ class ObjectListFilters(BaseModel):
 
     object_type: str | None = None
     site_id: str | None = None
+    scope: Literal["org", "site"] | None = None
     include_deleted: bool = False
     q: str | None = None
     skip: int = Field(default=0, ge=0)
@@ -56,6 +57,8 @@ def object_list_criteria(
     full of punctuation is searched for rather than interpreted.
     """
     criteria: dict[str, object] = {"organization_id": organization_id}
+    if filters.scope:
+        criteria["scope"] = filters.scope
     if filters.object_type:
         criteria["object_type"] = filters.object_type
     if filters.site_id:
@@ -68,6 +71,8 @@ def object_list_criteria(
         criteria["$or"] = [
             {"name": {"$regex": pattern, "$options": "i"}},
             {"object_type": {"$regex": pattern, "$options": "i"}},
+            {"current_mist_id": {"$regex": pattern, "$options": "i"}},
+            {"site_mist_id": {"$regex": pattern, "$options": "i"}},
         ]
     return criteria
 
@@ -91,6 +96,59 @@ async def list_objects(
     return LogicalObjectListResponse(
         items=[LogicalObjectResponse.from_document(item) for item in objects],
         total=total,
+    )
+
+
+class ObjectFacet(BaseModel):
+    """A complete catalogue facet, independent of object pagination."""
+
+    id: str
+    name: str
+    count: int
+
+
+class ObjectFacets(BaseModel):
+    types: list[ObjectFacet]
+    sites: list[ObjectFacet]
+
+
+@router.get("/facets")
+async def object_facets(
+    organization_id: PydanticObjectId,
+    organizations: Annotated[OrganizationService, Depends(get_organization_service)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+    *,
+    include_deleted: bool = False,
+) -> ObjectFacets:
+    """Return type/site filters for the entire organization's stored catalogue."""
+    try:
+        await organizations.get(organization_id)
+    except OrganizationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    criteria = object_list_criteria(organization_id, ObjectListFilters(include_deleted=include_deleted))
+    groups = await LogicalObject.aggregate(
+        [
+            {"$match": criteria},
+            {"$group": {"_id": {"type": "$object_type", "site": "$site_mist_id"}, "count": {"$sum": 1}}},
+        ]
+    ).to_list()
+    sites = await LogicalObject.find({"organization_id": organization_id, "object_type": "sites"}).to_list()
+    names = {site.current_mist_id: site.name for site in sites}
+    types: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for row in groups:
+        key = row["_id"]
+        types[key["type"]] = types.get(key["type"], 0) + row["count"]
+        if key.get("site"):
+            counts[key["site"]] = counts.get(key["site"], 0) + row["count"]
+    return ObjectFacets(
+        types=[
+            ObjectFacet(id=key, name=key.replace("_", " ").title(), count=value) for key, value in sorted(types.items())
+        ],
+        sites=[
+            ObjectFacet(id=key, name=names.get(key, key), count=counts[key])
+            for key in sorted(counts, key=lambda key: names.get(key, key).casefold())
+        ],
     )
 
 

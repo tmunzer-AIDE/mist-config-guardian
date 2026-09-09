@@ -169,10 +169,30 @@ describe('HistoryPage', () => {
       )
       .flush(meta);
     await settle(fixture);
+    showVersions(fixture);
     return fixture;
   }
 
+  function showLibrary(fixture: ComponentFixture<HistoryPage>): void {
+    const back = [...fixture.nativeElement.querySelectorAll('button')].find((button: any) => button.textContent.includes('All objects')) as HTMLButtonElement | undefined;
+    back?.click();
+    fixture.detectChanges();
+  }
+  function showVersions(fixture: ComponentFixture<HistoryPage>): void {
+    const back = fixture.nativeElement.querySelector('.return-selected') as HTMLButtonElement | null;
+    back?.click();
+    fixture.detectChanges();
+  }
+  function libraryFilter(fixture: ComponentFixture<HistoryPage>): HTMLInputElement {
+    showLibrary(fixture);
+    return fixture.nativeElement.querySelector('.filter-input');
+  }
+  function comparisonName(fixture: ComponentFixture<HistoryPage>): string | undefined {
+    return (fixture.componentInstance as unknown as { selectedObject(): ConfigurationObject | null }).selectedObject()?.name;
+  }
+
   function pins(fixture: ComponentFixture<HistoryPage>): HTMLButtonElement[][] {
+    showVersions(fixture);
     const element = fixture.nativeElement as HTMLElement;
     return [...element.querySelectorAll('.version')].map((row) => [
       ...row.querySelectorAll<HTMLButtonElement>('.pin'),
@@ -255,7 +275,7 @@ describe('HistoryPage', () => {
 
     // The selection does not change here — the page under it does. A search
     // narrows the rail to something else while the comparison stays open.
-    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    const filter = libraryFilter(fixture);
     filter!.value = 'guest';
     filter!.dispatchEvent(new Event('input'));
     await new Promise((resolve) => setTimeout(resolve, 320));
@@ -271,7 +291,7 @@ describe('HistoryPage', () => {
     await settle(fixture);
 
     expect(
-      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+      comparisonName(fixture),
     ).toContain('NW-Corp');
   });
 
@@ -287,7 +307,8 @@ describe('HistoryPage', () => {
     );
     await settle(fixture);
 
-    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.object')!.click();
+    showLibrary(fixture);
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.object-link')!.click();
     await settle(fixture);
     http
       .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1/versions')
@@ -296,7 +317,7 @@ describe('HistoryPage', () => {
 
     // A search pushes the now-selected object off the rail, so it is resolved
     // on its own and the panel is named from that.
-    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    const filter = libraryFilter(fixture);
     filter!.value = 'guest';
     filter!.dispatchEvent(new Event('input'));
     await new Promise((resolve) => setTimeout(resolve, 320));
@@ -310,7 +331,7 @@ describe('HistoryPage', () => {
       .flush(object('obj-1', 'NW-Corp'));
     await settle(fixture);
     expect(
-      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+      comparisonName(fixture),
     ).toContain('NW-Corp');
 
     // The abandoned read fails last. It describes an object nobody is looking
@@ -319,7 +340,7 @@ describe('HistoryPage', () => {
     await settle(fixture);
 
     expect(
-      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+      comparisonName(fixture),
     ).toContain('NW-Corp');
   });
 
@@ -328,7 +349,7 @@ describe('HistoryPage', () => {
     const detailUrl = `${objectsUrl}/obj-1`;
 
     async function search(term: string, items: ConfigurationObject[]): Promise<void> {
-      const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+      const filter = libraryFilter(fixture);
       filter!.value = term;
       filter!.dispatchEvent(new Event('input'));
       await new Promise((resolve) => setTimeout(resolve, 320));
@@ -385,7 +406,7 @@ describe('HistoryPage', () => {
 
     http.expectNone((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1');
     expect(
-      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+      comparisonName(fixture),
     ).toContain('NW-Corp');
   });
 
@@ -399,7 +420,7 @@ describe('HistoryPage', () => {
 
     // A search that hides the object being compared must not end the
     // comparison, so the selection survives a page it is absent from.
-    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    const filter = libraryFilter(fixture);
     filter!.value = 'guest';
     filter!.dispatchEvent(new Event('input'));
     await new Promise((resolve) => setTimeout(resolve, 320));
@@ -434,13 +455,13 @@ describe('HistoryPage', () => {
 
     // Appended, not replaced: the object being compared stays on screen.
     expect(railText(fixture)).toContain('Showing 3 of 124');
-    expect(fixture.nativeElement.querySelectorAll('.object').length).toBe(3);
+    expect(fixture.nativeElement.querySelectorAll('.object-link').length).toBe(3);
   });
 
   it('sends the filter to the server rather than narrowing the page it holds', async () => {
     const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
 
-    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    const filter = libraryFilter(fixture);
     filter!.value = 'guest';
     filter!.dispatchEvent(new Event('input'));
     // The term trails the keystroke by a debounce.
@@ -455,7 +476,7 @@ describe('HistoryPage', () => {
     search.flush({ items: [object('obj-7', 'Guest WLAN')], total: 1 });
     await settle(fixture);
 
-    expect(fixture.nativeElement.querySelectorAll('.object').length).toBe(1);
+    expect(fixture.nativeElement.querySelectorAll('.object-link').length).toBe(1);
     expect(railText(fixture)).toContain('Showing 1 of 1');
   });
 
@@ -531,7 +552,7 @@ describe('HistoryPage', () => {
     await settle(fixture);
 
     const element = fixture.nativeElement as HTMLElement;
-    const filter = element.querySelector<HTMLInputElement>('.filter-input');
+    const filter = libraryFilter(fixture);
     expect(filter).not.toBeNull();
 
     // A keystroke typed into the filter is text, not a command.

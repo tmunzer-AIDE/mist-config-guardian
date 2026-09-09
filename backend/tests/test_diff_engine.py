@@ -330,3 +330,16 @@ def test_uncertain_encrypted_fields_follow_real_changes_without_security_flags()
     assert "cannot be compared" in secret.note
     assert "Security-relevant" not in secret.note
     assert diff.notable == []
+
+
+def test_comparison_ignores_image_and_url_metadata_at_every_depth():
+    from mist_config_guardian_backend.services.diff import comparison_document  # noqa: PLC0415
+
+    fields = ["image1_url", "image2_url", "image3_url", "url", "thumbnail_url", "created_time", "modified_time"]
+    before = dict.fromkeys(fields, "before")
+    after = dict.fromkeys(fields, "after")
+    before["nested"] = [{**before, "ssid": "Staff"}]
+    after["nested"] = [{**after, "ssid": "Staff"}]
+    assert comparison_document(before) == {"nested": [{"ssid": "Staff"}]}
+    assert not diff_configurations(before, after).entries
+    assert before["image1_url"] == "before"

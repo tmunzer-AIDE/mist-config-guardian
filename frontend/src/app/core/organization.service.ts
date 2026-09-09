@@ -34,10 +34,9 @@ export class OrganizationService {
   }
 
   /** Replace the read-only service token. Write-capable tokens are refused. */
-  replaceServiceToken(id: string, serviceToken: string, password: string) {
+  replaceServiceToken(id: string, serviceToken: string) {
     return this.http.put<Organization>(orgPath(id, '/service-token'), {
       service_token: serviceToken,
-      password,
     });
   }
 
@@ -53,9 +52,8 @@ export class OrganizationService {
     return this.http.post<{ task_id: string }>(`/api/v1/organizations/${id}/snapshots`, { kind });
   }
 
-  rotateWebhookSecret(id: string, password: string) {
+  rotateWebhookSecret(id: string) {
     return this.http.post<WebhookSecret>(`/api/v1/organizations/${id}/webhook-secret/rotate`, {
-      password,
     });
   }
 }

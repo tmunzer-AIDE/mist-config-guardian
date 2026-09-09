@@ -28,8 +28,6 @@ export interface AiSettings {
  * one, which is what tells the API to keep the stored key untouched.
  */
 export interface AiSettingsUpdate {
-  /** These settings hold a provider key, so saving them is a credential change. */
-  password: string;
   enabled: boolean;
   base_url: string;
   model: string;

@@ -189,11 +189,7 @@ export class OrganizationsTab {
     reconciliation_cron: new FormControl('0 2 * * *', { nonNullable: true, validators: [Validators.required] }),
     configuration_retention_days: new FormControl(365, { nonNullable: true }),
     monitoring_retention_days: new FormControl(90, { nonNullable: true }),
-    // A service token is a credential, so onboarding confirms who is asking.
-    password: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
   });
-  /** The password confirming a service-token replacement; never persisted. */
-  protected readonly tokenPassword = signal('');
   protected readonly busy = signal('');
   protected readonly notice = signal('');
   protected readonly error = signal('');
@@ -319,10 +315,9 @@ export class OrganizationsTab {
 
   protected closeAdd(): void {
     this.addOpen.set(false);
-    // The token and the password exist only for the request that onboards the
+    // The token exists only for the request that onboards the
     // organization, which this is not.
     this.addForm.controls.service_token.reset('');
-    this.addForm.controls.password.reset('');
   }
 
   protected async add(): Promise<void> {
@@ -339,7 +334,6 @@ export class OrganizationsTab {
           reconciliation_cron: value.reconciliation_cron.trim(),
           configuration_retention_days: value.configuration_retention_days,
           monitoring_retention_days: value.monitoring_retention_days,
-          password: value.password,
         }),
       );
       this.closeAdd();
@@ -349,7 +343,6 @@ export class OrganizationsTab {
     });
     // Spent by the request whether or not it succeeded.
     this.addForm.controls.service_token.reset('');
-    this.addForm.controls.password.reset('');
   }
 
   protected addCronLabel(): string {
@@ -458,17 +451,15 @@ export class OrganizationsTab {
     // Neither field carries over from a previous edit, whether it was
     // abandoned or belonged to a different organization.
     this.tokenDraft.set('');
-    this.tokenPassword.set('');
     this.error.set('');
     this.notice.set('');
   }
 
   protected cancelTokenEdit(): void {
     this.tokenEditingId.set(null);
-    // The token and the password confirming it exist only for the request that
+    // The token exists only for the request that
     // replaces the token, and that request did not happen.
     this.tokenDraft.set('');
-    this.tokenPassword.set('');
   }
 
   protected onTokenInput(event: Event): void {
@@ -477,23 +468,17 @@ export class OrganizationsTab {
 
   protected async replaceToken(organization: Organization): Promise<void> {
     const token = this.tokenDraft().trim();
-    const password = this.tokenPassword();
-    if (!token || !password) {
+    if (!token) {
       return;
     }
     await this.run(`token-${organization.id}`, 'Service token replaced and verified.', async () => {
       this.context.replace(
-        await firstValueFrom(this.api.replaceServiceToken(organization.id, token, password)),
+        await firstValueFrom(this.api.replaceServiceToken(organization.id, token)),
       );
       this.cancelTokenEdit();
     });
     // Both are spent by the request and never outlive it.
     this.tokenDraft.set('');
-    this.tokenPassword.set('');
-  }
-
-  protected setTokenPassword(event: Event): void {
-    this.tokenPassword.set((event.target as HTMLInputElement).value);
   }
 
   protected requestRotate(organization: Organization): void {
@@ -503,9 +488,8 @@ export class OrganizationsTab {
       detail: 'The new secret is displayed once and never again.',
       confirmLabel: 'Rotate secret',
       danger: true,
-      requiresPassword: true,
-      run: async (password: string) => {
-        const rotated = await firstValueFrom(this.api.rotateWebhookSecret(organization.id, password));
+      run: async () => {
+        const rotated = await firstValueFrom(this.api.rotateWebhookSecret(organization.id));
         this.secretRevealed.emit({
           title: 'New webhook secret',
           body: `Copy this into the Mist webhook configuration for ${organization.name} now.`,

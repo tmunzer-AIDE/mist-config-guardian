@@ -141,11 +141,11 @@ describe('monitoring.model', () => {
     expect(changeMarkerPercent(bars)).toBe(50);
   });
 
-  it('treats every sample as post-change when the change instant is unknown', () => {
+  it('keeps the historical baseline before the change when the configured event is missing', () => {
     const bars = sleSeries(session({ ...CRITICAL, config_applied_at: null }), 'capacity');
 
-    expect(bars.every((bar) => !bar.preChange)).toBe(true);
-    expect(changeMarkerPercent(bars)).toBeNull();
+    expect(bars.map((bar) => bar.preChange)).toEqual([true, false, false, false]);
+    expect(changeMarkerPercent(bars)).toBe(25);
   });
 
   it('plots the degraded metric and ranks the deltas worst first', () => {

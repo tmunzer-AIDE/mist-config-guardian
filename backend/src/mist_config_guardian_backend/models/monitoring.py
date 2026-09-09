@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from pymongo import IndexModel
 
 from mist_config_guardian_backend.models.base import TimestampedModel, utc_now
+from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateFinding
 
 
 class DeviceType(StrEnum):
@@ -41,6 +42,8 @@ class SleObservation(BaseModel):
     """Numeric SLE values captured over a bounded window."""
 
     captured_at: datetime = Field(default_factory=utc_now)
+    window_start: datetime | None = None
+    window_end: datetime | None = None
     values: dict[str, float] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
 
@@ -68,6 +71,9 @@ class MonitoringSession(TimestampedModel, Document):
     status: MonitoringStatus = MonitoringStatus.AWAITING_CONFIG
     active: bool = True
     baseline: SleObservation | None = None
+    change_triggered_at: datetime | None = None
+    device_comparisons: list[DeviceStateComparison] = Field(default_factory=list)
+    device_findings: list[DeviceStateFinding] = Field(default_factory=list)
     observations: list[SleObservation] = Field(default_factory=list)
     incidents: list[MonitoringIncident] = Field(default_factory=list)
     config_applied_at: datetime | None = None
@@ -88,6 +94,7 @@ class MonitoringSession(TimestampedModel, Document):
             IndexModel([("organization_id", 1), ("created_at", -1)]),
             IndexModel([("organization_id", 1), ("status", 1)]),
             IndexModel([("organization_id", 1), ("audit_ids", 1)]),
+            IndexModel([("organization_id", 1), ("receipt_ids", 1)]),
             IndexModel(
                 [("organization_id", 1), ("device_mac", 1), ("active", 1)],
                 unique=True,

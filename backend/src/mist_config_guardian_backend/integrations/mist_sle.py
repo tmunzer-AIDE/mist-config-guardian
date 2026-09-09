@@ -2,12 +2,15 @@
 
 import asyncio
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime, timedelta
 from types import TracebackType
 from typing import Self
 
 import httpx
 
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
+from mist_config_guardian_backend.integrations.mist_telemetry import device_id
+from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import DeviceType, SleObservation
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 
@@ -57,26 +60,38 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         *,
         site_id: str,
         device_type: DeviceType,
-        end: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        device_mac: str | None = None,
     ) -> SleObservation:
         """Capture all relevant site-level metrics concurrently."""
-        tasks = [self._fetch_metric(site_id, metric, end=end) for metric in _METRICS[device_type]]
+        end = end or utc_now()
+        start = start or end - timedelta(hours=1)
+        scope = device_type.value if device_mac else "site"
+        scope_id = device_id(device_mac) if device_mac else site_id
+        tasks = [
+            self._fetch_metric(
+                metric,
+                f"/api/v1/sites/{site_id}/sle/{scope}/{scope_id}/metric/{metric}/summary-trend",
+                start=start,
+                end=end,
+            )
+            for metric in _METRICS[device_type]
+        ]
         results = await asyncio.gather(*tasks)
         values = {metric: value for metric, value, _error in results if value is not None}
         errors = [error for _metric, _value, error in results if error is not None]
-        return SleObservation(values=values, errors=errors)
+        return SleObservation(values=values, errors=errors, window_start=start, window_end=end)
 
     async def _fetch_metric(
         self,
-        site_id: str,
         metric: str,
+        path: str,
         *,
-        end: str | None,
+        start: datetime,
+        end: datetime,
     ) -> tuple[str, float | None, str | None]:
-        path = f"/api/v1/sites/{site_id}/sle/site/{site_id}/metric/{metric}/summary-trend"
-        params = {"duration": "1h"}
-        if end:
-            params["end"] = end
+        params = {"start": str(int(start.timestamp())), "end": str(int(end.timestamp()))}
         try:
             response = await self._client.get(path, params=params)
             response.raise_for_status()
@@ -100,7 +115,8 @@ def extract_sle_value(payload: object) -> float | None:
     degraded = samples.get("degraded")
     if not isinstance(totals, list) or not isinstance(degraded, list):
         return None
-    rates: list[float] = []
+    total_samples = 0.0
+    failed_samples = 0.0
     for total, failed in zip(totals, degraded, strict=False):
         if (
             isinstance(total, (int, float))
@@ -108,6 +124,8 @@ def extract_sle_value(payload: object) -> float | None:
             and isinstance(failed, (int, float))
             and not isinstance(failed, bool)
             and total > 0
+            and 0 <= failed <= total
         ):
-            rates.append((total - failed) / total * 100)
-    return None if not rates else round(sum(rates) / len(rates), 2)
+            total_samples += total
+            failed_samples += failed
+    return None if not total_samples else round((total_samples - failed_samples) / total_samples * 100, 2)
