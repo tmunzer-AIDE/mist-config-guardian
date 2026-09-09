@@ -3,7 +3,9 @@
 .page {
   display: grid;
   grid-template-columns: minmax(214px, 296px) minmax(0, 1fr);
-  min-height: calc(100vh - var(--header-height) - var(--track-height));
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   animation: cg-in 0.2s ease-out;
 }
 
@@ -107,6 +109,8 @@
 
 // ---------------------------------------------------------------------- detail
 .detail {
+  min-height: 0;
+  overflow: auto;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -473,11 +477,29 @@
 @include bp.below(page) {
   .page {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(140px, 0.3fr) minmax(240px, 0.7fr);
   }
 
   .body--split {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+.change-event-head {
+  cursor: pointer;
+  padding: 14px 15px 10px;
+  background: var(--surface-sunken);
+  border-block: 1px solid var(--hairline);
+}
+.change-event-head strong {
+  display: inline;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.change-event-head small {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-soft);
+  font: 10px var(--font-mono);
 }
 
 .collection-errors,
@@ -488,10 +510,21 @@
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: 0 2px 8px rgba(20, 22, 26, 0.04);
-  h3 { margin: 0 0 8px; font-size: 15px; }
-  p, li { font-size: 12px; line-height: 1.5; }
-  summary { cursor: pointer; }
-  .cg-badge { margin-bottom: 10px; }
+  h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+  }
+  p,
+  li {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  summary {
+    cursor: pointer;
+  }
+  .cg-badge {
+    margin-bottom: 10px;
+  }
 }
 
 .collection-errors {

@@ -784,8 +784,16 @@ def resolve_recovery_state(
         return RecoveryState.NOT_APPLICABLE
     if any(session.status in _OPEN_STATUSES for session in sessions):
         return RecoveryState.MONITORING
-    degraded = any(session.degraded_metrics for session in sessions) or any(
-        session.impact_severity in _IMPACTING for session in sessions
+    if any(
+        any(finding.severity in _IMPACTING for finding in session.device_findings)
+        or any(not incident.resolved for incident in session.incidents)
+        for session in sessions
+    ):
+        return RecoveryState.UNRECOVERED
+    degraded = (
+        any(session.peak_impact_severity in _IMPACTING for session in sessions)
+        or any(session.degraded_metrics for session in sessions)
+        or any(session.impact_severity in _IMPACTING for session in sessions)
     )
     if not degraded:
         return RecoveryState.COMPLETED

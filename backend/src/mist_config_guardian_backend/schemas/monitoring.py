@@ -9,6 +9,7 @@ from mist_config_guardian_backend.models.monitoring import (
     ImpactSeverity,
     MonitoringSession,
     MonitoringStatus,
+    MonitoringTimelineEvent,
 )
 from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateFinding
 
@@ -35,11 +36,21 @@ class MonitoringIncidentResponse(BaseModel):
     resolved_at: datetime | None
 
 
+class MonitoringChangeRef(BaseModel):
+    id: str
+    audit_id: str
+    title: str
+    occurred_at: datetime | None = None
+
+
 class MonitoringSessionResponse(BaseModel):
     """Complete monitoring session with no credentials or raw payloads."""
 
     id: str
     audit_ids: list[str]
+    change_groups: list[MonitoringChangeRef] = Field(default_factory=list)
+    change_group_id: str | None = None
+    timeline: list[MonitoringTimelineEvent] = Field(default_factory=list)
     site_id: str
     device_mac: str
     device_name: str
@@ -55,6 +66,7 @@ class MonitoringSessionResponse(BaseModel):
     monitoring_started_at: datetime | None
     monitoring_ends_at: datetime | None
     impact_severity: ImpactSeverity
+    peak_impact_severity: ImpactSeverity = ImpactSeverity.NONE
     deterministic_summary: str | None
     degraded_metrics: list[str]
     ai_assessment: dict[str, object] | None
@@ -64,14 +76,20 @@ class MonitoringSessionResponse(BaseModel):
     completed_at: datetime | None
 
     @classmethod
-    def from_document(cls, session: MonitoringSession) -> "MonitoringSessionResponse":
+    def from_document(
+        cls, session: MonitoringSession, changes: list[MonitoringChangeRef] | None = None
+    ) -> "MonitoringSessionResponse":
         """Convert a persisted session into its safe API shape."""
         if session.id is None:
             msg = "Persisted monitoring session is missing an identifier"
             raise ValueError(msg)
+        timeline = sorted(session.timeline, key=lambda item: (item.occurred_at, item.received_at, item.key))
         return cls(
             id=str(session.id),
             audit_ids=list(session.audit_ids),
+            change_groups=changes or [],
+            change_group_id=changes[0].id if changes else None,
+            timeline=timeline,
             site_id=session.site_id,
             device_mac=session.device_mac,
             device_name=session.device_name,
@@ -95,6 +113,7 @@ class MonitoringSessionResponse(BaseModel):
             monitoring_started_at=session.monitoring_started_at,
             monitoring_ends_at=session.monitoring_ends_at,
             impact_severity=session.impact_severity,
+            peak_impact_severity=session.peak_impact_severity,
             deterministic_summary=session.deterministic_summary,
             degraded_metrics=list(session.degraded_metrics),
             ai_assessment=session.ai_assessment,

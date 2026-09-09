@@ -60,12 +60,23 @@ class MonitoringIncident(BaseModel):
     resolved_at: datetime | None = None
 
 
+class MonitoringTimelineEvent(BaseModel):
+    """Observed lifecycle evidence, never an inferred deployment milestone."""
+
+    key: str
+    event_type: str
+    occurred_at: datetime
+    received_at: datetime
+    audit_id: str | None = None
+
+
 class MonitoringSession(TimestampedModel, Document):
     """One active monitoring window for a changed device."""
 
     organization_id: PydanticObjectId
     audit_ids: list[str] = Field(default_factory=list)
     receipt_ids: list[PydanticObjectId] = Field(default_factory=list)
+    timeline: list[MonitoringTimelineEvent] = Field(default_factory=list)
     site_id: str
     device_mac: str
     device_name: str = ""
@@ -83,6 +94,7 @@ class MonitoringSession(TimestampedModel, Document):
     monitoring_ends_at: datetime | None = None
     next_poll_at: datetime | None = None
     impact_severity: ImpactSeverity = ImpactSeverity.NONE
+    peak_impact_severity: ImpactSeverity = ImpactSeverity.NONE
     deterministic_summary: str | None = None
     degraded_metrics: list[str] = Field(default_factory=list)
     ai_assessment: dict[str, object] | None = None

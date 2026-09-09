@@ -20,6 +20,7 @@ from mist_config_guardian_backend.models.monitoring import (
     MonitoringIncident,
     MonitoringSession,
     MonitoringStatus,
+    MonitoringTimelineEvent,
     SleObservation,
 )
 from mist_config_guardian_backend.models.organization import Organization
@@ -32,7 +33,7 @@ from mist_config_guardian_backend.services.application_configuration import (
     ImpactAiRuntimeConfiguration,
 )
 from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
-from mist_config_guardian_backend.services.device_impact import compare_device_states
+from mist_config_guardian_backend.services.device_impact import compare_device_states, refresh_device_findings
 from mist_config_guardian_backend.services.impact_analysis import (
     ImpactAssessment,
     assess_impact,
@@ -151,20 +152,45 @@ class MonitoringEventService:
             )
         if session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
             self._link_receipt(session, receipt)
+            self._record_event(session, event, receipt)
             await self._record_incident(session, event_type)
             return session
         if session is not None and event_type in _RESOLUTIONS:
             self._link_receipt(session, receipt)
-            resolved_type = _RESOLUTIONS[event_type]
-            now = utc_now()
-            for incident in session.incidents:
-                if incident.event_type == resolved_type and not incident.resolved:
-                    incident.resolved = True
-                    incident.resolved_at = now
+            self._record_event(session, event, receipt)
+            self._resolve_incidents(session, event_type)
+            session.touch()
+            await session.save()
+            return session
+        if session is not None and "_CONFIG" in event_type:
+            self._link_receipt(session, receipt)
+            self._record_event(session, event, receipt)
             session.touch()
             await session.save()
             return session
         return None
+
+    @staticmethod
+    def _resolve_incidents(session: MonitoringSession, event_type: str) -> None:
+        now = utc_now()
+        for incident in session.incidents:
+            if incident.event_type == _RESOLUTIONS[event_type] and not incident.resolved:
+                incident.resolved = True
+                incident.resolved_at = now
+
+    @staticmethod
+    def _record_event(session: MonitoringSession, event: DeviceEvent, receipt: WebhookReceipt) -> None:
+        key = str(receipt.id) if receipt.id else f"{event.event_type}:{receipt.created_at.isoformat()}"
+        if not any(item.key == key for item in session.timeline):
+            session.timeline.append(
+                MonitoringTimelineEvent(
+                    key=key,
+                    event_type=event.event_type,
+                    occurred_at=event_time(event, receipt),
+                    received_at=receipt.created_at,
+                    audit_id=receipt.audit_id,
+                )
+            )
 
     @staticmethod
     async def _record_incident(
@@ -247,6 +273,7 @@ class MonitoringEventService:
                     raise
                 await self._add_comparison(session, organization, event, receipt)
         self._link_receipt(session, receipt)
+        self._record_event(session, event, receipt)
         session.touch()
         await session.save()
         return session
@@ -298,6 +325,7 @@ class MonitoringEventService:
             if comparison.followup is None:
                 session.next_poll_at = min(session.next_poll_at, comparison.due_at)
         self._link_receipt(session, receipt)
+        self._record_event(session, event, receipt)
         session.touch()
         await session.save()
         return session
@@ -431,6 +459,18 @@ class MonitoringPollService:
         assessment = assess_impact(
             session.baseline, observation, session.incidents, device_findings=session.device_findings
         )
+        if session.impact_severity != assessment.severity:
+            session.timeline.append(
+                MonitoringTimelineEvent(
+                    key=f"assessment:{now.isoformat()}",
+                    event_type=f"ASSESSMENT_{assessment.severity.value.upper()}",
+                    occurred_at=now,
+                    received_at=now,
+                )
+            )
+        session.peak_impact_severity = max_severity(
+            session.peak_impact_severity, max_severity(session.impact_severity, assessment.severity)
+        )
         session.impact_severity = assessment.severity
         session.deterministic_summary = assessment.summary
         session.degraded_metrics = list(assessment.degraded_metrics)
@@ -464,7 +504,7 @@ class MonitoringPollService:
     async def _compare_due_states(
         session: MonitoringSession, organization: Organization, token: str, now: datetime
     ) -> None:
-        due = [item for item in session.device_comparisons if item.followup is None and now >= item.due_at]
+        due = [item for item in session.device_comparisons if now >= item.due_at]
         if due:
             async with MistTelemetryClient(token=token, region=organization.cloud_region) as telemetry:
                 followup = await telemetry.capture(
@@ -473,9 +513,26 @@ class MonitoringPollService:
                     device_mac=session.device_mac,
                 )
             for comparison in due:
-                comparison.followup = followup
-                comparison.findings = compare_device_states(comparison.baseline, followup)
-            session.device_findings = [finding for item in session.device_comparisons for finding in item.findings]
+                previous = (
+                    comparison.current_findings if comparison.current_findings is not None else comparison.findings
+                )
+                previous_observation = comparison.latest or comparison.followup
+                if comparison.followup is None:
+                    comparison.followup = followup
+                    comparison.findings = compare_device_states(comparison.baseline, followup)
+                comparison.current_findings = refresh_device_findings(
+                    comparison.baseline, followup, previous, previous_observation
+                )
+                comparison.latest = followup
+                if previous and not comparison.current_findings:
+                    comparison.recovered_at = followup.captured_at
+                elif comparison.current_findings:
+                    comparison.recovered_at = None
+            session.device_findings = [
+                finding
+                for item in session.device_comparisons
+                for finding in (item.current_findings if item.current_findings is not None else item.findings)
+            ]
 
     async def _refresh_change_groups(self, session: MonitoringSession) -> None:
         """Recompute the projections of every change group this session feeds.

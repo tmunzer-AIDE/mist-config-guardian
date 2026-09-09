@@ -4,7 +4,9 @@
     <p>Find an object, open its versions, then compare or restore.</p>
   </div>
   @if (library() && selectedObject(); as object) {
-    <button class="cg-btn return-selected" (click)="selectObject(object.id)">Back to {{ object.name }}</button>
+    <button class="cg-btn return-selected" (click)="selectObject(object.id)">
+      Back to {{ object.name }}
+    </button>
   }
   @if (!library()) {
     <button class="cg-btn" type="button" (click)="browseObjects()">← All objects</button>
@@ -17,211 +19,319 @@
 @if (restoreOpen()) {
   <section class="restore-inline" aria-label="Restore selected version">
     <header class="restore-inline-head">
-      <h2>{{ routeParams().get('versions') || routeParams().get('operation') ? 'Restore plan' : 'Restore activity' }}</h2>
-      <button class="cg-btn" type="button" (click)="closeRestore()">Back to {{ library() ? 'objects' : 'versions' }}</button>
+      <h2>
+        {{
+          routeParams().get('versions') || routeParams().get('operation')
+            ? 'Restore plan'
+            : 'Restore activity'
+        }}
+      </h2>
+      <button class="cg-btn" type="button" (click)="closeRestore()">
+        Back to {{ library() ? 'objects' : 'versions' }}
+      </button>
     </header>
-    <app-restore-page [embedded]="true" [versions]="routeParams().get('versions') ?? ''"
-      [operation]="routeParams().get('operation') ?? ''" [changeGroup]="routeParams().get('changeGroup') ?? ''"
-      [step]="routeParams().get('step') ?? ''" [compensate]="routeParams().get('compensate') ?? ''" />
+    <app-restore-page
+      [embedded]="true"
+      [versions]="routeParams().get('versions') ?? ''"
+      [operation]="routeParams().get('operation') ?? ''"
+      [changeGroup]="routeParams().get('changeGroup') ?? ''"
+      [step]="routeParams().get('step') ?? ''"
+      [compensate]="routeParams().get('compensate') ?? ''"
+    />
   </section>
 } @else if (library()) {
   <section class="library-body" aria-label="Stored objects">
     <div class="library-filters">
-      <input class="cg-input library-search filter-input" type="search" placeholder="Search by name, type or Mist ID"
-        aria-label="Search stored objects" [value]="query()" (input)="setQuery($event)" />
-        <select class="cg-select" aria-label="Scope" [value]="scopeFilter()" (change)="setFilter('scope', $event)">
-          <option value="">All scopes</option><option value="org">Organization</option><option value="site">Site</option>
-        </select>
-        <select class="cg-select" aria-label="Site" [value]="siteFilter()" (change)="setFilter('site', $event)">
-          <option value="">All sites</option>
-          @for (site of facets().sites; track site.id) { <option [value]="site.id">{{ site.name }} ({{ site.count }})</option> }
-        </select>
-        <select class="cg-select" aria-label="Object type" [value]="typeFilter()" (change)="setFilter('type', $event)">
-          <option value="">All object types</option>
-          @for (type of facets().types; track type.id) { <option [value]="type.id">{{ type.name }} ({{ type.count }})</option> }
-        </select>
-      <button class="cg-btn" [attr.aria-pressed]="showDeleted()" (click)="toggleDeleted()">{{ showDeleted() ? 'Including deleted' : 'Show deleted' }}</button>
+      <input
+        class="cg-input library-search filter-input"
+        type="search"
+        placeholder="Search by name, type or Mist ID"
+        aria-label="Search stored objects"
+        [value]="query()"
+        (input)="setQuery($event)"
+      />
+      <select
+        class="cg-select"
+        aria-label="Scope"
+        [value]="scopeFilter()"
+        (change)="setFilter('scope', $event)"
+      >
+        <option value="">All scopes</option>
+        <option value="org">Organization</option>
+        <option value="site">Site</option>
+      </select>
+      <select
+        class="cg-select"
+        aria-label="Site"
+        [value]="siteFilter()"
+        (change)="setFilter('site', $event)"
+      >
+        <option value="">All sites</option>
+        @for (site of facets().sites; track site.id) {
+          <option [value]="site.id">{{ site.name }} ({{ site.count }})</option>
+        }
+      </select>
+      <select
+        class="cg-select"
+        aria-label="Object type"
+        [value]="typeFilter()"
+        (change)="setFilter('type', $event)"
+      >
+        <option value="">All object types</option>
+        @for (type of facets().types; track type.id) {
+          <option [value]="type.id">{{ type.name }} ({{ type.count }})</option>
+        }
+      </select>
+      <button class="cg-btn" [attr.aria-pressed]="showDeleted()" (click)="toggleDeleted()">
+        {{ showDeleted() ? 'Including deleted' : 'Show deleted' }}
+      </button>
     </div>
     <p class="cg-meta" role="status">{{ objectCountLabel() }}</p>
     <div class="library-table cg-scroll-x">
       <table>
-        <thead><tr><th>Object</th><th>Type</th><th>Site / scope</th><th>Versions</th><th>Last captured</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            @for (column of objectColumns; track column.key) {
+              <th
+                [attr.aria-sort]="
+                  sortKey() === column.key
+                    ? sortDirection() === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                "
+              >
+                <button type="button" class="sort-heading" (click)="sortObjects(column.key)">
+                  {{ column.label }}
+                  @if (sortKey() === column.key) {
+                    <span aria-hidden="true">{{ sortDirection() === 'asc' ? '↑' : '↓' }}</span>
+                  }
+                </button>
+              </th>
+            }
+            <th></th>
+          </tr>
+        </thead>
         <tbody>
           @for (object of catalogue(); track object.id) {
             <tr [class.deleted-row]="object.is_deleted">
-              <td><button class="object-link" (click)="selectObject(object.id)">{{ object.name }}</button><small>{{ object.current_mist_id }}</small></td>
-              <td>{{ object.typeLabel }}</td><td>{{ object.siteLabel }}</td><td>{{ object.current_version }}</td><td>{{ object.updated }}</td>
-              <td><button class="cg-btn cg-btn--sm" (click)="selectObject(object.id)">View versions →</button></td>
+              <td>
+                <button class="object-link" (click)="selectObject(object.id)">
+                  {{ object.name }}</button
+                ><small>{{ object.current_mist_id }}</small>
+              </td>
+              <td>{{ object.typeLabel }}</td>
+              <td>{{ object.siteLabel }}</td>
+              <td>{{ object.current_version }}</td>
+              <td>{{ object.updated }}</td>
+              <td>
+                <button class="cg-btn cg-btn--sm" (click)="selectObject(object.id)">
+                  View versions →
+                </button>
+              </td>
             </tr>
           } @empty {
-            <tr><td colspan="6">{{ noObjects() ? 'No stored objects yet.' : 'No objects match these filters.' }}</td></tr>
+            <tr>
+              <td colspan="6">
+                {{ noObjects() ? 'No stored objects yet.' : 'No objects match these filters.' }}
+              </td>
+            </tr>
           }
         </tbody>
       </table>
     </div>
     @if (hasMoreObjects()) {
-      <button class="cg-btn load-more more-btn" [disabled]="loadingMore()" (click)="loadMoreObjects()">{{ loadingMore() ? 'Loading…' : 'Load more objects' }}</button>
+      <button
+        class="cg-btn load-more more-btn"
+        [disabled]="loadingMore()"
+        (click)="loadMoreObjects()"
+      >
+        {{ loadingMore() ? 'Loading…' : 'Load more objects' }}
+      </button>
     }
   </section>
 } @else {
   <div class="detail-layout">
-<section class="col col--versions" aria-label="Versions">
-  <div class="col-head col-head--ruled">
-    <h2 class="cg-label col-title">VERSIONS</h2>
-    <p class="col-hint">Choose a before and after version to compare, or restore any version below.</p>
-  </div>
-
-  <div class="col-body cg-scroll">
-    @for (row of versionRows(); track row.id) {
-      <div class="version" [class.version--a]="row.isA" [class.version--b]="row.isB">
-        <div class="version-top">
-          <span class="version-label">{{ row.label }}</span>
-          <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.event }}</span>
-          <span class="pins">
-            <button
-              class="pin"
-              type="button"
-              [class.pin--on]="row.isA"
-              [attr.aria-pressed]="row.isA"
-              [attr.aria-label]="'Compare from ' + row.label"
-              (click)="pin('a', row.id)"
-            >
-              Before
-            </button>
-            <button
-              class="pin"
-              type="button"
-              [class.pin--on]="row.isB"
-              [attr.aria-pressed]="row.isB"
-              [attr.aria-label]="'Compare to ' + row.label"
-              (click)="pin('b', row.id)"
-            >
-              After
-            </button>
-          </span>
-        </div>
-        <div class="version-at cg-mono">{{ row.at }}</div>
-        <div class="version-actor">{{ row.actor }}</div>
-        @if (restorable()) {
-          <button class="cg-btn cg-btn--sm version-restore" type="button" [disabled]="time.isHistorical()"
-            (click)="restoreVersion(row.id)">Restore {{ row.label }}</button>
-        }
+    <section class="col col--versions" aria-label="Versions">
+      <div class="col-head col-head--ruled">
+        <h2 class="cg-label col-title">VERSIONS</h2>
+        <p class="col-hint">
+          Choose a before and after version to compare, or restore any version below.
+        </p>
       </div>
-    } @empty {
-      <p class="col-empty">No versions captured for this object.</p>
-    }
-  </div>
-</section>
 
-<section class="panel" aria-label="Comparison">
-  @if (selectedObject(); as object) {
-    <header class="panel-head">
-      <div class="panel-head-top">
-        <h1 class="panel-name">{{ object.name }}</h1>
-        <span class="panel-kind cg-mono">{{ objectKind() }}</span>
-        <div class="panel-actions">
-          <div class="export">
-            <button
-              class="cg-btn cg-btn--sm cg-btn--selected"
-              type="button"
-              [disabled]="!hasDiff() || exporting()"
-              [attr.aria-expanded]="exportOpen()"
-              (click)="toggleExport()"
-            >
-              Export ▾
-            </button>
-            @if (exportOpen()) {
-              <div class="cg-menu export-menu" role="menu">
-                <button class="export-option" type="button" role="menuitem" (click)="exportDiff('json')">
-                  Structured JSON
+      <div class="col-body cg-scroll">
+        @for (row of versionRows(); track row.id) {
+          <div class="version" [class.version--a]="row.isA" [class.version--b]="row.isB">
+            <div class="version-top">
+              <span class="version-label">{{ row.label }}</span>
+              <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{
+                row.event
+              }}</span>
+              <span class="pins">
+                <button
+                  class="pin"
+                  type="button"
+                  [class.pin--on]="row.isA"
+                  [attr.aria-pressed]="row.isA"
+                  [attr.aria-label]="'Compare from ' + row.label"
+                  (click)="pin('a', row.id)"
+                >
+                  Before
                 </button>
-                <button class="export-option" type="button" role="menuitem" (click)="exportDiff('patch')">
-                  JSON Patch
+                <button
+                  class="pin"
+                  type="button"
+                  [class.pin--on]="row.isB"
+                  [attr.aria-pressed]="row.isB"
+                  [attr.aria-label]="'Compare to ' + row.label"
+                  (click)="pin('b', row.id)"
+                >
+                  After
                 </button>
-              </div>
+              </span>
+            </div>
+            <div class="version-at cg-mono">{{ row.at }}</div>
+            <div class="version-actor">{{ row.actor }}</div>
+            @if (restorable()) {
+              <button
+                class="cg-btn cg-btn--sm version-restore"
+                type="button"
+                [disabled]="time.isHistorical()"
+                (click)="restoreVersion(row.id)"
+              >
+                Restore {{ row.label }}
+              </button>
             }
           </div>
-          @if (restorable()) {
-            <button
-              class="cg-btn cg-btn--sm cg-btn--primary"
-              type="button"
-              [disabled]="!canRestore()"
-              [attr.title]="time.isHistorical() ? 'Write operations are disabled while viewing the past' : null"
-              (click)="restoreVersion()"
-            >
-              Restore this version
-            </button>
-          }
-        </div>
+        } @empty {
+          <p class="col-empty">No versions captured for this object.</p>
+        }
       </div>
+    </section>
+
+    <section class="panel" aria-label="Comparison">
+      @if (selectedObject(); as object) {
+        <header class="panel-head">
+          <div class="panel-head-top">
+            <h1 class="panel-name">{{ object.name }}</h1>
+            <span class="panel-kind cg-mono">{{ objectKind() }}</span>
+            <div class="panel-actions">
+              <div class="export">
+                <button
+                  class="cg-btn cg-btn--sm cg-btn--selected"
+                  type="button"
+                  [disabled]="!hasDiff() || exporting()"
+                  [attr.aria-expanded]="exportOpen()"
+                  (click)="toggleExport()"
+                >
+                  Export ▾
+                </button>
+                @if (exportOpen()) {
+                  <div class="cg-menu export-menu" role="menu">
+                    <button
+                      class="export-option"
+                      type="button"
+                      role="menuitem"
+                      (click)="exportDiff('json')"
+                    >
+                      Structured JSON
+                    </button>
+                    <button
+                      class="export-option"
+                      type="button"
+                      role="menuitem"
+                      (click)="exportDiff('patch')"
+                    >
+                      JSON Patch
+                    </button>
+                  </div>
+                }
+              </div>
+              @if (restorable()) {
+                <button
+                  class="cg-btn cg-btn--sm cg-btn--primary"
+                  type="button"
+                  [disabled]="!canRestore()"
+                  [attr.title]="
+                    time.isHistorical()
+                      ? 'Write operations are disabled while viewing the past'
+                      : null
+                  "
+                  (click)="restoreVersion()"
+                >
+                  Restore this version
+                </button>
+              }
+            </div>
+          </div>
+
+          @if (hasDiff()) {
+            <div class="pair">
+              <span class="pair-tag pair-tag--a">{{ pairA() }}</span>
+              <span class="pair-arrow" aria-hidden="true">→</span>
+              <span class="pair-tag pair-tag--b">{{ pairB() }}</span>
+              <span class="pair-summary">{{ summary() }}</span>
+            </div>
+          }
+        </header>
+      }
 
       @if (hasDiff()) {
-        <div class="pair">
-          <span class="pair-tag pair-tag--a">{{ pairA() }}</span>
-          <span class="pair-arrow" aria-hidden="true">→</span>
-          <span class="pair-tag pair-tag--b">{{ pairB() }}</span>
-          <span class="pair-summary">{{ summary() }}</span>
+        <div class="body cg-scroll">
+          <app-ai-assist-strip
+            [offered]="aiOffered()"
+            [state]="aiState()"
+            [prompt]="aiPrompt()"
+            [disclaimer]="disclaimer()"
+            [note]="aiNote()"
+            [meta]="aiMeta()"
+            [summary]="aiSummary()"
+            [question]="question()"
+            [answer]="answer()"
+            [asking]="asking()"
+            [canAsk]="canAsk()"
+            [questionMaxLength]="questionMaxLength"
+            (run)="runAi($event)"
+            (ask)="ask()"
+            (questionChange)="question.set($event)"
+            (openSettings)="openAiSettings()"
+          />
+
+          @if (truncated()) {
+            <p class="notice cg-meta">
+              This comparison is larger than one response carries: the sections below are complete,
+              but their entries are capped by the API.
+            </p>
+          }
+
+          <app-diff-panel
+            [compact]="isCompact()"
+            [sectioned]="isSectioned()"
+            [changed]="counts()?.changed ?? 0"
+            [cards]="changeCards()"
+            [notable]="notable()"
+            [sections]="sections()"
+            [rawLabel]="rawLabel()"
+            [rawExpanded]="rawExpanded()"
+            [rawLoading]="rawLoading()"
+            [rawRows]="rawRows()"
+            (openSection)="toggleSection($event)"
+            (expandSection)="expandSection($event)"
+            (toggleRaw)="toggleRaw()"
+          />
+        </div>
+      } @else if (!diffLoading()) {
+        <div class="body">
+          <div class="empty">
+            <div class="empty-title">No comparison for this object yet</div>
+            <p class="empty-body">
+              Pick two versions in the rail to build a diff, or choose an object with more than one
+              captured version.
+            </p>
+          </div>
         </div>
       }
-    </header>
-  }
-
-  @if (hasDiff()) {
-    <div class="body cg-scroll">
-      <app-ai-assist-strip
-        [offered]="aiOffered()"
-        [state]="aiState()"
-        [prompt]="aiPrompt()"
-        [disclaimer]="disclaimer()"
-        [note]="aiNote()"
-        [meta]="aiMeta()"
-        [summary]="aiSummary()"
-        [question]="question()"
-        [answer]="answer()"
-        [asking]="asking()"
-        [canAsk]="canAsk()"
-        [questionMaxLength]="questionMaxLength"
-        (run)="runAi($event)"
-        (ask)="ask()"
-        (questionChange)="question.set($event)"
-        (openSettings)="openAiSettings()"
-      />
-
-      @if (truncated()) {
-        <p class="notice cg-meta">
-          This comparison is larger than one response carries: the sections below are complete, but their
-          entries are capped by the API.
-        </p>
-      }
-
-      <app-diff-panel
-        [compact]="isCompact()"
-        [sectioned]="isSectioned()"
-        [changed]="counts()?.changed ?? 0"
-        [cards]="changeCards()"
-        [notable]="notable()"
-        [sections]="sections()"
-        [rawLabel]="rawLabel()"
-        [rawExpanded]="rawExpanded()"
-        [rawLoading]="rawLoading()"
-        [rawRows]="rawRows()"
-        (openSection)="toggleSection($event)"
-        (expandSection)="expandSection($event)"
-        (toggleRaw)="toggleRaw()"
-      />
-    </div>
-  } @else if (!diffLoading()) {
-    <div class="body">
-      <div class="empty">
-        <div class="empty-title">No comparison for this object yet</div>
-        <p class="empty-body">
-          Pick two versions in the rail to build a diff, or choose an object with more than one captured
-          version.
-        </p>
-      </div>
-    </div>
-  }
-</section>
-
+    </section>
   </div>
 }

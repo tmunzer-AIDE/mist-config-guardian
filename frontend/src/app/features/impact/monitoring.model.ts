@@ -30,6 +30,15 @@ export interface MonitoringIncident {
 export interface MonitoringSession {
   id: string;
   audit_ids: string[];
+  change_groups?: { id: string; audit_id: string; title: string; occurred_at: string | null }[];
+  timeline?: {
+    key: string;
+    event_type: string;
+    occurred_at: string;
+    received_at: string;
+    audit_id: string | null;
+  }[];
+  peak_impact_severity?: ImpactSeverity;
   site_id: string;
   device_mac: string;
   device_name: string;
@@ -226,11 +235,17 @@ export function sleSeries(session: MonitoringSession, metric: string): SleBar[] 
     : [...session.observations];
   return samples
     .filter((sample) => Object.hasOwn(sample.values, metric))
-    .sort((left, right) => Date.parse(left.window_end ?? left.captured_at) - Date.parse(right.window_end ?? right.captured_at))
+    .sort(
+      (left, right) =>
+        Date.parse(left.window_end ?? left.captured_at) -
+        Date.parse(right.window_end ?? right.captured_at),
+    )
     .map((sample) => ({
       at: sample.window_end ?? sample.captured_at,
       value: sample.values[metric],
-      preChange: sample === session.baseline || (appliedAt !== null && Date.parse(sample.window_end ?? sample.captured_at) < appliedAt),
+      preChange:
+        sample === session.baseline ||
+        (appliedAt !== null && Date.parse(sample.window_end ?? sample.captured_at) < appliedAt),
     }));
 }
 
@@ -367,4 +382,7 @@ export interface DeviceStateComparison {
   due_at: string;
   followup: DeviceStateObservation | null;
   findings: DeviceStateFinding[];
+  latest?: DeviceStateObservation | null;
+  current_findings?: DeviceStateFinding[] | null;
+  recovered_at?: string | null;
 }

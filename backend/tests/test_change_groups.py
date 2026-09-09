@@ -1594,3 +1594,24 @@ async def test_historical_competitors_are_found_by_the_sites_the_audit_named() -
     named = {ref.site_mist_id for ref in group.changed_objects if ref.site_mist_id}
     assert store.searched_sites == [sorted(named)]
     assert PORTLAND not in store.searched_sites[0]
+
+
+def test_operational_outage_is_not_reported_recovered_without_sle_movements():
+    from mist_config_guardian_backend.models.telemetry import DeviceStateFinding  # noqa: PLC0415
+
+    session = _session(mac="switch-1", severity=ImpactSeverity.CRITICAL)
+    session.device_findings = [
+        DeviceStateFinding(
+            kind="poe_power_lost",
+            subject="ge-0/0/1",
+            severity="critical",
+            before="on",
+            after="off",
+            detail="Power lost",
+        )
+    ]
+    assert resolve_recovery_state([session], ()) is RecoveryState.UNRECOVERED
+    session.device_findings = []
+    session.peak_impact_severity = ImpactSeverity.CRITICAL
+    session.impact_severity = ImpactSeverity.NONE
+    assert resolve_recovery_state([session], ()) is RecoveryState.RECOVERED

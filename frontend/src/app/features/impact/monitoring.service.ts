@@ -84,6 +84,9 @@ export class MonitoringService {
       const session = await firstValueFrom(this.get(organizationId, sessionId));
       if (request === this.sessionRequest) {
         this.resolved.set(session);
+        this.sessions.update((items) =>
+          items.map((item) => (item.id === session.id ? session : item)),
+        );
       }
       return session;
     } catch {
@@ -92,6 +95,19 @@ export class MonitoringService {
       }
       return null;
     }
+  }
+
+  async loadMore(organizationId: string, query: MonitoringQuery): Promise<void> {
+    const request = this.loadRequest;
+    const response = await firstValueFrom(
+      this.list(organizationId, { ...query, skip: this.sessions().length }),
+    );
+    if (request !== this.loadRequest) return;
+    this.sessions.update((items) => [
+      ...items,
+      ...response.items.filter((item) => !items.some((old) => old.id === item.id)),
+    ]);
+    this.total.set(response.total);
   }
 
   /**

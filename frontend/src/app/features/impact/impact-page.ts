@@ -1,5 +1,14 @@
 import { DeviceEvidence } from './device-evidence';
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+  untracked,
+} from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { AuthService } from '../../core/auth.service';
@@ -32,6 +41,7 @@ import {
 } from './monitoring.model';
 import { MonitoringService } from './monitoring.service';
 import { SleChart } from './sle-chart';
+import { ConfigurationTimeline } from './configuration-timeline';
 
 interface SessionRow {
   id: string;
@@ -83,7 +93,7 @@ const SEVERITIES: ImpactSeverity[] = ['none', 'info', 'warning', 'critical'];
  */
 @Component({
   selector: 'app-impact-page',
-  imports: [DeviceEvidence, SleChart],
+  imports: [DeviceEvidence, SleChart, ConfigurationTimeline],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './impact-page.html',
   styleUrl: './impact-page.scss',
@@ -105,6 +115,7 @@ export class ImpactPage {
   protected readonly filters = STATUS_FILTERS;
   protected readonly statusFilter = signal<StatusFilter>('all');
   private readonly picked = signal<string | null>(null);
+  private readonly pickedAudit = signal<string | null>(null);
   /** The organization the deep link and its resolved session belong to. */
   private linkFor: string | null = null;
   /** A linked identifier from another organization, ignored until the router replaces it. */
@@ -116,6 +127,27 @@ export class ImpactPage {
   });
 
   protected readonly total = computed(() => this.monitoring.total());
+  protected readonly hasMore = computed(() => this.monitoring.sessions().length < this.total());
+  protected readonly loadingMore = signal(false);
+  protected async loadMore(): Promise<void> {
+    const org = this.organizations.selected()?.id;
+    if (!org || this.loadingMore()) return;
+    this.loadingMore.set(true);
+    try {
+      await this.monitoring.loadMore(org, {
+        status:
+          this.statusFilter() === 'all'
+            ? undefined
+            : (this.statusFilter() as Exclude<StatusFilter, 'all'>),
+        severity:
+          this.severityFilter() === 'any' ? undefined : (this.severityFilter() as ImpactSeverity),
+      });
+    } catch (cause) {
+      this.ui.fail(cause, 'Loading more monitoring windows');
+    } finally {
+      this.loadingMore.set(false);
+    }
+  }
 
   /** Sessions after both filters, in the order the API returned them. */
   protected readonly visible = computed(() =>
@@ -123,6 +155,34 @@ export class ImpactPage {
   );
 
   protected readonly rows = computed<SessionRow[]>(() => this.visible().map((item) => toRow(item)));
+  protected readonly groups = computed(() => {
+    const groups = new Map<
+      string,
+      { key: string; title: string; audit: string; rows: SessionRow[] }
+    >();
+    for (const session of this.visible()) {
+      for (const audit of session.audit_ids.length
+        ? session.audit_ids
+        : ['uncorrelated:' + session.id]) {
+        const ref = session.change_groups?.find((change) => change.audit_id === audit);
+        const group = groups.get(audit) ?? {
+          key: audit,
+          title:
+            ref?.title ??
+            (session.audit_ids.length ? 'Configuration change' : 'Uncorrelated device change'),
+          audit: session.audit_ids.length ? shortAudit(audit) : 'No audit ID supplied',
+          rows: [],
+        };
+        group.rows.push(toRow(session));
+        groups.set(audit, group);
+      }
+    }
+    return [...groups.values()].map((group) => ({
+      ...group,
+      critical: group.rows.filter((row) => row.severity === 'CRITICAL').length,
+      warning: group.rows.filter((row) => row.severity === 'WARNING').length,
+    }));
+  });
 
   protected readonly selected = computed<MonitoringSession | null>(() => {
     const wanted = this.picked() ?? this.session();
@@ -205,7 +265,12 @@ export class ImpactPage {
       key: `${incident.event_type}·${incident.occurred_at}`,
       tag: incident.resolved ? 'RESOLVED' : 'OPEN',
       tone: incident.resolved ? 'ok' : toneOf(incident.severity),
-      label: incidentLabel(incident.event_type, incident.occurred_at, incident.resolved, incident.resolved_at),
+      label: incidentLabel(
+        incident.event_type,
+        incident.occurred_at,
+        incident.resolved,
+        incident.resolved_at,
+      ),
     })),
   );
 
@@ -248,15 +313,19 @@ export class ImpactPage {
     if (!session) return [];
     const latest = session.observations.at(-1);
     return [
-      ...(session.baseline?.errors ?? []).map(error => 'Baseline: ' + error),
-      ...(latest?.errors ?? []).map(error => 'Latest: ' + error),
+      ...(session.baseline?.errors ?? []).map((error) => 'Baseline: ' + error),
+      ...(latest?.errors ?? []).map((error) => 'Latest: ' + error),
     ];
   });
 
   protected readonly noTrafficMetrics = computed(() => {
     const session = this.selected();
-    return [...new Set([...(session?.baseline?.no_data ?? []), ...(session?.observations.at(-1)?.no_data ?? [])])]
-      .map(metricLabel);
+    return [
+      ...new Set([
+        ...(session?.baseline?.no_data ?? []),
+        ...(session?.observations.at(-1)?.no_data ?? []),
+      ]),
+    ].map(metricLabel);
   });
 
   /** Rich no-evidence panel, standing in for the chart and the comparison. */
@@ -278,7 +347,14 @@ export class ImpactPage {
     () => this.hasData() || this.incidents().length > 0 || this.showAside(),
   );
 
-  protected readonly changeGroupId = computed(() => this.selected()?.change_group_id ?? null);
+  protected readonly changeGroupId = computed(() => {
+    const session = this.selected();
+    const picked = session?.change_groups?.find((group) => group.audit_id === this.pickedAudit());
+    if (picked) return picked.id;
+    // A shared window opened by URL has no exclusive originating change.
+    if ((session?.audit_ids.length ?? 0) > 1) return null;
+    return session?.change_group_id ?? null;
+  });
 
   /**
    * Monitoring is live evidence with no historical projection.
@@ -291,6 +367,22 @@ export class ImpactPage {
   protected readonly historical = computed(() => this.time.isHistorical());
 
   constructor() {
+    effect((onCleanup) => {
+      const org = this.organizations.selected()?.id;
+      const selected = this.selectedId();
+      if (!org || !selected || this.historical()) return;
+      let busy = false;
+      const timer = setInterval(async () => {
+        if (busy) return;
+        busy = true;
+        try {
+          await this.monitoring.loadSession(org, selected);
+        } finally {
+          busy = false;
+        }
+      }, 30_000);
+      onCleanup(() => clearInterval(timer));
+    });
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       this.organizations.revision();
@@ -405,7 +497,8 @@ export class ImpactPage {
     this.statusFilter.set(filter);
   }
 
-  protected select(id: string): void {
+  protected select(id: string, audit: string | null = null): void {
+    this.pickedAudit.set(audit);
     this.picked.set(id);
   }
 
@@ -414,17 +507,22 @@ export class ImpactPage {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
       return;
     }
-    const rows = this.rows();
-    if (rows.length === 0) {
-      return;
-    }
+    const list = event.currentTarget as HTMLElement;
+    const rows = [...list.querySelectorAll<HTMLButtonElement>('.row')].filter(
+      (row) => row.closest<HTMLDetailsElement>('details')?.open !== false,
+    );
+    if (!rows.length) return;
     event.preventDefault();
-    const current = rows.findIndex((row) => row.id === this.selectedId());
+    const focused = rows.findIndex((row) => row === event.target);
+    const current =
+      focused >= 0
+        ? focused
+        : rows.findIndex((row) => row.dataset['sessionId'] === this.selectedId());
     const step = event.key === 'ArrowDown' ? 1 : -1;
     const next = Math.min(rows.length - 1, Math.max(0, (current < 0 ? 0 : current) + step));
-    this.select(rows[next].id);
-    const list = event.currentTarget as HTMLElement;
-    list.querySelectorAll<HTMLButtonElement>('.row')[next]?.focus();
+    const id = rows[next].dataset['sessionId'];
+    if (id) this.select(id, rows[next].dataset['auditId'] ?? null);
+    rows[next].focus();
   }
 
   /** Restores are writes: never offered in historical mode or below operator. */
@@ -554,7 +652,7 @@ function statePanel(session: MonitoringSession): StatePanel {
         metaAValue: windowLabel(session),
         metaB: 'Samples so far',
         metaBValue: `${samples} collected`,
-        next: 'The comparison appears as soon as the device reports SLE samples for the new configuration. This page updates on the next load.',
+        next: 'The comparison appears as soon as the device reports SLE samples for the new configuration. The selected device refreshes every 30 seconds.',
       };
     case 'failed':
       return {

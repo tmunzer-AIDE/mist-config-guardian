@@ -349,3 +349,22 @@ def test_event_time_bounds_are_relative_to_receipt_even_on_delayed_processing(mo
     )
     expected = reported if -86400 <= offset <= 60 else NOW
     assert monitoring.event_time(event, _receipt()) == expected
+
+
+async def test_lifecycle_timeline_retains_event_and_receipt_times_without_duplicate_entries(monkeypatch):
+    session = _session(status=MonitoringStatus.MONITORING, audit_ids=["audit-7"])
+    _install_active_session(monkeypatch, session)
+    receipt = _receipt()
+    payload = {
+        "type": "SW_CONFIG_REQUESTED",
+        "mac": MAC,
+        "site_id": "site-1",
+        "timestamp": receipt.created_at.timestamp() - 30,
+    }
+    handler = _handler()
+    assert await handler.handle(receipt, payload, _organization()) is session
+    assert await handler.handle(receipt, payload, _organization()) is session
+    assert len(session.timeline) == 1
+    assert session.timeline[0].event_type == "SW_CONFIG_REQUESTED"
+    assert session.timeline[0].received_at == receipt.created_at
+    assert (receipt.created_at - session.timeline[0].occurred_at).total_seconds() == 30

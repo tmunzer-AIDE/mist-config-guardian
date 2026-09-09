@@ -24,6 +24,8 @@ export class HistoryService {
 
   objects(organizationId: string, query: ObjectQuery = {}): Promise<ConfigurationObjectList> {
     let params = new HttpParams();
+    if (query.sort) params = params.set('sort', query.sort);
+    if (query.direction) params = params.set('direction', query.direction);
     if (query.scope) { params = params.set('scope', query.scope); }
     if (query.objectType) {
       params = params.set('object_type', query.objectType);

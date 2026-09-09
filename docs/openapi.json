@@ -1371,6 +1371,20 @@
           "baseline": {
             "$ref": "#/components/schemas/DeviceStateObservation"
           },
+          "current_findings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DeviceStateFinding"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Findings"
+          },
           "due_at": {
             "format": "date-time",
             "title": "Due At",
@@ -1392,6 +1406,28 @@
                 "type": "null"
               }
             ]
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceStateObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recovered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered At"
           },
           "triggered_at": {
             "format": "date-time",
@@ -2312,6 +2348,41 @@
         "title": "MistCloudRegion",
         "type": "string"
       },
+      "MonitoringChangeRef": {
+        "properties": {
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "audit_id",
+          "title"
+        ],
+        "title": "MonitoringChangeRef",
+        "type": "object"
+      },
       "MonitoringIncidentResponse": {
         "description": "Relevant event observed in a monitoring window.",
         "properties": {
@@ -2418,6 +2489,24 @@
                 "type": "null"
               }
             ]
+          },
+          "change_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Group Id"
+          },
+          "change_groups": {
+            "items": {
+              "$ref": "#/components/schemas/MonitoringChangeRef"
+            },
+            "title": "Change Groups",
+            "type": "array"
           },
           "change_triggered_at": {
             "anyOf": [
@@ -2549,12 +2638,23 @@
             "title": "Observations",
             "type": "array"
           },
+          "peak_impact_severity": {
+            "$ref": "#/components/schemas/ImpactSeverity",
+            "default": "none"
+          },
           "site_id": {
             "title": "Site Id",
             "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/MonitoringStatus"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/MonitoringTimelineEvent"
+            },
+            "title": "Timeline",
+            "type": "array"
           },
           "warnings": {
             "items": {
@@ -2600,6 +2700,48 @@
         ],
         "title": "MonitoringStatus",
         "type": "string"
+      },
+      "MonitoringTimelineEvent": {
+        "description": "Observed lifecycle evidence, never an inferred deployment milestone.",
+        "properties": {
+          "audit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Id"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "event_type",
+          "occurred_at",
+          "received_at"
+        ],
+        "title": "MonitoringTimelineEvent",
+        "type": "object"
       },
       "NotificationKind": {
         "description": "Notification category shown as the feed tag.",
@@ -8237,6 +8379,22 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "audit_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audit Id"
+            }
           }
         ],
         "responses": {
@@ -8662,6 +8820,37 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "updated_at",
+              "enum": [
+                "updated_at",
+                "name",
+                "object_type",
+                "site_mist_id",
+                "current_version"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Direction",
+              "type": "string"
             }
           },
           {

@@ -109,3 +109,17 @@ async def test_facets_aggregate_the_entire_scoped_catalogue(monkeypatch):
     assert result.sites[0].name == "Paris"
     assert result.sites[0].count == 601
     assert next(item.count for item in result.types if item.id == "wlans") == 600
+
+
+def test_sort_defaults_to_latest_capture_and_uses_only_allowed_fields():
+    import pytest  # noqa: PLC0415
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    from mist_config_guardian_backend.api.routes.history import object_list_sort  # noqa: PLC0415
+
+    assert object_list_sort(ObjectListFilters()) == ("-updated_at", "_id")
+    for key in ("updated_at", "name", "object_type", "site_mist_id", "current_version"):
+        assert object_list_sort(ObjectListFilters(sort=key, direction="asc")) == (key, "_id")
+        assert object_list_sort(ObjectListFilters(sort=key, direction="desc")) == (f"-{key}", "_id")
+    with pytest.raises(ValidationError):
+        ObjectListFilters(sort="$where")
