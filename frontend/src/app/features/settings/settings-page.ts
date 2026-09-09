@@ -251,7 +251,13 @@ export class SettingsPage {
     this.confirmBusy.set(true);
     try {
       await request.run(password);
-      this.closeDialogs();
+      // A run that opened a dialog of its own — a rotated webhook secret is
+      // shown exactly once — has already cleared this confirmation through
+      // beforeOpen. Closing again here would discard the value it just put on
+      // screen, which is the only time the secret is ever displayed.
+      if (this.confirm() === request) {
+        this.closeDialogs();
+      }
     } finally {
       // The password is spent by the request and never outlives it.
       this.confirmPassword.set('');

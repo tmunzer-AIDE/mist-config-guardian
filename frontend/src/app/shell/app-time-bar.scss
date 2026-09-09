@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 :host {
   height: var(--track-height);
   flex: none;
@@ -79,4 +81,22 @@
 
 .handle--past {
   background: var(--tone-warning-ink);
+}
+
+
+// The scrubber needs width to be aimable at all. Below `narrow` it is dropped
+// and the range pills stay, which is the same choice at a coarser grain.
+@include bp.below(narrow) {
+  :host {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .track {
+    display: none;
+  }
+
+  .cg-pills {
+    margin-left: auto;
+  }
 }

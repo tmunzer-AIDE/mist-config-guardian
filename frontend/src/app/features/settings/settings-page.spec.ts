@@ -5,6 +5,7 @@ import { Router, provideRouter } from '@angular/router';
 
 import { AuthService, CurrentUser, UserRole } from '../../core/auth.service';
 import {
+  ConfirmRequest,
   matchSettingsTab,
   resolveSettingsTab,
   SecretReveal,
@@ -17,6 +18,8 @@ interface PageInternals {
   active(): string;
   select(tab: string): void;
   openSecret(request: SecretReveal): void;
+  openConfirm(request: ConfirmRequest): void;
+  runConfirmed(): Promise<void>;
   closeDialogs(): void;
   secret(): SecretReveal | null;
 }
@@ -148,6 +151,38 @@ describe('SettingsPage', () => {
     // The value must not survive anywhere the next page load could read it.
     expect((fixture.nativeElement as HTMLElement).textContent).not.toContain(secret);
     expect(window.location.href).not.toContain('whsec_');
+  });
+
+  it('keeps a secret the confirmed action opened, because rotation shows it once', async () => {
+    const fixture = await render('administrator');
+    const page = fixture.componentInstance as unknown as PageInternals;
+    const secret = 'whsec_7Qd3xR8pLm2VaKt9YbN4CzE6HfJ1sW0u';
+
+    // Rotation is confirmed in one dialog and answered in another: the run
+    // opens the secret dialog itself, the way the organizations tab does.
+    page.openConfirm({
+      title: 'Rotate the webhook secret?',
+      body: 'Mist will reject events signed with the old secret.',
+      confirmLabel: 'Rotate secret',
+      danger: false,
+      requiresPassword: false,
+      run: async () => {
+        page.openSecret({
+          title: 'New webhook secret',
+          body: 'Copy this now.',
+          value: secret,
+          endpoint: '/api/v1/webhooks/mist/org-1',
+        });
+      },
+    });
+    await fixture.whenStable();
+
+    await page.runConfirmed();
+    await fixture.whenStable();
+
+    expect(page.secret()?.value).toBe(secret);
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[role="dialog"]')?.textContent).toContain(secret);
   });
 
   it('reflects the selected tab back into the URL without stacking history', async () => {

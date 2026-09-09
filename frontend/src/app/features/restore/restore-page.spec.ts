@@ -253,7 +253,7 @@ describe('RestorePage', () => {
   it('counts what is shown against the whole catalogue and facets the type row', async () => {
     await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE]));
 
-    expect(text()).toContain('Showing 3 of 3 restorable objects · 0 selected');
+    expect(text()).toContain('3 of 3 restorable objects match · 0 selected');
     expect(all('.target').length).toBe(3);
     const types = all('.filter-row--types .cg-chip').map((chip) =>
       (chip.textContent ?? '').replace(/\s+/g, ' ').trim(),
@@ -268,7 +268,7 @@ describe('RestorePage', () => {
     button('Organization')?.click();
     let request = await nextTargets(targetList([NW_CORP, RF_DENSE], 2));
     expect(request.request.params.get('scope')).toBe('org');
-    expect(request.request.params.get('limit')).toBe('200');
+    expect(request.request.params.get('limit')).toBe('25');
 
     button('rftemplate')?.click();
     request = await nextTargets(targetList([RF_DENSE], 1));
@@ -288,6 +288,54 @@ describe('RestorePage', () => {
     expect(request.request.params.get('scope')).toBe('all');
     expect(request.request.params.has('object_type')).toBe(false);
     expect(request.request.params.has('q')).toBe(false);
+  });
+
+  it('reads one page at a time and walks the window server-side', async () => {
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+
+    expect(text()).toContain('Showing 1–3 of 70 matching objects');
+    expect(button('Previous')?.disabled).toBe(true);
+    expect(button('Next')?.disabled).toBe(false);
+
+    button('Next')!.click();
+    let request = await nextTargets(targetList([NW_CORP], 70));
+    expect(request.request.params.get('skip')).toBe('25');
+    expect(request.request.params.get('limit')).toBe('25');
+    expect(button('Previous')?.disabled).toBe(false);
+
+    button('Previous')!.click();
+    request = await nextTargets(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+    expect(request.request.params.get('skip')).toBe('0');
+  });
+
+  it('asks the server again for a new page size, from the first row', async () => {
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+
+    button('Next')!.click();
+    await nextTargets(targetList([NW_CORP], 70));
+
+    const size = element().querySelector<HTMLSelectElement>('.pager-select');
+    size!.value = '100';
+    size!.dispatchEvent(new Event('change'));
+    const request = await nextTargets(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+
+    expect(request.request.params.get('limit')).toBe('100');
+    // A page number means a different window at a different size, so the only
+    // offset that still names the same rows is the first.
+    expect(request.request.params.get('skip')).toBe('0');
+  });
+
+  it('returns to the first page when a filter changes, so no page is left empty', async () => {
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+
+    button('Next')!.click();
+    await nextTargets(targetList([NW_CORP], 70));
+
+    button('Organization')!.click();
+    const request = await nextTargets(targetList([RF_DENSE], 1));
+    expect(request.request.params.get('scope')).toBe('org');
+    expect(request.request.params.get('skip')).toBe('0');
+    expect(button('Next')?.disabled).toBe(true);
   });
 
   it('offers the site select only once the site scope is chosen', async () => {
@@ -335,7 +383,7 @@ describe('RestorePage', () => {
     }
     await boot();
 
-    expect(text()).toContain('Showing 3 of 3 restorable objects · 0 selected');
+    expect(text()).toContain('3 of 3 restorable objects match · 0 selected');
     expect(all('.pill').length).toBe(0);
     expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
   });
@@ -863,7 +911,7 @@ describe('RestorePage', () => {
     broad.flush(targetList([NW_CORP, RF_DENSE, SEA_VOICE]));
     await settle();
     expect(all('.target').length).toBe(1);
-    expect(text()).toContain('Showing 1 of');
+    expect(text()).toContain('1 of 3 restorable objects match');
   });
 
   it('shows nothing rather than a frozen predecessor when the operation named cannot be read', async () => {

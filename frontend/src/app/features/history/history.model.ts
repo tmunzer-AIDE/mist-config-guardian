@@ -41,6 +41,8 @@ export interface ObjectQuery {
   objectType?: string;
   siteId?: string;
   includeDeleted?: boolean;
+  /** Free text matched against an object's name or type, server-side. */
+  q?: string;
   skip?: number;
   limit?: number;
 }

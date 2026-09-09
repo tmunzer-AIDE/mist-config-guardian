@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 // The six-column track the design defines for the changes table. Header and
 // body rows share it so the columns line up without a fixed table layout.
 $columns: minmax(0, 0.8fr) minmax(150px, 2.6fr) minmax(0, 1fr) minmax(0, 0.45fr) minmax(0, 1fr)
@@ -374,7 +376,7 @@ $sunken: rgba(251, 250, 247, 0.55);
 
 // The table and the split panel both collapse on narrow viewports rather than
 // forcing a horizontal scroll inside the page.
-@media (max-width: 900px) {
+@include bp.below(page) {
   .row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
     gap: 4px 12px;

@@ -21,6 +21,9 @@ export class HistoryService {
     if (query.includeDeleted !== undefined) {
       params = params.set('include_deleted', query.includeDeleted);
     }
+    if (query.q) {
+      params = params.set('q', query.q);
+    }
     if (query.skip !== undefined) {
       params = params.set('skip', query.skip);
     }

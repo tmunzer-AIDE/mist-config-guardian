@@ -17,6 +17,7 @@ from mist_config_guardian_backend.models.organization import (
 from mist_config_guardian_backend.models.snapshot import LogicalObject
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.services.restore_targets import (
+    InMemoryRestoreTargetSearch,
     RestorableVersion,
     RestoreTargetQuery,
     RestoreTargetService,
@@ -49,7 +50,7 @@ def _logical(  # noqa: PLR0913 - one keyword per logical object field a test var
     )
 
 
-class _MemoryTargetStore:
+class _MemoryTargetReader:
     """In-memory logical objects and their newest restorable versions."""
 
     def __init__(self, objects: list[LogicalObject], *, without_versions: set[str] | None = None) -> None:
@@ -82,7 +83,8 @@ def _catalog() -> list[LogicalObject]:
 
 
 def _service(objects: list[LogicalObject] | None = None, **kwargs) -> RestoreTargetService:
-    return RestoreTargetService(_MemoryTargetStore(objects or _catalog(), **kwargs))
+    reader = _MemoryTargetReader(objects or _catalog(), **kwargs)
+    return RestoreTargetService(InMemoryRestoreTargetSearch(reader))
 
 
 async def test_every_object_with_a_restorable_version_is_offered() -> None:

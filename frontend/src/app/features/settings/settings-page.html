@@ -170,8 +170,9 @@
           <p class="modal-note">Endpoint <span class="cg-mono">{{ dialog.endpoint }}</span></p>
         }
         <p class="modal-warn">
-          This value is stored hashed. Closing this dialog discards it, and no page in this application can
-          display it again.
+          This value is encrypted at rest so deliveries can be verified against it, but no page in this
+          application can display it again. Closing this dialog discards it — rotate the secret to issue a
+          replacement if you lose it.
         </p>
         @if (copyNotice()) {
           <p class="modal-note" role="status">{{ copyNotice() }}</p>

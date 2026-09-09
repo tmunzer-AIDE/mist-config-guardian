@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 // Configuration history — objects | versions | comparison.
 // The shell's <main> is the positioned scroll container; this page fills it and
 // scrolls each column independently, the way the design lays it out.
@@ -380,7 +382,7 @@
 }
 
 // -------------------------------------------------------------- narrow view
-@media (max-width: 980px) {
+@include bp.below(mid) {
   :host {
     position: static;
     grid-template-columns: minmax(0, 1fr);
@@ -394,4 +396,27 @@
   .col-body {
     max-height: 280px;
   }
+}
+
+
+// ------------------------------------------------- object rail load-more
+.more {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 11px 12px 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+
+.more-count {
+  font: 400 10.5px var(--font-mono);
+  color: var(--ink-soft);
+  margin: 0;
+  text-align: center;
+}
+
+.more-btn {
+  justify-content: center;
 }

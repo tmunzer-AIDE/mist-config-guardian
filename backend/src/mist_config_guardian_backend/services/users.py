@@ -66,6 +66,18 @@ class UserService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
+    async def bootstrap_available(self) -> bool:
+        """Report whether the first administrator can still be created.
+
+        This is the read behind the sign-in page's choice of form, and it
+        answers exactly what ``bootstrap_administrator`` would enforce: an
+        account already exists, or no token is configured, and either way the
+        route cannot be used.
+        """
+        if await User.count() > 0:
+            return False
+        return bool(self._settings.bootstrap_admin_token.get_secret_value())
+
     async def bootstrap_administrator(self, request: BootstrapAdminRequest) -> User:
         """Create the first local administrator exactly once."""
         if await User.count() > 0:

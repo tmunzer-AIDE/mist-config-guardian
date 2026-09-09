@@ -46,6 +46,12 @@ import {
 import { HistoryService } from './history.service';
 
 /** Which end of the comparison a version is pinned to. */
+/** Objects fetched per read of the rail. */
+const OBJECT_PAGE_SIZE = 50;
+
+/** How long typing pauses before the term is sent to the server. */
+const SEARCH_DEBOUNCE_MS = 250;
+
 export type AbSlot = 'a' | 'b';
 
 interface ObjectRow {
@@ -101,11 +107,26 @@ export class HistoryPage {
   protected readonly time = inject(TimeContextService);
 
   protected readonly questionMaxLength = AI_QUESTION_MAX_LENGTH;
+  protected readonly objectPageSize = OBJECT_PAGE_SIZE;
 
   // ------------------------------------------------------------------ state
+  /** What is in the search box right now. */
   protected readonly query = signal('');
+  /**
+   * The term the list on screen was read for.
+   *
+   * Searching is server-side — the rail holds one page, not the catalogue, so
+   * a term the browser could filter against would only ever find what had
+   * already been fetched. It trails `query` by a keystroke pause so typing a
+   * word is one request rather than one per letter.
+   */
+  private readonly searchTerm = signal('');
+  private searchDebounce: ReturnType<typeof setTimeout> | null = null;
   protected readonly showDeleted = signal(false);
   protected readonly objectsLoaded = signal(false);
+  /** Objects matching the current filters, which is more than the rail holds. */
+  protected readonly objectsTotal = signal(0);
+  protected readonly loadingMore = signal(false);
 
   private readonly objects = signal<ConfigurationObject[]>([]);
   private readonly versions = signal<ConfigurationVersion[]>([]);
@@ -144,13 +165,11 @@ export class HistoryPage {
 
   // -------------------------------------------------------------- selections
   protected readonly objectGroups = computed<ObjectGroup[]>(() => {
-    const needle = this.query().trim().toLowerCase();
+    // Every object held has already been matched by the server, so grouping is
+    // all that is left to do here.
     const selected = this.selectedObjectId();
     const groups = new Map<string, ObjectRow[]>();
     for (const object of this.objects()) {
-      if (needle && !`${object.name} ${object.object_type}`.toLowerCase().includes(needle)) {
-        continue;
-      }
       const label = objectGroupLabel(object);
       const rows = groups.get(label) ?? [];
       rows.push({
@@ -166,11 +185,17 @@ export class HistoryPage {
     return [...groups.entries()].map(([label, items]) => ({ label, items }));
   });
 
-  protected readonly matchCount = computed(() =>
-    this.objectGroups().reduce((total, group) => total + group.items.length, 0),
+  protected readonly noObjects = computed(
+    () => this.objectsLoaded() && this.objectsTotal() === 0 && this.searchTerm() === '',
   );
-  protected readonly noObjects = computed(() => this.objectsLoaded() && this.objects().length === 0);
-  protected readonly noMatches = computed(() => this.objects().length > 0 && this.matchCount() === 0);
+  protected readonly noMatches = computed(
+    () => this.objectsLoaded() && this.objectsTotal() === 0 && this.searchTerm() !== '',
+  );
+  protected readonly hasMoreObjects = computed(() => this.objects().length < this.objectsTotal());
+  /** "Showing n of N", so a partial rail never reads as the whole catalogue. */
+  protected readonly objectCountLabel = computed(
+    () => `Showing ${this.objects().length} of ${this.objectsTotal()}`,
+  );
 
   protected readonly selectedObject = computed(
     () => this.objects().find((object) => object.id === this.selectedObjectId()) ?? null,
@@ -334,6 +359,7 @@ export class HistoryPage {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const includeDeleted = this.showDeleted();
+      const term = this.searchTerm();
       this.organizations.revision();
       if (!organizationId) {
         return;
@@ -346,7 +372,9 @@ export class HistoryPage {
           this.resetSelection();
         }
         this.loadedOrganization = organizationId;
-        void this.ui.track('Loading configuration objects', () => this.loadObjects(organizationId, includeDeleted));
+        void this.ui.track('Loading configuration objects', () =>
+          this.loadObjects(organizationId, includeDeleted, term, 0),
+        );
       });
     });
 
@@ -392,7 +420,34 @@ export class HistoryPage {
   // ----------------------------------------------------------------- objects
 
   protected setQuery(event: Event): void {
-    this.query.set((event.target as HTMLInputElement).value);
+    const value = (event.target as HTMLInputElement).value;
+    this.query.set(value);
+    if (this.searchDebounce !== null) {
+      clearTimeout(this.searchDebounce);
+    }
+    this.searchDebounce = setTimeout(() => {
+      this.searchDebounce = null;
+      this.searchTerm.set(value.trim());
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  /** Fetch the next page and append it, keeping what is already on screen. */
+  protected async loadMoreObjects(): Promise<void> {
+    const organizationId = this.organizations.selected()?.id;
+    if (!organizationId || this.loadingMore() || !this.hasMoreObjects()) {
+      return;
+    }
+    this.loadingMore.set(true);
+    try {
+      await this.loadObjects(
+        organizationId,
+        this.showDeleted(),
+        this.searchTerm(),
+        this.objects().length,
+      );
+    } finally {
+      this.loadingMore.set(false);
+    }
   }
 
   protected toggleDeleted(): void {
@@ -649,19 +704,42 @@ export class HistoryPage {
 
   // ---------------------------------------------------------------- loading
 
-  private async loadObjects(organizationId: string, includeDeleted: boolean): Promise<void> {
+  /**
+   * Read one page of objects.
+   *
+   * `skip` of zero replaces the rail — a new organization, filter, or search
+   * term — and anything else appends the next page to what is already shown.
+   */
+  private async loadObjects(
+    organizationId: string,
+    includeDeleted: boolean,
+    term: string,
+    skip: number,
+  ): Promise<void> {
     const request = ++this.objectsRequest;
-    const response = await this.history.objects(organizationId, { includeDeleted });
-    // A slow answer for a previous organization or filter must not replace the
-    // list on screen.
+    const response = await this.history.objects(organizationId, {
+      includeDeleted,
+      q: term || undefined,
+      skip,
+      limit: OBJECT_PAGE_SIZE,
+    });
+    // A slow answer for a previous organization, filter, or term must not
+    // replace the list on screen.
     if (request !== this.objectsRequest) {
       return;
     }
-    this.objects.set(response.items);
+    const items = skip === 0 ? response.items : [...this.objects(), ...response.items];
+    this.objects.set(items);
+    this.objectsTotal.set(response.total ?? items.length);
     this.objectsLoaded.set(true);
+    // Appending must not move the selection: the object being compared is the
+    // reason the rest of the page is on screen.
+    if (skip > 0) {
+      return;
+    }
     const current = this.selectedObjectId();
-    if (!current || !response.items.some((object) => object.id === current)) {
-      this.selectedObjectId.set(response.items[0]?.id ?? null);
+    if (!current || !items.some((object) => object.id === current)) {
+      this.selectedObjectId.set(items[0]?.id ?? null);
     }
   }
 

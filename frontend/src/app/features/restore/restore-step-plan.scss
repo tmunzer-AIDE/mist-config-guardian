@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 // The five-column track the design defines for the restore action list.
 $columns: minmax(0, 0.32fr) minmax(0, 0.8fr) minmax(150px, 2.6fr) minmax(0, 1fr) minmax(0, 0.85fr);
 $sunken: rgba(251, 250, 247, 0.55);
@@ -195,7 +197,7 @@ $sunken: rgba(251, 250, 247, 0.55);
   margin: 0;
 }
 
-@media (max-width: 860px) {
+@include bp.below(page) {
   // The TYPE column folds away first; the object cell already names the type.
   .row {
     grid-template-columns: minmax(0, 0.4fr) minmax(0, 0.9fr) minmax(0, 2.6fr) minmax(0, 1fr);

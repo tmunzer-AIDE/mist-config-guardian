@@ -1,0 +1,35 @@
+// Layout breakpoints.
+//
+// Sass cannot read a CSS custom property inside a media query, so these are the
+// one place widths are named. Every `@media` rule in the application goes
+// through `below()` or `short()` rather than repeating a pixel value.
+@use 'sass:map';
+
+$widths: (
+  wide: 1280px,
+  mid: 1024px,
+  // Where a two-column page body stops having room for two columns.
+  page: 900px,
+  narrow: 768px,
+);
+
+/// Styles that apply below a named width.
+@mixin below($name) {
+  $width: map.get($widths, $name);
+
+  @if $width == null {
+    @error 'Unknown breakpoint `#{$name}`. Known: #{map.keys($widths)}.';
+  }
+
+  @media (max-width: #{$width - 0.02px}) {
+    @content;
+  }
+}
+
+/// Styles that apply when the viewport is too short for the full chrome —
+/// a laptop with a browser panel open, or a phone in landscape.
+@mixin short($height: 640px) {
+  @media (max-height: $height) {
+    @content;
+  }
+}

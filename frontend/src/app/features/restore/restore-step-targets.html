@@ -4,7 +4,7 @@
       <div class="panel-head">
         <h2 class="panel-title">Restore targets</h2>
         <p class="panel-meta">
-          Showing {{ showing() }} of {{ total() }} restorable objects ·
+          {{ matched() }} of {{ total() }} restorable objects match ·
           {{ selectedIds().length }} selected
         </p>
       </div>
@@ -156,11 +156,43 @@
           }
         </fieldset>
 
-        @if (capped()) {
-          <p class="capped">
-            {{ matched() }} objects match — narrow the filters to reach the rest.
+        <nav class="pager" aria-label="Restore target pages">
+          <p class="pager-count" role="status" aria-live="polite">
+            Showing {{ pageLabel() }} matching objects
           </p>
-        }
+
+          <label class="pager-size">
+            <span class="cg-label">PER PAGE</span>
+            <select
+              class="cg-select pager-select"
+              [value]="pageSize()"
+              (change)="pageSizePicked.emit(numericValue($event))"
+            >
+              @for (size of pageSizes(); track size) {
+                <option [value]="size">{{ size }}</option>
+              }
+            </select>
+          </label>
+
+          <div class="pager-steps">
+            <button
+              class="cg-btn cg-btn--sm"
+              type="button"
+              [disabled]="!hasPrevPage()"
+              (click)="previousPageRequested.emit()"
+            >
+              Previous
+            </button>
+            <button
+              class="cg-btn cg-btn--sm"
+              type="button"
+              [disabled]="!hasNextPage()"
+              (click)="nextPageRequested.emit()"
+            >
+              Next
+            </button>
+          </div>
+        </nav>
       }
     </section>
 

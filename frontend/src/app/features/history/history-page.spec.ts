@@ -187,6 +187,79 @@ describe('HistoryPage', () => {
     );
   }
 
+  // ---- object rail: server-side search and paging -------------------------
+
+  /** Create the page with an object rail of `total` matches, page one flushed. */
+  async function openRail(items: ConfigurationObject[], total: number) {
+    const fixture = TestBed.createComponent(HistoryPage);
+    fixture.detectChanges();
+    http.expectOne(`${API_ROOT}/ai/settings`).flush(SETTINGS);
+    const first = http.expectOne((request) => request.url === '/api/v1/organizations/org-1/objects');
+    first.flush({ items, total });
+    await settle(fixture);
+    return { fixture, first };
+  }
+
+  function railText(fixture: ComponentFixture<HistoryPage>): string {
+    return ((fixture.nativeElement as HTMLElement).textContent ?? '').replace(/\s+/g, ' ');
+  }
+
+  it('reads the rail one page at a time and says how much it is showing', async () => {
+    const page = [object('obj-1', 'NW-Corp'), object('obj-2', 'Guest')];
+    const { fixture, first } = await openRail(page, 124);
+
+    expect(first.request.params.get('limit')).toBe('50');
+    expect(first.request.params.get('skip')).toBe('0');
+    expect(railText(fixture)).toContain('Showing 2 of 124');
+
+    const more = [...fixture.nativeElement.querySelectorAll('button')].find((node: HTMLButtonElement) =>
+      (node.textContent ?? '').includes('Load more'),
+    ) as HTMLButtonElement;
+    more.click();
+    await settle(fixture);
+
+    const next = http.expectOne((request) => request.url === '/api/v1/organizations/org-1/objects');
+    expect(next.request.params.get('skip')).toBe('2');
+    next.flush({ items: [object('obj-3', 'Lab')], total: 124 });
+    await settle(fixture);
+
+    // Appended, not replaced: the object being compared stays on screen.
+    expect(railText(fixture)).toContain('Showing 3 of 124');
+    expect(fixture.nativeElement.querySelectorAll('.object').length).toBe(3);
+  });
+
+  it('sends the filter to the server rather than narrowing the page it holds', async () => {
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
+
+    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    filter!.value = 'guest';
+    filter!.dispatchEvent(new Event('input'));
+    // The term trails the keystroke by a debounce.
+    http.expectNone((request) => request.url === '/api/v1/organizations/org-1/objects');
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    await settle(fixture);
+
+    const search = http.expectOne((request) => request.url === '/api/v1/organizations/org-1/objects');
+    expect(search.request.params.get('q')).toBe('guest');
+    // A new term is a new list, read from the first row.
+    expect(search.request.params.get('skip')).toBe('0');
+    search.flush({ items: [object('obj-7', 'Guest WLAN')], total: 1 });
+    await settle(fixture);
+
+    expect(fixture.nativeElement.querySelectorAll('.object').length).toBe(1);
+    expect(railText(fixture)).toContain('Showing 1 of 1');
+  });
+
+  it('offers no further page once the rail holds every match', async () => {
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 1);
+    const labels = [...fixture.nativeElement.querySelectorAll('button')].map(
+      (node: HTMLButtonElement) => node.textContent ?? '',
+    );
+
+    expect(labels.some((label: string) => label.includes('Load more'))).toBe(false);
+    expect(railText(fixture)).toContain('Showing 1 of 1');
+  });
+
   it('defaults to the two newest versions and re-pins A on demand', async () => {
     const versions = [version('v-3', 3), version('v-2', 2), version('v-1', 1)];
     const fixture = await open(versions, diff());

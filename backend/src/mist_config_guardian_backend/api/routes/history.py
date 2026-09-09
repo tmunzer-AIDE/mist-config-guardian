@@ -1,5 +1,6 @@
 """Configuration object and immutable version history endpoints."""
 
+import re
 from typing import Annotated
 
 from beanie import PydanticObjectId
@@ -32,8 +33,36 @@ class ObjectListFilters(BaseModel):
     object_type: str | None = None
     site_id: str | None = None
     include_deleted: bool = False
+    q: str | None = None
     skip: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=500)
+
+
+def object_list_criteria(
+    organization_id: PydanticObjectId,
+    filters: ObjectListFilters,
+) -> dict[str, object]:
+    """Translate list filters into the MongoDB criteria they select.
+
+    Free text matches a name or a type, the way the search page and the restore
+    picker do. The term is escaped before it reaches the ``$regex``, so a name
+    full of punctuation is searched for rather than interpreted.
+    """
+    criteria: dict[str, object] = {"organization_id": organization_id}
+    if filters.object_type:
+        criteria["object_type"] = filters.object_type
+    if filters.site_id:
+        criteria["site_mist_id"] = filters.site_id
+    if not filters.include_deleted:
+        criteria["is_deleted"] = False
+    term = (filters.q or "").strip()
+    if term:
+        pattern = re.escape(term)
+        criteria["$or"] = [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"object_type": {"$regex": pattern, "$options": "i"}},
+        ]
+    return criteria
 
 
 @router.get("")
@@ -43,20 +72,13 @@ async def list_objects(
     _viewer: Annotated[User, Depends(require_viewer)],
     filters: Annotated[ObjectListFilters, Query()],
 ) -> LogicalObjectListResponse:
-    """List stable objects with optional type, site, and deletion filters."""
+    """List stable objects with optional type, site, free-text, and deletion filters."""
     try:
         await organizations.get(organization_id)
     except OrganizationNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    database_filters: dict[str, object] = {"organization_id": organization_id}
-    if filters.object_type:
-        database_filters["object_type"] = filters.object_type
-    if filters.site_id:
-        database_filters["site_mist_id"] = filters.site_id
-    if not filters.include_deleted:
-        database_filters["is_deleted"] = False
-    query = LogicalObject.find(database_filters)
+    query = LogicalObject.find(object_list_criteria(organization_id, filters))
     total = await query.count()
     objects = await query.sort("object_type", "name").skip(filters.skip).limit(filters.limit).to_list()
     return LogicalObjectListResponse(

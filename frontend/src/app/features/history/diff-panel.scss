@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 :host {
   display: flex;
   flex-direction: column;
@@ -360,7 +362,7 @@
   user-select: none;
 }
 
-@media (max-width: 980px) {
+@include bp.below(mid) {
   .sections {
     grid-template-columns: minmax(0, 1fr);
   }

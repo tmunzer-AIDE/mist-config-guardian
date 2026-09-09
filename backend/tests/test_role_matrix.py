@@ -33,6 +33,7 @@ _ROLE_BY_DEPENDENCY = {
 PUBLIC = {
     ("GET", "/api/v1/health"),
     ("GET", "/api/v1/ready"),
+    ("GET", "/api/v1/auth/bootstrap"),
     ("POST", "/api/v1/auth/bootstrap"),
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/login/mfa"),

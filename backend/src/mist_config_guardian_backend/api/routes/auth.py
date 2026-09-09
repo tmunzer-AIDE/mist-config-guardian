@@ -14,6 +14,7 @@ from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.models.user import User
 from mist_config_guardian_backend.schemas.auth import (
     BootstrapAdminRequest,
+    BootstrapStateResponse,
     LoginSuccessResponse,
     LogoutResponse,
     MfaChallengeResponse,
@@ -51,6 +52,19 @@ router = APIRouter(prefix="/auth")
 
 _INVALID_CREDENTIALS = "Invalid email or password"
 _INVALID_SECOND_FACTOR = "That code is not valid"
+
+
+@router.get("/bootstrap")
+async def bootstrap_state(
+    users: Annotated[UserService, Depends(get_user_service)],
+) -> BootstrapStateResponse:
+    """Report whether the first administrator can still be created.
+
+    Unauthenticated, because the sign-in page reads it before anyone has a
+    session. It discloses nothing the bootstrap route does not already: posting
+    to it answers the same question through its status code.
+    """
+    return BootstrapStateResponse(available=await users.bootstrap_available())
 
 
 @router.post("/bootstrap", status_code=status.HTTP_201_CREATED)

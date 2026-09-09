@@ -127,6 +127,19 @@ export class AuthService {
     return response.user;
   }
 
+  /**
+   * Whether the first administrator can still be created.
+   *
+   * The sign-in page offers one form or the other on the answer, so it is read
+   * before anyone has a session.
+   */
+  async bootstrapAvailable(): Promise<boolean> {
+    const state = await firstValueFrom(
+      this.http.get<{ available: boolean }>(`${API_ROOT}/auth/bootstrap`),
+    );
+    return state.available;
+  }
+
   async bootstrapAdministrator(request: BootstrapAdministrator): Promise<CurrentUser> {
     return firstValueFrom(this.http.post<CurrentUser>(`${API_ROOT}/auth/bootstrap`, request));
   }

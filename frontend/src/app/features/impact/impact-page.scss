@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 .page {
   display: grid;
   grid-template-columns: minmax(214px, 296px) minmax(0, 1fr);
@@ -472,7 +474,7 @@
   line-height: 1.6;
 }
 
-@media (max-width: 900px) {
+@include bp.below(page) {
   .page {
     grid-template-columns: minmax(0, 1fr);
   }
