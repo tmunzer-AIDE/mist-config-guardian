@@ -1,6 +1,6 @@
 [project]
 name = "mist-config-guardian-backend"
-version = "0.6.5"
+version = "0.7.0"
 description = "FastAPI backend for Mist Config Guardian"
 readme = "README.md"
 authors = [
