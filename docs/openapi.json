@@ -1365,6 +1365,173 @@
         "title": "ConfigurationDiff",
         "type": "object"
       },
+      "DeviceImpact": {
+        "properties": {
+          "collection_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collection Errors",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "config_state": {
+            "default": "unknown",
+            "enum": [
+              "pending",
+              "applied",
+              "rolled_back",
+              "unknown"
+            ],
+            "title": "Config State",
+            "type": "string"
+          },
+          "configured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured At"
+          },
+          "detected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected At"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "headline": {
+            "default": "Waiting for comparable evidence",
+            "title": "Headline",
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactMetric"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "monitoring_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Ends At"
+          },
+          "monitoring_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Started At"
+          },
+          "monitoring_state": {
+            "default": "unknown",
+            "enum": [
+              "not_started",
+              "monitoring",
+              "completed",
+              "stalled",
+              "aborted",
+              "unknown"
+            ],
+            "title": "Monitoring State",
+            "type": "string"
+          },
+          "observation_count": {
+            "default": 0,
+            "title": "Observation Count",
+            "type": "integer"
+          },
+          "progress": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "severity": {
+            "default": "unknown",
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "critical",
+              "unknown"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "shared_window": {
+            "default": false,
+            "title": "Shared Window",
+            "type": "boolean"
+          },
+          "snapshot_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot At"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_name",
+          "session_id"
+        ],
+        "title": "DeviceImpact",
+        "type": "object"
+      },
       "DeviceStateComparison": {
         "description": "One trigger's initial state and independently scheduled follow-up.",
         "properties": {
@@ -2079,6 +2246,34 @@
         "title": "ImpactAiSettingsUpdate",
         "type": "object"
       },
+      "ImpactMetric": {
+        "properties": {
+          "baseline": {
+            "title": "Baseline",
+            "type": "number"
+          },
+          "delta": {
+            "title": "Delta",
+            "type": "number"
+          },
+          "latest": {
+            "title": "Latest",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "baseline",
+          "latest",
+          "delta"
+        ],
+        "title": "ImpactMetric",
+        "type": "object"
+      },
       "ImpactSeverity": {
         "description": "Deterministic or AI-assisted impact rating.",
         "enum": [
@@ -2089,6 +2284,40 @@
         ],
         "title": "ImpactSeverity",
         "type": "string"
+      },
+      "ImpactSite": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ImpactSite",
+        "type": "object"
+      },
+      "ImpactSiteList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactSite"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ImpactSiteList",
+        "type": "object"
       },
       "LandingPage": {
         "description": "Page the application opens after sign-in.",
@@ -4927,6 +5156,178 @@
         "title": "SessionRevocationResponse",
         "type": "object"
       },
+      "SiteChange": {
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "audit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Id"
+          },
+          "change_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Group Id"
+          },
+          "change_type": {
+            "default": "Configuration change",
+            "title": "Change Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "impacts": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceImpact"
+            },
+            "title": "Impacts",
+            "type": "array"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "occurred_at",
+          "title"
+        ],
+        "title": "SiteChange",
+        "type": "object"
+      },
+      "SiteChangeList": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "complete": {
+            "default": true,
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "historical": {
+            "default": false,
+            "title": "Historical",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SiteChange"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "as_of"
+        ],
+        "title": "SiteChangeList",
+        "type": "object"
+      },
+      "SiteTopology": {
+        "properties": {
+          "collected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected At"
+          },
+          "complete": {
+            "default": false,
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/TopologyDevice"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "site_id": {
+            "title": "Site Id",
+            "type": "string"
+          },
+          "source": {
+            "default": "stored",
+            "enum": [
+              "mist",
+              "stored",
+              "historical"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "site_id"
+        ],
+        "title": "SiteTopology",
+        "type": "object"
+      },
       "SleObservationResponse": {
         "description": "Safe numeric SLE observation.",
         "properties": {
@@ -5244,6 +5645,128 @@
           "label"
         ],
         "title": "TimelineMarkerResponse",
+        "type": "object"
+      },
+      "TopologyDevice": {
+        "properties": {
+          "clients": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clients"
+          },
+          "col": {
+            "default": 0,
+            "title": "Col",
+            "type": "number"
+          },
+          "health": {
+            "default": "unknown",
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "critical",
+              "unknown"
+            ],
+            "title": "Health",
+            "type": "string"
+          },
+          "health_label": {
+            "default": "No health evidence",
+            "title": "Health Label",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "kind": {
+            "default": "unknown",
+            "enum": [
+              "ap",
+              "switch",
+              "gateway",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "tier": {
+            "default": 2,
+            "title": "Tier",
+            "type": "integer"
+          },
+          "uplink": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uplink"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mac"
+        ],
+        "title": "TopologyDevice",
         "type": "object"
       },
       "TotpConfirmRequest": {
@@ -8312,6 +8835,268 @@
         ]
       }
     },
+    "/api/v1/organizations/{organization_id}/impact/sites": {
+      "get": {
+        "description": "Discover known sites without sending configuration or secrets.",
+        "operationId": "impact_sites_api_v1_organizations__organization_id__impact_sites_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactSiteList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Impact Sites",
+        "tags": [
+          "Site Impact"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/impact/sites/{site_id}/changes": {
+      "get": {
+        "description": "Page site configuration events, then expand only their small device summaries.",
+        "operationId": "site_changes_api_v1_organizations__organization_id__impact_sites__site_id__changes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "title": "Range",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteChangeList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Site Changes",
+        "tags": [
+          "Site Impact"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/impact/sites/{site_id}/topology": {
+      "get": {
+        "description": "Read live all-device statistics; historical requests use stored inventory only.",
+        "operationId": "site_topology_api_v1_organizations__organization_id__impact_sites__site_id__topology_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteTopology"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Site Topology",
+        "tags": [
+          "Site Impact"
+        ]
+      }
+    },
     "/api/v1/organizations/{organization_id}/monitoring": {
       "get": {
         "description": "List newest monitoring windows for one organization.",
@@ -11129,6 +11914,10 @@
     {
       "description": "Two-person approval for restores that trigger organization policy. A requester cannot approve their own request, and any change to the plan invalidates the approval.",
       "name": "Approvals"
+    },
+    {
+      "description": "Site-scoped configuration events, observed topology, and compact device impact evidence.",
+      "name": "Site Impact"
     },
     {
       "description": "Per-device monitoring windows with baseline and post-change service-level evidence, incidents, and confidence.",

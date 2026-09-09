@@ -76,7 +76,7 @@
             }
 
             <div class="card-actions">
-              <button class="cg-btn cg-btn--primary" type="button" (click)="open(card.id)">Open change group</button>
+              <button class="cg-btn" type="button" (click)="open(card.id)">Open change group</button>
               @if (card.restorable && canRestore()) {
                 <button class="cg-btn" type="button" (click)="planRestore(card.group)">Plan a restore</button>
               }

@@ -18,20 +18,23 @@ from mist_config_guardian_backend.models.organization import MistCloudRegion
 _METRICS: dict[DeviceType, tuple[str, ...]] = {
     DeviceType.AP: (
         "time-to-connect",
+        "failed-to-connect",
         "successful-connect",
         "throughput",
         "roaming",
         "capacity",
         "coverage",
+        "ap-availability",
         "ap-health",
     ),
     DeviceType.SWITCH: (
+        "switch-bandwidth",
         "switch-throughput",
         "switch-health",
         "switch-stc",
         "switch-stc-new",
     ),
-    DeviceType.GATEWAY: ("gateway-health", "wan-link-health"),
+    DeviceType.GATEWAY: ("gateway-health", "wan-link-health", "gateway-bandwidth", "application-health"),
 }
 
 
@@ -40,7 +43,7 @@ class SlePayloadError(ValueError):
 
 
 class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
-    """Capture site SLE success rates using a read-only service token."""
+    """Capture site or device SLE success rates using a read-only service token."""
 
     def __init__(self, *, token: str, region: MistCloudRegion) -> None:
         self._client = httpx.AsyncClient(

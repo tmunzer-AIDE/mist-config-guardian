@@ -25,6 +25,10 @@
 // The settings strip sits tighter than the shared tab primitive: each tab is a
 // padded target rather than a spaced label, so the gap and padding are local.
 .tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
   --cg-tabs-rule: var(--hairline-strong);
 
   gap: 2px;

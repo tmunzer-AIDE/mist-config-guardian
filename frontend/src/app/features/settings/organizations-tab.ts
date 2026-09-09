@@ -1,5 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, computed, inject, output, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  output,
+  signal,
+  untracked,
+} from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 
@@ -15,7 +24,12 @@ import {
 } from '../../core/organization.model';
 import { OrganizationService } from '../../core/organization.service';
 import { Tone } from '../../core/tone';
-import { copyToClipboard, type ConfirmRequest, type CronReveal, type SecretReveal } from './settings-page';
+import {
+  copyToClipboard,
+  type ConfirmRequest,
+  type CronReveal,
+  type SecretReveal,
+} from './settings-page';
 
 /** One "check for changes" preset and the cron expression it writes. */
 export interface CronPreset {
@@ -155,7 +169,10 @@ export class OrganizationsTab {
   readonly secretRevealed = output<SecretReveal>();
 
   protected readonly presets = CRON_PRESETS;
-  protected readonly regions = MIST_REGIONS.map((region) => ({ value: region, label: regionLabel(region) }));
+  protected readonly regions = MIST_REGIONS.map((region) => ({
+    value: region,
+    label: regionLabel(region),
+  }));
 
   protected readonly canManage = computed(() => {
     this.auth.user();
@@ -171,6 +188,8 @@ export class OrganizationsTab {
   private readonly collapsedByUser = signal(false);
   private readonly drafts = signal<Record<string, Draft>>({});
   private readonly snapshots = signal<Record<string, SnapshotManifest[]>>({});
+  private readonly snapshotReads = new Set<string>();
+  private readonly snapshotErrors = signal<Record<string, boolean>>({});
   private readonly snapshotsLoaded = signal<Record<string, boolean>>({});
   private readonly tokenEditingId = signal<string | null>(null);
 
@@ -186,7 +205,10 @@ export class OrganizationsTab {
   protected readonly addForm = new FormGroup({
     cloud_region: new FormControl<MistCloudRegion>('global_01', { nonNullable: true }),
     service_token: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-    reconciliation_cron: new FormControl('0 2 * * *', { nonNullable: true, validators: [Validators.required] }),
+    reconciliation_cron: new FormControl('0 2 * * *', {
+      nonNullable: true,
+      validators: [Validators.required],
+    }),
     configuration_retention_days: new FormControl(365, { nonNullable: true }),
     monitoring_retention_days: new FormControl(90, { nonNullable: true }),
   });
@@ -199,6 +221,17 @@ export class OrganizationsTab {
   );
 
   protected readonly currentId = computed(() => this.context.selected()?.id ?? null);
+
+  constructor() {
+    effect(() => {
+      const id = this.expandedId() ?? (this.collapsedByUser() ? null : this.context.selected()?.id);
+      const organization = this.context.all().find((org) => org.id === id);
+      if (organization && this.canManage())
+        untracked(() => {
+          if (!this.snapshotsLoaded()[organization.id]) void this.loadSnapshots(organization);
+        });
+    });
+  }
 
   // ------------------------------------------------------------------ cards
   private toCard(organization: Organization) {
@@ -258,14 +291,14 @@ export class OrganizationsTab {
       tokenEditing: this.tokenEditingId() === organization.id,
       history: history.map((manifest) => this.toHistoryRow(manifest)),
       historyLoaded: this.snapshotsLoaded()[organization.id] === true,
+      historyError: this.snapshotErrors()[organization.id] === true,
     };
   }
 
   private toHistoryRow(manifest: SnapshotManifest) {
     const started = manifest.started_at ? new Date(manifest.started_at) : null;
     const completed = manifest.completed_at ? new Date(manifest.completed_at) : null;
-    const seconds =
-      started && completed ? (completed.getTime() - started.getTime()) / 1000 : null;
+    const seconds = started && completed ? (completed.getTime() - started.getTime()) / 1000 : null;
     return {
       id: manifest.id,
       at: formatInstant(new Date(manifest.created_at)),
@@ -346,7 +379,9 @@ export class OrganizationsTab {
   }
 
   protected addCronLabel(): string {
-    return presetForCron(this.addForm.controls.reconciliation_cron.value)?.label ?? 'a custom expression';
+    return (
+      presetForCron(this.addForm.controls.reconciliation_cron.value)?.label ?? 'a custom expression'
+    );
   }
 
   protected pickAddPreset(preset: CronPreset): void {
@@ -370,16 +405,20 @@ export class OrganizationsTab {
     }
   }
 
-  private async loadSnapshots(organization: Organization): Promise<void> {
-    if (!this.canManage()) {
+  protected async loadSnapshots(organization: Organization): Promise<void> {
+    if (!this.canManage() || this.snapshotReads.has(organization.id)) {
       return;
     }
+    this.snapshotReads.add(organization.id);
+    this.snapshotErrors.update((all) => ({ ...all, [organization.id]: false }));
+    this.snapshotsLoaded.update((all) => ({ ...all, [organization.id]: false }));
     try {
       const response = await firstValueFrom(this.api.snapshots(organization.id));
       this.snapshots.update((all) => ({ ...all, [organization.id]: response.items }));
     } catch {
-      this.snapshots.update((all) => ({ ...all, [organization.id]: [] }));
+      this.snapshotErrors.update((all) => ({ ...all, [organization.id]: true }));
     } finally {
+      this.snapshotReads.delete(organization.id);
       this.snapshotsLoaded.update((all) => ({ ...all, [organization.id]: true }));
     }
   }

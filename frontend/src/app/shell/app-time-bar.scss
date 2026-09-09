@@ -1,102 +1,237 @@
-@use 'breakpoints' as bp;
-
 :host {
-  height: var(--track-height);
-  flex: none;
-  background: var(--track-fill);
-  border-bottom: 1px solid var(--header-rule);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 20px;
+  gap: 22px;
+  flex: none;
+  min-height: 72px;
+  padding: 10px 24px;
+  background: #fff;
+  border-bottom: 1px solid var(--rule);
+  position: relative;
+  z-index: 15;
 }
-
-:host(.past) {
-  background: var(--track-fill-past);
-  border-bottom-color: var(--header-rule-past);
-}
-
-.as-of {
+.time-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex: none;
 }
-
-.as-of-label {
-  font: 600 9.5px/1 var(--font-mono);
-  letter-spacing: 0.1em;
+.live-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: white;
   color: var(--ink-soft);
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
 }
-
-.as-of-value {
-  font: 600 12.5px/1.4 var(--font-mono);
-  color: var(--brand);
+.live-button span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.live-button.active {
+  color: var(--tone-ok-ink);
+  background: var(--tone-ok-soft);
+  border-color: var(--tone-ok-line);
+}
+.live-button.active span {
+  background: var(--tone-ok-ink);
+}
+.exact-time > summary {
+  list-style: none;
+  cursor: pointer;
+  font: 12px var(--font-sans);
+  color: var(--ink-muted);
+  padding: 8px 0;
   white-space: nowrap;
 }
-
-.as-of-value--past {
+.exact-time > summary::-webkit-details-marker {
+  display: none;
+}
+.exact-time > summary > span {
+  margin-left: 9px;
+}
+.exact-time > summary.historical {
   color: var(--tone-warning-ink);
 }
-
-.track {
-  flex: 1;
-  position: relative;
-  height: 32px;
-  background: repeating-linear-gradient(to right, var(--rule-track) 0 1px, transparent 1px 28px);
-  border-bottom: 1px solid var(--border-strong);
-  cursor: crosshair;
-
-  &:focus-visible {
-    outline: 2px solid var(--brand);
-    outline-offset: 2px;
-  }
+.exact-time form {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 24px;
+  width: 310px;
+  max-width: calc(100vw - 90px);
+  padding: 18px;
+  background: white;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-menu);
 }
-
+.exact-time label {
+  font-size: 12px;
+  display: block;
+  margin-bottom: 10px;
+}
+.exact-time input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: 12px var(--font-mono);
+  color: var(--ink);
+}
+.exact-time p {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  margin: 12px 0;
+}
+.exact-time p.date-error {
+  color: var(--tone-critical-ink);
+}
+.exact-time .cg-btn {
+  font-size: 12px;
+}
+.activity {
+  flex: 1;
+  min-width: 80px;
+}
+.track {
+  height: 26px;
+  position: relative;
+  cursor: crosshair;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0 calc(10% - 1px),
+    var(--rule) calc(10% - 1px) 10%
+  );
+}
+.track-seek {
+  position: absolute;
+  inset: 0;
+}
+.track-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px solid var(--rule-strong);
+}
 .tick {
   position: absolute;
   bottom: 0;
-  width: 3px;
-  pointer-events: none;
-}
-
-.handle-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--brand);
-  pointer-events: none;
-}
-
-.handle-mark {
-  position: absolute;
-  top: -3px;
   width: 9px;
-  height: 9px;
-  margin-left: -3.5px;
-  background: var(--brand);
-  transform: rotate(45deg);
+  min-width: 9px;
+  min-height: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: -4px;
+  border: 3px solid transparent;
+  border-top: 0;
+  border-bottom: 0;
+  border-radius: 2px;
+  background: var(--ink-faint);
+  background-clip: padding-box;
+  cursor: pointer;
+}
+.tick[data-tone='critical'] {
+  height: 25px;
+  background-color: var(--tone-critical-ink);
+}
+.tick[data-tone='warning'] {
+  height: 20px;
+  background-color: var(--tone-warning-ink);
+}
+.end-mark {
+  position: absolute;
+  bottom: -2px;
   pointer-events: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--brand);
 }
-
-.handle--past {
-  background: var(--tone-warning-ink);
+.track-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font: 9px var(--font-mono);
+  color: var(--ink-soft);
+  gap: 10px;
 }
-
-
-// The scrubber needs width to be aimable at all. Below `narrow` it is dropped
-// and the range pills stay, which is the same choice at a coarser grain.
-@include bp.below(narrow) {
+.track-labels span:nth-child(2) {
+  font-family: var(--font-sans);
+}
+.range-control {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 3px;
+  background: var(--surface-sunken);
+  flex: none;
+}
+.range-control button {
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font: 500 11px var(--font-sans);
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.range-control button.active {
+  background: var(--surface-raised);
+  color: var(--brand);
+  box-shadow: 0 1px 3px #19233320;
+}
+button:focus-visible,
+summary:focus-visible,
+.track-seek:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+@media (max-width: 1000px) {
   :host {
-    gap: 10px;
-    padding: 0 12px;
+    gap: 14px;
+    padding-inline: 16px;
   }
-
-  .track {
+  .track-labels span:nth-child(2) {
     display: none;
   }
-
-  .cg-pills {
-    margin-left: auto;
+}
+@media (max-width: 700px) {
+  :host {
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    min-height: 66px;
+    gap: 8px;
+  }
+  .activity {
+    display: none;
+  }
+  .time-mode {
+    flex: 1;
+    gap: 8px;
+  }
+  .range-control button {
+    font-size: 10px;
+    padding: 5px 6px;
+  }
+  .exact-time > summary {
+    font-size: 10px;
+  }
+  .exact-time form {
+    left: 12px;
+  }
+  .live-button {
+    font-size: 11px;
+    padding: 5px;
   }
 }

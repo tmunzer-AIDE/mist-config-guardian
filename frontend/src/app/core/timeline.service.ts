@@ -27,6 +27,7 @@ export class TimelineService {
   private readonly http = inject(HttpClient);
 
   readonly markers = signal<TimelineMarker[]>([]);
+  readonly bounds = signal<{ start: Date; end: Date } | null>(null);
 
   /** Only the latest read describes the track; a slow answer for a previous organization must not. */
   private request = 0;
@@ -40,6 +41,7 @@ export class TimelineService {
       // are gone even if this read fails or never answers.
       this.owner = organizationId;
       this.markers.set([]);
+      this.bounds.set(null);
     }
     const request = ++this.request;
     // The instant reaches this endpoint in the as-of header, which the session
@@ -48,16 +50,26 @@ export class TimelineService {
     const params = new HttpParams().set('range', range);
     try {
       const response = await firstValueFrom(
-        this.http.get<TimelineResponse>(orgPath(organizationId, '/point-in-time/markers'), { params }),
+        this.http.get<TimelineResponse>(orgPath(organizationId, '/point-in-time/markers'), {
+          params,
+        }),
       );
       if (request === this.request) {
         this.markers.set(response.items);
+        const start = new Date(response.range_start),
+          end = new Date(response.range_end);
+        this.bounds.set(
+          Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start
+            ? { start, end }
+            : null,
+        );
       }
     } catch {
       // A failed read leaves an empty track rather than markers that no longer
       // describe anything on screen.
       if (request === this.request) {
         this.markers.set([]);
+        this.bounds.set(null);
       }
     }
   }
@@ -66,5 +78,6 @@ export class TimelineService {
     this.request += 1;
     this.owner = null;
     this.markers.set([]);
+    this.bounds.set(null);
   }
 }

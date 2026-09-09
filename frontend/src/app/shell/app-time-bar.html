@@ -1,39 +1,74 @@
-<div class="as-of">
-  <div class="as-of-label">AS OF</div>
-  <div class="as-of-value" [class.as-of-value--past]="time.isHistorical()">{{ asOfLabel() }}</div>
+<div class="time-mode">
+  <button
+    class="live-button"
+    type="button"
+    [class.active]="!time.isHistorical()"
+    [attr.aria-pressed]="!time.isHistorical()"
+    (click)="live()"
+  >
+    <span></span>Live
+  </button>
+  <details class="exact-time" #picker>
+    <summary [class.historical]="time.isHistorical()">
+      {{ time.isHistorical() ? asOfLabel() : 'View at…' }}<span aria-hidden="true">⌄</span>
+    </summary>
+    <form (submit)="apply($event, picker)">
+      <label for="view-at-time">View configuration at (UTC)</label
+      ><input
+        id="view-at-time"
+        type="datetime-local"
+        step="1"
+        required
+        [value]="exactValue()"
+        (input)="draft.set($any($event.target).value)"
+      />
+      @if (dateError()) {
+        <p class="date-error" role="alert">{{ dateError() }}</p>
+      }
+      <p>Inspection stays available. Configuration writes are disabled in a historical view.</p>
+      <button class="cg-btn cg-btn--primary" type="submit">Apply time</button>
+    </form>
+  </details>
 </div>
-
-<div
-  class="track"
-  role="slider"
-  tabindex="0"
-  aria-label="Point in time"
-  aria-valuemin="0"
-  aria-valuemax="100"
-  [attr.aria-valuenow]="handleLeft().replace('%', '')"
-  [attr.aria-valuetext]="asOfLabel()"
-  (click)="scrub($event)"
-  (keydown)="onTrackKey($event)"
->
-  @for (tick of ticks(); track $index) {
-    <span
-      class="tick"
-      [style.left]="tick.left"
-      [style.height]="tick.height"
-      [style.background]="tick.color"
-      [attr.title]="tick.label"
-    ></span>
-  }
-  <span class="handle-line" [style.left]="handleLeft()" [class.handle--past]="time.isHistorical()"></span>
-  <span class="handle-mark" [style.left]="handleLeft()" [class.handle--past]="time.isHistorical()"></span>
+<div class="activity">
+  <div class="track">
+    <div
+      class="track-seek"
+      role="slider"
+      tabindex="0"
+      aria-label="View time in displayed activity range"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      [attr.aria-valuenow]="cursor()"
+      [attr.aria-valuetext]="asOfLabel()"
+      (click)="scrub($event)"
+      (keydown)="onTrackKey($event)"
+    >
+      <span class="track-line"></span>
+    </div>
+    @for (tick of ticks(); track $index) {
+      <button
+        type="button"
+        class="tick"
+        [attr.data-tone]="tick.tone"
+        [style.left.%]="tick.left"
+        [title]="tick.at + ' · ' + tick.label"
+        [attr.aria-label]="tick.at + ' · ' + tick.label"
+        (click)="marker($event, tick.at)"
+      ></button>
+    }
+    <span class="end-mark" [style.left.%]="cursor()" aria-hidden="true"></span>
+  </div>
+  <div class="track-labels">
+    <span>{{ startLabel() }}</span
+    ><span>Change activity</span><span>{{ endLabel() }}</span>
+  </div>
 </div>
-
-<div class="cg-pills" role="group" aria-label="Time range">
+<div class="range-control" role="group" aria-label="Time range">
   @for (range of ranges; track range) {
     <button
-      class="cg-pill"
       type="button"
-      [class.cg-pill--on]="time.range() === range"
+      [class.active]="time.range() === range"
       [attr.aria-pressed]="time.range() === range"
       (click)="time.setRange(range)"
     >

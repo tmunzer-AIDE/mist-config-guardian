@@ -13,6 +13,7 @@ from mist_config_guardian_backend.api.routes.change_groups import router as chan
 from mist_config_guardian_backend.api.routes.diff import router as diff_router
 from mist_config_guardian_backend.api.routes.health import router as health_router
 from mist_config_guardian_backend.api.routes.history import router as history_router
+from mist_config_guardian_backend.api.routes.impact import router as impact_router
 from mist_config_guardian_backend.api.routes.monitoring import router as monitoring_router
 from mist_config_guardian_backend.api.routes.notifications import router as notifications_router
 from mist_config_guardian_backend.api.routes.organizations import router as organizations_router
@@ -46,3 +47,5 @@ router.include_router(monitoring_router, tags=["Impact Monitoring"])
 router.include_router(notifications_router, tags=["Notifications"])
 router.include_router(ai_router, tags=["AI Assist"])
 router.include_router(application_configuration_router, tags=["Application Settings"])
+
+router.include_router(impact_router, tags=["Site Impact"])

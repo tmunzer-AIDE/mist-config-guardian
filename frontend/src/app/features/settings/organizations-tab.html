@@ -4,7 +4,11 @@
       Service tokens must be read-only. Write-capable tokens are refused at onboarding.
     </p>
     @if (canManage()) {
-      <button class="cg-btn cg-btn--primary cg-btn--lg intro-action" type="button" (click)="openAdd()">
+      <button
+        class="cg-btn cg-btn--primary cg-btn--lg intro-action"
+        type="button"
+        (click)="openAdd()"
+      >
         Add organization
       </button>
     }
@@ -14,8 +18,8 @@
     <form class="cg-card add" [formGroup]="addForm" (ngSubmit)="add()">
       <h3 class="add-title">Onboard a Mist organization</h3>
       <p class="hint">
-        The organization's name and identifier are read from Mist with the token, so nothing here can
-        disagree with the cloud.
+        The organization's name and identifier are read from Mist with the token, so nothing here
+        can disagree with the cloud.
       </p>
 
       <div class="add-grid">
@@ -76,8 +80,8 @@
         }
       </div>
       <p class="hint">
-        Checks for changes {{ addCronLabel() }}. A write-capable token is refused: onboarding reads the
-        token's privileges from Mist before storing it.
+        Checks for changes {{ addCronLabel() }}. A write-capable token is refused: onboarding reads
+        the token's privileges from Mist before storing it.
       </p>
 
       <div class="row-buttons">
@@ -91,8 +95,8 @@
 
   @if (!canManage()) {
     <p class="readonly" role="note">
-      Organization credentials and schedules are administrator-only. You can see which organizations are
-      onboarded, but not their tokens, webhooks or retention settings.
+      Organization credentials and schedules are administrator-only. You can see which organizations
+      are onboarded, but not their tokens, webhooks or retention settings.
     </p>
   }
 
@@ -107,8 +111,8 @@
     <div class="empty">
       <div class="empty-title">No organizations onboarded</div>
       <p class="empty-body">
-        Configuration history begins after a Mist organization is onboarded with a read-only service token
-        and its first snapshot completes.
+        Configuration history begins after a Mist organization is onboarded with a read-only service
+        token and its first snapshot completes.
       </p>
     </div>
   }
@@ -124,7 +128,9 @@
       >
         <span class="cg-mono caret" aria-hidden="true">{{ card.caret }}</span>
         <span class="summary-name">{{ card.name }}</span>
-        <span class="cg-badge" [class]="'cg-badge cg-badge--' + card.statusTone">{{ card.status }}</span>
+        <span class="cg-badge" [class]="'cg-badge cg-badge--' + card.statusTone">{{
+          card.status
+        }}</span>
         @if (card.isCurrent) {
           <span class="cg-mono scope-flag">CURRENT SCOPE</span>
         }
@@ -146,7 +152,11 @@
               <span class="row-label">Service token</span>
               <span class="cg-mono row-value">{{ card.tokenSuffix }}</span>
               @if (canManage() && !card.tokenEditing) {
-                <button class="cg-btn cg-btn--link row-action" type="button" (click)="startTokenEdit(card.organization)">
+                <button
+                  class="cg-btn cg-btn--link row-action"
+                  type="button"
+                  (click)="startTokenEdit(card.organization)"
+                >
                   Replace
                 </button>
               }
@@ -154,7 +164,9 @@
 
             @if (card.tokenEditing) {
               <div class="token-form">
-                <label class="cg-label token-label" [attr.for]="'token-' + card.id">NEW READ-ONLY SERVICE TOKEN</label>
+                <label class="cg-label token-label" [attr.for]="'token-' + card.id"
+                  >NEW READ-ONLY SERVICE TOKEN</label
+                >
                 <input
                   class="cg-input cg-mono"
                   type="password"
@@ -166,8 +178,8 @@
                   (input)="onTokenInput($event)"
                 />
                 <p class="hint">
-                  The token is verified against the Mist cloud before it is stored, and a write-capable token
-                  is refused.
+                  The token is verified against the Mist cloud before it is stored, and a
+                  write-capable token is refused.
                 </p>
                 <div class="row-buttons">
                   <button
@@ -178,7 +190,9 @@
                   >
                     {{ isBusy('token-' + card.id) ? 'Verifying…' : 'Save token' }}
                   </button>
-                  <button class="cg-btn cg-btn--sm" type="button" (click)="cancelTokenEdit()">Cancel</button>
+                  <button class="cg-btn cg-btn--sm" type="button" (click)="cancelTokenEdit()">
+                    Cancel
+                  </button>
                 </div>
               </div>
             }
@@ -222,13 +236,17 @@
                 </div>
                 <p class="hint hint--body">{{ card.reconSummary }}</p>
                 <p class="hint">
-                  Webhooks deliver changes within seconds; this schedule is the safety net that catches
-                  anything a webhook missed.
+                  Webhooks deliver changes within seconds; this schedule is the safety net that
+                  catches anything a webhook missed.
                 </p>
                 @if (card.reconWarn) {
                   <p class="warn">{{ card.reconWarn }}</p>
                 }
-                <button class="cg-btn cg-btn--link" type="button" (click)="showCron(card.organization)">
+                <button
+                  class="cg-btn cg-btn--link"
+                  type="button"
+                  (click)="showCron(card.organization)"
+                >
                   Show cron expression
                 </button>
               </div>
@@ -296,19 +314,38 @@
                 Copy URL
               </button>
               @if (canManage()) {
-                <button class="cg-btn cg-btn--sm" type="button" (click)="requestRotate(card.organization)">
+                <button
+                  class="cg-btn cg-btn--sm"
+                  type="button"
+                  (click)="requestRotate(card.organization)"
+                >
                   Rotate secret
                 </button>
               }
             </div>
-            <p class="hint">A rotated secret is shown once, immediately after generation, and never again.</p>
+            <p class="hint">
+              A rotated secret is shown once, immediately after generation, and never again.
+            </p>
 
             @if (canManage()) {
               <div class="history">
                 <h3 class="cg-label">SNAPSHOT HISTORY</h3>
+                @if (card.historyError) {
+                  <p class="hint" role="alert">
+                    Snapshot history could not be loaded.
+                    <button class="cg-btn" type="button" (click)="loadSnapshots(card.organization)">
+                      Retry history
+                    </button>
+                  </p>
+                }
                 @if (card.history.length > 0) {
                   <table class="history-table">
-                    <caption class="cg-visually-hidden">Snapshots for {{ card.name }}, newest first</caption>
+                    <caption class="cg-visually-hidden">
+                      Snapshots for
+                      {{
+                        card.name
+                      }}, newest first
+                    </caption>
                     <thead>
                       <tr>
                         <th scope="col">Taken</th>
@@ -326,7 +363,9 @@
                           <td class="cg-mono">{{ row.objects }}</td>
                           <td class="cg-mono muted">{{ row.duration }}</td>
                           <td>
-                            <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.status }}</span>
+                            <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{
+                              row.status
+                            }}</span>
                           </td>
                         </tr>
                       }
@@ -334,7 +373,13 @@
                   </table>
                 } @else {
                   <p class="hint">
-                    {{ card.historyLoaded ? 'No snapshots recorded yet.' : 'Reading snapshot history…' }}
+                    {{
+                      card.historyLoaded
+                        ? card.historyError
+                          ? 'History is unavailable.'
+                          : 'No snapshots recorded yet.'
+                        : 'Reading snapshot history…'
+                    }}
                   </p>
                 }
               </div>
@@ -342,7 +387,11 @@
 
             @if (!card.isCurrent) {
               <div class="scope-switch">
-                <button class="cg-btn cg-btn--selected" type="button" (click)="switchScope(card.organization)">
+                <button
+                  class="cg-btn cg-btn--selected"
+                  type="button"
+                  (click)="switchScope(card.organization)"
+                >
                   Switch scope to {{ card.name }}
                 </button>
               </div>

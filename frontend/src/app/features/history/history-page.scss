@@ -58,7 +58,10 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--surface-raised);
+  background: var(--surface-sunken);
+}
+.library-table tbody tr:hover {
+  background: var(--surface-selected-soft);
 }
 .sort-heading {
   border: 0;
@@ -87,7 +90,8 @@
 .library-table th {
   font-size: 11px;
   color: var(--ink-soft);
-  text-transform: uppercase;
+  font-weight: 600;
+  text-transform: none;
 }
 .library-table small {
   display: block;
@@ -198,12 +202,12 @@
 
 .version--b {
   background: var(--brand-soft);
-  box-shadow: inset 3px 0 0 var(--brand);
+
 }
 
 .version--a {
   background: var(--surface-selected);
-  box-shadow: inset 3px 0 0 var(--nav-accent);
+
 }
 
 .version-top {

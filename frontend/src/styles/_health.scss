@@ -1,0 +1,31 @@
+// Shared health badge: explicit labels remain required alongside color.
+.cg-health {
+  display: inline-block;
+  white-space: nowrap;
+  font: 600 10px/1.4 var(--font-sans);
+  padding: 3px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
+}
+.cg-health[data-health='ok'] {
+  color: var(--tone-ok-ink);
+  background: var(--tone-ok-soft);
+  border-color: var(--tone-ok-line);
+}
+.cg-health[data-health='warning'] {
+  color: var(--tone-warning-ink);
+  background: var(--tone-warning-soft);
+  border-color: var(--tone-warning-line);
+}
+.cg-health[data-health='error'] {
+  color: var(--tone-critical-ink);
+  background: var(--tone-critical-soft);
+  border-color: var(--tone-critical-line);
+}
+.cg-health[data-health='critical'] {
+  background: var(--tone-critical-ink);
+  color: white;
+  border-color: var(--tone-critical-ink);
+}

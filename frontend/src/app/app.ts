@@ -1,4 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core';
 import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 
@@ -48,11 +56,16 @@ export class App {
     return version ? `v${version}` : '';
   });
 
-  protected readonly chrome = computed(() => this.auth.isAuthenticated() && !this.currentUrl().startsWith('/login'));
+  protected readonly chrome = computed(
+    () => this.auth.isAuthenticated() && !this.currentUrl().startsWith('/login'),
+  );
 
   protected readonly showTimeBar = computed(() => {
     const url = this.currentUrl().split('?')[0];
-    return this.chrome() && TIME_BAR_ROUTES.some((route) => (route === '/' ? url === '/' : url.startsWith(route)));
+    return (
+      this.chrome() &&
+      TIME_BAR_ROUTES.some((route) => (route === '/' ? url === '/' : url.startsWith(route)))
+    );
   });
 
   protected readonly asOfLabel = computed(() => {
@@ -68,9 +81,11 @@ export class App {
   protected readonly skeletons = [96, 132, 72, 72];
 
   constructor() {
-    this.router.events.pipe(filter((event) => event instanceof NavigationEnd)).subscribe((event) => {
-      this.currentUrl.set(event.urlAfterRedirects);
-    });
+    this.router.events
+      .pipe(filter((event) => event instanceof NavigationEnd))
+      .subscribe((event) => {
+        this.currentUrl.set(event.urlAfterRedirects);
+      });
 
     void this.health.loadVersion();
 
@@ -83,7 +98,7 @@ export class App {
       void untracked(() => this.organizations.load());
     });
 
-    effect(() => {
+    effect((onCleanup) => {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
       // The markers and the change badge are outcome data, so the instant is
@@ -115,6 +130,19 @@ export class App {
           this.health.load(),
         ]);
       });
+      if (!asOf) {
+        let refreshing = false;
+        const timer = setInterval(async () => {
+          if (document.visibilityState !== 'visible' || refreshing) return;
+          refreshing = true;
+          try {
+            await this.timeline.load(organizationId, range);
+          } finally {
+            refreshing = false;
+          }
+        }, 60_000);
+        onCleanup(() => clearInterval(timer));
+      }
     });
   }
 

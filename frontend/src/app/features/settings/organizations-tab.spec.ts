@@ -1,6 +1,8 @@
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
+import { OrganizationContextService } from '../../core/organization-context.service';
 
 import { AuthService, CurrentUser } from '../../core/auth.service';
 import { Organization } from '../../core/organization.model';
@@ -70,7 +72,6 @@ describe('nextCronRun', () => {
   });
 });
 
-
 interface TabInternals {
   startTokenEdit(organization: Organization): void;
   cancelTokenEdit(): void;
@@ -99,8 +100,7 @@ describe('OrganizationsTab credentials', () => {
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });
     TestBed.inject(AuthService).applyUser(ADMINISTRATOR);
-    return TestBed.createComponent(OrganizationsTab)
-      .componentInstance as unknown as TabInternals;
+    return TestBed.createComponent(OrganizationsTab).componentInstance as unknown as TabInternals;
   }
 
   afterEach(() => {
@@ -113,7 +113,54 @@ describe('OrganizationsTab credentials', () => {
     const panel = fixture.componentInstance as unknown as TabInternals;
     panel.startTokenEdit(organization('org1'));
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('input[autocomplete="current-password"]')).toBeNull();
+    expect(
+      fixture.nativeElement.querySelector('input[autocomplete="current-password"]'),
+    ).toBeNull();
   });
+});
 
+describe('automatically expanded snapshot history', () => {
+  it('loads on entry, reports collection failures honestly, and retries', async () => {
+    const org = {
+      id: 'org1',
+      name: 'Paris',
+      status: 'verified',
+      cloud_region: 'global_02',
+      reconciliation_cron: '0 2 * * *',
+      configuration_retention_days: 365,
+      monitoring_retention_days: 90,
+    } as Organization;
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: OrganizationContextService,
+          useValue: { all: signal([org]), selected: signal(org) },
+        },
+      ],
+    });
+    TestBed.inject(AuthService).applyUser(ADMINISTRATOR);
+    const fixture = TestBed.createComponent(OrganizationsTab),
+      http = TestBed.inject(HttpTestingController);
+    fixture.detectChanges();
+    http
+      .expectOne((request) => request.url.endsWith('/snapshots'))
+      .flush({}, { status: 503, statusText: 'Unavailable' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Snapshot history could not be loaded.');
+    expect(fixture.nativeElement.textContent).not.toContain('No snapshots recorded yet.');
+    const retry = [...fixture.nativeElement.querySelectorAll('button')].find((b: any) =>
+      b.textContent.includes('Retry history'),
+    ) as HTMLButtonElement;
+    retry.click();
+    http.expectOne((request) => request.url.endsWith('/snapshots')).flush({ items: [], total: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('No snapshots recorded yet.');
+    expect(fixture.nativeElement.textContent).not.toContain('Reading snapshot history');
+    http.verify();
+    fixture.destroy();
+  });
 });

@@ -1,44 +1,38 @@
-// Design tokens transcribed verbatim from the approved prototype
-// (docs/design/prototype.html). Values are the computed values the prototype
-// renders; do not adjust them without a corresponding design change.
+// Updated for the site Impact design. Rationale: DECISION.md.
 
 :root {
   // ---- Typography ----
-  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --text-base: 13px;
-  --leading-base: 1.45;
+  --text-base: 14px;
+  --leading-base: 1.5;
 
   // ---- Neutral ink ----
-  --ink: #14161a; // primary text
-  --ink-muted: #4a4f57; // secondary text
-  --ink-soft: #65696f; // tertiary text and mono meta
+  --ink: #192333; // primary text
+  --ink-muted: #4b586a; // secondary text
+  --ink-soft: #667386; // tertiary text and mono meta
   --ink-faint: #7c828c; // quaternary text
-  --ink-dim: #a09a8c; // disabled / placeholder
+  --ink-dim: #788497; // disabled / placeholder
   --ink-outline: #a4a9b1; // unfilled control outlines
   --ink-invert: #ffffff;
 
   // ---- Surfaces ----
-  --surface: #f4f3ef;
+  --surface: #f3f5f8;
   --surface-raised: #ffffff;
-  --surface-sunken: #fbfaf7;
-  --surface-warm: #f0eee8;
-  --surface-selected: #f6f8fd;
+  --surface-sunken: #f8f9fb;
+  --surface-warm: #eef1f5;
+  --surface-selected: color-mix(in oklab, var(--brand) 6%, white);
   --surface-selected-soft: #f7f8fc;
   --surface-brand-soft: #eef0f6;
 
-  // App background: two brand washes over a warm vertical gradient.
-  --app-background:
-    radial-gradient(1100px 640px at 10% -12%, rgba(39, 67, 163, 0.13), transparent 62%),
-    radial-gradient(920px 540px at 98% 2%, rgba(161, 98, 7, 0.09), transparent 64%),
-    linear-gradient(180deg, #f9f8f5 0%, #eeece6 100%);
+  --app-background: #f6f7f9;
 
   // ---- Rules and borders ----
-  --rule: #e4e1d9;
-  --rule-strong: #d8d4c9;
-  --rule-soft: #e9e6dd;
-  --rule-track: #e0dcd1;
-  --rule-heavy: #cfcbc0;
+  --rule: #e1e4e9;
+  --rule-strong: #ccd1da;
+  --rule-soft: #e9edf2;
+  --rule-track: #dde3ec;
+  --rule-heavy: #c8d0dc;
   --hairline: rgba(20, 22, 26, 0.06);
   --hairline-strong: rgba(20, 22, 26, 0.08);
   --border-subtle: rgba(20, 22, 26, 0.11);
@@ -53,32 +47,28 @@
   --brand-line: #c3cdec;
   --brand-tint: #eef1fb;
   --brand-tint-deep: #dfe5f6;
-  --brand-gradient: linear-gradient(180deg, #3757bd, #2743a3);
-  --brand-gradient-hover: linear-gradient(180deg, #4062c9, #2b4bb4);
+  --brand-gradient: var(--brand);
+  --brand-gradient-hover: var(--brand-hover);
 
   // ---- Sidebar ----
-  --nav-background: linear-gradient(180deg, #1e2128 0%, #14161b 100%);
-  --nav-rule: #262a32;
-  --nav-ink: #a4aab4;
-  --nav-ink-hover: #d6dae2;
-  --nav-ink-active: #f7f7f5;
-  --nav-brand-ink: #f2f1ee;
-  --nav-meta: #8b919b;
-  --nav-accent: #8fa0dd;
-  --nav-accent-dim: #4a5580;
-  --nav-active-fill: linear-gradient(
-    90deg,
-    rgba(127, 150, 232, 0.22),
-    rgba(127, 150, 232, 0.05)
-  );
+  --nav-background: #f8f9fc;
+  --nav-rule: #e3e8f0;
+  --nav-ink: #5b687b;
+  --nav-ink-hover: #192333;
+  --nav-ink-active: var(--brand);
+  --nav-brand-ink: var(--ink);
+  --nav-meta: #6b788b;
+  --nav-accent: var(--brand);
+  --nav-accent-dim: #9aaad8;
+  --nav-active-fill: color-mix(in oklab, var(--brand) 9%, white);
 
   // ---- Semantic tones ----
   --tone-critical-ink: #b91c1c;
   --tone-critical-soft: #fbeaea;
   --tone-critical-line: #f0c9c9;
   --tone-critical-hover: #cc2626;
-  --tone-critical-gradient: linear-gradient(180deg, #cc2626, #b91c1c);
-  --tone-critical-gradient-hover: linear-gradient(180deg, #d63232, #c42020);
+  --tone-critical-gradient: var(--tone-critical-ink);
+  --tone-critical-gradient-hover: var(--tone-critical-hover);
   --tone-critical-wash: #fffdfd;
 
   --tone-warning-ink: #8a5306;
@@ -92,8 +82,8 @@
   --tone-ok-line: #c6e3d1;
 
   --tone-none-ink: #4a4f57;
-  --tone-none-soft: #f4f3ef;
-  --tone-none-line: #e4e1d9;
+  --tone-none-soft: #f1f4f8;
+  --tone-none-line: #dce3ed;
   --tone-none-mark: #a9aeb6; // unremarkable timeline ticks
 
   --tone-info-ink: #2743a3;
@@ -101,29 +91,21 @@
   --tone-info-line: #c3cdec;
 
   // ---- Glass panels ----
-  --glass-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
-  --glass-border: rgba(255, 255, 255, 0.72);
-  --glass-blur: blur(14px);
+  --glass-fill: #ffffff;
+  --glass-border: var(--rule);
+  --glass-blur: none;
 
-  --header-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.66));
-  --header-fill-past: linear-gradient(
-    180deg,
-    rgba(253, 249, 239, 0.9),
-    rgba(253, 249, 239, 0.72)
-  );
+  --header-fill: #ffffff;
+  --header-fill-past: #fdf9ef;
   --header-rule: rgba(20, 22, 26, 0.08);
   --header-rule-past: rgba(161, 98, 7, 0.2);
   --track-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(251, 250, 247, 0.4));
-  --track-fill-past: linear-gradient(
-    180deg,
-    rgba(253, 249, 239, 0.72),
-    rgba(253, 249, 239, 0.52)
-  );
+  --track-fill-past: linear-gradient(180deg, rgba(253, 249, 239, 0.72), rgba(253, 249, 239, 0.52));
 
   // ---- Elevation ----
   --shadow-hairline: 0 1px 2px rgba(20, 22, 26, 0.04);
   --shadow-raised: 0 1px 2px rgba(20, 22, 26, 0.05);
-  --shadow-card: 0 1px 2px rgba(20, 22, 26, 0.05), 0 12px 30px -16px rgba(20, 22, 26, 0.2);
+  --shadow-card: 0 2px 3px -2px #1923330a, 0 8px 24px -16px #19233318;
   --shadow-menu: 0 1px 2px rgba(20, 22, 26, 0.06), 0 18px 44px -20px rgba(20, 22, 26, 0.35);
   --shadow-brand: 0 1px 2px rgba(39, 67, 163, 0.1);
 
@@ -134,10 +116,10 @@
   --header-height: 56px;
   --track-height: 58px;
   --radius-xs: 2px;
-  --radius-sm: 5px;
-  --radius: 7px;
-  --radius-md: 8px;
-  --radius-lg: 9px;
-  --radius-xl: 10px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-md: 9px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
   --radius-pill: 999px;
 }

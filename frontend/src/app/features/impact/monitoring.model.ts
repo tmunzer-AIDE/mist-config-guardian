@@ -122,6 +122,11 @@ const FILTER_LABELS: Record<StatusFilter, string> = {
 
 // The SLE client's metric keys, spelled the way the design renders them.
 const METRIC_LABELS: Record<string, string> = {
+  'failed-to-connect': 'Connection success',
+  'ap-availability': 'AP availability',
+  'switch-bandwidth': 'Switch bandwidth',
+  'gateway-bandwidth': 'Gateway bandwidth',
+  'application-health': 'Application health',
   'time-to-connect': 'Time to connect',
   'successful-connect': 'Successful connect',
   throughput: 'Throughput',

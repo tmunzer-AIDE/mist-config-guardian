@@ -152,6 +152,7 @@ class AuditChangeGroup(TimestampedModel, Document):
     class Settings:
         name = "audit_change_groups"
         indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("organization_id", 1), ("affected_site_ids", 1), ("occurred_at", -1)]),
             IndexModel(
                 [("organization_id", 1), ("audit_id", 1)],
                 unique=True,
