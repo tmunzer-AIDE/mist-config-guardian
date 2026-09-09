@@ -1,0 +1,131 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $fullname := include "mist-config-guardian.fullname" . }}
+{{- $name := include "mist-config-guardian.name" . }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-default-deny
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+spec:
+  # Selecting a pod with no rules denies everything to it, so this covers the
+  # release rather than the namespace: a policy with an empty podSelector would
+  # also cut off whatever else happens to be deployed alongside it.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-datastores
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+spec:
+  # The three datastores accept connections from this release's own application
+  # pods and from nothing else. Anything else in the cluster that finds the
+  # service address still has to get past the credential, and now does not get
+  # the chance to try.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [mongodb, redis, influxdb]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "mist-config-guardian.datastoreClients" . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 27017
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 8086
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-web
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+spec:
+  # What a browser reaches. The frontend also calls the API directly under its
+  # own origin, so the API is open to the same sources.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, frontend]
+  policyTypes:
+    - Ingress
+  ingress:
+    - {{ if .Values.networkPolicy.webIngressFrom }}from:
+        {{- toYaml .Values.networkPolicy.webIngressFrom | nindent 8 }}
+      {{ end }}ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8080
+{{- if .Values.networkPolicy.egress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-egress
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+spec:
+  # Where the application pods are allowed to go: name resolution, their own
+  # datastores, and the outside world minus the cluster's own address space.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker, scheduler, frontend]
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $name }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [mongodb, redis, influxdb, api]
+    {{- with .Values.networkPolicy.egress.allowedDestinations }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ .cidr }}
+            {{- with .except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

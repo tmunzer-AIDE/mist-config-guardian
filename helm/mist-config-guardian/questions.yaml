@@ -93,6 +93,42 @@ questions:
         required: true
         label: InfluxDB API token
         description: "Must match the configured InfluxDB token. Generate with: openssl rand -hex 32"
+      - variable: secrets.mongodbRootUsername
+        default: guardian
+        type: string
+        required: true
+        label: MongoDB username
+        description: >-
+          The account the bundled MongoDB creates and then requires. Set at
+          first install only: changing it later does not rename the account
+          MongoDB already has.
+      - variable: secrets.mongodbRootPassword
+        default: ""
+        type: password
+        required: true
+        label: MongoDB password
+        description: >-
+          Goes into a connection URI, so use only letters, digits and -._~ .
+          Generate with `openssl rand -hex 32`. Set at first install only:
+          MongoDB keeps this in its data directory, so changing it here on an
+          existing volume makes the database unreachable. See the README to
+          rotate it.
+      - variable: secrets.redisPassword
+        default: ""
+        type: password
+        required: true
+        label: Redis password
+        description: "Goes into a connection URI, so use only letters, digits and -._~ . Generate with: openssl rand -hex 32"
+  - variable: networkPolicy.enabled
+    default: true
+    type: boolean
+    label: Restrict pod-to-pod traffic
+    description: >-
+      Refuses every connection a pod in this release was not meant to receive,
+      then allows the ones it was. Requires a CNI that enforces NetworkPolicy;
+      on a cluster without one these objects have no effect.
+    group: Networking
+
   - variable: existingSecret
     default: mist-config-guardian-secrets
     type: string
@@ -100,12 +136,17 @@ questions:
     label: Existing Secret name
     description: >-
       Must contain SECRET_KEY, BOOTSTRAP_ADMIN_TOKEN,
-      CREDENTIAL_ENCRYPTION_KEY, and INFLUXDB_TOKEN. Generate each value with
+      CREDENTIAL_ENCRYPTION_KEY, and INFLUXDB_TOKEN, plus
+      MONGODB_ROOT_USERNAME and MONGODB_ROOT_PASSWORD when MongoDB is bundled
+      and REDIS_PASSWORD when Redis is bundled. Generate each value with
       `openssl rand -hex 32`, then create the Secret with
       `kubectl create secret generic mist-config-guardian-secrets
       --from-literal=SECRET_KEY=<value>
       --from-literal=BOOTSTRAP_ADMIN_TOKEN=<value>
       --from-literal=CREDENTIAL_ENCRYPTION_KEY=<value>
-      --from-literal=INFLUXDB_TOKEN=<value>`.
+      --from-literal=INFLUXDB_TOKEN=<value>
+      --from-literal=MONGODB_ROOT_USERNAME=guardian
+      --from-literal=MONGODB_ROOT_PASSWORD=<value>
+      --from-literal=REDIS_PASSWORD=<value>`.
     group: Secrets
     show_if: "secrets.create=false"

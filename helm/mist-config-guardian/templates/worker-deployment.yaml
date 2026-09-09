@@ -14,6 +14,9 @@ spec:
       app.kubernetes.io/component: worker
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include "mist-config-guardian.secretChecksum" . }}
       labels:
         app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -34,9 +37,22 @@ spec:
                 name: {{ include "mist-config-guardian.fullname" . }}
             - secretRef:
                 name: {{ include "mist-config-guardian.secretName" . }}
+          env:
+            {{- include "mist-config-guardian.datastoreEnv" . | trim | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: temp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.workerResources | nindent 12 }}
+      volumes:
+        - name: temp
+          emptyDir: {}

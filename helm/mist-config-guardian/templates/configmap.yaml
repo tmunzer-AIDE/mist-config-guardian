@@ -10,11 +10,21 @@ data:
   ENVIRONMENT: {{ .Values.config.environment | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
-  MONGODB_URL: {{ .Values.config.mongodbUrl | quote }}
   MONGODB_DB_NAME: {{ .Values.config.mongodbDatabase | quote }}
+{{- /*
+  A bundled datastore needs a credential in its URL, so that URL is assembled
+  in the pod from the Secret instead of being written down here. Only the
+  external endpoints, which carry whatever the operator put in them, appear in
+  a ConfigMap.
+*/}}
+{{- if not .Values.mongodb.enabled }}
+  MONGODB_URL: {{ .Values.config.mongodbUrl | quote }}
+{{- end }}
+{{- if not .Values.redis.enabled }}
   REDIS_URL: {{ .Values.config.redisUrl | quote }}
   CELERY_BROKER_URL: {{ .Values.config.celeryBrokerUrl | quote }}
   CELERY_RESULT_BACKEND: {{ .Values.config.celeryResultBackend | quote }}
-  INFLUXDB_URL: {{ .Values.config.influxdbUrl | quote }}
+{{- end }}
+  INFLUXDB_URL: {{ ternary (printf "http://%s-influxdb:8086" (include "mist-config-guardian.fullname" .)) .Values.config.influxdbUrl .Values.influxdb.enabled | quote }}
   INFLUXDB_ORG: {{ .Values.config.influxdbOrg | quote }}
   INFLUXDB_BUCKET: {{ .Values.config.influxdbBucket | quote }}

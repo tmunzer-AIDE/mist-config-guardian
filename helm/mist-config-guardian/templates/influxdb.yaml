@@ -1,0 +1,120 @@
+{{- if .Values.influxdb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mist-config-guardian.fullname" . }}-influxdb
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: influxdb
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: influxdb
+  ports:
+    - name: http
+      port: 8086
+      targetPort: http
+---
+{{- if .Values.influxdb.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mist-config-guardian.fullname" . }}-influxdb
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: influxdb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.influxdb.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.influxdb.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mist-config-guardian.fullname" . }}-influxdb
+  labels:
+    {{- include "mist-config-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: influxdb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: influxdb
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include "mist-config-guardian.secretChecksum" . }}
+      labels:
+        app.kubernetes.io/name: {{ include "mist-config-guardian.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: influxdb
+    spec:
+      containers:
+        - name: influxdb
+          image: "{{ .Values.influxdb.image.repository }}:{{ .Values.influxdb.image.tag }}"
+          imagePullPolicy: {{ .Values.influxdb.image.pullPolicy }}
+          env:
+            - name: DOCKER_INFLUXDB_INIT_MODE
+              value: setup
+            - name: DOCKER_INFLUXDB_INIT_USERNAME
+              value: {{ .Values.influxdb.adminUsername | quote }}
+            - name: DOCKER_INFLUXDB_INIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mist-config-guardian.secretName" . }}
+                  key: INFLUXDB_TOKEN
+            - name: DOCKER_INFLUXDB_INIT_ORG
+              value: {{ .Values.config.influxdbOrg | quote }}
+            - name: DOCKER_INFLUXDB_INIT_BUCKET
+              value: {{ .Values.config.influxdbBucket | quote }}
+            - name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mist-config-guardian.secretName" . }}
+                  key: INFLUXDB_TOKEN
+          ports:
+            - name: http
+              containerPort: 8086
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/influxdb2
+          resources:
+            {{- toYaml .Values.influxdb.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.influxdb.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mist-config-guardian.fullname" . }}-influxdb
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
