@@ -31,7 +31,11 @@ from mist_config_guardian_backend.security.credentials import (
     CredentialVault,
 )
 from mist_config_guardian_backend.services.approvals import compute_plan_hash
-from mist_config_guardian_backend.services.restore_authorization import find_unavailable_secrets
+from mist_config_guardian_backend.services.restore_authorization import (
+    SecretPath,
+    find_unavailable_secrets,
+    format_secret_path,
+)
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     RestoreStateStore,
@@ -118,17 +122,23 @@ async def capture_safety_snapshot(
 _MISSING = object()
 
 
-def _at_path(value: object, path: str) -> object:
-    """Read one of the locations :func:`find_unavailable_secrets` reports."""
-    for part in path.split("."):
-        if isinstance(value, Mapping):
-            if part not in value:
+def _at_path(value: object, path: SecretPath) -> object:
+    """Read one of the locations :func:`find_unavailable_secrets` reports.
+
+    A step is a mapping key or a sequence position, and only the matching kind
+    of container answers to it: a mapping is not indexed by number, and a list
+    is not keyed by name. Anything else means the location is not there, and a
+    location that is not there supplies nothing.
+    """
+    for step in path:
+        if isinstance(step, str) and isinstance(value, Mapping):
+            if step not in value:
                 return _MISSING
-            value = value[part]
-        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            if not part.lstrip("-").isdigit() or not -len(value) <= int(part) < len(value):
+            value = value[step]
+        elif isinstance(step, int) and isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if not -len(value) <= step < len(value):
                 return _MISSING
-            value = value[int(part)]
+            value = value[step]
         else:
             return _MISSING
     return value
@@ -146,23 +156,24 @@ def _usable_secret(value: object) -> bool:
     return not (isinstance(value, str) and set(value) == {"*"})
 
 
-def _without_paths(value: object, paths: frozenset[str], *, path: str = "") -> object:
-    """Drop exactly the named locations, leaving same-named fields elsewhere.
+def _without_paths(value: object, paths: frozenset[SecretPath], *, path: SecretPath = ()) -> object:
+    """Drop exactly those locations, leaving same-named fields elsewhere.
 
     The paths are the ones :func:`find_unavailable_secrets` reports, so this
-    walks a configuration the same way it does — dotted keys for mappings,
-    dotted indices for sequences — and removes only what it named.
+    walks a configuration the same way it does and removes only what it named
+    — step for step, so a key that happens to spell another location's path
+    does not stand in for it.
     """
     if isinstance(value, Mapping):
         kept: dict[str, object] = {}
         for key, child in value.items():
-            child_path = f"{path}.{key}" if path else str(key)
+            child_path = (*path, str(key))
             if child_path in paths:
                 continue
             kept[str(key)] = _without_paths(child, paths, path=child_path)
         return kept
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_without_paths(child, paths, path=f"{path}.{index}") for index, child in enumerate(value)]
+        return [_without_paths(child, paths, path=(*path, index)) for index, child in enumerate(value)]
     return value
 
 
@@ -359,7 +370,7 @@ class RestoreCompensationService:
             )
             return False
         masked = frozenset(find_unavailable_secrets(live, definition.sensitive_fields))
-        unsourced = sorted(path for path in masked if not _usable_secret(_at_path(plaintext, path)))
+        unsourced = sorted(format_secret_path(path) for path in masked if not _usable_secret(_at_path(plaintext, path)))
         if unsourced:
             logger.warning(
                 "Stored version %s cannot supply the masked secrets %s, so the live snapshot is kept",

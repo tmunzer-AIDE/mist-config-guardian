@@ -535,7 +535,7 @@ async def test_a_stored_version_without_the_masked_secret_is_not_a_source(
     # The live snapshot is kept, mask and all, which is what makes the plan
     # fail closed instead of writing the object back without its key.
     assert revealed["psk"] == "********"
-    assert find_unavailable_secrets(revealed, definition.sensitive_fields) == {"psk"}
+    assert find_unavailable_secrets(revealed, definition.sensitive_fields) == {("psk",)}
 
 
 async def test_a_stored_version_whose_secret_is_itself_masked_is_not_a_source(
@@ -557,7 +557,45 @@ async def test_a_stored_version_whose_secret_is_itself_masked_is_not_a_source(
     assert find_unavailable_secrets(
         reveal_configuration(inverse.protected_configuration, vault),
         definition.sensitive_fields,
-    ) == {"psk"}
+    ) == {("psk",)}
+
+
+async def test_a_key_containing_a_dot_is_not_mistaken_for_another_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two distinct locations must not share an identity.
+
+    A key may itself contain a dot, so `{"a.b": {"secret": ...}}` and
+    `{"a": {"b": {"secret": ...}}}` both spell `a.b.secret`. While locations
+    were named that way, a mask on the first suppressed the second and stood in
+    as its source, and compensation replaced a returned, rotated secret with
+    stale plaintext.
+    """
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    live: dict[str, object] = {
+        "name": "Corp",
+        "a.b": {"secret": "********"},
+        "a": {"b": {"secret": "rotated-returned-secret"}},
+    }
+    stored_configuration: dict[str, object] = {
+        "name": "Corp",
+        "a.b": {"secret": "primary-real-secret"},
+        "a": {"b": {"secret": "stale-returned-secret"}},
+    }
+    stored = _stored_version(
+        protect_configuration(stored_configuration, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(stored_configuration, ignored_fields=IGNORED),
+    )
+    entry = _entry(live, stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    revealed = reveal_configuration(inverse.protected_configuration, vault)
+    nested = revealed["a"]
+    assert isinstance(nested, dict)
+    assert nested["b"]["secret"] == "rotated-returned-secret"
 
 
 async def test_a_stored_version_that_has_drifted_is_not_paired_with(
