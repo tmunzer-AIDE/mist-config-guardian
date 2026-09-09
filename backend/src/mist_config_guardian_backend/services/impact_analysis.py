@@ -57,7 +57,7 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
         severity = ImpactSeverity.CRITICAL
     elif unresolved or degraded or device_findings:
         severity = ImpactSeverity.WARNING
-    elif _complete_sle_comparison(baseline, latest):
+    elif deltas and _complete_sle_comparison(baseline, latest):
         severity = ImpactSeverity.NONE
     else:
         severity = ImpactSeverity.INFO

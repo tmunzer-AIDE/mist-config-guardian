@@ -1,5 +1,7 @@
 """Deterministic impact assessment tests."""
 
+import pytest
+
 from mist_config_guardian_backend.models.monitoring import (
     ImpactSeverity,
     MonitoringIncident,
@@ -85,3 +87,27 @@ def test_unexplained_missing_metric_is_not_equivalent_to_explicit_no_traffic():
     baseline = SleObservation(values={"ap-health": 99, "roaming": 99})
     latest = SleObservation(values={"ap-health": 99})
     assert assess_impact(baseline, latest, []).severity is ImpactSeverity.INFO
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ({"values": {"ap-health": 99}}, {"no_data": ["ap-health"]}),
+        ({"no_data": ["ap-health"]}, {"no_data": ["ap-health"]}),
+        ({"no_data": ["ap-health"]}, {"values": {"ap-health": 99}}),
+        (
+            {"values": {"ap-health": 99}, "no_data": ["coverage"]},
+            {"values": {"coverage": 99}, "no_data": ["ap-health"]},
+        ),
+    ],
+    ids=["measured-then-silent", "both-silent", "silent-then-measured", "no-shared-measured-metric"],
+)
+def test_complete_collection_without_a_numeric_comparison_cannot_establish_health(before, after):
+    baseline = SleObservation.model_validate(before)
+    latest = SleObservation.model_validate(after)
+    assessment = assess_impact(baseline, latest, [])
+
+    assert baseline.errors == latest.errors == []
+    assert assessment.metric_deltas == {}
+    assert assessment.severity is ImpactSeverity.INFO
+    assert "not a healthy verdict" in assessment.summary

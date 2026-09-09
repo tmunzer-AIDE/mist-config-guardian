@@ -38,9 +38,11 @@ missing metrics prevent a clean verdict and appear explicitly in the Impact page
 Valid responses with no sampled traffic are recorded in `no_data`, separately
 from `errors`. They contribute to collection coverage but receive no invented
 success rate or numeric delta. A quiet roaming or join metric therefore does not
-block a clean result for the other measured metrics; an entirely unsampled window
-is explicitly labelled as having no sampled traffic. Disruptive device evidence
-and incidents still take precedence over quiet SLEs.
+block a clean result for the other measured metrics. A clean verdict still requires
+at least one metric measured on both sides. If a previously measured device becomes
+silent, both windows are unsampled, or their measured metrics do not overlap, the
+result is INFO: insufficient evidence, rather than an assertion of health.
+Disruptive device evidence and incidents still take precedence over quiet SLEs.
 
 Actual collection happens when the worker processes the webhook and when the
 scheduler processes due work. Recorded capture times make delays visible. The

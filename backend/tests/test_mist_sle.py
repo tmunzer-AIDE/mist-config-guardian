@@ -124,7 +124,10 @@ async def test_quiet_site_response_is_no_data_rather_than_a_collection_error(buc
         "coverage",
         "ap-health",
     }
-    assert assess_impact(observation, observation, []).severity == "none"
+    # Successful collection without measurements still cannot establish health.
+    assessment = assess_impact(observation, observation, [])
+    assert assessment.severity == "info"
+    assert assessment.metric_deltas == {}
 
 
 async def test_malformed_200_response_remains_a_collection_error(httpx_mock):
