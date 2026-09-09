@@ -244,6 +244,37 @@ describe('HistoryPage', () => {
     expect(panel?.textContent).toContain('Deep Linked WLAN');
   });
 
+  it('re-resolves the compared object when a new page stops holding it', async () => {
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
+
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1/versions')
+      .flush({ items: [], total: 0 });
+    await settle(fixture);
+    http.expectNone((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1');
+
+    // The selection does not change here — the page under it does. A search
+    // narrows the rail to something else while the comparison stays open.
+    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    filter!.value = 'guest';
+    filter!.dispatchEvent(new Event('input'));
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
+      .flush({ items: [object('obj-7', 'Guest WLAN')], total: 1 });
+    await settle(fixture);
+
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1')
+      .flush(object('obj-1', 'NW-Corp'));
+    await settle(fixture);
+
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+    ).toContain('NW-Corp');
+  });
+
   it('does not re-fetch an object the rail already describes', async () => {
     const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
 

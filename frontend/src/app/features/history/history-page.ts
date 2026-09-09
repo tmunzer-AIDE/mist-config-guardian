@@ -137,6 +137,8 @@ export class HistoryPage {
    * comparison is still labelled from this.
    */
   private readonly offPageObject = signal<ConfigurationObject | null>(null);
+  /** The id being resolved right now, so a re-run cannot ask for it twice. */
+  private resolvingObjectId: string | null = null;
   private readonly versions = signal<ConfigurationVersion[]>([]);
   protected readonly selectedObjectId = signal<string | null>(null);
   private objectsRequest = 0;
@@ -401,7 +403,21 @@ export class HistoryPage {
         return;
       }
       void untracked(() => this.loadVersions(organizationId, objectId));
-      void untracked(() => this.resolveOffPageObject(organizationId, objectId));
+    });
+
+    // Resolving the compared object is its own effect because it depends on
+    // the rail as well as the selection: a search or a later page can stop
+    // holding the object without the selection changing, and the comparison
+    // panel is named from it. Tracking this alongside the version read would
+    // re-read the versions on every page of the rail.
+    effect(() => {
+      const organizationId = this.organizations.selected()?.id;
+      const objectId = this.selectedObjectId();
+      const loaded = this.objects();
+      if (!organizationId || !objectId || this.loadedOrganization !== organizationId) {
+        return;
+      }
+      void untracked(() => this.resolveOffPageObject(organizationId, objectId, loaded));
     });
 
     effect(() => {
@@ -479,6 +495,7 @@ export class HistoryPage {
   }
 
   private resetSelection(): void {
+    this.resolvingObjectId = null;
     this.offPageObject.set(null);
     this.versions.set([]);
     this.versionAId.set(null);
@@ -780,21 +797,35 @@ export class HistoryPage {
    * version reads, and those report their own errors rather than raising a
    * second banner for the same missing object.
    */
-  private async resolveOffPageObject(organizationId: string, objectId: string): Promise<void> {
-    if (this.objects().some((object) => object.id === objectId)) {
+  private async resolveOffPageObject(
+    organizationId: string,
+    objectId: string,
+    loaded: ConfigurationObject[],
+  ): Promise<void> {
+    if (loaded.some((object) => object.id === objectId)) {
+      this.resolvingObjectId = null;
       this.offPageObject.set(null);
       return;
     }
-    if (this.offPageObject()?.id === objectId) {
+    // This runs again whenever the rail changes, which can happen while the
+    // read it already started is still in flight.
+    if (this.offPageObject()?.id === objectId || this.resolvingObjectId === objectId) {
       return;
     }
+    this.resolvingObjectId = objectId;
     try {
       const object = await this.history.object(organizationId, objectId);
-      if (this.selectedObjectId() === objectId) {
+      // The rail may have caught up with the object while this was in flight,
+      // in which case it describes it and this copy is not needed.
+      if (this.selectedObjectId() === objectId && !this.objects().some((item) => item.id === objectId)) {
         this.offPageObject.set(object);
       }
     } catch {
       this.offPageObject.set(null);
+    } finally {
+      if (this.resolvingObjectId === objectId) {
+        this.resolvingObjectId = null;
+      }
     }
   }
 
