@@ -11,6 +11,7 @@
 .shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   // No minimum height: the shell is exactly as tall as the viewport and `main`
   // scrolls inside it. A floor taller than the window pushed the footer of
@@ -130,6 +131,11 @@ main {
   min-height: 0;
   overflow: auto;
   position: relative;
+}
+
+.page-host {
+  height: 100%;
+  min-height: 0;
 }
 
 .page-host--hidden {

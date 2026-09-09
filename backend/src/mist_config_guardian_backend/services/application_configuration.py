@@ -10,6 +10,7 @@ from pymongo.errors import DuplicateKeyError
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.integrations.ai_provider import (
     AiProvider,
+    AiProviderError,
     OpenAiCompatibleProvider,
 )
 from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
@@ -17,6 +18,7 @@ from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.schemas.application_configuration import (
     AiConnectionTestResponse,
     AiModelResponse,
+    AiProviderDraft,
     AiSettingsResponse,
     AiSettingsUpdate,
     ImpactAiSettingsResponse,
@@ -200,10 +202,6 @@ class ApplicationConfigurationService:
             configuration.encrypted_impact_ai_api_key = None
             configuration.impact_ai_api_key_last_four = None
 
-        if request.enabled and configuration.encrypted_impact_ai_api_key is None:
-            msg = "An AI provider API key is required before AI assistance can be enabled"
-            raise ApplicationConfigurationError(msg)
-
         configuration.impact_ai_enabled = request.enabled
         configuration.impact_ai_base_url = request.base_url
         configuration.impact_ai_model = request.model
@@ -220,23 +218,32 @@ class ApplicationConfigurationService:
             return None
         return self._runtime(configuration)
 
-    async def test_ai_connection(self, recorder: AiAuditSink | None = None) -> AiConnectionTestResponse:
-        """Prove the stored credentials and model, then persist the outcome."""
+    async def test_ai_connection(
+        self, recorder: AiAuditSink | None = None, *, draft: AiProviderDraft | None = None
+    ) -> AiConnectionTestResponse:
+        """Probe a draft, or check the stored provider and persist its outcome."""
         configuration = await self._get_or_create()
-        runtime = self._runtime(configuration)
+        runtime = self._draft_runtime(configuration, draft) if draft else self._runtime(configuration)
         provider = self._build_provider(runtime)
         started = time.perf_counter()
         try:
-            ok, detail = await provider.test_connection()
+            if runtime.model:
+                ok, detail = await provider.test_connection()
+            else:
+                await provider.list_models()
+                ok, detail = True, "Connected. Select a model, then test again to verify completions."
+        except AiProviderError as exc:
+            ok, detail = False, str(exc)
         finally:
             await provider.aclose()
         duration_ms = int((time.perf_counter() - started) * 1000)
         checked_at = utc_now()
-        configuration.impact_ai_last_test_at = checked_at
-        configuration.impact_ai_last_test_ok = ok
-        configuration.impact_ai_last_test_detail = detail
-        configuration.touch()
-        await configuration.save()
+        if draft is None:
+            configuration.impact_ai_last_test_at = checked_at
+            configuration.impact_ai_last_test_ok = ok
+            configuration.impact_ai_last_test_detail = detail
+            configuration.touch()
+            await configuration.save()
         if recorder is not None:
             await recorder.record(
                 AiRequestRecord(
@@ -250,10 +257,12 @@ class ApplicationConfigurationService:
             )
         return AiConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
 
-    async def list_ai_models(self) -> list[AiModelResponse]:
-        """Discover the models the configured provider advertises."""
+    async def list_ai_models(self, *, draft: AiProviderDraft | None = None) -> list[AiModelResponse]:
+        """Discover models using the draft when supplied, otherwise saved settings."""
         configuration = await self._get_or_create()
-        runtime = self._runtime(configuration, require_model=False)
+        runtime = (
+            self._draft_runtime(configuration, draft) if draft else self._runtime(configuration, require_model=False)
+        )
         provider = self._build_provider(runtime)
         try:
             models = await provider.list_models()
@@ -269,6 +278,22 @@ class ApplicationConfigurationService:
         ]
 
     # -- internals ---------------------------------------------------------
+    def _draft_runtime(self, configuration: ApplicationConfiguration, draft: AiProviderDraft) -> AiRuntimeConfiguration:
+        # A draft URL must never redirect a saved credential to another server.
+        # Reusing it at a new endpoint still requires the authenticated save flow.
+        api_key = ""
+        if draft.api_key is not None:
+            api_key = draft.api_key.get_secret_value()
+        elif draft.base_url == configuration.impact_ai_base_url.rstrip("/"):
+            api_key = self._decrypt_api_key(configuration)
+        return AiRuntimeConfiguration(
+            base_url=draft.base_url,
+            model=draft.model,
+            api_key=api_key,
+            max_response_tokens=configuration.impact_ai_max_response_tokens,
+            automatic_summaries=False,
+        )
+
     def _build_provider(self, runtime: AiRuntimeConfiguration) -> AiProvider:
         return self._provider_factory(
             base_url=runtime.base_url,
@@ -301,8 +326,7 @@ class ApplicationConfigurationService:
     def _decrypt_api_key(self, configuration: ApplicationConfiguration) -> str:
         encrypted = configuration.encrypted_impact_ai_api_key
         if not encrypted:
-            msg = "An AI provider API key has not been configured"
-            raise ApplicationConfigurationError(msg)
+            return ""
         for context in (_AI_PROVIDER_KEY_CONTEXT, _IMPACT_AI_KEY_CONTEXT):
             try:
                 return self._vault.decrypt_for_context(encrypted, context=context)

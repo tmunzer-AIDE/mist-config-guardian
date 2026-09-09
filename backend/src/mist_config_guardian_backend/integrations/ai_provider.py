@@ -121,7 +121,7 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
         self._max_response_tokens = max_response_tokens
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
             timeout=timeout,
         )
 

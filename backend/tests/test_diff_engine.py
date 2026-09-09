@@ -7,6 +7,7 @@ from mist_config_guardian_backend.services.diff import (
     build_json_patch,
     count_document_lines,
     diff_configurations,
+    redact_document,
     section_label,
 )
 
@@ -307,3 +308,25 @@ def test_json_patch_escapes_pointer_segments_and_appends_list_items() -> None:
 
 def test_line_count_uses_the_taller_document() -> None:
     assert count_document_lines({"a": 1}, {"a": 1, "b": {"c": 2}}) == 6
+
+
+def test_comparisons_ignore_timestamps_in_nested_objects_and_arrays() -> None:
+    before = {"created_time": 1, "modified_time": 2, "items": [{"id": "x", "modified_time": 3, "enabled": True}]}
+    after = {"created_time": 4, "modified_time": 5, "items": [{"id": "x", "modified_time": 6, "enabled": True}]}
+    assert diff_configurations(before, after).counts.changed == 0
+    assert build_json_patch(before, after) == []
+    assert redact_document(before) == {"items": [{"id": "x", "enabled": True}]}
+    assert before["created_time"] == 1  # Stored versions are not mutated.
+
+
+def test_uncertain_encrypted_fields_follow_real_changes_without_security_flags() -> None:
+    before = {"radius": {"secret": {"$encrypted": "first"}}, "enabled": True}
+    after = {"radius": {"secret": {"$encrypted": "second"}}, "enabled": False}
+    diff = diff_configurations(before, after)
+    assert [entry.field for entry in diff.entries] == ["enabled", "radius.secret"]
+    secret = diff.entries[-1]
+    assert secret.secret_unknown is True
+    assert secret.notable is False
+    assert "cannot be compared" in secret.note
+    assert "Security-relevant" not in secret.note
+    assert diff.notable == []

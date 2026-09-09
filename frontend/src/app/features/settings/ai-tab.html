@@ -94,13 +94,13 @@
           </div>
         }
         <p class="hint">
-          Stored encrypted and never returned by the API. Only the last four characters are ever displayed,
+          Optional for endpoints that do not require authentication. Stored encrypted and never returned by the API. Only the last four characters are ever displayed,
           and leaving this field untouched keeps the stored key when you save other settings.
         </p>
       </div>
 
       <div class="test-row">
-        <button class="cg-btn" type="button" [disabled]="testState() === 'testing'" (click)="test()">
+        <button class="cg-btn" type="button" [disabled]="testState() === 'testing' || !baseUrl().trim()" (click)="test()">
           Test connection
         </button>
         @switch (testState()) {
@@ -117,6 +117,11 @@
           }
         }
       </div>
+      <p class="hint">
+        Test connection and Fetch models use the values above without saving them. A stored key is used
+        only at its saved URL; enter a key to test a different endpoint that requires one.
+        Save your settings after choosing a model.
+      </p>
       @if (lastTest()) {
         <p class="hint">{{ lastTest() }}</p>
       }
@@ -129,7 +134,7 @@
         <button
           class="cg-btn cg-btn--sm cg-btn--selected head-action"
           type="button"
-          [disabled]="fetching()"
+          [disabled]="fetching() || !baseUrl().trim()"
           (click)="fetchModels()"
         >
           Fetch models

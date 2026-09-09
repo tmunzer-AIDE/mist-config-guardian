@@ -19,6 +19,7 @@ from mist_config_guardian_backend.schemas.diff import (
     DiffEntry,
     DiffSection,
 )
+from mist_config_guardian_backend.snapshots.canonical import canonicalize
 from mist_config_guardian_backend.snapshots.secrets import redact_configuration
 
 ENCRYPTED_MARKER: Final = "$encrypted"
@@ -27,6 +28,7 @@ IDENTITY_KEYS: Final = ("id", "_id", "name", "mac", "port_id")
 COMPACT_MODE_LIMIT: Final = 8
 MAX_ENTRIES: Final = 5000
 MAX_NOTABLE: Final = 10
+COMPARISON_IGNORED_FIELDS: Final = frozenset({"created_time", "modified_time"})
 
 _VALUE_DISPLAY_LIMIT: Final = 120
 _INLINE_LIST_LIMIT: Final = 8
@@ -253,7 +255,7 @@ class _DiffBuilder:
             return
         rendered_before = DIFF_SECRET_MASK if secret and before is not ABSENT else render_value(before)
         rendered_after = DIFF_SECRET_MASK if secret and after is not ABSENT else render_value(after)
-        category = notable_category(path, kind)
+        category = None if secret_unknown else notable_category(path, kind)
         self.entries.append(
             DiffEntry(
                 field=path,
@@ -625,8 +627,11 @@ def diff_configurations(
     ``sections`` restricts entry bodies to the named sections so a large diff
     can be fetched one section at a time.
     """
+    before = comparison_document(before)
+    after = comparison_document(after)
     builder = _DiffBuilder(max_entries=max_entries)
     builder.walk("", before, after)
+    builder.entries.sort(key=lambda entry: (entry.secret, entry.secret_unknown))
     counts = builder.counts
     mode = "chips" if counts.changed <= COMPACT_MODE_LIMIT else "sections"
     all_sections = _build_sections(builder.entries, before, after)
@@ -648,9 +653,18 @@ def diff_configurations(
     )
 
 
+def comparison_document(configuration: Mapping[str, object]) -> dict[str, object]:
+    """Drop volatile metadata for comparisons, preserving immutable snapshots."""
+    return {
+        key: canonicalize(value, ignored_fields=COMPARISON_IGNORED_FIELDS)
+        for key, value in configuration.items()
+        if key not in COMPARISON_IGNORED_FIELDS
+    }
+
+
 def redact_document(configuration: Mapping[str, object]) -> dict[str, object]:
     """Return the redacted form of a stored configuration document."""
-    return redact_configuration(configuration)
+    return redact_configuration(comparison_document(configuration))
 
 
 def count_document_lines(*documents: Mapping[str, object]) -> int:

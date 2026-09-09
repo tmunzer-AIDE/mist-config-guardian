@@ -428,7 +428,7 @@ export class ImpactPage {
     if (!group || !this.canRestore()) {
       return;
     }
-    await this.router.navigate(['/restore'], { queryParams: { changeGroup: group } });
+    await this.router.navigate(['/history/restore'], { queryParams: { changeGroup: group } });
   }
 }
 

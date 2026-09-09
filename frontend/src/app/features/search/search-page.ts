@@ -18,7 +18,7 @@ const ROUTES: Record<string, string> = {
   overview: '/',
   changes: '/changes',
   history: '/history',
-  restore: '/restore',
+  restore: '/history/restore',
   impact: '/impact',
   settings: '/settings',
 };

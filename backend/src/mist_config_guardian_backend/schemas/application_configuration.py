@@ -74,6 +74,26 @@ class AiSettingsUpdate(BaseModel):
         return self
 
 
+class AiProviderDraft(BaseModel):
+    """Probe unsaved provider settings without changing the active provider."""
+
+    base_url: str = Field(max_length=2048)
+    model: str = Field(default="", max_length=255)
+    api_key: SecretStr | None = Field(default=None, max_length=4096)
+
+    @model_validator(mode="after")
+    def validate_provider(self) -> "AiProviderDraft":
+        """Normalise the endpoint and allow discovery before model selection."""
+        self.base_url = self.base_url.strip().rstrip("/")
+        self.model = self.model.strip()
+        if not self.base_url.startswith(("http://", "https://")):
+            msg = "AI base URL must use HTTP or HTTPS"
+            raise ValueError(msg)
+        if self.api_key is not None and not self.api_key.get_secret_value().strip():
+            self.api_key = None
+        return self
+
+
 class AiSettingsResponse(BaseModel):
     """Safe AI provider settings without encrypted credential material."""
 

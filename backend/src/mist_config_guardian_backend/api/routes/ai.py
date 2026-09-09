@@ -25,6 +25,7 @@ from mist_config_guardian_backend.schemas.ai import (
 from mist_config_guardian_backend.schemas.application_configuration import (
     AiConnectionTestResponse,
     AiModelListResponse,
+    AiProviderDraft,
     AiSettingsResponse,
     AiSettingsUpdate,
 )
@@ -109,10 +110,11 @@ async def check_ai_connection(
     ],
     recorder: Annotated[AiAuditRecorder, Depends(get_ai_audit_recorder)],
     _administrator: Annotated[User, Depends(require_administrator)],
+    request: AiProviderDraft | None = None,
 ) -> AiConnectionTestResponse:
-    """Check provider credentials and model, and persist the outcome."""
+    """Check a draft provider, or persist a check of the saved provider."""
     try:
-        return await settings.test_ai_connection(recorder)
+        return await settings.test_ai_connection(recorder, draft=request)
     except ApplicationConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -128,6 +130,22 @@ async def list_ai_models(
     """Discover the models the configured provider advertises."""
     try:
         items = await settings.list_ai_models()
+    except ApplicationConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except AiProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return AiModelListResponse(items=items)
+
+
+@router.post("/models")
+async def list_draft_ai_models(
+    request: AiProviderDraft,
+    settings: Annotated[ApplicationConfigurationService, Depends(get_application_configuration_service)],
+    _administrator: Annotated[User, Depends(require_administrator)],
+) -> AiModelListResponse:
+    """Discover models before saving provider settings or choosing a model."""
+    try:
+        items = await settings.list_ai_models(draft=request)
     except ApplicationConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except AiProviderError as exc:

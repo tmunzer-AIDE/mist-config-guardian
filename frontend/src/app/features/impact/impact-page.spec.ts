@@ -423,7 +423,7 @@ describe('ImpactPage', () => {
       extras: { queryParams: { group: 'cg1' } },
     });
     expect(navigations.at(-1)).toMatchObject({
-      commands: ['/restore'],
+      commands: ['/history/restore'],
       extras: { queryParams: { changeGroup: 'cg1' } },
     });
   });

@@ -13,8 +13,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { label: 'Overview', path: '/', exact: true, icon: 'overview' },
   { label: 'Changes', path: '/changes', exact: false, icon: 'changes' },
-  { label: 'History', path: '/history', exact: false, icon: 'history' },
-  { label: 'Restore', path: '/restore', exact: false, icon: 'restore' },
+  { label: 'History & Restore', path: '/history', exact: false, icon: 'history' },
   { label: 'Impact', path: '/impact', exact: false, icon: 'impact' },
   { label: 'Settings', path: '/settings', exact: false, icon: 'settings' },
 ];

@@ -27,7 +27,7 @@ class OpenAiCompatibleImpactProvider(AbstractAsyncContextManager["OpenAiCompatib
         self._model = model
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
             timeout=45,
         )
 

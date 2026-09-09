@@ -592,3 +592,104 @@ async def test_ai_settings_require_administrator() -> None:
         response = await client.get("/api/v1/ai/settings")
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/api/v1/ai/models", "/api/v1/ai/settings/test"])
+async def test_draft_provider_can_be_probed_before_saving_or_selecting_a_model(
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+) -> None:
+    configuration = _stored_configuration()
+    service = ApplicationConfigurationService(_vault(), Settings(environment="test", database_enabled=False))
+    monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
+    save = AsyncMock()
+    monkeypatch.setattr(ApplicationConfiguration, "save", save)
+    httpx_mock.add_response(method="GET", url=MODELS_URL, json={"data": [{"id": "local-model"}]})
+    app = _settings_app(service)
+    app.dependency_overrides[get_ai_audit_recorder] = _FakeRecorder
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(path, json={"base_url": BASE_URL + "/"})
+    assert response.status_code == 200
+    assert configuration.impact_ai_base_url == ""
+    assert configuration.impact_ai_last_test_at is None
+    save.assert_not_awaited()
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert "authorization" not in request.headers
+    if path.endswith("test"):
+        assert response.json()["ok"] is True
+        assert "Select a model" in response.json()["detail"]
+    else:
+        assert response.json()["items"][0]["id"] == "local-model"
+
+
+@pytest.mark.parametrize(
+    ("draft_url", "draft_key", "expected_header"),
+    [
+        (BASE_URL, None, "Bearer saved-provider-key"),
+        ("https://new.example.test/v1", None, None),
+        ("https://new.example.test/v1", "new-key", "Bearer new-key"),
+    ],
+)
+async def test_draft_probe_never_sends_a_saved_key_to_a_different_endpoint(
+    draft_url: str,
+    draft_key: str | None,
+    expected_header: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+) -> None:
+    vault = _vault()
+    configuration = _stored_configuration()
+    configuration.impact_ai_base_url = BASE_URL
+    configuration.encrypted_impact_ai_api_key = vault.encrypt_for_context(
+        "saved-provider-key",
+        context="ai-provider-key",
+    )
+    service = ApplicationConfigurationService(vault, Settings(environment="test", database_enabled=False))
+    monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{draft_url}/chat/completions",
+        json={
+            "choices": [{"message": {"content": "OK"}}],
+            "model": "draft-model",
+        },
+    )
+    app = _settings_app(service)
+    app.dependency_overrides[get_ai_audit_recorder] = _FakeRecorder
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/ai/settings/test",
+            json={
+                "base_url": draft_url,
+                "model": "draft-model",
+                "api_key": draft_key,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.headers.get("authorization") == expected_header
+    assert json.loads(request.content)["model"] == "draft-model"
+    assert configuration.impact_ai_base_url == BASE_URL
+    assert configuration.impact_ai_model == ""
+    assert "saved-provider-key" not in response.text
+
+
+async def test_ai_settings_allow_a_keyless_self_hosted_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    configuration = _stored_configuration()
+    service = ApplicationConfigurationService(_vault(), Settings(environment="test", database_enabled=False))
+    monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
+    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    result = await service.update_ai_settings(
+        AiSettingsUpdate(
+            enabled=True,
+            base_url=BASE_URL,
+            model="local-model",
+            password=SecretStr(ADMIN_PASSWORD),
+        )
+    )
+    assert result.enabled is True
+    assert result.api_key_set is False

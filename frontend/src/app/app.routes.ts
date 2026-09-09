@@ -29,14 +29,25 @@ export const routes: Routes = [
   {
     path: 'history',
     canActivate: [authGuard],
-    loadComponent: () => import('./features/history/history-page').then((m) => m.HistoryPage),
-    title: 'History · Config Guardian',
+    loadComponent: () => import('./features/history/history-workspace').then((m) => m.HistoryWorkspace),
+    title: 'History & Restore · Config Guardian',
+    children: [
+      {
+        path: '',
+        loadComponent: () => import('./features/history/history-page').then((m) => m.HistoryPage),
+      },
+      {
+        path: 'restore',
+        canActivate: [roleGuard('operator')],
+        loadComponent: () => import('./features/restore/restore-page').then((m) => m.RestorePage),
+      },
+    ],
   },
   {
     path: 'restore',
-    canActivate: [roleGuard('operator')],
-    loadComponent: () => import('./features/restore/restore-page').then((m) => m.RestorePage),
-    title: 'Restore · Config Guardian',
+    redirectTo: ({ queryParams, fragment }) => inject(Router).createUrlTree(
+      ['/history/restore'], { queryParams, fragment: fragment ?? undefined },
+    ),
   },
   {
     path: 'impact',
