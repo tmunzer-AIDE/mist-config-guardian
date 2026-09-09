@@ -1,0 +1,43 @@
+<div class="as-of">
+  <div class="as-of-label">AS OF</div>
+  <div class="as-of-value" [class.as-of-value--past]="time.isHistorical()">{{ asOfLabel() }}</div>
+</div>
+
+<div
+  class="track"
+  role="slider"
+  tabindex="0"
+  aria-label="Point in time"
+  aria-valuemin="0"
+  aria-valuemax="100"
+  [attr.aria-valuenow]="handleLeft().replace('%', '')"
+  [attr.aria-valuetext]="asOfLabel()"
+  (click)="scrub($event)"
+  (keydown)="onTrackKey($event)"
+>
+  @for (tick of ticks(); track $index) {
+    <span
+      class="tick"
+      [style.left]="tick.left"
+      [style.height]="tick.height"
+      [style.background]="tick.color"
+      [attr.title]="tick.label"
+    ></span>
+  }
+  <span class="handle-line" [style.left]="handleLeft()" [class.handle--past]="time.isHistorical()"></span>
+  <span class="handle-mark" [style.left]="handleLeft()" [class.handle--past]="time.isHistorical()"></span>
+</div>
+
+<div class="cg-pills" role="group" aria-label="Time range">
+  @for (range of ranges; track range) {
+    <button
+      class="cg-pill"
+      type="button"
+      [class.cg-pill--on]="time.range() === range"
+      [attr.aria-pressed]="time.range() === range"
+      (click)="time.setRange(range)"
+    >
+      {{ range.toUpperCase() }}
+    </button>
+  }
+</div>

@@ -1,0 +1,57 @@
+<div class="stack">
+  <section class="cg-card list">
+    <header class="list-head">
+      <h2 class="list-title">Active sessions</h2>
+      @if (hasOthers()) {
+        <button
+          class="cg-btn cg-btn--link danger-link"
+          type="button"
+          [disabled]="revokingOthers()"
+          (click)="revokeOthers()"
+        >
+          Sign out everywhere else
+        </button>
+      }
+    </header>
+
+    @for (session of rows(); track session.id) {
+      <div class="entry" [class.entry--current]="session.current">
+        <div class="entry-main">
+          <div class="entry-head">
+            <span class="entry-label">{{ session.label }}</span>
+            @if (session.current) {
+              <span class="cg-badge cg-badge--info">THIS SESSION</span>
+            }
+          </div>
+          <div class="cg-meta entry-meta">{{ session.meta }}</div>
+        </div>
+        @if (!session.current) {
+          <button
+            class="cg-btn cg-btn--link danger-link entry-action"
+            type="button"
+            [disabled]="busyId() === session.id"
+            (click)="revoke(session.id, session.label)"
+          >
+            Revoke
+          </button>
+        }
+      </div>
+    }
+
+    <p class="list-foot">
+      Every session here expires on its own. Revoking one ends it immediately, wherever it is
+      signed in.
+    </p>
+  </section>
+
+  <p class="status" role="status" aria-live="polite">
+    @if (notice()) {
+      <span class="status-text status-text--ok">{{ notice() }}</span>
+    }
+  </p>
+  <p class="status" role="alert">
+    @if (error()) {
+      <span class="status-text status-text--bad">{{ error() }}</span>
+    }
+  </p>
+</div>

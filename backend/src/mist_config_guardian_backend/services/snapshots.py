@@ -25,6 +25,8 @@ from mist_config_guardian_backend.services.service_credentials import service_to
 from mist_config_guardian_backend.snapshots.canonical import (
     changed_top_level_fields,
     configuration_hash,
+    configuration_hash_matches,
+    is_legacy_hash,
 )
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
@@ -266,7 +268,15 @@ class SnapshotService:
             .sort(-ObjectVersion.version)
             .first_or_none()
         )
-        if latest is not None and latest.configuration_hash == canonical_hash:
+        if latest is not None and configuration_hash_matches(
+            latest.configuration_hash,
+            configuration,
+            ignored_fields=definition.ignored_fields,
+        ):
+            # Unchanged, and the only moment the plaintext behind an older
+            # digest is in hand: rewrite it in the keyed generation now rather
+            # than leave the object waiting on the periodic backfill.
+            await _upgrade_stored_hash(latest, canonical_hash)
             return False
 
         version_number = 1 if latest is None else latest.version + 1
@@ -332,3 +342,20 @@ class SnapshotService:
         manifest.errors = errors
         manifest.touch()
         await manifest.save()
+
+
+async def _upgrade_stored_hash(version: ObjectVersion, canonical_hash: str) -> None:
+    """Rewrite one version's digest in the keyed generation, if it is older.
+
+    The write is conditional on the digest still being the one that was read,
+    so two workers finding the same unchanged object cannot fight over it, and
+    a version rewritten by the backfill in between is left alone.
+    """
+    previous = version.configuration_hash
+    if version.id is None or not is_legacy_hash(previous):
+        return
+    await ObjectVersion.find_one(
+        ObjectVersion.id == version.id,
+        ObjectVersion.configuration_hash == previous,
+    ).update({"$set": {"configuration_hash": canonical_hash}})
+    version.configuration_hash = canonical_hash

@@ -7,7 +7,7 @@ from typing import Self
 
 import httpx
 
-from mist_config_guardian_backend.integrations.mist import _REGION_HOSTS
+from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
 from mist_config_guardian_backend.models.monitoring import DeviceType, SleObservation
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 
@@ -36,7 +36,7 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
 
     def __init__(self, *, token: str, region: MistCloudRegion) -> None:
         self._client = httpx.AsyncClient(
-            base_url=_REGION_HOSTS[region],
+            base_url=REGION_HOSTS[region],
             headers={"Authorization": f"Token {token}"},
             timeout=30,
         )

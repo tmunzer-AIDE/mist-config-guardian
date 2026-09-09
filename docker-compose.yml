@@ -95,7 +95,11 @@ services:
     build:
       context: ./frontend
     ports:
-      - "8080:8080"
+      # Bound to the loopback interface. This file runs the application with
+      # its development defaults — a known signing key among them — so the
+      # stack it brings up must not be reachable from the network. Publish it
+      # deliberately, with deployment-unique secrets, or use the Helm chart.
+      - "127.0.0.1:8080:8080"
     depends_on:
       api:
         condition: service_healthy

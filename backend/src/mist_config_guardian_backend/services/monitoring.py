@@ -1,5 +1,6 @@
 """Device-event driven post-change monitoring."""
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -27,6 +28,7 @@ from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
     ImpactAiRuntimeConfiguration,
 )
+from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
 from mist_config_guardian_backend.services.impact_analysis import (
     ImpactAssessment,
     assess_impact,
@@ -69,6 +71,9 @@ _WINDOWS: dict[DeviceType, tuple[int, int]] = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class DeviceEvent:
     """Normalized fields from a Mist device event."""
@@ -85,20 +90,26 @@ class MonitoringEventService:
     def __init__(self, vault: CredentialVault) -> None:
         self._vault = vault
 
-    async def handle(
+    async def handle(  # noqa: PLR0911 - one return per class of device event
         self,
         receipt: WebhookReceipt,
         payload: dict[str, object],
         organization: Organization,
-    ) -> None:
-        """Apply one relevant device event."""
+    ) -> MonitoringSession | None:
+        """Apply one relevant device event and return the session it changed.
+
+        The caller rebuilds the change groups that session belongs to. It has to
+        come from here rather than a later lookup: a failure event closes its
+        session, and a device carries a history of sessions, so nothing about
+        the device alone identifies the one this event actually touched.
+        """
         if receipt.topic != "device-events":
-            return
+            return None
         event_type = self._first_string(payload, "type", "event_type")
         device_mac = self._first_string(payload, "mac", "device_mac", "ap_mac")
         site_id = self._first_string(payload, "site_id")
         if not event_type or not device_mac or not site_id:
-            return
+            return None
         event = DeviceEvent(
             event_type=event_type,
             device_mac=device_mac.replace(":", "").replace("-", "").lower(),
@@ -112,22 +123,23 @@ class MonitoringEventService:
         )
 
         if event_type in _PRE_CONFIG_EVENTS:
-            await self._start_or_merge(
+            return await self._start_or_merge(
                 receipt,
                 organization,
                 event,
                 session,
             )
-        elif event_type in _CONFIGURED_EVENTS:
-            await self._mark_configured(
+        if event_type in _CONFIGURED_EVENTS:
+            return await self._mark_configured(
                 receipt,
                 organization,
                 event,
                 session,
             )
-        elif session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
+        if session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
             await self._record_incident(session, event_type)
-        elif session is not None and event_type in _RESOLUTIONS:
+            return session
+        if session is not None and event_type in _RESOLUTIONS:
             resolved_type = _RESOLUTIONS[event_type]
             now = utc_now()
             for incident in session.incidents:
@@ -136,6 +148,8 @@ class MonitoringEventService:
                     incident.resolved_at = now
             session.touch()
             await session.save()
+            return session
+        return None
 
     @staticmethod
     async def _record_incident(
@@ -162,7 +176,7 @@ class MonitoringEventService:
         organization: Organization,
         event: DeviceEvent,
         session: MonitoringSession | None,
-    ) -> None:
+    ) -> MonitoringSession:
         if session is None:
             device_type = device_type_from_event(event.event_type)
             baseline = await self._capture(organization, event.site_id, device_type)
@@ -195,6 +209,7 @@ class MonitoringEventService:
         self._link_receipt(session, receipt)
         session.touch()
         await session.save()
+        return session
 
     async def _mark_configured(
         self,
@@ -202,7 +217,7 @@ class MonitoringEventService:
         organization: Organization,
         event: DeviceEvent,
         session: MonitoringSession | None,
-    ) -> None:
+    ) -> MonitoringSession:
         device_type = device_type_from_event(event.event_type)
         if session is None:
             session = MonitoringSession(
@@ -247,6 +262,7 @@ class MonitoringEventService:
         self._link_receipt(session, receipt)
         session.touch()
         await session.save()
+        return session
 
     async def _capture(
         self,
@@ -281,13 +297,22 @@ class MonitoringPollService:
         self,
         vault: CredentialVault,
         application_configuration: ApplicationConfigurationService,
+        projector: ChangeGroupProjector | None = None,
     ) -> None:
         self._vault = vault
         self._application_configuration = application_configuration
+        self._projector = projector or ChangeGroupProjector()
 
     async def poll_active(self) -> int:
         """Poll every due active session once."""
         now = utc_now()
+        # Collected before the bulk update, because afterwards these sessions no
+        # longer match the query and their change groups would never learn that
+        # monitoring was abandoned.
+        timed_out = await MonitoringSession.find(
+            MonitoringSession.status == MonitoringStatus.AWAITING_CONFIG,
+            {"created_at": {"$lte": now - timedelta(minutes=10)}},
+        ).to_list()
         await MonitoringSession.find(
             MonitoringSession.status == MonitoringStatus.AWAITING_CONFIG,
             {"created_at": {"$lte": now - timedelta(minutes=10)}},
@@ -305,6 +330,8 @@ class MonitoringPollService:
                 },
             }
         )
+        for session in timed_out:
+            await self._refresh_change_groups(session)
         sessions = await MonitoringSession.find(
             MonitoringSession.status == MonitoringStatus.MONITORING,
             {"next_poll_at": {"$lte": now}},
@@ -359,6 +386,24 @@ class MonitoringPollService:
             session.next_poll_at = now + timedelta(minutes=interval)
         session.touch()
         await session.save()
+        await self._refresh_change_groups(session)
+
+    async def _refresh_change_groups(self, session: MonitoringSession) -> None:
+        """Recompute the projections of every change group this session feeds.
+
+        Severity and recovery state live on the change group, so without this a
+        group's projection would only refresh on the next webhook for that audit
+        and the Changes page would keep reporting a stale recovery state. The
+        rebuild is idempotent, so running it on every poll is safe.
+        """
+        for audit_id in session.audit_ids:
+            try:
+                await self._projector.rebuild(session.organization_id, audit_id)
+            except Exception:
+                logger.exception(
+                    "Unable to refresh the change-group projection for audit %s",
+                    audit_id,
+                )
 
     async def _assess_with_ai(
         self,

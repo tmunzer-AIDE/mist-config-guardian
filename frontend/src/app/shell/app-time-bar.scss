@@ -1,0 +1,82 @@
+:host {
+  height: var(--track-height);
+  flex: none;
+  background: var(--track-fill);
+  border-bottom: 1px solid var(--header-rule);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+}
+
+:host(.past) {
+  background: var(--track-fill-past);
+  border-bottom-color: var(--header-rule-past);
+}
+
+.as-of {
+  flex: none;
+}
+
+.as-of-label {
+  font: 600 9.5px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+}
+
+.as-of-value {
+  font: 600 12.5px/1.4 var(--font-mono);
+  color: var(--brand);
+  white-space: nowrap;
+}
+
+.as-of-value--past {
+  color: var(--tone-warning-ink);
+}
+
+.track {
+  flex: 1;
+  position: relative;
+  height: 32px;
+  background: repeating-linear-gradient(to right, var(--rule-track) 0 1px, transparent 1px 28px);
+  border-bottom: 1px solid var(--border-strong);
+  cursor: crosshair;
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+.tick {
+  position: absolute;
+  bottom: 0;
+  width: 3px;
+  pointer-events: none;
+}
+
+.handle-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--brand);
+  pointer-events: none;
+}
+
+.handle-mark {
+  position: absolute;
+  top: -3px;
+  width: 9px;
+  height: 9px;
+  margin-left: -3.5px;
+  background: var(--brand);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.handle--past {
+  background: var(--tone-warning-ink);
+}

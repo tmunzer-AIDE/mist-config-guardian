@@ -1,0 +1,112 @@
+.stack {
+  max-width: 680px;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.list {
+  overflow: hidden;
+}
+
+.list-head {
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--hairline-strong);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.list-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0;
+}
+
+.entry {
+  padding: 13px 15px;
+  border-bottom: 1px solid rgba(20, 22, 26, 0.05);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+// The session reading this page is tinted so it is obvious which row has no
+// revoke control, rather than leaving a gap that reads as a missing button.
+.entry--current {
+  background: var(--surface-selected);
+}
+
+.entry-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.entry-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.entry-label {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.entry-meta {
+  margin-top: 5px;
+}
+
+.entry-action {
+  flex: none;
+}
+
+.danger-link {
+  color: var(--tone-critical-ink);
+
+  &:hover:not(:disabled) {
+    color: var(--tone-critical-hover);
+  }
+}
+
+.list-head .danger-link {
+  margin-left: auto;
+}
+
+.list-foot {
+  padding: 11px 15px;
+  background: var(--surface-sunken);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.status {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.status-text {
+  display: inline-block;
+
+  &::before {
+    margin-right: 5px;
+  }
+}
+
+.status-text--ok {
+  color: var(--tone-ok-ink);
+
+  &::before {
+    content: '✓';
+  }
+}
+
+.status-text--bad {
+  color: var(--tone-critical-ink);
+}

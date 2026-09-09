@@ -1,0 +1,242 @@
+<div class="tab-body">
+  @if (!canManage()) {
+    <p class="readonly" role="note">
+      AI Assist is configured by an administrator. Every count, field value and SLE figure in this
+      application is computed without a model, so the deterministic analysis you see is unaffected by this
+      setting.
+    </p>
+  } @else {
+    @if (notice()) {
+      <p class="notice" role="status">{{ notice() }}</p>
+    }
+    @if (error()) {
+      <p class="failure" role="alert">{{ error() }}</p>
+    }
+
+    <section class="cg-card card card--row">
+      <div class="card-copy">
+        <h3 class="card-title">AI Assist</h3>
+        <p class="card-body">
+          When enabled, change groups and diffs gain an advisory summary. Every deterministic count, field
+          value and SLE figure in this application is computed without a model — AI Assist only ever adds a
+          narrative layer on top of them.
+        </p>
+      </div>
+      <button
+        class="cg-toggle"
+        type="button"
+        role="switch"
+        [class.cg-toggle--on]="enabled()"
+        [attr.aria-checked]="enabled()"
+        (click)="toggleEnabled()"
+      >
+        <span class="cg-toggle__track" aria-hidden="true"><span class="cg-toggle__thumb"></span></span>
+        <span class="toggle-text">{{ enabled() ? 'Enabled' : 'Disabled' }}</span>
+      </button>
+    </section>
+
+    <section class="cg-card card">
+      <h3 class="card-title">Provider</h3>
+
+      <div class="field">
+        <label class="cg-label" for="ai-base-url">OPENAI-COMPATIBLE BASE URL</label>
+        <input
+          class="cg-input cg-mono field-input"
+          id="ai-base-url"
+          type="url"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="https://api.openai.com/v1"
+          [value]="baseUrl()"
+          (input)="setBaseUrl($event)"
+        />
+        <p class="hint">
+          Any endpoint that implements the OpenAI chat-completions and models APIs — including a self-hosted
+          gateway inside your own network.
+        </p>
+      </div>
+
+      <div class="field">
+        <span class="cg-label" id="ai-key-label">API KEY</span>
+        @if (keyEditing()) {
+          <div class="key-row">
+            <input
+              class="cg-input cg-mono field-input"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="sk-…"
+              aria-labelledby="ai-key-label"
+              [value]="keyDraft()"
+              (input)="setKeyDraft($event)"
+            />
+            <button
+              class="cg-btn cg-btn--sm cg-btn--primary"
+              type="button"
+              [disabled]="!keyDraft().trim() || !password() || isSaving('key')"
+              (click)="saveKey()"
+            >
+              {{ isSaving('key') ? 'Saving…' : 'Save key' }}
+            </button>
+            <button class="cg-btn cg-btn--sm" type="button" (click)="cancelKey()">Cancel</button>
+          </div>
+        } @else {
+          <div class="key-row">
+            <output class="cg-mono key-masked" aria-labelledby="ai-key-label">{{ keyMasked() }}</output>
+            <button class="cg-btn cg-btn--sm" type="button" (click)="editKey()">
+              {{ settings()?.api_key_set ? 'Replace key' : 'Add key' }}
+            </button>
+            @if (settings()?.api_key_set) {
+              <button class="cg-btn cg-btn--sm" type="button" [disabled]="isSaving('key')" (click)="clearKey()">
+                Remove key
+              </button>
+            }
+          </div>
+        }
+        <p class="hint">
+          Stored encrypted and never returned by the API. Only the last four characters are ever displayed,
+          and leaving this field untouched keeps the stored key when you save other settings.
+        </p>
+      </div>
+
+      <div class="test-row">
+        <button class="cg-btn" type="button" [disabled]="testState() === 'testing'" (click)="test()">
+          Test connection
+        </button>
+        @switch (testState()) {
+          @case ('testing') {
+            <span class="test-status" role="status">
+              <span class="cg-spinner" aria-hidden="true"></span>Contacting the endpoint…
+            </span>
+          }
+          @case ('ok') {
+            <span class="test-status test-status--ok" role="status">Reachable · {{ testDetail() }}</span>
+          }
+          @case ('failed') {
+            <span class="test-status test-status--failed" role="status">Failed · {{ testDetail() }}</span>
+          }
+        }
+      </div>
+      @if (lastTest()) {
+        <p class="hint">{{ lastTest() }}</p>
+      }
+    </section>
+
+    <section class="cg-card card">
+      <div class="card-head">
+        <h3 class="card-title">Model</h3>
+        <span class="cg-meta current">CURRENT · {{ model() || 'none selected' }}</span>
+        <button
+          class="cg-btn cg-btn--sm cg-btn--selected head-action"
+          type="button"
+          [disabled]="fetching()"
+          (click)="fetchModels()"
+        >
+          Fetch models
+        </button>
+      </div>
+
+      @switch (modelState()) {
+        @case ('loading') {
+          <div class="loading">
+            <div class="cg-skeleton skeleton"></div>
+            <span class="test-status" role="status">
+              <span class="cg-spinner" aria-hidden="true"></span>Reading the provider's model list…
+            </span>
+          </div>
+        }
+        @case ('fetched') {
+          <div class="field">
+            <label class="cg-label" for="ai-model">MODEL</label>
+            <select class="cg-select field-input" id="ai-model" (change)="setModel($event)">
+              <option value="" [selected]="model() === ''">Select a model</option>
+              @for (option of modelOptions(); track option.id) {
+                <option [value]="option.id" [selected]="option.id === model()">
+                  {{ option.label }}{{ option.detail ? ' — ' + option.detail : '' }}
+                </option>
+              }
+            </select>
+          </div>
+        }
+        @default {
+          <p class="unfetched">
+            Models are read from the endpoint rather than hard-coded, so a self-hosted gateway lists whatever
+            it actually serves. Fetch to see what this key can reach.
+          </p>
+        }
+      }
+      @if (fetchError()) {
+        <p class="failure">{{ fetchError() }}</p>
+      }
+
+      <div class="budget">
+        <label class="budget-label" for="ai-max-tokens">Response budget</label>
+        <input
+          class="cg-input cg-input--sm cg-mono budget-input"
+          id="ai-max-tokens"
+          type="number"
+          min="256"
+          max="32000"
+          [value]="maxTokens()"
+          (change)="setMaxTokens($event)"
+        />
+        <span class="hint">tokens per summary — large gateway templates need more</span>
+      </div>
+    </section>
+
+    <section class="cg-card card">
+      <h3 class="card-title">Behaviour</h3>
+      <div class="behaviour">
+        <button
+          class="cg-toggle"
+          type="button"
+          role="switch"
+          [class.cg-toggle--on]="automaticSummaries()"
+          [attr.aria-checked]="automaticSummaries()"
+          aria-describedby="ai-auto-note"
+          (click)="toggleAutomatic()"
+        >
+          <span class="cg-toggle__track" aria-hidden="true"><span class="cg-toggle__thumb"></span></span>
+          <span class="toggle-text">Summarise automatically when a diff opens</span>
+        </button>
+        <p class="hint" id="ai-auto-note">
+          Off by default. Leaving it off means no diff ever leaves your network unless someone asks for a
+          summary — which is the defensible default for a read-only tool.
+        </p>
+      </div>
+    </section>
+
+    <div class="save-bar">
+      @if (incomplete()) {
+        <p class="warn">A base URL and a model are required while AI Assist is enabled.</p>
+      }
+      <div class="confirm-field">
+        <label class="cg-label" for="ai-password">YOUR CURRENT PASSWORD</label>
+        <input
+          class="cg-input"
+          id="ai-password"
+          type="password"
+          autocomplete="current-password"
+          [value]="password()"
+          (input)="setPassword($event)"
+        />
+        <p class="hint">
+          These settings hold a provider key, so saving them confirms who is asking rather than who
+          signed in earlier.
+        </p>
+      </div>
+      <button
+        class="cg-btn cg-btn--lg cg-btn--primary"
+        type="button"
+        [disabled]="!dirty() || incomplete() || !password() || isSaving('settings')"
+        (click)="saveSettings()"
+      >
+        {{ isSaving('settings') ? 'Saving…' : 'Save provider settings' }}
+      </button>
+      <p class="hint">
+        Deterministic analysis — diffs, change groups, impact and restore — works with AI Assist switched
+        off. Nothing on this page affects it.
+      </p>
+    </div>
+  }
+</div>

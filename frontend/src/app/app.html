@@ -1,47 +1,69 @@
-<div class="app-shell">
-  @if (auth.isAuthenticated()) {
-  <aside class="sidebar">
-    <a class="brand" routerLink="/" aria-label="Mist Config Guardian home">
-      <span class="brand-mark" aria-hidden="true">MCG</span>
-      <span>
-        <strong>Mist Config</strong>
-        <small>Guardian</small>
-      </span>
-    </a>
+@if (chrome()) {
+  <div class="shell">
+    <app-sidebar [changeBadge]="overview.unrecovered()" [buildLabel]="buildLabel()" />
 
-    <nav aria-label="Primary navigation">
-      @for (item of [
-        ['Overview', '/'],
-        ['Changes', '/changes'],
-        ['Configuration history', '/history'],
-        ['Restore center', '/restores'],
-        ['Impact monitoring', '/monitoring'],
-        ['Organizations', '/organizations'],
-        ['Administration', '/administration']
-      ]; track item[1]) {
-        <a [routerLink]="item[1]" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: item[1] === '/' }">
-          {{ item[0] }}
-        </a>
+    <div class="frame">
+      @if (time.isHistorical()) {
+        <div class="past-banner" role="status">
+          <span class="past-marker" aria-hidden="true"></span>
+          <b>Viewing {{ asOfLabel() }}</b>
+          <span class="past-detail">— {{ pastDelta() }} behind now. Write operations are disabled.</span>
+          <button class="past-return" type="button" (click)="returnToNow()">Return to now</button>
+        </div>
       }
-    </nav>
 
-    <div class="security-note">
-      <strong>Read-only by default</strong>
-      <span>Mist writes require fresh administrator authentication.</span>
+      <app-header
+        [class.past]="time.isHistorical()"
+        [unread]="notifications.unread()"
+        [serviceHealthy]="health.healthy()"
+        [buildLabel]="buildLabel()"
+        (openNotifications)="openDrawer()"
+      />
+
+      @if (showTimeBar()) {
+        <app-time-bar [class.past]="time.isHistorical()" />
+      }
+
+      @if (ui.error(); as error) {
+        <div class="error-banner" role="alert">
+          <span class="error-tag">ERROR</span>
+          <div class="error-body">
+            <div class="error-title">{{ error.title }}</div>
+            <div class="error-detail">{{ error.detail }}</div>
+            <div class="error-code">{{ error.code }}</div>
+          </div>
+          <button class="error-dismiss" type="button" (click)="ui.clearError()">Dismiss</button>
+        </div>
+      }
+
+      <main class="cg-scroll">
+        <!-- The outlet stays mounted while loading; the skeleton overlays it so
+             a page's own initial fetch cannot destroy and re-create the page. -->
+        <div class="page-host" [class.page-host--hidden]="ui.loading()">
+          <router-outlet />
+        </div>
+
+        @if (ui.loading()) {
+          <div class="loading" role="status" aria-live="polite">
+            <div class="cg-skeleton loading-title"></div>
+            @for (height of skeletons; track $index) {
+              <div class="cg-skeleton" [style.height.px]="height"></div>
+            }
+            <div class="loading-label">
+              <span class="cg-spinner" aria-hidden="true"></span>{{ ui.label() }}
+            </div>
+          </div>
+        }
+      </main>
     </div>
-    <button class="logout" type="button" (click)="logout()">Sign out</button>
-  </aside>
-  }
 
-  <main [class.full-width]="!auth.isAuthenticated()">
-    <header>
-      <div>
-        <p class="eyebrow">Configuration resilience</p>
-        <h1>Mist Config Guardian</h1>
-      </div>
-      <span class="foundation-status">Foundation ready</span>
-    </header>
+    @if (drawerOpen()) {
+      <app-notification-drawer (closed)="drawerOpen.set(false)" />
+    }
 
-    <router-outlet />
-  </main>
-</div>
+    <!-- Raised by the interceptor, from wherever the blocked request came. -->
+    <app-step-up-prompt />
+  </div>
+} @else {
+  <router-outlet />
+}

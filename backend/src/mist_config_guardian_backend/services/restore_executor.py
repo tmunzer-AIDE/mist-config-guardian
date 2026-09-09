@@ -1,5 +1,7 @@
 """Fail-closed execution of reviewed restore plans."""
 
+from dataclasses import dataclass, field
+
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.integrations.mist_mutation import (
@@ -22,6 +24,15 @@ from mist_config_guardian_backend.models.snapshot import (
     VersionEvent,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.notifications import NotificationService
+from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot
+from mist_config_guardian_backend.services.restore_planner import (
+    RestoreStateStore,
+    RestoreVerificationResult,
+    get_restore_state_store,
+    load_or_build_state,
+)
+from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition
@@ -30,20 +41,43 @@ from mist_config_guardian_backend.snapshots.secrets import (
     reveal_configuration,
 )
 
+_MAX_REPORTED_CHECKS = 3
+
 
 class RestoreExecutionError(ValueError):
     """Raised when a plan cannot safely begin execution."""
 
 
+@dataclass
+class _RunOutcome:
+    """What one pass over the action list produced."""
+
+    succeeded: bool = True
+    id_map: dict[str, str] = field(default_factory=dict)
+    applied: dict[int, dict[str, object]] = field(default_factory=dict)
+
+
 class RestoreExecutor:
     """Execute one plan in persisted dependency order."""
 
-    def __init__(self, vault: CredentialVault) -> None:
+    def __init__(
+        self,
+        vault: CredentialVault,
+        *,
+        store: RestoreStateStore | None = None,
+        notifications: NotificationService | None = None,
+        verifier: RestoreVerificationService | None = None,
+    ) -> None:
         self._vault = vault
+        self._store = store or get_restore_state_store()
+        self._notifications = notifications or NotificationService()
+        self._verifier = verifier or RestoreVerificationService(self._store)
 
     async def execute(self, operation_id: PydanticObjectId) -> RestoreOperation:
         """Execute pending actions once using the delegated Mist identity."""
         operation, organization, token = await self._prepare(operation_id)
+        state = await load_or_build_state(self._store, operation)
+        compensating = state.compensates_operation_id is not None
         operation.status = RestoreStatus.RUNNING
         operation.started_at = utc_now()
         operation.touch()
@@ -54,19 +88,47 @@ class RestoreExecutor:
             region=organization.cloud_region,
         ) as client:
             try:
-                await self._validate_live_state(client, organization, operation)
+                state.safety_snapshot = await capture_safety_snapshot(
+                    client,
+                    organization,
+                    operation,
+                    self._vault,
+                    relaxed=compensating,
+                )
             except MistMutationError as exc:
                 await self._fail_preflight(operation, str(exc))
+                await self._notify_failure(operation, str(exc))
                 return operation
-            if not await self._run_actions(client, organization, operation):
-                return operation
+            await self._store.save(state)
 
-        operation.status = RestoreStatus.COMPLETED
-        operation.completed_at = utc_now()
+            outcome = await self._run_actions(client, organization, operation)
+            if not outcome.succeeded:
+                await self._notify_failure(operation, _failure_reason(operation))
+                return operation
+            verification = await self._verifier.verify(
+                client,
+                organization,
+                operation,
+                id_map=outcome.id_map,
+                applied=outcome.applied,
+            )
+
         operation.encrypted_delegated_credential = None
         operation.delegated_credential_expires_at = None
+        operation.completed_at = utc_now()
+        if not verification.verified:
+            await self._fail_verification(operation, verification)
+            return operation
+        operation.status = RestoreStatus.COMPENSATED if compensating else RestoreStatus.COMPLETED
         operation.touch()
         await operation.save()
+        if compensating and state.compensates_operation_id is not None:
+            await self._mark_compensated(operation.organization_id, state.compensates_operation_id)
+        await self._notifications.notify_restore_completed(
+            organization_id=operation.organization_id,
+            restore_id=str(operation.id),
+            applied_count=sum(1 for action in operation.actions if action.status is RestoreActionStatus.COMPLETED),
+        )
         return operation
 
     async def _prepare(
@@ -77,6 +139,8 @@ class RestoreExecutor:
         if operation is None:
             msg = "Restore operation not found"
             raise RestoreExecutionError(msg)
+        # The queued status is the idempotency guard: a redelivered task finds a
+        # running or finished operation here and refuses to apply it twice.
         if operation.status is not RestoreStatus.QUEUED:
             msg = "Restore operation is not ready to execute"
             raise RestoreExecutionError(msg)
@@ -113,25 +177,76 @@ class RestoreExecutor:
         client: MistMutationClient,
         organization: Organization,
         operation: RestoreOperation,
-    ) -> bool:
-        id_map: dict[str, str] = {}
+    ) -> _RunOutcome:
+        outcome = _RunOutcome()
         for index, action in enumerate(operation.actions):
             if action.status is RestoreActionStatus.COMPLETED:
                 if action.resulting_mist_id:
-                    id_map[action.current_mist_id] = action.resulting_mist_id
+                    outcome.id_map[action.current_mist_id] = action.resulting_mist_id
                 continue
             try:
-                await self._execute_action(
+                outcome.applied[action.order] = await self._execute_action(
                     client,
                     organization,
                     operation,
                     index,
-                    id_map,
+                    outcome.id_map,
                 )
             except MistMutationError as exc:
-                await self._fail_operation(operation, index, str(exc))
-                return False
-        return True
+                await self._fail_operation(
+                    operation,
+                    index,
+                    str(exc),
+                    action_failed=operation.actions[index].status is not RestoreActionStatus.COMPLETED,
+                )
+                outcome.succeeded = False
+                return outcome
+        return outcome
+
+    async def _notify_failure(self, operation: RestoreOperation, reason: str) -> None:
+        await self._notifications.notify_restore_failed(
+            organization_id=operation.organization_id,
+            restore_id=str(operation.id),
+            reason=reason,
+        )
+
+    async def _fail_verification(
+        self,
+        operation: RestoreOperation,
+        verification: RestoreVerificationResult,
+    ) -> None:
+        """Refuse to report success while a post-restore check is failing."""
+        failed = [check for check in verification.checks if check.status == "failed"]
+        listed = "; ".join(check.detail or check.label for check in failed[:_MAX_REPORTED_CHECKS])
+        if len(failed) > _MAX_REPORTED_CHECKS:
+            listed = f"{listed}; +{len(failed) - _MAX_REPORTED_CHECKS} more"
+        reason = f"Post-restore verification failed: {listed}"
+        operation.status = (
+            RestoreStatus.COMPENSATION_AVAILABLE
+            if any(item.status is RestoreActionStatus.COMPLETED for item in operation.actions)
+            else RestoreStatus.FAILED
+        )
+        operation.preflight_errors.append(reason)
+        operation.touch()
+        await operation.save()
+        await self._notify_failure(operation, reason)
+
+    @staticmethod
+    async def _mark_compensated(
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> None:
+        await RestoreOperation.find_one(
+            RestoreOperation.id == operation_id,
+            RestoreOperation.organization_id == organization_id,
+        ).update(
+            {
+                "$set": {
+                    "status": RestoreStatus.COMPENSATED,
+                    "updated_at": utc_now(),
+                }
+            }
+        )
 
     @staticmethod
     async def _fail_preflight(
@@ -146,45 +261,6 @@ class RestoreExecutor:
         operation.touch()
         await operation.save()
 
-    @staticmethod
-    async def _validate_live_state(
-        client: MistMutationClient,
-        organization: Organization,
-        operation: RestoreOperation,
-    ) -> None:
-        """Abort before writes when live state differs from the reviewed plan."""
-        for action in operation.actions:
-            definition = get_definition(action.scope, action.object_type)
-            if definition is None:
-                msg = f"Unsupported restore type: {action.scope}:{action.object_type}"
-                raise MistMutationError(msg)
-            current = await client.get_current(
-                definition,
-                action.current_mist_id,
-                org_id=organization.mist_org_id,
-                site_id=action.site_mist_id,
-            )
-            if action.action is RestoreActionType.CREATE:
-                if current is not None:
-                    msg = f"{action.object_name} was recreated after this plan was reviewed"
-                    raise MistMutationError(msg)
-                continue
-            if action.expected_current_hash is None:
-                if current is not None:
-                    msg = f"{action.object_name} was recreated after this plan was reviewed"
-                    raise MistMutationError(msg)
-                continue
-            if current is None:
-                msg = f"{action.object_name} no longer exists"
-                raise MistMutationError(msg)
-            current_hash = configuration_hash(
-                current,
-                ignored_fields=definition.ignored_fields,
-            )
-            if current_hash != action.expected_current_hash:
-                msg = f"{action.object_name} changed after this plan was reviewed"
-                raise MistMutationError(msg)
-
     async def _execute_action(
         self,
         client: MistMutationClient,
@@ -192,7 +268,7 @@ class RestoreExecutor:
         operation: RestoreOperation,
         index: int,
         id_map: dict[str, str],
-    ) -> None:
+    ) -> dict[str, object]:
         action = operation.actions[index]
         definition = get_definition(action.scope, action.object_type)
         if definition is None:
@@ -247,6 +323,13 @@ class RestoreExecutor:
                 site_id=site_id,
             )
 
+        # The write has happened in Mist: persist that fact before any local
+        # bookkeeping can fail, so compensation knows what was applied.
+        action.status = RestoreActionStatus.COMPLETED
+        operation.actions[index] = action
+        operation.touch()
+        await operation.save()
+
         await self._record_result(
             operation,
             action,
@@ -254,10 +337,7 @@ class RestoreExecutor:
             result or payload,
             site_id=site_id,
         )
-        action.status = RestoreActionStatus.COMPLETED
-        operation.actions[index] = action
-        operation.touch()
-        await operation.save()
+        return payload
 
     async def _record_result(
         self,
@@ -344,9 +424,12 @@ class RestoreExecutor:
         operation: RestoreOperation,
         action_index: int,
         message: str,
+        *,
+        action_failed: bool = True,
     ) -> None:
         action = operation.actions[action_index]
-        action.status = RestoreActionStatus.FAILED
+        if action_failed:
+            action.status = RestoreActionStatus.FAILED
         action.error = message
         operation.actions[action_index] = action
         operation.failure_action_order = action.order
@@ -360,6 +443,14 @@ class RestoreExecutor:
         operation.delegated_credential_expires_at = None
         operation.touch()
         await operation.save()
+
+
+def _failure_reason(operation: RestoreOperation) -> str:
+    """Describe why a run stopped, for the mandatory failure notification."""
+    for action in operation.actions:
+        if action.error:
+            return f"{action.object_name}: {action.error}"
+    return "Restore execution stopped before completing every action"
 
 
 def prepare_restore_payload(

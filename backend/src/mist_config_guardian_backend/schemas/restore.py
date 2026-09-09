@@ -1,4 +1,4 @@
-"""Restore planning and execution schemas."""
+"""Restore planning, targeting, verification, and execution schemas."""
 
 from datetime import datetime
 
@@ -13,6 +13,12 @@ from mist_config_guardian_backend.models.restore import (
     RestoreOperation,
     RestoreStatus,
 )
+from mist_config_guardian_backend.schemas.approval import ApprovalResponse
+from mist_config_guardian_backend.services.restore_planner import (
+    RestoreVerificationResult,
+    VerificationStatus,
+)
+from mist_config_guardian_backend.services.restore_targets import RestoreTargetPage
 from mist_config_guardian_backend.snapshots.secrets import redact_configuration
 
 
@@ -75,6 +81,9 @@ class RestoreOperationResponse(BaseModel):
     id: str
     mode: RestoreMode
     include_dependencies: bool
+    # The versions the requester chose; empty on operations planned before it
+    # was recorded, which a client must treat as not rebuildable.
+    requested_version_ids: list[str] = Field(default_factory=list)
     target_at: datetime
     status: RestoreStatus
     actions: list[RestoreActionResponse]
@@ -85,17 +94,32 @@ class RestoreOperationResponse(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     task_id: str | None
+    approval: ApprovalResponse | None = None
+    compensation_available: bool = False
 
     @classmethod
-    def from_document(cls, operation: RestoreOperation) -> "RestoreOperationResponse":
+    def from_document(
+        cls,
+        operation: RestoreOperation,
+        *,
+        approval: ApprovalResponse | None = None,
+        compensation_available: bool | None = None,
+    ) -> "RestoreOperationResponse":
         """Create an API response with no credential material."""
         if operation.id is None:
             msg = "Persisted restore operation is missing an identifier"
             raise ValueError(msg)
         return cls(
+            approval=approval,
+            compensation_available=(
+                operation.status is RestoreStatus.COMPENSATION_AVAILABLE
+                if compensation_available is None
+                else compensation_available
+            ),
             id=str(operation.id),
             mode=operation.mode,
             include_dependencies=operation.include_dependencies,
+            requested_version_ids=[str(version_id) for version_id in operation.requested_version_ids],
             target_at=operation.target_at,
             status=operation.status,
             actions=[RestoreActionResponse.from_model(action) for action in operation.actions],
@@ -114,3 +138,93 @@ class RestoreOperationListResponse(BaseModel):
 
     items: list[RestoreOperationResponse]
     total: int
+
+
+class RestoreTargetResponse(BaseModel):
+    """One restorable object version offered on restore step one."""
+
+    logical_object_id: str
+    version_id: str
+    name: str
+    object_type: str
+    scope: str
+    site_mist_id: str | None
+    site_name: str | None
+    version: int
+    observed_at: datetime
+
+
+class RestoreTargetTypeCountResponse(BaseModel):
+    """One object-type facet count."""
+
+    type: str
+    count: int
+
+
+class RestoreTargetSiteResponse(BaseModel):
+    """One site facet entry."""
+
+    id: str
+    name: str
+
+
+class RestoreTargetListResponse(BaseModel):
+    """Restore targets with the facet vocabularies the filter rows render."""
+
+    items: list[RestoreTargetResponse]
+    total: int
+    types: list[RestoreTargetTypeCountResponse]
+    sites: list[RestoreTargetSiteResponse]
+
+    @classmethod
+    def from_page(cls, page: RestoreTargetPage) -> "RestoreTargetListResponse":
+        """Create an API response from one searched page of targets."""
+        return cls(
+            items=[
+                RestoreTargetResponse(
+                    logical_object_id=target.logical_object_id,
+                    version_id=target.version_id,
+                    name=target.name,
+                    object_type=target.object_type,
+                    scope=target.scope,
+                    site_mist_id=target.site_mist_id,
+                    site_name=target.site_name,
+                    version=target.version,
+                    observed_at=target.observed_at,
+                )
+                for target in page.items
+            ],
+            total=page.total,
+            types=[RestoreTargetTypeCountResponse(type=item.type, count=item.count) for item in page.types],
+            sites=[RestoreTargetSiteResponse(id=item.id, name=item.name) for item in page.sites],
+        )
+
+
+class VerificationCheckResponse(BaseModel):
+    """One named post-restore check and its outcome."""
+
+    label: str
+    status: VerificationStatus
+    detail: str | None = None
+
+
+class RestoreVerificationResponse(BaseModel):
+    """Post-restore checks, snapshot, and reopened monitoring sessions."""
+
+    verified: bool
+    checks: list[VerificationCheckResponse]
+    post_snapshot_id: str | None
+    monitoring_session_ids: list[str]
+
+    @classmethod
+    def from_result(cls, result: RestoreVerificationResult) -> "RestoreVerificationResponse":
+        """Create an API response from a persisted verification result."""
+        return cls(
+            verified=result.verified,
+            checks=[
+                VerificationCheckResponse(label=check.label, status=check.status, detail=check.detail)
+                for check in result.checks
+            ],
+            post_snapshot_id=result.post_snapshot_id,
+            monitoring_session_ids=list(result.monitoring_session_ids),
+        )

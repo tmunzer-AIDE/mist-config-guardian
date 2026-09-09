@@ -1,0 +1,260 @@
+<div class="columns">
+  <div class="main">
+    <section class="cg-card panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Restore targets</h2>
+        <p class="panel-meta">
+          Showing {{ showing() }} of {{ total() }} restorable objects ·
+          {{ selectedIds().length }} selected
+        </p>
+      </div>
+
+      @if (changeGroupTitle(); as group) {
+        <div class="scoped">
+          <span class="cg-badge cg-badge--info">CHANGE GROUP</span>
+          <span class="scoped-text">
+            Pre-selected from the versions “{{ group }}” replaced.
+          </span>
+          <button class="cg-btn cg-btn--link" type="button" (click)="changeGroupCleared.emit()">
+            Clear this selection
+          </button>
+        </div>
+      }
+
+      <div class="filters">
+        <div class="filter-row">
+          <span class="cg-label filter-key">SCOPE</span>
+          <div class="chips" role="group" aria-label="Target scope">
+            @for (option of scopes; track option.value) {
+              <button
+                class="cg-chip"
+                type="button"
+                [class.cg-chip--on]="scope() === option.value"
+                [attr.aria-pressed]="scope() === option.value"
+                (click)="scopePicked.emit(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            }
+          </div>
+
+          @if (scope() === 'site') {
+            <label class="site-picker">
+              <span class="cg-visually-hidden">Site</span>
+              <select
+                class="cg-select cg-input--sm site-select"
+                (change)="sitePicked.emit(selectValue($event))"
+              >
+                @for (option of siteOptions(); track option.value) {
+                  <option [value]="option.value" [selected]="option.value === siteId()">
+                    {{ option.label }}
+                  </option>
+                }
+              </select>
+            </label>
+          }
+
+          <label class="search">
+            <span class="cg-visually-hidden">Filter targets by name</span>
+            <span class="search-mark" aria-hidden="true"></span>
+            <input
+              class="search-input"
+              type="search"
+              placeholder="Filter by name"
+              [value]="query()"
+              (change)="queryChanged.emit(inputValue($event))"
+            />
+          </label>
+        </div>
+
+        <div class="filter-row filter-row--types">
+          <span class="cg-label filter-key filter-key--top">TYPE</span>
+          <div class="chips" role="group" aria-label="Object type">
+            @for (option of typeOptions(); track option.value) {
+              <button
+                class="cg-chip"
+                type="button"
+                [class.cg-chip--on]="objectType() === option.value"
+                [attr.aria-pressed]="objectType() === option.value"
+                (click)="typePicked.emit(option.value)"
+              >
+                {{ option.label }} <span class="chip-count">{{ option.count }}</span>
+              </button>
+            }
+          </div>
+        </div>
+      </div>
+
+      @if (pills().length > 0) {
+        <div class="selected">
+          <span class="cg-label">SELECTED</span>
+          @for (pill of pills(); track pill.id) {
+            <span class="pill">
+              {{ pill.label }}
+              <button
+                class="pill-remove"
+                type="button"
+                [attr.aria-label]="'Remove ' + pill.label + ' from the restore selection'"
+                [disabled]="readOnly()"
+                (click)="targetRemoved.emit(pill.id)"
+              >
+                ✕
+              </button>
+            </span>
+          }
+          <button
+            class="cg-btn cg-btn--link"
+            type="button"
+            [disabled]="readOnly()"
+            (click)="cleared.emit()"
+          >
+            Clear all
+          </button>
+        </div>
+      }
+
+      @if (noMatches()) {
+        <div class="blank">
+          <div class="blank-title">No objects match these filters</div>
+          <p class="blank-body">Selected targets are kept regardless of the filter.</p>
+          <button class="cg-btn cg-btn--sm" type="button" (click)="filtersCleared.emit()">
+            Clear filters
+          </button>
+        </div>
+      }
+
+      @if (isEmpty()) {
+        <div class="blank">
+          <div class="blank-title">No restorable objects yet</div>
+          <p class="blank-body">
+            Restore targets appear once this organization has captured configuration history.
+          </p>
+        </div>
+      }
+
+      @if (rows().length > 0) {
+        <fieldset class="targets">
+          <legend class="cg-visually-hidden">Restore targets</legend>
+          @for (row of rows(); track row.id) {
+            <label class="target" [class.target--on]="row.selected">
+              <input
+                class="target-box"
+                type="checkbox"
+                [checked]="row.selected"
+                [disabled]="readOnly()"
+                (change)="targetToggled.emit(row.id)"
+              />
+              <span class="target-body">
+                <span class="target-name">{{ row.name }}</span>
+                <span class="target-kind">{{ row.kind }}</span>
+              </span>
+              <span class="target-side">
+                <span class="target-version">{{ row.version }}</span>
+                <span class="target-at">{{ row.at }}</span>
+              </span>
+            </label>
+          }
+        </fieldset>
+
+        @if (capped()) {
+          <p class="capped">
+            {{ matched() }} objects match — narrow the filters to reach the rest.
+          </p>
+        }
+      }
+    </section>
+
+    <section class="cg-card panel">
+      <h2 class="panel-title mode-title">Restore mode</h2>
+      <div class="modes" role="radiogroup" aria-label="Restore mode">
+        <label class="mode" [class.mode--on]="mode() === 'non_destructive'">
+          <input
+            class="cg-visually-hidden"
+            type="radio"
+            name="restore-mode"
+            value="non_destructive"
+            [checked]="mode() === 'non_destructive'"
+            [disabled]="readOnly()"
+            (change)="modePicked.emit('non_destructive')"
+          />
+          <span class="mode-name">Non-destructive</span>
+          <span class="mode-body">
+            Restore the selected state and leave everything else alone. Objects created since the
+            target moment survive.
+          </span>
+        </label>
+        <label class="mode" [class.mode--on]="mode() === 'exact'">
+          <input
+            class="cg-visually-hidden"
+            type="radio"
+            name="restore-mode"
+            value="exact"
+            [checked]="mode() === 'exact'"
+            [disabled]="readOnly()"
+            (change)="modePicked.emit('exact')"
+          />
+          <span class="mode-name">Exact point-in-time</span>
+          <span class="mode-body">
+            Reproduce the historical state exactly, deleting objects that did not exist then.
+            Requires approval.
+          </span>
+        </label>
+      </div>
+
+      <div class="deps">
+        <button
+          class="cg-toggle"
+          type="button"
+          role="switch"
+          [class.cg-toggle--on]="includeDependencies()"
+          [attr.aria-checked]="includeDependencies()"
+          [disabled]="readOnly()"
+          (click)="dependenciesToggled.emit(!includeDependencies())"
+        >
+          <span class="cg-toggle__track"><span class="cg-toggle__thumb"></span></span>
+          Include dependencies and contained objects
+        </button>
+      </div>
+
+      <div class="build">
+        <button
+          class="cg-btn cg-btn--primary cg-btn--lg"
+          type="button"
+          [disabled]="!canPlan()"
+          (click)="planRequested.emit()"
+        >
+          Build restore plan
+        </button>
+        <p class="build-note">
+          Planning is side-effect free — it reads the current state and computes an ordered action
+          list.
+        </p>
+      </div>
+
+      @if (readOnly()) {
+        <p class="read-only-note" role="note">{{ readOnlyNote() }}</p>
+      }
+    </section>
+  </div>
+
+  <aside class="rail">
+    <section class="cg-card panel panel--flush">
+      <h2 class="rail-title">Recent restore operations</h2>
+      @for (row of historyRows(); track row.id) {
+        <button class="entry" type="button" (click)="operationPicked.emit(row.id)">
+          <span class="entry-head">
+            <span class="entry-id cg-mono">{{ row.label }}</span>
+            <span class="entry-badge" [class]="'cg-badge cg-badge--' + row.tone">
+              {{ row.status }}
+            </span>
+          </span>
+          <span class="entry-meta">{{ row.meta }}</span>
+          <span class="entry-at">{{ row.at }}</span>
+        </button>
+      }
+      @if (historyRows().length === 0) {
+        <p class="rail-empty">No restores have been run for this organization.</p>
+      }
+    </section>
+  </aside>
+</div>

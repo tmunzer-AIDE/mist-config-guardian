@@ -1,0 +1,413 @@
+// Shared control primitives transcribed from the approved prototype.
+// Every declaration mirrors a computed value present in docs/design/prototype.html.
+
+// ---------------------------------------------------------------- typography
+.cg-mono {
+  font-family: var(--font-mono);
+}
+
+.cg-label {
+  font: 600 9.5px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+
+.cg-meta {
+  font: 400 10.5px/1.4 var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.cg-page-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.cg-page-sub {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+// -------------------------------------------------------------------- button
+.cg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: center;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.88);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+.cg-btn--primary {
+  border-color: transparent;
+  background: var(--brand-gradient);
+  color: var(--ink-invert);
+  box-shadow:
+    0 1px 2px rgba(20, 22, 26, 0.14),
+    0 8px 18px -10px rgba(39, 67, 163, 0.75);
+
+  &:hover:not(:disabled) {
+    background: var(--brand-gradient-hover);
+  }
+}
+
+.cg-btn--danger {
+  border-color: transparent;
+  background: var(--tone-critical-gradient);
+  color: var(--ink-invert);
+  box-shadow:
+    0 1px 2px rgba(20, 22, 26, 0.14),
+    0 8px 18px -10px rgba(185, 28, 28, 0.7);
+
+  &:hover:not(:disabled) {
+    background: var(--tone-critical-gradient-hover);
+  }
+}
+
+.cg-btn--selected {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.cg-btn--sm {
+  font-size: 11.5px;
+  padding: 6px 11px;
+}
+
+.cg-btn--lg {
+  font-size: 12.5px;
+  padding: 9px 15px;
+
+  &.cg-btn--primary {
+    box-shadow:
+      0 1px 2px rgba(20, 22, 26, 0.14),
+      0 8px 18px -10px rgba(39, 67, 163, 0.75);
+  }
+}
+
+.cg-btn--link {
+  border: 0;
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--brand);
+  font-size: 11.5px;
+
+  &:hover:not(:disabled) {
+    background: none;
+    color: var(--brand-hover);
+  }
+}
+
+// --------------------------------------------------------------------- badge
+.cg-badge {
+  display: inline-block;
+  font: 600 10px var(--font-mono);
+  letter-spacing: 0.02em;
+  padding: 2.5px 7px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  background: var(--tone-none-soft);
+  color: var(--tone-none-ink);
+  border: 1px solid var(--tone-none-line);
+}
+
+.cg-badge--crit {
+  background: var(--tone-critical-ink);
+  color: var(--ink-invert);
+  border-color: transparent;
+}
+
+.cg-badge--warn {
+  background: var(--tone-warning-soft);
+  color: var(--tone-warning-ink);
+  border-color: var(--tone-warning-line);
+}
+
+.cg-badge--ok {
+  background: var(--tone-ok-soft);
+  color: var(--tone-ok-ink);
+  border-color: var(--tone-ok-line);
+}
+
+.cg-badge--info {
+  background: var(--tone-info-soft);
+  color: var(--tone-info-ink);
+  border-color: var(--tone-info-line);
+}
+
+// ---------------------------------------------------------------------- chip
+.cg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--ink-muted);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+.cg-chip--on {
+  border-color: rgba(39, 67, 163, 0.45);
+  background: linear-gradient(180deg, rgba(232, 236, 248, 0.95), rgba(232, 236, 248, 0.72));
+  color: var(--brand);
+  box-shadow: var(--shadow-brand);
+}
+
+// --------------------------------------------------------------- pill group
+.cg-pills {
+  display: flex;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font: 500 11px var(--font-mono);
+}
+
+.cg-pill {
+  padding: 5px 10px;
+  cursor: pointer;
+  border: 0;
+  border-left: 1px solid rgba(20, 22, 26, 0.1);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink-muted);
+  font: inherit;
+
+  &:first-child {
+    border-left: 0;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: -2px;
+  }
+}
+
+.cg-pill--on {
+  background: var(--brand-gradient);
+  color: var(--ink-invert);
+}
+
+// ---------------------------------------------------------------------- card
+.cg-card {
+  background: var(--glass-fill);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+
+.cg-panel {
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-xl);
+}
+
+// -------------------------------------------------------------------- inputs
+.cg-input,
+.cg-select {
+  font: 400 12.5px var(--font-sans);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  color: var(--ink);
+  width: 100%;
+
+  &::placeholder {
+    color: var(--ink-dim);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: -1px;
+  }
+
+  &:disabled {
+    background: var(--surface-warm);
+    color: var(--ink-faint);
+    cursor: not-allowed;
+  }
+}
+
+.cg-select {
+  cursor: pointer;
+}
+
+.cg-input--sm {
+  font-size: 11.5px;
+  padding: 5px 8px;
+}
+
+// ------------------------------------------------------------------- toggle
+.cg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-muted);
+  border: 0;
+  background: none;
+  padding: 0;
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+.cg-toggle__track {
+  width: 30px;
+  height: 17px;
+  border-radius: var(--radius-pill);
+  background: var(--rule-heavy);
+  position: relative;
+  flex: none;
+  transition: background 0.15s ease;
+}
+
+.cg-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgba(20, 22, 26, 0.25);
+  transition: transform 0.15s ease;
+}
+
+.cg-toggle--on .cg-toggle__track {
+  background: var(--brand);
+}
+
+.cg-toggle--on .cg-toggle__thumb {
+  transform: translateX(13px);
+}
+
+// --------------------------------------------------------------------- tabs
+.cg-tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.cg-tab {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 0 0 9px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+.cg-tab--on {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--brand);
+}
+
+// ---------------------------------------------------------------- skeletons
+.cg-skeleton {
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    90deg,
+    rgba(20, 22, 26, 0.06) 25%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(20, 22, 26, 0.06) 75%
+  );
+  background-size: 320px 100%;
+  animation: cg-shimmer 1.1s linear infinite;
+}
+
+.cg-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--rule-heavy);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: cg-spin 0.7s linear infinite;
+  display: block;
+  flex: none;
+}
+
+// ----------------------------------------------------------------- surfaces
+.cg-menu {
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-menu);
+  overflow: hidden;
+  animation: cg-in 0.14s ease-out;
+}
+
+.cg-scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cg-skeleton,
+  .cg-spinner,
+  .cg-menu {
+    animation: none;
+  }
+}

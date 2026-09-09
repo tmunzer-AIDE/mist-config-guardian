@@ -14,6 +14,8 @@ backend/                       FastAPI API and Celery workers
 frontend/                      Angular application
 helm/mist-config-guardian/     Kubernetes Helm chart
 docs/product-specification.md  Approved product and technical baseline
+docs/design/prototype.html     Approved interface design, rendered
+docs/openapi.json              Published API contract
 docker-compose.yml             Local and single-node deployment
 ```
 
@@ -30,7 +32,60 @@ make frontend
 ```
 
 The API runs at `http://localhost:8000` and the Angular development server at
-`http://localhost:4200`.
+`http://localhost:4200`. The development server proxies `/api` to the API, so
+sign-in cookies are same-origin.
+
+## API contract
+
+`docs/openapi.json` is the contract the browser application and any integration
+are written against. It is generated from the code, so `make check` fails when
+the two disagree. Regenerate it after changing any endpoint:
+
+```bash
+make openapi
+```
+
+The document records what the schemas alone cannot: the two ways a client
+authenticates, how the three roles nest, the difference between the stored
+read-only service token and the delegated administrator credential every Mist
+write requires, and the header that makes writes refuse while a client is
+browsing a past point in time. Outside production the same document is browsable
+at `http://localhost:8000/docs`.
+
+### Compatibility changes
+
+`configuration_hash` has been **removed** from the object version responses of
+`GET /api/v1/organizations/{organization_id}/objects/{logical_object_id}/versions`
+and `GET /api/v1/organizations/{organization_id}/point-in-time/objects/{logical_object_id}`.
+
+The digest was taken over the plaintext configuration while those responses
+carry the same configuration with its secrets redacted. Publishing both let any
+reader confirm a guessed secret offline: they hold every other field, so one
+hash per guess is enough. A client that read the field for change detection
+should compare `version` instead, or use the diff endpoint, which reports what
+actually differs.
+
+The stored digest is now a keyed HMAC and carries a `v2:` prefix. It is derived
+from `CREDENTIAL_ENCRYPTION_KEY`, so it shares that key's lifecycle: rotating
+the key means re-encrypting stored secrets and re-hashing alongside them.
+Digests written before this change are still recognised wherever one is
+compared, and the `hashes.backfill_configuration_hashes` worker task rewrites
+them in the background, so no deployment step is required.
+
+## Interface design
+
+`docs/design/prototype.html` is the approved design. It is a reference artifact,
+not a dependency: the application implements it natively in Angular, with the
+prototype's computed colours, type, spacing, and elevation transcribed into
+`frontend/src/styles/`. IBM Plex Sans and Mono are self-hosted from
+`frontend/public/fonts`, so no deployment contacts an external font CDN.
+
+Open it side by side with the running application to check a change against the
+design:
+
+```bash
+python3 -m http.server 4310 --directory docs/design
+```
 
 ## Docker Compose
 
@@ -45,12 +100,13 @@ The application is served at `http://localhost:8080`.
 ## Helm
 
 The chart includes `questions.yaml` for guided installation in Rancher-compatible
-catalog UIs. Configure the container images, the datastores, networking, and
-application secrets through the form.
+catalog UIs. Configure the container images, workload sizing, the datastores,
+networking, and application secrets through the form.
 
-MongoDB, Redis, and InfluxDB are deployed with the release by default. Set
-`mongodb.enabled`, `redis.enabled`, or `influxdb.enabled` to `false` to point
-the application at an existing service through `config` instead.
+MongoDB, Redis, and InfluxDB are deployed with the release by default, each with
+a persistent volume. Set `mongodb.enabled`, `redis.enabled`, or
+`influxdb.enabled` to `false` to point the application at an existing service
+through `config` instead.
 
 By default, the chart reads sensitive settings from the Secret named by
 `existingSecret`. It must contain `SECRET_KEY`, `BOOTSTRAP_ADMIN_TOKEN`,
@@ -69,7 +125,7 @@ percent-encoding: letters, digits, and any of `-._~`. The URIs are assembled
 inside the pod from the Secret, so no password is written to a ConfigMap or
 into the rendered manifest.
 
-#### Rotating the MongoDB credentials
+### Rotating the MongoDB credentials
 
 **`MONGODB_ROOT_USERNAME` and `MONGODB_ROOT_PASSWORD` are set at first install
 only.** MongoDB creates the account when its data directory is empty and then
@@ -91,7 +147,7 @@ Then update `MONGODB_ROOT_PASSWORD` in the Secret and restart the application:
 kubectl rollout restart deploy -l app.kubernetes.io/instance=<release>
 ```
 
-#### Rotating the Redis password
+### Rotating the Redis password
 
 `REDIS_PASSWORD` has no such constraint — Redis reads it when the container
 starts — but a changed Secret does not restart anything on its own.
