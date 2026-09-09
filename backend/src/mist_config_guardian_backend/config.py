@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Mist Config Guardian"
-    app_version: str = "0.6.1"
+    app_version: str = "0.6.2"
     environment: Literal["development", "test", "production"] = "development"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
