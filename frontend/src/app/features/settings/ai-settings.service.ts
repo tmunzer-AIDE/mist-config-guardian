@@ -8,8 +8,7 @@ import { API_ROOT } from '../../core/api';
  * Safe AI provider settings.
  *
  * The API never returns the stored key; only `api_key_last_four` is ever
- * displayed, and the plaintext key exists in this application for the single
- * turn of a save request.
+ * displayed. A typed key is sent only in save or draft probe request bodies.
  */
 export interface AiSettings {
   enabled: boolean;
@@ -44,6 +43,12 @@ export interface AiConnectionTest {
   ok: boolean;
   detail: string;
   checked_at: string;
+}
+
+export interface AiProviderDraft {
+  base_url: string;
+  model: string;
+  api_key?: string;
 }
 
 /** One model the configured provider advertises. */
@@ -81,10 +86,13 @@ export class AiSettingsService {
     return settings;
   }
 
-  async test(): Promise<AiConnectionTest> {
+  async test(draft?: AiProviderDraft): Promise<AiConnectionTest> {
     const result = await firstValueFrom(
-      this.http.post<AiConnectionTest>(`${API_ROOT}/ai/settings/test`, {}),
+      this.http.post<AiConnectionTest>(`${API_ROOT}/ai/settings/test`, draft ?? null),
     );
+    if (draft) {
+      return result;
+    }
     this.settingsState.update((current) =>
       current === null
         ? current
@@ -99,8 +107,10 @@ export class AiSettingsService {
   }
 
   /** Read the models the configured provider actually advertises. */
-  async fetchModels(): Promise<AiModel[]> {
-    const response = await firstValueFrom(this.http.get<AiModelList>(`${API_ROOT}/ai/models`));
+  async fetchModels(draft?: AiProviderDraft): Promise<AiModel[]> {
+    const response = await firstValueFrom(draft
+      ? this.http.post<AiModelList>(`${API_ROOT}/ai/models`, draft)
+      : this.http.get<AiModelList>(`${API_ROOT}/ai/models`));
     const items = response.items.filter((item) => Boolean(item.id));
     this.modelsState.set(items);
     return items;

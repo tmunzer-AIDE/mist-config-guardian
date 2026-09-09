@@ -308,8 +308,8 @@ export class HistoryPage {
         rows: visible.map((entry, index) => ({
           key: `${section.key}:${entry.field}:${index}`,
           field: entry.field,
-          kind: entry.kind,
-          tone: entryTone(entry.kind),
+          kind: entry.secret_unknown ? 'PROTECTED' : entry.kind,
+          tone: entry.secret ? 'none' : entryTone(entry.kind),
           before: diffValue(entry.before),
           after: diffValue(entry.after),
           removed: entry.kind === 'REMOVED',
@@ -666,7 +666,7 @@ export class HistoryPage {
     if (!versionId || !this.canRestore()) {
       return;
     }
-    await this.router.navigate(['/restore'], { queryParams: { versions: versionId } });
+    await this.router.navigate(['/history/restore'], { queryParams: { versions: versionId } });
   }
 
   protected async openAiSettings(): Promise<void> {

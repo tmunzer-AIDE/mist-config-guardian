@@ -57,13 +57,15 @@
       </main>
     </div>
 
-    @if (drawerOpen()) {
-      <app-notification-drawer (closed)="drawerOpen.set(false)" />
-    }
-
-    <!-- Raised by the interceptor, from wherever the blocked request came. -->
-    <app-step-up-prompt />
   </div>
+
+  @if (drawerOpen()) {
+    <app-notification-drawer (closed)="drawerOpen.set(false)" />
+  }
+
+  <!-- Overlays sit outside the grid: even a closed prompt has a component
+       host, which otherwise creates an empty second row in the shell. -->
+  <app-step-up-prompt />
 } @else {
   <router-outlet />
 }

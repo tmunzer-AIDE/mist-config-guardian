@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, u
 
 import { AuthService } from '../../core/auth.service';
 import { formatInstant } from '../../core/format';
-import { AiSettings, AiSettingsService, AiSettingsUpdate } from './ai-settings.service';
+import { AiProviderDraft, AiSettings, AiSettingsService, AiSettingsUpdate } from './ai-settings.service';
 
 type TestState = 'idle' | 'testing' | 'ok' | 'failed';
 
@@ -11,8 +11,8 @@ type TestState = 'idle' | 'testing' | 'ok' | 'failed';
  * The AI Assist panel.
  *
  * The API key is write-only by design: the API returns only its last four
- * characters, and this panel never puts a typed key anywhere but the body of
- * the request that stores it. A blank key field is therefore not "no key" — it
+ * characters, and sends a typed key only in save or provider probe requests.
+ * A blank key field is therefore not "no key" — it
  * means "keep the stored one", which is why the key is omitted from the update
  * unless the operator explicitly typed a replacement.
  */
@@ -99,7 +99,8 @@ export class AiTab {
       this.baseUrl().trim() !== current.base_url ||
       this.model() !== current.model ||
       this.maxTokens() !== current.max_response_tokens ||
-      this.automaticSummaries() !== current.automatic_summaries
+      this.automaticSummaries() !== current.automatic_summaries ||
+      (this.keyEditing() && this.keyDraft().trim() !== '')
     );
   });
 
@@ -168,6 +169,7 @@ export class AiTab {
 
   protected setModel(event: Event): void {
     this.model.set((event.target as HTMLSelectElement).value);
+    this.testState.set('idle');
     this.touched();
   }
 
@@ -182,6 +184,8 @@ export class AiTab {
 
   protected setKeyDraft(event: Event): void {
     this.keyDraft.set((event.target as HTMLInputElement).value);
+    this.ai.forgetModels();
+    this.testState.set('idle');
   }
 
   protected editKey(): void {
@@ -203,9 +207,17 @@ export class AiTab {
   }
 
   // ---------------------------------------------------------------- actions
-  /** Persist everything except the key, which a blank field must never clear. */
+  /** Save the complete draft; an untouched key field keeps the stored key. */
   protected async saveSettings(): Promise<void> {
-    await this.persist('settings', this.updateBody(), 'Provider settings saved.');
+    const key = this.keyEditing() ? this.keyDraft().trim() : '';
+    const saved = await this.persist('settings', {
+      ...this.updateBody(),
+      ...(key ? { api_key: key } : {}),
+    }, 'Provider settings saved.');
+    if (saved) {
+      this.keyDraft.set('');
+      this.keyEditing.set(false);
+    }
   }
 
   protected async saveKey(): Promise<void> {
@@ -213,7 +225,9 @@ export class AiTab {
     if (!key) {
       return;
     }
-    await this.persist('key', { ...this.updateBody(), api_key: key }, 'API key stored.');
+    if (!await this.persist('key', { ...this.updateBody(), api_key: key }, 'API key stored.')) {
+      return;
+    }
     this.keyDraft.set('');
     this.keyEditing.set(false);
     this.ai.forgetModels();
@@ -221,7 +235,9 @@ export class AiTab {
   }
 
   protected async clearKey(): Promise<void> {
-    await this.persist('key', { ...this.updateBody(), clear_api_key: true }, 'API key removed.');
+    if (!await this.persist('key', { ...this.updateBody(), clear_api_key: true }, 'API key removed.')) {
+      return;
+    }
     this.keyEditing.set(false);
     this.keyDraft.set('');
   }
@@ -233,7 +249,7 @@ export class AiTab {
     this.fetching.set(true);
     this.fetchError.set('');
     try {
-      const items = await this.ai.fetchModels();
+      const items = await this.ai.fetchModels(this.providerDraft());
       if (items.length === 0) {
         this.fetchError.set('The endpoint returned no models for this key.');
       }
@@ -251,13 +267,22 @@ export class AiTab {
     this.testState.set('testing');
     this.testDetail.set('');
     try {
-      const result = await this.ai.test();
+      const result = await this.ai.test(this.providerDraft());
       this.testState.set(result.ok ? 'ok' : 'failed');
       this.testDetail.set(result.detail);
     } catch (cause) {
       this.testState.set('failed');
       this.testDetail.set(detailOf(cause));
     }
+  }
+
+  private providerDraft(): AiProviderDraft {
+    const key = this.keyEditing() ? this.keyDraft().trim() : '';
+    return {
+      base_url: this.baseUrl().trim(),
+      model: this.model().trim(),
+      ...(key ? { api_key: key } : {}),
+    };
   }
 
   private updateBody(): AiSettingsUpdate {
@@ -271,9 +296,9 @@ export class AiTab {
     };
   }
 
-  private async persist(key: string, body: AiSettingsUpdate, success: string): Promise<void> {
+  private async persist(key: string, body: AiSettingsUpdate, success: string): Promise<boolean> {
     if (this.saving()) {
-      return;
+      return false;
     }
     this.saving.set(key);
     this.error.set('');
@@ -281,8 +306,10 @@ export class AiTab {
     try {
       await this.ai.save(body);
       this.notice.set(success);
+      return true;
     } catch (cause) {
       this.error.set(detailOf(cause));
+      return false;
     } finally {
       // The password authorises one change. Leaving it in the field let anyone
       // who reached the unlocked session make the next one without knowing it.

@@ -150,7 +150,7 @@ export class OverviewPage {
   protected async planRestore(group: ChangeGroupSummary): Promise<void> {
     // The restore page resolves the change group into pre-selected targets so
     // the operator lands on step 1 with the right objects already chosen.
-    await this.router.navigate(['/restore'], { queryParams: { changeGroup: group.id } });
+    await this.router.navigate(['/history/restore'], { queryParams: { changeGroup: group.id } });
   }
 
   protected async openImpact(group: ChangeGroupSummary): Promise<void> {
@@ -158,11 +158,11 @@ export class OverviewPage {
   }
 
   protected async openApproval(restoreOperationId: string): Promise<void> {
-    await this.router.navigate(['/restore'], { queryParams: { operation: restoreOperationId, step: 'authorize' } });
+    await this.router.navigate(['/history/restore'], { queryParams: { operation: restoreOperationId, step: 'authorize' } });
   }
 
   protected async openCompensation(operationId: string): Promise<void> {
-    await this.router.navigate(['/restore'], { queryParams: { operation: operationId, compensate: 1 } });
+    await this.router.navigate(['/history/restore'], { queryParams: { operation: operationId, compensate: 1 } });
   }
 
   protected async openSettings(): Promise<void> {

@@ -70,3 +70,16 @@ textarea {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+// Propagate the available shell height through routed page hosts. Long pages
+// retain their natural height and scroll inside main, including on phones.
+:where(.page-host, .workspace-content) > router-outlet + * {
+  display: block;
+  height: 100%;
+  min-height: 100%;
+}
+
+.page-host > router-outlet + * > .page,
+.workspace-content > router-outlet + * > .page {
+  min-height: 100%;
+}

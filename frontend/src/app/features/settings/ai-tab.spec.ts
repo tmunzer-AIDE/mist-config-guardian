@@ -8,6 +8,10 @@ import { AiTab } from './ai-tab';
 
 interface TabInternals {
   saveSettings(): Promise<void>;
+  test(): Promise<void>;
+  baseUrl: { set(value: string): void };
+  model: { set(value: string): void };
+  keyEditing(): boolean;
   saveKey(): Promise<void>;
   clearKey(): Promise<void>;
   editKey(): void;
@@ -187,4 +191,55 @@ describe('AiTab', () => {
     expect(tab.modelOptions()[0].detail).toBe('served by openai · 128k context');
     expect((fixture.nativeElement as HTMLElement).querySelector('select#ai-model')).not.toBeNull();
   });
+  it('tests the unsaved endpoint and key without saving settings', async () => {
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+    tab.baseUrl.set('http://oracle.example.test:8000/v1');
+    tab.model.set('');
+    tab.editKey();
+    tab.keyDraft.set('draft-key');
+    const pending = tab.test();
+    const request = http.expectOne('/api/v1/ai/settings/test');
+    expect(request.request.body).toEqual({
+      base_url: 'http://oracle.example.test:8000/v1', model: '', api_key: 'draft-key',
+    });
+    http.expectNone((request) => request.method === 'PUT');
+    request.flush({ ok: true, detail: 'Connected. Select a model.', checked_at: '2026-09-09T12:00:00Z' });
+    await pending;
+    expect(TestBed.inject(AiSettingsService).settings()?.last_test_at).toBeNull();
+  });
+
+  it('discovers models from the unsaved endpoint', async () => {
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+    tab.baseUrl.set('http://oracle.example.test:8000/v1');
+    tab.model.set('');
+    const pending = tab.fetchModels();
+    const request = http.expectOne('/api/v1/ai/models');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ base_url: 'http://oracle.example.test:8000/v1', model: '' });
+    request.flush({ items: [{ id: 'local-model', owned_by: null, context_window: null }] });
+    await pending;
+    expect(tab.modelOptions().map((item) => item.id)).toEqual(['local-model']);
+  });
+
+  it('keeps an edited key after a failed save and saves it with the complete form', async () => {
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+    tab.editKey();
+    tab.keyDraft.set('draft-key');
+    tab.password.set('wrong-password');
+    const failed = tab.saveKey();
+    http.expectOne('/api/v1/ai/settings').flush({ detail: 'Wrong password' }, { status: 403, statusText: 'Forbidden' });
+    await failed;
+    expect(tab.keyEditing()).toBe(true);
+    tab.password.set('correct-password');
+    const saved = tab.saveSettings();
+    const request = http.expectOne('/api/v1/ai/settings');
+    expect(request.request.body.api_key).toBe('draft-key');
+    request.flush({ ...STORED, api_key_last_four: '-key' });
+    await saved;
+    expect(tab.keyEditing()).toBe(false);
+  });
+
 });

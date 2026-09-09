@@ -382,7 +382,7 @@ export class RestorePage {
       // The identifiers in the link belong to the organization it was written
       // for; under another one they name nothing. The URL is cleared rather
       // than left to fail, and the effect re-runs with the empty link.
-      void this.router.navigate(['/restore'], { queryParams: {} });
+      void this.router.navigate(['/history/restore'], { queryParams: {} });
       return;
     }
     void this.applyLink(organizationId, link, token);
@@ -486,7 +486,7 @@ export class RestorePage {
   private canonicalize(organizationId: string, operationId: string | null, replaceUrl = false): void {
     this.appliedLink = linkKey(organizationId, { ...EMPTY_LINK, operation: operationId ?? '' });
     this.appliedOrganization = organizationId;
-    void this.router.navigate(['/restore'], {
+    void this.router.navigate(['/history/restore'], {
       queryParams: operationId ? { operation: operationId } : {},
       replaceUrl,
     });

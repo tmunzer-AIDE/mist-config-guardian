@@ -277,6 +277,41 @@
         "title": "AiModelResponse",
         "type": "object"
       },
+      "AiProviderDraft": {
+        "description": "Probe unsaved provider settings without changing the active provider.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 4096,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "maxLength": 2048,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 255,
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url"
+        ],
+        "title": "AiProviderDraft",
+        "type": "object"
+      },
       "AiSettingsResponse": {
         "description": "Safe AI provider settings without encrypted credential material.",
         "properties": {
@@ -6356,6 +6391,55 @@
         "tags": [
           "AI Assist"
         ]
+      },
+      "post": {
+        "description": "Discover models before saving provider settings or choosing a model.",
+        "operationId": "list_draft_ai_models_api_v1_ai_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiProviderDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiModelListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "List Draft Ai Models",
+        "tags": [
+          "AI Assist"
+        ]
       }
     },
     "/api/v1/ai/settings": {
@@ -6440,8 +6524,25 @@
     },
     "/api/v1/ai/settings/test": {
       "post": {
-        "description": "Check provider credentials and model, and persist the outcome.",
+        "description": "Check a draft provider, or persist a check of the saved provider.",
         "operationId": "check_ai_connection_api_v1_ai_settings_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AiProviderDraft"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -6452,6 +6553,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

@@ -31,6 +31,23 @@
   overflow-wrap: anywhere;
 }
 
+.card--secret {
+  background: var(--surface-raised);
+  border-color: var(--hairline-strong);
+  box-shadow: none;
+
+  .card-field,
+  .card-arrow,
+  .secret-label {
+    color: var(--ink-soft);
+  }
+
+  .secret-label {
+    display: block;
+    margin-bottom: 8px;
+  }
+}
+
 .card-values {
   display: flex;
   align-items: center;

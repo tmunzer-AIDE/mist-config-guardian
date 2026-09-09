@@ -318,7 +318,7 @@ export class ChangesPage {
   }
 
   protected async planRestore(id: string): Promise<void> {
-    await this.router.navigate(['/restore'], { queryParams: { changeGroup: id } });
+    await this.router.navigate(['/history/restore'], { queryParams: { changeGroup: id } });
   }
 
   /** A restore is a write, so it is hidden for viewers and in historical mode. */

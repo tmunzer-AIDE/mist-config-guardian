@@ -1,7 +1,10 @@
 @if (compact()) {
   <div class="cards">
     @for (card of cards(); track card.key) {
-      <article class="card">
+      <article class="card" [class.card--secret]="card.secret">
+        @if (card.secret) {
+          <span class="cg-label secret-label">PROTECTED FIELD</span>
+        }
         <div class="card-field cg-mono">{{ card.field }}</div>
         <div class="card-values cg-mono">
           <span class="card-before">{{ card.before }}</span>

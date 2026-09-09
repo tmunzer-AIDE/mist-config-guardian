@@ -560,7 +560,7 @@ describe('RestorePage', () => {
     expect(JSON.stringify(navigations)).not.toContain('a-fresh-administrator-token');
     // The only navigation is the plan becoming the page's canonical URL.
     expect(navigations).toEqual([
-      { commands: ['/restore'], extras: { queryParams: { operation: 'op-1' }, replaceUrl: true } },
+      { commands: ['/history/restore'], extras: { queryParams: { operation: 'op-1' }, replaceUrl: true } },
     ]);
     expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
   });
@@ -812,7 +812,7 @@ describe('RestorePage', () => {
 
     expect(text()).not.toContain('RUNNING');
     expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
-    expect(navigations).toEqual([{ commands: ['/restore'], extras: { queryParams: {} } }]);
+    expect(navigations).toEqual([{ commands: ['/history/restore'], extras: { queryParams: {} } }]);
     // The first organization's poll is gone with its operation.
     vi.advanceTimersByTime(20_000);
     await tick();
@@ -859,7 +859,7 @@ describe('RestorePage', () => {
     await settle();
 
     expect(navigations).toEqual([
-      { commands: ['/restore'], extras: { queryParams: { operation: 'op-9' }, replaceUrl: false } },
+      { commands: ['/history/restore'], extras: { queryParams: { operation: 'op-9' }, replaceUrl: false } },
     ]);
     expect(all('.step-button--on')[0].textContent).toContain('2 ·');
   });
@@ -886,7 +886,7 @@ describe('RestorePage', () => {
     await settle();
 
     // A refresh must return to an empty picker, not to the finished operation.
-    expect(navigations).toEqual([{ commands: ['/restore'], extras: { queryParams: {}, replaceUrl: false } }]);
+    expect(navigations).toEqual([{ commands: ['/history/restore'], extras: { queryParams: {}, replaceUrl: false } }]);
     expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
     expect(text()).not.toContain('COMPLETED');
   });
@@ -964,7 +964,7 @@ describe('RestorePage', () => {
 
     expect(all('.step-button--on')[0].textContent).toContain('2 ·');
     expect(navigations.at(-1)).toEqual({
-      commands: ['/restore'],
+      commands: ['/history/restore'],
       extras: { queryParams: { operation: 'op-2' }, replaceUrl: true },
     });
   });
@@ -1202,7 +1202,7 @@ describe('RestorePage', () => {
     await settle();
 
     expect(all('.pill').length).toBe(0);
-    expect(navigations).toEqual([{ commands: ['/restore'], extras: { queryParams: {}, replaceUrl: true } }]);
+    expect(navigations).toEqual([{ commands: ['/history/restore'], extras: { queryParams: {}, replaceUrl: true } }]);
   });
 
   it('offers compensation for a failed run and names what it will reverse', async () => {
