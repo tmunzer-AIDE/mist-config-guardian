@@ -1,11 +1,11 @@
 image:
   repository: docker.io/tmunzer/mist-config-guardian
-  tag: "0.6.0"
+  tag: "0.6.1"
   pullPolicy: IfNotPresent
 
 frontendImage:
   repository: docker.io/tmunzer/mist-config-guardian-frontend
-  tag: "0.6.0"
+  tag: "0.6.1"
   pullPolicy: IfNotPresent
 
 replicaCount: 1
