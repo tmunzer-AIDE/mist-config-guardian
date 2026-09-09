@@ -1,87 +1,74 @@
-<section class="col col--objects" aria-label="Configuration objects">
-  <div class="col-head">
-    <h2 class="cg-label col-title">OBJECTS</h2>
-    <div class="filter">
-      <span class="filter-mark" aria-hidden="true"></span>
-      <input
-        class="filter-input"
-        type="search"
-        placeholder="Filter by name or type"
-        aria-label="Filter by name or type"
-        [value]="query()"
-        (input)="setQuery($event)"
-      />
+<header class="library-head">
+  <div>
+    <h1 class="cg-page-title">Configuration library</h1>
+    <p>Find an object, open its versions, then compare or restore.</p>
+  </div>
+  @if (library() && selectedObject(); as object) {
+    <button class="cg-btn return-selected" (click)="selectObject(object.id)">Back to {{ object.name }}</button>
+  }
+  @if (!library()) {
+    <button class="cg-btn" type="button" (click)="browseObjects()">← All objects</button>
+  }
+  @if (restorable()) {
+    <button class="cg-btn" type="button" (click)="restoreActivity()">Restore activity</button>
+  }
+</header>
+
+@if (restoreOpen()) {
+  <section class="restore-inline" aria-label="Restore selected version">
+    <header class="restore-inline-head">
+      <h2>{{ routeParams().get('versions') || routeParams().get('operation') ? 'Restore plan' : 'Restore activity' }}</h2>
+      <button class="cg-btn" type="button" (click)="closeRestore()">Back to {{ library() ? 'objects' : 'versions' }}</button>
+    </header>
+    <app-restore-page [embedded]="true" [versions]="routeParams().get('versions') ?? ''"
+      [operation]="routeParams().get('operation') ?? ''" [changeGroup]="routeParams().get('changeGroup') ?? ''"
+      [step]="routeParams().get('step') ?? ''" [compensate]="routeParams().get('compensate') ?? ''" />
+  </section>
+} @else if (library()) {
+  <section class="library-body" aria-label="Stored objects">
+    <div class="library-filters">
+      <input class="cg-input library-search filter-input" type="search" placeholder="Search by name, type or Mist ID"
+        aria-label="Search stored objects" [value]="query()" (input)="setQuery($event)" />
+      <select class="cg-select" aria-label="Object type" [value]="typeFilter()" (change)="setFilter('type', $event)">
+        <option value="">All object types</option>
+        @for (type of facets().types; track type.id) { <option [value]="type.id">{{ type.name }} ({{ type.count }})</option> }
+      </select>
+      <select class="cg-select" aria-label="Site" [value]="siteFilter()" (change)="setFilter('site', $event)">
+        <option value="">All sites</option>
+        @for (site of facets().sites; track site.id) { <option [value]="site.id">{{ site.name }} ({{ site.count }})</option> }
+      </select>
+      <select class="cg-select" aria-label="Scope" [value]="scopeFilter()" (change)="setFilter('scope', $event)">
+        <option value="">All scopes</option><option value="org">Organization</option><option value="site">Site</option>
+      </select>
+      <button class="cg-btn" [attr.aria-pressed]="showDeleted()" (click)="toggleDeleted()">{{ showDeleted() ? 'Including deleted' : 'Show deleted' }}</button>
     </div>
-  </div>
-
-  <div class="col-body cg-scroll">
-    @for (group of objectGroups(); track group.label) {
-      <h3 class="cg-label group">{{ group.label }}</h3>
-      @for (row of group.items; track row.id) {
-        <button
-          class="object"
-          type="button"
-          [class.object--on]="row.selected"
-          [class.object--deleted]="row.deleted"
-          [attr.aria-pressed]="row.selected"
-          (click)="selectObject(row.id)"
-        >
-          <span class="object-top">
-            <span class="object-name">{{ row.name }}</span>
-            @if (row.deleted) {
-              <span class="object-tomb">DELETED</span>
-            }
-            <span class="object-version">{{ row.version }}</span>
-          </span>
-          <span class="object-meta">{{ row.meta }}</span>
-        </button>
-      }
+    <p class="cg-meta" role="status">{{ objectCountLabel() }}</p>
+    <div class="library-table cg-scroll-x">
+      <table>
+        <thead><tr><th>Object</th><th>Type</th><th>Site / scope</th><th>Versions</th><th>Last captured</th><th></th></tr></thead>
+        <tbody>
+          @for (object of catalogue(); track object.id) {
+            <tr [class.deleted-row]="object.is_deleted">
+              <td><button class="object-link" (click)="selectObject(object.id)">{{ object.name }}</button><small>{{ object.current_mist_id }}</small></td>
+              <td>{{ object.typeLabel }}</td><td>{{ object.siteLabel }}</td><td>{{ object.current_version }}</td><td>{{ object.updated }}</td>
+              <td><button class="cg-btn cg-btn--sm" (click)="selectObject(object.id)">View versions →</button></td>
+            </tr>
+          } @empty {
+            <tr><td colspan="6">{{ noObjects() ? 'No stored objects yet.' : 'No objects match these filters.' }}</td></tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    @if (hasMoreObjects()) {
+      <button class="cg-btn load-more more-btn" [disabled]="loadingMore()" (click)="loadMoreObjects()">{{ loadingMore() ? 'Loading…' : 'Load more objects' }}</button>
     }
-
-    @if (noObjects()) {
-      <p class="col-empty">No configuration objects have been captured for this organization yet.</p>
-    } @else if (noMatches()) {
-      <p class="col-empty">No object matches that filter.</p>
-    }
-
-    @if (objectsTotal() > 0) {
-      <div class="more">
-        <p class="more-count" role="status" aria-live="polite">{{ objectCountLabel() }}</p>
-        @if (hasMoreObjects()) {
-          <button
-            class="cg-btn cg-btn--sm more-btn"
-            type="button"
-            [disabled]="loadingMore()"
-            (click)="loadMoreObjects()"
-          >
-            @if (loadingMore()) {
-              <span class="cg-spinner" aria-hidden="true"></span>
-            }
-            {{ loadingMore() ? 'Loading…' : 'Load more ' + objectPageSize }}
-          </button>
-        }
-      </div>
-    }
-  </div>
-
-  <div class="col-foot">
-    <button
-      class="cg-toggle"
-      type="button"
-      [class.cg-toggle--on]="showDeleted()"
-      [attr.aria-pressed]="showDeleted()"
-      (click)="toggleDeleted()"
-    >
-      <span class="cg-toggle__track" aria-hidden="true"><span class="cg-toggle__thumb"></span></span>
-      Show deleted
-    </button>
-  </div>
-</section>
-
+  </section>
+} @else {
+  <div class="detail-layout">
 <section class="col col--versions" aria-label="Versions">
   <div class="col-head col-head--ruled">
     <h2 class="cg-label col-title">VERSIONS</h2>
-    <p class="col-hint">Newest is B, previous is A</p>
+    <p class="col-hint">Choose a before and after version to compare, or restore any version below.</p>
   </div>
 
   <div class="col-body cg-scroll">
@@ -99,7 +86,7 @@
               [attr.aria-label]="'Compare from ' + row.label"
               (click)="pin('a', row.id)"
             >
-              A
+              Before
             </button>
             <button
               class="pin"
@@ -109,12 +96,16 @@
               [attr.aria-label]="'Compare to ' + row.label"
               (click)="pin('b', row.id)"
             >
-              B
+              After
             </button>
           </span>
         </div>
         <div class="version-at cg-mono">{{ row.at }}</div>
         <div class="version-actor">{{ row.actor }}</div>
+        @if (restorable()) {
+          <button class="cg-btn cg-btn--sm version-restore" type="button" [disabled]="time.isHistorical()"
+            (click)="restoreVersion(row.id)">Restore {{ row.label }}</button>
+        }
       </div>
     } @empty {
       <p class="col-empty">No versions captured for this object.</p>
@@ -231,3 +222,6 @@
     </div>
   }
 </section>
+
+  </div>
+}

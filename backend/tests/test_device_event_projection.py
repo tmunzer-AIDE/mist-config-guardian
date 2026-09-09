@@ -1,6 +1,7 @@
 """A device event is attributed to the session it actually changed."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from beanie import PydanticObjectId
@@ -13,14 +14,17 @@ from mist_config_guardian_backend.models.monitoring import (
     ImpactSeverity,
     MonitoringSession,
     MonitoringStatus,
+    SleObservation,
 )
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
     OrganizationStatus,
 )
+from mist_config_guardian_backend.models.telemetry import DeviceStateObservation
 from mist_config_guardian_backend.models.webhook import WebhookProcessingStatus, WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services import monitoring
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
 from mist_config_guardian_backend.services.webhook_processing import WebhookProcessingService
 
@@ -112,7 +116,9 @@ def _install_active_session(monkeypatch: pytest.MonkeyPatch, session: Monitoring
     """Answer the handler's lookup for the device's active session, and swallow saves."""
 
     async def find_one(*_args: object, **_kwargs: object) -> MonitoringSession | None:
-        return session
+        if len(_args) == 1 and isinstance(_args[0], dict) and "receipt_ids" in _args[0]:
+            return session if session and _args[0]["receipt_ids"] in session.receipt_ids else None
+        return session if session and session.active else None
 
     async def save(self: MonitoringSession, *_args: object, **_kwargs: object) -> MonitoringSession:
         return self
@@ -229,3 +235,117 @@ async def test_projection_without_a_device_address_rebuilds_nothing(monkeypatch:
     await WebhookProcessingService(vault=None, projector=projector).project(_receipt(), {})  # type: ignore[arg-type]
 
     assert projector.rebuilt == []
+
+
+async def test_prechange_captures_immediately_and_monitors_without_a_configured_event(monkeypatch):
+    _install_active_session(monkeypatch, None)
+    monkeypatch.setattr(MonitoringSession, "get_pymongo_collection", classmethod(lambda _cls: None))
+    monkeypatch.setattr(MonitoringSession, "insert", AsyncMock())
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW)
+    initial = DeviceStateObservation(captured_at=NOW)
+    handler = _handler()
+    baseline = AsyncMock(return_value=SleObservation())
+    telemetry = AsyncMock(return_value=initial)
+    monkeypatch.setattr(handler, "_capture", baseline)
+    monkeypatch.setattr(handler, "_capture_state", telemetry)
+    receipt = _receipt()
+    session = await handler.handle(
+        receipt,
+        {
+            "type": "AP_CONFIG_CHANGED_BY_USER",
+            "mac": MAC,
+            "site_id": "site-1",
+            "timestamp": NOW.timestamp(),
+        },
+        _organization(),
+    )
+    assert session.status is MonitoringStatus.MONITORING
+    assert session.monitoring_ends_at == NOW + timedelta(hours=1)
+    assert session.next_poll_at == NOW + timedelta(minutes=5)
+    assert session.device_comparisons[0].baseline is initial
+    assert session.device_comparisons[0].due_at == NOW + timedelta(minutes=5)
+    assert baseline.await_args.args[1:] == ("site-1", DeviceType.AP, MAC, NOW)
+    telemetry.assert_awaited_once()
+
+
+async def test_overlapping_triggers_capture_separately_and_receipt_retries_are_idempotent(monkeypatch):
+    session = _session(status=MonitoringStatus.MONITORING, audit_ids=["audit-7"])
+    _install_active_session(monkeypatch, session)
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW)
+    handler = _handler()
+    telemetry = AsyncMock(return_value=DeviceStateObservation(captured_at=NOW))
+    monkeypatch.setattr(handler, "_capture_state", telemetry)
+    payload = {"type": "AP_CONFIG_CHANGED_BY_USER", "mac": MAC, "site_id": "site-1"}
+    receipt = _receipt()
+    await handler.handle(receipt, payload, _organization())
+    await handler.handle(receipt, payload, _organization())
+    await handler.handle(_receipt(), payload, _organization())
+    assert len(session.device_comparisons) == 2
+    assert telemetry.await_count == 2
+    assert len(session.receipt_ids) == 2
+    assert session.monitoring_ends_at == NOW + timedelta(hours=1)
+    assert len(session.warnings) == 1
+
+
+@pytest.mark.parametrize("event_type", ["GW_CONFIG_REVERTED", "SW_CONFIG_REVERTED"])
+@pytest.mark.parametrize("status", [MonitoringStatus.MONITORING, MonitoringStatus.AWAITING_CONFIG])
+async def test_revert_closes_session_and_next_change_gets_a_new_baseline(monkeypatch, event_type, status):
+    previous = _session(status=status, audit_ids=["reverted-audit"])
+    previous.next_poll_at = NOW
+    _install_active_session(monkeypatch, previous)
+    monkeypatch.setattr(MonitoringSession, "get_pymongo_collection", classmethod(lambda _cls: None))
+    monkeypatch.setattr(MonitoringSession, "insert", AsyncMock())
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW)
+    handler = _handler()
+    baseline = AsyncMock(return_value=SleObservation(values={"capacity": 95}))
+    monkeypatch.setattr(handler, "_capture", baseline)
+    monkeypatch.setattr(handler, "_capture_state", AsyncMock(return_value=DeviceStateObservation(captured_at=NOW)))
+    receipt = _receipt()
+    payload = {"type": event_type, "mac": MAC, "site_id": "site-1"}
+
+    assert await handler.handle(receipt, payload, _organization()) is previous
+    assert previous.status is MonitoringStatus.FAILED
+    assert previous.active is False
+    assert previous.completed_at == NOW
+    assert previous.next_poll_at is None
+    assert previous.impact_severity is ImpactSeverity.CRITICAL
+    assert "reverted" in previous.deterministic_summary
+    # A retry must find the closed session, without duplicating its incident.
+    assert await handler.handle(receipt, payload, _organization()) is previous
+    assert len(previous.incidents) == 1
+
+    next_receipt = _receipt()
+    next_receipt.audit_id = "next-audit"
+    next_session = await handler.handle(
+        next_receipt,
+        {**payload, "type": event_type.replace("REVERTED", "CHANGED_BY_USER")},
+        _organization(),
+    )
+    assert next_session is not previous
+    assert next_session.active is True
+    assert next_session.status is MonitoringStatus.MONITORING
+    assert next_session.baseline is baseline.return_value
+    assert next_session.audit_ids == ["next-audit"]
+    assert previous.audit_ids == ["reverted-audit"]
+    assert next_session.monitoring_ends_at == NOW + timedelta(hours=1)
+    baseline.assert_awaited_once()
+
+
+@pytest.mark.parametrize("value", [0, -1, 1e100, float("nan"), float("inf"), True, "bad", None])
+def test_invalid_event_times_fall_back_to_receipt(value):
+    event = monitoring.DeviceEvent(
+        event_type="AP_CONFIG_CHANGED_BY_USER", device_mac=MAC, site_id="site-1", payload={"timestamp": value}
+    )
+    assert monitoring.event_time(event, _receipt()) == NOW
+
+
+@pytest.mark.parametrize("offset", [-86401, -86400, -300, 0, 60, 61])
+@pytest.mark.parametrize("key", ["timestamp", "time"])
+def test_event_time_bounds_are_relative_to_receipt_even_on_delayed_processing(monkeypatch, offset, key):
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW + timedelta(days=5))
+    reported = NOW + timedelta(seconds=offset)
+    event = monitoring.DeviceEvent(
+        event_type="AP_CONFIG_CHANGED_BY_USER", device_mac=MAC, site_id="site-1", payload={key: reported.timestamp()}
+    )
+    expected = reported if -86400 <= offset <= 60 else NOW
+    assert monitoring.event_time(event, _receipt()) == expected

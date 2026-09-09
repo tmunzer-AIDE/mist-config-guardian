@@ -21,7 +21,6 @@ interface TabInternals {
   fetchModels(): Promise<void>;
   modelState(): string;
   modelOptions(): { id: string; detail: string }[];
-  password: { (): string; set(value: string): void };
 }
 
 const STORED: AiSettings = {
@@ -135,24 +134,16 @@ describe('AiTab', () => {
     expect((fixture.nativeElement as HTMLElement).innerHTML).not.toContain('sk-live');
   });
 
-  it('forgets the password once the change it authorised has been made', async () => {
+  it('saves provider settings using the admin session without a password', async () => {
     const fixture = await render('administrator');
     const tab = fixture.componentInstance as unknown as TabInternals;
-
-    tab.password.set('the-account-password');
     tab.toggleAutomatic();
     const saving = tab.saveSettings();
     const request = http.expectOne('/api/v1/ai/settings');
-
-    expect((request.request.body as { password: string }).password).toBe('the-account-password');
+    expect(request.request.body.password).toBeUndefined();
     request.flush({ ...STORED, automatic_summaries: true });
     await saving;
-    await fixture.whenStable();
-
-    // A password left in the field authorises the next change too, for whoever
-    // reaches the unlocked session next.
-    expect(tab.password()).toBe('');
-    expect((fixture.nativeElement as HTMLElement).innerHTML).not.toContain('the-account-password');
+    expect(fixture.nativeElement.querySelector('#ai-password')).toBeNull();
   });
 
   it('asks for the key to be cleared explicitly rather than by blanking it', async () => {
@@ -228,12 +219,10 @@ describe('AiTab', () => {
     const tab = fixture.componentInstance as unknown as TabInternals;
     tab.editKey();
     tab.keyDraft.set('draft-key');
-    tab.password.set('wrong-password');
     const failed = tab.saveKey();
-    http.expectOne('/api/v1/ai/settings').flush({ detail: 'Wrong password' }, { status: 403, statusText: 'Forbidden' });
+    http.expectOne('/api/v1/ai/settings').flush({ detail: 'Provider unavailable' }, { status: 502, statusText: 'Bad gateway' });
     await failed;
     expect(tab.keyEditing()).toBe(true);
-    tab.password.set('correct-password');
     const saved = tab.saveSettings();
     const request = http.expectOne('/api/v1/ai/settings');
     expect(request.request.body.api_key).toBe('draft-key');

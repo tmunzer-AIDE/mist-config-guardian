@@ -1,21 +1,27 @@
 """Network impact monitoring API schemas."""
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.models.monitoring import (
     ImpactSeverity,
     MonitoringSession,
     MonitoringStatus,
 )
+from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateFinding
 
 
 class SleObservationResponse(BaseModel):
     """Safe numeric SLE observation."""
 
     captured_at: datetime
+    scope: Literal["site", "device"] = "site"
+    window_start: datetime | None = None
+    window_end: datetime | None = None
     values: dict[str, float]
+    no_data: list[str] = Field(default_factory=list)
     errors: list[str]
 
 
@@ -39,6 +45,9 @@ class MonitoringSessionResponse(BaseModel):
     device_name: str
     device_type: str
     status: MonitoringStatus
+    change_triggered_at: datetime | None = None
+    device_comparisons: list[DeviceStateComparison] = Field(default_factory=list)
+    device_findings: list[DeviceStateFinding] = Field(default_factory=list)
     baseline: SleObservationResponse | None
     observations: list[SleObservationResponse]
     incidents: list[MonitoringIncidentResponse]
@@ -68,6 +77,9 @@ class MonitoringSessionResponse(BaseModel):
             device_name=session.device_name,
             device_type=session.device_type,
             status=session.status,
+            change_triggered_at=session.change_triggered_at,
+            device_comparisons=session.device_comparisons,
+            device_findings=session.device_findings,
             baseline=(
                 SleObservationResponse.model_validate(session.baseline, from_attributes=True)
                 if session.baseline

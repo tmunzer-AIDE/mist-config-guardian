@@ -141,11 +141,11 @@ describe('monitoring.model', () => {
     expect(changeMarkerPercent(bars)).toBe(50);
   });
 
-  it('treats every sample as post-change when the change instant is unknown', () => {
+  it('keeps the historical baseline before the change when the configured event is missing', () => {
     const bars = sleSeries(session({ ...CRITICAL, config_applied_at: null }), 'capacity');
 
-    expect(bars.every((bar) => !bar.preChange)).toBe(true);
-    expect(changeMarkerPercent(bars)).toBeNull();
+    expect(bars.map((bar) => bar.preChange)).toEqual([true, false, false, false]);
+    expect(changeMarkerPercent(bars)).toBe(25);
   });
 
   it('plots the degraded metric and ranks the deltas worst first', () => {
@@ -220,6 +220,33 @@ describe('ImpactPage', () => {
     fixture = TestBed.createComponent(ImpactPage);
     monitoring = TestBed.inject(MonitoringService);
     monitoring.reset();
+  });
+
+  it('labels zero-sample metrics without presenting them as collection failures', async () => {
+    await render([session({
+      status: 'completed', impact_severity: 'none', baseline_confidence: 'high',
+      baseline: { captured_at: '2026-09-09T10:00:00Z', values: { 'ap-health': 99, roaming: 99 }, errors: [] },
+      observations: [{ captured_at: '2026-09-09T11:00:00Z', values: { 'ap-health': 99 }, no_data: ['roaming'], errors: [] }],
+    })]);
+    const quiet = fixture.nativeElement.querySelector('[aria-label="SLE metrics without sampled traffic"]') as HTMLElement;
+    expect(quiet.textContent).toContain('Roaming');
+    expect(quiet.textContent).toContain('not treated as collection failures');
+    expect(fixture.nativeElement.querySelector('[aria-label="SLE collection problems"]')).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('NO IMPACT DETECTED');
+  });
+
+  it('shows SLE collection failures separately from the network verdict', async () => {
+    await render([session({
+      status: 'completed', impact_severity: 'info',
+      baseline: { captured_at: '2026-09-09T10:00:00Z', values: {}, errors: ['coverage: HTTP 404 from the SLE endpoint'] },
+      observations: [{ captured_at: '2026-09-09T11:00:00Z', values: {}, errors: ['coverage: HTTP 403 from the SLE endpoint'] }],
+    })]);
+    const problems = fixture.nativeElement.querySelector('[aria-label="SLE collection problems"]') as HTMLElement;
+    expect(problems.textContent).toContain('SLE collection is incomplete');
+    expect(problems.textContent).toContain('cannot establish that the network is healthy');
+    expect(problems.textContent).toContain('HTTP 403');
+    expect(problems.textContent).toContain('HTTP 404');
+    expect(fixture.nativeElement.textContent).not.toContain('NO IMPACT DETECTED');
   });
 
   it('forgets a session resolved for another organization when switching', async () => {

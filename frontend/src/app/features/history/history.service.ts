@@ -8,6 +8,7 @@ import {
   ConfigurationObjectList,
   ConfigurationVersionList,
   ObjectQuery,
+  ObjectFacets,
 } from './history.model';
 
 /** Logical configuration objects and their captured version chains. */
@@ -15,8 +16,15 @@ import {
 export class HistoryService {
   private readonly http = inject(HttpClient);
 
+  facets(organizationId: string, includeDeleted: boolean): Promise<ObjectFacets> {
+    return firstValueFrom(this.http.get<ObjectFacets>(orgPath(organizationId, '/objects/facets'), {
+      params: { include_deleted: includeDeleted },
+    }));
+  }
+
   objects(organizationId: string, query: ObjectQuery = {}): Promise<ConfigurationObjectList> {
     let params = new HttpParams();
+    if (query.scope) { params = params.set('scope', query.scope); }
     if (query.objectType) {
       params = params.set('object_type', query.objectType);
     }

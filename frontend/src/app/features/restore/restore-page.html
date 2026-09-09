@@ -1,4 +1,5 @@
 <div class="page">
+  @if (!embedded()) {
   <header class="head">
     <h1 class="cg-page-title">Restore center</h1>
     <p class="head-sub">
@@ -6,6 +7,7 @@
       credential.
     </p>
   </header>
+  }
 
   @if (readOnly()) {
     <p class="read-only" role="note">{{ readOnlyNote() }}</p>

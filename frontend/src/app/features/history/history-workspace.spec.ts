@@ -8,7 +8,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { routes } from '../../app.routes';
 import { AuthService, UserRole } from '../../core/auth.service';
 import { RestorePage } from '../restore/restore-page';
-import { HistoryWorkspace } from './history-workspace';
+import { HistoryPage } from './history-page';
 
 async function setup(role: UserRole): Promise<RouterTestingHarness> {
   TestBed.configureTestingModule({ providers: [
@@ -26,8 +26,8 @@ async function setup(role: UserRole): Promise<RouterTestingHarness> {
 describe('History and restore workspace routing', () => {
   it('preserves restore selections, operation links and fragments through the legacy redirect', async () => {
     const harness = await setup('operator');
-    await harness.navigateByUrl('/restore?versions=v1,v2&operation=op1&step=plan#details', HistoryWorkspace);
-    expect(TestBed.inject(Router).url).toBe('/history/restore?versions=v1,v2&operation=op1&step=plan#details');
+    await harness.navigateByUrl('/restore?versions=v1,v2&operation=op1&step=plan#details', HistoryPage);
+    expect(TestBed.inject(Router).url).toBe('/history?versions=v1,v2&operation=op1&step=plan&restore=1#details');
     const page = harness.routeDebugElement!.query(By.directive(RestorePage)).componentInstance as RestorePage;
     expect(page.versions()).toBe('v1,v2');
     expect(page.operation()).toBe('op1');
@@ -36,19 +36,29 @@ describe('History and restore workspace routing', () => {
 
   it('keeps version browsing available to viewers without exposing a restore tab', async () => {
     const harness = await setup('viewer');
-    await harness.navigateByUrl('/history?object=o1&a=v1&b=v2', HistoryWorkspace);
-    expect(harness.routeNativeElement?.textContent).toContain('Versions');
-    expect(harness.routeNativeElement?.querySelector('a[href="/history"]')?.getAttribute('aria-current')).toBe('page');
+    await harness.navigateByUrl('/history?object=o1&a=v1&b=v2', HistoryPage);
+    expect(harness.routeNativeElement?.textContent).toContain('VERSIONS');
     expect(harness.routeNativeElement?.querySelector('a[href="/history/restore"]')).toBeNull();
     expect(TestBed.inject(Router).url).toContain('object=o1&a=v1&b=v2');
   });
 
-  it('enforces the operator guard on both direct and legacy restore links', async () => {
+  it('rejects viewer restore access through legacy and direct links', async () => {
     const harness = await setup('viewer');
-    for (const url of ['/history/restore', '/restore']) {
+    for (const url of ['/history/restore', '/restore', '/history?restore=1', '/history?versions=v1', '/history?operation=op1']) {
       await harness.navigateByUrl(url);
       expect(TestBed.inject(Router).url).toBe('/');
       expect(harness.routeNativeElement?.querySelector('app-restore-page')).toBeNull();
     }
+  });
+});
+
+
+describe('Restore access on query-only navigation', () => {
+  it('reruns the role guard when a viewer adds restore parameters to history', async () => {
+    const harness = await setup('viewer');
+    await harness.navigateByUrl('/history?object=o1', HistoryPage);
+    await harness.navigateByUrl('/history?object=o1&restore=1');
+    expect(TestBed.inject(Router).url).toBe('/');
+    expect(harness.routeNativeElement?.querySelector('app-restore-page')).toBeNull();
   });
 });

@@ -165,7 +165,6 @@ describe('SettingsPage', () => {
       body: 'Mist will reject events signed with the old secret.',
       confirmLabel: 'Rotate secret',
       danger: false,
-      requiresPassword: false,
       run: async () => {
         page.openSecret({
           title: 'New webhook secret',

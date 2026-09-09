@@ -1,8 +1,9 @@
 """Device-event driven post-change monitoring."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from pymongo.errors import DuplicateKeyError
 
@@ -11,6 +12,7 @@ from mist_config_guardian_backend.integrations.impact_ai import (
     OpenAiCompatibleImpactProvider,
 )
 from mist_config_guardian_backend.integrations.mist_sle import MistSleClient
+from mist_config_guardian_backend.integrations.mist_telemetry import MistTelemetryClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
@@ -21,6 +23,7 @@ from mist_config_guardian_backend.models.monitoring import (
     SleObservation,
 )
 from mist_config_guardian_backend.models.organization import Organization
+from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateObservation
 from mist_config_guardian_backend.models.webhook import WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.application_configuration import (
@@ -29,6 +32,7 @@ from mist_config_guardian_backend.services.application_configuration import (
     ImpactAiRuntimeConfiguration,
 )
 from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
+from mist_config_guardian_backend.services.device_impact import compare_device_states
 from mist_config_guardian_backend.services.impact_analysis import (
     ImpactAssessment,
     assess_impact,
@@ -62,13 +66,15 @@ _RESOLUTIONS = {
     "GW_TUNNEL_UP": "GW_TUNNEL_DOWN",
     "GW_VPN_PATH_UP": "GW_VPN_PATH_DOWN",
     "SW_CONNECTED": "SW_DISCONNECTED",
+    "SW_BGP_NEIGHBOR_UP": "SW_BGP_NEIGHBOR_DOWN",
+    "SW_OSPF_NEIGHBOR_UP": "SW_OSPF_NEIGHBOR_DOWN",
+    "GW_BGP_NEIGHBOR_UP": "GW_BGP_NEIGHBOR_DOWN",
+    "GW_OSPF_NEIGHBOR_UP": "GW_OSPF_NEIGHBOR_DOWN",
     "SW_VC_PORT_UP": "SW_VC_PORT_DOWN",
 }
-_WINDOWS: dict[DeviceType, tuple[int, int]] = {
-    DeviceType.AP: (2, 1),
-    DeviceType.SWITCH: (5, 1),
-    DeviceType.GATEWAY: (10, 2),
-}
+_MONITORING_DURATION = timedelta(hours=1)
+_POLL_INTERVAL = timedelta(minutes=5)
+_DEVICE_COMPARISON_DELAY = timedelta(minutes=5)
 
 
 logger = logging.getLogger(__name__)
@@ -116,6 +122,13 @@ class MonitoringEventService:
             site_id=site_id,
             payload=payload,
         )
+        already_handled = (
+            await MonitoringSession.find_one({"organization_id": receipt.organization_id, "receipt_ids": receipt.id})
+            if receipt.id
+            else None
+        )
+        if already_handled is not None:
+            return already_handled
         session = await MonitoringSession.find_one(
             MonitoringSession.organization_id == receipt.organization_id,
             MonitoringSession.device_mac == event.device_mac,
@@ -137,9 +150,11 @@ class MonitoringEventService:
                 session,
             )
         if session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
+            self._link_receipt(session, receipt)
             await self._record_incident(session, event_type)
             return session
         if session is not None and event_type in _RESOLUTIONS:
+            self._link_receipt(session, receipt)
             resolved_type = _RESOLUTIONS[event_type]
             now = utc_now()
             for incident in session.incidents:
@@ -165,8 +180,13 @@ class MonitoringEventService:
             session.completed_at = utc_now()
             session.deterministic_summary = "The configuration failed before monitoring could begin."
         elif event_type in _REVERT_EVENTS:
-            session.monitoring_ends_at = utc_now()
-            session.next_poll_at = utc_now()
+            # The reverted configuration is no longer under test. Release the
+            # unique active-device slot so a later change gets a fresh baseline.
+            session.status = MonitoringStatus.FAILED
+            session.active = False
+            session.completed_at = utc_now()
+            session.next_poll_at = None
+            session.deterministic_summary = "The configuration was reverted; monitoring for this change has ended."
         session.touch()
         await session.save()
 
@@ -177,9 +197,16 @@ class MonitoringEventService:
         event: DeviceEvent,
         session: MonitoringSession | None,
     ) -> MonitoringSession:
+        if session is not None:
+            await self._add_comparison(session, organization, event, receipt)
         if session is None:
             device_type = device_type_from_event(event.event_type)
-            baseline = await self._capture(organization, event.site_id, device_type)
+            triggered_at = event_time(event, receipt)
+            baseline, device_baseline = await asyncio.gather(
+                self._capture(organization, event.site_id, device_type, event.device_mac, triggered_at),
+                self._capture_state(organization, event.site_id, device_type, event.device_mac),
+            )
+            now = utc_now()
             session = MonitoringSession(
                 organization_id=receipt.organization_id,
                 audit_ids=[receipt.audit_id] if receipt.audit_id else [],
@@ -195,6 +222,18 @@ class MonitoringEventService:
                 or "",
                 device_type=device_type,
                 baseline=baseline,
+                device_comparisons=[
+                    DeviceStateComparison(
+                        triggered_at=triggered_at,
+                        baseline=device_baseline,
+                        due_at=device_baseline.captured_at + _DEVICE_COMPARISON_DELAY,
+                    )
+                ],
+                change_triggered_at=triggered_at,
+                status=MonitoringStatus.MONITORING,
+                monitoring_started_at=now,
+                monitoring_ends_at=now + _MONITORING_DURATION,
+                next_poll_at=device_baseline.captured_at + _DEVICE_COMPARISON_DELAY,
             )
             try:
                 await session.insert()
@@ -206,10 +245,34 @@ class MonitoringEventService:
                 )
                 if session is None:
                     raise
+                await self._add_comparison(session, organization, event, receipt)
         self._link_receipt(session, receipt)
         session.touch()
         await session.save()
         return session
+
+    async def _add_comparison(
+        self, session: MonitoringSession, organization: Organization, event: DeviceEvent, receipt: WebhookReceipt
+    ) -> None:
+        initial = await self._capture_state(organization, event.site_id, session.device_type, event.device_mac)
+        due = initial.captured_at + _DEVICE_COMPARISON_DELAY
+        session.device_comparisons.append(
+            DeviceStateComparison(
+                triggered_at=event_time(event, receipt),
+                baseline=initial,
+                due_at=due,
+            )
+        )
+        session.status = MonitoringStatus.MONITORING
+        session.monitoring_started_at = session.monitoring_started_at or utc_now()
+        session.monitoring_ends_at = utc_now() + _MONITORING_DURATION
+        session.next_poll_at = min(session.next_poll_at, due) if session.next_poll_at else due
+        warning = (
+            "Multiple configuration triggers overlap; device comparisons are separate, "
+            "but SLE and incidents span the combined monitoring window."
+        )
+        if warning not in session.warnings:
+            session.warnings.append(warning)
 
     async def _mark_configured(
         self,
@@ -218,47 +281,22 @@ class MonitoringEventService:
         event: DeviceEvent,
         session: MonitoringSession | None,
     ) -> MonitoringSession:
-        device_type = device_type_from_event(event.event_type)
         if session is None:
-            session = MonitoringSession(
-                organization_id=receipt.organization_id,
-                audit_ids=[receipt.audit_id] if receipt.audit_id else [],
-                receipt_ids=[receipt.id] if receipt.id else [],
-                site_id=event.site_id,
-                device_mac=event.device_mac,
-                device_name=self._first_string(
-                    event.payload,
-                    "device_name",
-                    "ap",
-                    "switch_name",
-                )
-                or "",
-                device_type=device_type,
-                baseline=await self._capture(
-                    organization,
-                    event.site_id,
-                    device_type,
-                ),
-                warnings=["Pre-change event was missed; baseline was captured after configuration."],
+            session = await self._start_or_merge(receipt, organization, event, None)
+            session.warnings.append(
+                "Pre-change device event was missed. SLE baseline uses the preceding 24 hours; "
+                "initial device state was captured after configuration and may already include its effects."
             )
-            try:
-                await session.insert()
-            except DuplicateKeyError:
-                session = await MonitoringSession.find_one(
-                    MonitoringSession.organization_id == receipt.organization_id,
-                    MonitoringSession.device_mac == event.device_mac,
-                    MonitoringSession.active == True,  # noqa: E712
-                )
-                if session is None:
-                    raise
 
-        duration_minutes, interval_minutes = _WINDOWS[session.device_type]
         now = utc_now()
         session.status = MonitoringStatus.MONITORING
-        session.config_applied_at = now
+        session.config_applied_at = session.config_applied_at or event_time(event, receipt)
         session.monitoring_started_at = now
-        session.monitoring_ends_at = now + timedelta(minutes=duration_minutes)
-        session.next_poll_at = now + timedelta(minutes=interval_minutes)
+        session.monitoring_ends_at = now + _MONITORING_DURATION
+        session.next_poll_at = now + _POLL_INTERVAL
+        for comparison in session.device_comparisons:
+            if comparison.followup is None:
+                session.next_poll_at = min(session.next_poll_at, comparison.due_at)
         self._link_receipt(session, receipt)
         session.touch()
         await session.save()
@@ -269,10 +307,25 @@ class MonitoringEventService:
         organization: Organization,
         site_id: str,
         device_type: DeviceType,
+        device_mac: str,
+        triggered_at: datetime,
     ) -> SleObservation:
         token = await service_token(organization, self._vault)
         async with MistSleClient(token=token, region=organization.cloud_region) as client:
-            return await client.capture(site_id=site_id, device_type=device_type)
+            return await client.capture(
+                site_id=site_id,
+                device_type=device_type,
+                device_mac=device_mac,
+                start=triggered_at - timedelta(hours=24),
+                end=triggered_at,
+            )
+
+    async def _capture_state(
+        self, organization: Organization, site_id: str, device_type: DeviceType, device_mac: str
+    ) -> DeviceStateObservation:
+        token = await service_token(organization, self._vault)
+        async with MistTelemetryClient(token=token, region=organization.cloud_region) as client:
+            return await client.capture(site_id=site_id, device_mac=device_mac, device_type=device_type)
 
     @staticmethod
     def _link_receipt(session: MonitoringSession, receipt: WebhookReceipt) -> None:
@@ -337,7 +390,16 @@ class MonitoringPollService:
             {"next_poll_at": {"$lte": now}},
         ).to_list()
         for session in sessions:
-            await self._poll_session(session, now)
+            try:
+                await self._poll_session(session, now)
+            except Exception:
+                logger.exception("Unable to poll monitoring session %s", session.id)
+                warning = "A monitoring poll failed; collection will be retried."
+                if warning not in session.warnings:
+                    session.warnings.append(warning)
+                session.next_poll_at = now + _POLL_INTERVAL
+                session.touch()
+                await session.save()
         return len(sessions)
 
     async def _poll_session(
@@ -358,9 +420,17 @@ class MonitoringPollService:
             observation = await client.capture(
                 site_id=session.site_id,
                 device_type=session.device_type,
+                # Older persisted baselines were site-wide. Keep polling their
+                # original scope rather than comparing a site to one device.
+                device_mac=session.device_mac if session.baseline and session.baseline.scope == "device" else None,
+                start=session.config_applied_at or session.change_triggered_at or session.monitoring_started_at,
+                end=now,
             )
+        await self._compare_due_states(session, organization, token, now)
         session.observations.append(observation)
-        assessment = assess_impact(session.baseline, observation, session.incidents)
+        assessment = assess_impact(
+            session.baseline, observation, session.incidents, device_findings=session.device_findings
+        )
         session.impact_severity = assessment.severity
         session.deterministic_summary = assessment.summary
         session.degraded_metrics = list(assessment.degraded_metrics)
@@ -382,11 +452,30 @@ class MonitoringPollService:
             session.completed_at = now
             session.next_poll_at = None
         else:
-            _duration, interval = _WINDOWS[session.device_type]
-            session.next_poll_at = now + timedelta(minutes=interval)
+            session.next_poll_at = now + _POLL_INTERVAL
+            for comparison in session.device_comparisons:
+                if comparison.followup is None:
+                    session.next_poll_at = min(session.next_poll_at, comparison.due_at)
         session.touch()
         await session.save()
         await self._refresh_change_groups(session)
+
+    @staticmethod
+    async def _compare_due_states(
+        session: MonitoringSession, organization: Organization, token: str, now: datetime
+    ) -> None:
+        due = [item for item in session.device_comparisons if item.followup is None and now >= item.due_at]
+        if due:
+            async with MistTelemetryClient(token=token, region=organization.cloud_region) as telemetry:
+                followup = await telemetry.capture(
+                    site_id=session.site_id,
+                    device_type=session.device_type,
+                    device_mac=session.device_mac,
+                )
+            for comparison in due:
+                comparison.followup = followup
+                comparison.findings = compare_device_states(comparison.baseline, followup)
+            session.device_findings = [finding for item in session.device_comparisons for finding in item.findings]
 
     async def _refresh_change_groups(self, session: MonitoringSession) -> None:
         """Recompute the projections of every change group this session feeds.
@@ -441,3 +530,17 @@ def max_severity(left: ImpactSeverity, right: ImpactSeverity) -> ImpactSeverity:
         ImpactSeverity.CRITICAL: 3,
     }
     return left if order[left] >= order[right] else right
+
+
+def event_time(event: DeviceEvent, receipt: WebhookReceipt) -> datetime:
+    """Accept source times within 24 hours before receipt, allowing one minute of clock skew."""
+    value = event.payload.get("timestamp", event.payload.get("time"))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            reported = datetime.fromtimestamp(value, tz=UTC)
+            # Receipt-relative bounds stay stable when processing is retried.
+            if receipt.created_at - timedelta(hours=24) <= reported <= receipt.created_at + timedelta(minutes=1):
+                return reported
+        except (ValueError, OverflowError, OSError):
+            pass
+    return receipt.created_at

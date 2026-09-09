@@ -75,8 +75,6 @@ interface TabInternals {
   startTokenEdit(organization: Organization): void;
   cancelTokenEdit(): void;
   closeAdd(): void;
-  tokenPassword: { (): string; set(value: string): void };
-  addForm: { controls: { password: { value: string; setValue(value: string): void } } };
 }
 
 const ADMINISTRATOR: CurrentUser = {
@@ -109,30 +107,13 @@ describe('OrganizationsTab credentials', () => {
     TestBed.resetTestingModule();
   });
 
-  it('does not carry a service-token password into the next edit', () => {
-    const panel = tab();
-
-    panel.startTokenEdit(organization('org-1'));
-    panel.tokenPassword.set('the-account-password');
-    panel.cancelTokenEdit();
-
-    // Abandoning the edit spends nothing, so the password must not survive it:
-    // whoever reaches the session next would otherwise replace a service token
-    // without knowing it.
-    expect(panel.tokenPassword()).toBe('');
-
-    panel.tokenPassword.set('the-account-password');
-    panel.startTokenEdit(organization('org-2'));
-    // Nor does it follow the administrator to another organization.
-    expect(panel.tokenPassword()).toBe('');
+  it('does not ask for a password when editing a service token', () => {
+    tab();
+    const fixture = TestBed.createComponent(OrganizationsTab);
+    const panel = fixture.componentInstance as unknown as TabInternals;
+    panel.startTokenEdit(organization('org1'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('input[autocomplete="current-password"]')).toBeNull();
   });
 
-  it('does not keep the onboarding password after the form is dismissed', () => {
-    const panel = tab();
-
-    panel.addForm.controls.password.setValue('the-account-password');
-    panel.closeAdd();
-
-    expect(panel.addForm.controls.password.value).toBe('');
-  });
 });

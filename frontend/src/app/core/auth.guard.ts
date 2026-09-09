@@ -23,3 +23,10 @@ export function roleGuard(minimum: UserRole): CanActivateFn {
     return auth.can(minimum) ? true : inject(Router).createUrlTree(['/']);
   };
 }
+
+/** The shared history route needs an operator only when it opens restore context. */
+export const historyAccessGuard: CanActivateFn = (route, state) => {
+  const restoreContext = route.queryParamMap.get('restore') === '1' ||
+    ['versions', 'operation', 'changeGroup', 'step', 'compensate'].some(key => route.queryParamMap.has(key));
+  return restoreContext ? roleGuard('operator')(route, state) : true;
+};

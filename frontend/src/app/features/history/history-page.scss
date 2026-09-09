@@ -1,16 +1,35 @@
 @use 'breakpoints' as bp;
 
-// Configuration history — objects | versions | comparison.
+// Configuration library with an object catalogue and version comparison.
 // The shell's <main> is the positioned scroll container; this page fills it and
 // scrolls each column independently, the way the design lays it out.
 :host {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  grid-template-columns: minmax(184px, 240px) minmax(142px, 204px) minmax(0, 1fr);
-  min-height: 0;
-  animation: cg-in 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  height: 100%;
 }
+.library-head { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 18px 22px; border-bottom: 1px solid var(--hairline-strong); background: var(--surface-raised); flex: none; }
+.library-head > div { flex: 1; }
+.library-head p { margin: 6px 0 0; color: var(--ink-soft); }
+.library-body { padding: 20px 22px; overflow: auto; flex: 1; }
+.library-filters { display: flex; flex-wrap: wrap; gap: 10px; }
+.library-search { min-width: 230px; flex: 1; }
+.library-filters select { max-width: 280px; }
+.library-table { background: var(--surface-raised); border: 1px solid var(--hairline-strong); border-radius: var(--radius-md); }
+.library-table table { border-collapse: collapse; width: 100%; text-align: left; }
+.library-table th, .library-table td { padding: 13px 16px; border-bottom: 1px solid var(--hairline); }
+.library-table th { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; }
+.library-table small { display: block; color: var(--ink-soft); margin-top: 5px; }
+.object-link { font: 600 13px var(--font-sans); color: var(--brand); background: none; border: 0; cursor: pointer; padding: 0; text-align: left; }
+.deleted-row { opacity: .65; }
+.load-more { margin-top: 16px; }
+.detail-layout { flex: 1; display: grid; grid-template-columns: minmax(220px, 270px) minmax(0, 1fr); min-height: 0; }
+.restore-inline { flex: 1; overflow: auto; min-height: 0; }
+.restore-inline-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 14px 20px; }
+.restore-inline-head h2 { font-size: 18px; margin: 0; }
+.version-restore { margin-top: 10px; }
+
 
 // ------------------------------------------------------------------- columns
 .col {
@@ -18,12 +37,6 @@
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--hairline);
-}
-
-.col--objects {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(251, 250, 247, 0.3));
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .col--versions {
@@ -54,42 +67,6 @@
   margin: 6px 0 0;
 }
 
-.filter {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
-  border-radius: var(--radius-md);
-  padding: 6px 9px;
-
-  &:focus-within {
-    outline: 2px solid var(--brand);
-    outline-offset: -1px;
-  }
-}
-
-.filter-mark {
-  width: 11px;
-  height: 11px;
-  border: 1.5px solid var(--ink-dim);
-  border-radius: 50%;
-  flex: none;
-}
-
-.filter-input {
-  border: 0;
-  outline: 0;
-  font: 400 12px var(--font-sans);
-  width: 100%;
-  background: transparent;
-  color: var(--ink);
-
-  &::placeholder {
-    color: var(--ink-dim);
-  }
-}
-
 .col-body {
   flex: 1;
   min-height: 0;
@@ -106,80 +83,6 @@
   color: var(--ink-soft);
   line-height: 1.6;
   margin: 0;
-}
-
-.col-foot {
-  padding: 11px 15px;
-  border-top: 1px solid var(--hairline-strong);
-}
-
-// ------------------------------------------------------------------- objects
-.group {
-  margin: 0;
-  padding: 12px 15px 6px;
-  color: var(--ink-faint);
-}
-
-.object {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 10px 15px;
-  border: 0;
-  border-bottom: 1px solid var(--hairline);
-  background: none;
-  cursor: pointer;
-}
-
-.object--on {
-  background: var(--surface-raised);
-  box-shadow: inset 3px 0 0 var(--brand);
-}
-
-.object--deleted {
-  opacity: 0.7;
-}
-
-.object-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.object-name {
-  font-size: 12.5px;
-  color: var(--ink);
-}
-
-.object--on .object-name {
-  font-weight: 600;
-}
-
-.object--deleted .object-name {
-  text-decoration: line-through;
-  color: var(--ink-soft);
-}
-
-.object-tomb {
-  font: 500 9.5px var(--font-mono);
-  background: var(--surface);
-  border: 1px solid var(--hairline-strong);
-  color: var(--ink-muted);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-}
-
-.object-version {
-  margin-left: auto;
-  font: 500 10.5px var(--font-mono);
-  color: var(--ink-soft);
-}
-
-.object-meta {
-  display: block;
-  font: 400 10.5px var(--font-mono);
-  color: var(--ink-soft);
-  margin-top: 3px;
 }
 
 // ------------------------------------------------------------------ versions
@@ -216,7 +119,8 @@
 
 .pin {
   font: 600 9.5px var(--font-mono);
-  width: 19px;
+  min-width: 42px;
+  width: auto;
   height: 19px;
   padding: 0;
   border-radius: var(--radius-xs);
@@ -383,10 +287,9 @@
 
 // -------------------------------------------------------------- narrow view
 @include bp.below(mid) {
-  :host {
-    position: static;
-    grid-template-columns: minmax(0, 1fr);
-  }
+  :host { height: auto; }
+  .detail-layout { grid-template-columns: minmax(0, 1fr); }
+  .library-body { overflow: visible; }
 
   .col {
     border-right: 0;

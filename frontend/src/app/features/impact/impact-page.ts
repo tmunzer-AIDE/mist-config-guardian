@@ -1,3 +1,4 @@
+import { DeviceEvidence } from './device-evidence';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 
@@ -82,7 +83,7 @@ const SEVERITIES: ImpactSeverity[] = ['none', 'info', 'warning', 'critical'];
  */
 @Component({
   selector: 'app-impact-page',
-  imports: [SleChart],
+  imports: [DeviceEvidence, SleChart],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './impact-page.html',
   styleUrl: './impact-page.scss',
@@ -241,6 +242,22 @@ export class ImpactPage {
    * state panel instead, and printing both would say the same thing twice.
    */
   protected readonly hasData = computed(() => this.metrics().length > 0);
+
+  protected readonly collectionErrors = computed(() => {
+    const session = this.selected();
+    if (!session) return [];
+    const latest = session.observations.at(-1);
+    return [
+      ...(session.baseline?.errors ?? []).map(error => 'Baseline: ' + error),
+      ...(latest?.errors ?? []).map(error => 'Latest: ' + error),
+    ];
+  });
+
+  protected readonly noTrafficMetrics = computed(() => {
+    const session = this.selected();
+    return [...new Set([...(session?.baseline?.no_data ?? []), ...(session?.observations.at(-1)?.no_data ?? [])])]
+      .map(metricLabel);
+  });
 
   /** Rich no-evidence panel, standing in for the chart and the comparison. */
   protected readonly state = computed<StatePanel | null>(() => {

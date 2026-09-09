@@ -1,7 +1,7 @@
 import { inject } from '@angular/core';
 import { RedirectFunction, Router, Routes } from '@angular/router';
 
-import { authGuard, roleGuard } from './core/auth.guard';
+import { authGuard, historyAccessGuard } from './core/auth.guard';
 
 /** Send `/<page>/<tab>` to `/<page>?tab=<tab>`, the one route that mounts the page. */
 function tabRedirect(page: string): RedirectFunction {
@@ -28,27 +28,17 @@ export const routes: Routes = [
   },
   {
     path: 'history',
-    canActivate: [authGuard],
-    loadComponent: () => import('./features/history/history-workspace').then((m) => m.HistoryWorkspace),
-    title: 'History & Restore · Config Guardian',
-    children: [
-      {
-        path: '',
-        loadComponent: () => import('./features/history/history-page').then((m) => m.HistoryPage),
-      },
-      {
-        path: 'restore',
-        canActivate: [roleGuard('operator')],
-        loadComponent: () => import('./features/restore/restore-page').then((m) => m.RestorePage),
-      },
-    ],
+    canActivate: [authGuard, historyAccessGuard],
+    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
+    loadComponent: () => import('./features/history/history-page').then((m) => m.HistoryPage),
+    title: 'Configuration library · Config Guardian',
   },
-  {
-    path: 'restore',
-    redirectTo: ({ queryParams, fragment }) => inject(Router).createUrlTree(
-      ['/history/restore'], { queryParams, fragment: fragment ?? undefined },
-    ),
-  },
+  ...['restore', 'history/restore'].map(path => ({
+    path,
+    redirectTo: (({ queryParams, fragment }) => inject(Router).createUrlTree(
+      ['/history'], { queryParams: { ...queryParams, restore: '1' }, fragment: fragment ?? undefined },
+    )) as RedirectFunction,
+  })),
   {
     path: 'impact',
     canActivate: [authGuard],

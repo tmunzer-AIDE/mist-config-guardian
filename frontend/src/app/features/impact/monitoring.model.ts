@@ -10,7 +10,11 @@ export type StatusFilter = 'all' | MonitoringStatus;
 export type SeverityFilter = 'any' | ImpactSeverity;
 
 export interface SleObservation {
+  no_data?: string[];
+  scope?: 'site' | 'device';
   captured_at: string;
+  window_start?: string | null;
+  window_end?: string | null;
   values: Record<string, number>;
   errors: string[];
 }
@@ -31,6 +35,9 @@ export interface MonitoringSession {
   device_name: string;
   device_type: string;
   status: MonitoringStatus;
+  change_triggered_at?: string | null;
+  device_comparisons?: DeviceStateComparison[];
+  device_findings?: DeviceStateFinding[];
   baseline: SleObservation | null;
   observations: SleObservation[];
   incidents: MonitoringIncident[];
@@ -209,8 +216,8 @@ export function primaryMetric(session: MonitoringSession): string | null {
 /**
  * Build the chart series for one metric.
  *
- * The baseline observation and every poll are one timeline; a sample captured
- * before `config_applied_at` is a pre-change bar, everything else is post.
+ * Place observations at the end of the measured window. The 24-hour baseline
+ * is pre-change evidence even when fetched after a delayed webhook arrives.
  */
 export function sleSeries(session: MonitoringSession, metric: string): SleBar[] {
   const appliedAt = session.config_applied_at ? Date.parse(session.config_applied_at) : null;
@@ -219,11 +226,11 @@ export function sleSeries(session: MonitoringSession, metric: string): SleBar[] 
     : [...session.observations];
   return samples
     .filter((sample) => Object.hasOwn(sample.values, metric))
-    .sort((left, right) => Date.parse(left.captured_at) - Date.parse(right.captured_at))
+    .sort((left, right) => Date.parse(left.window_end ?? left.captured_at) - Date.parse(right.window_end ?? right.captured_at))
     .map((sample) => ({
-      at: sample.captured_at,
+      at: sample.window_end ?? sample.captured_at,
       value: sample.values[metric],
-      preChange: appliedAt !== null && Date.parse(sample.captured_at) < appliedAt,
+      preChange: sample === session.baseline || (appliedAt !== null && Date.parse(sample.window_end ?? sample.captured_at) < appliedAt),
     }));
 }
 
@@ -239,7 +246,7 @@ export function changeMarkerPercent(bars: SleBar[]): number | null {
 export function metricDeltas(session: MonitoringSession): MetricDelta[] {
   const baseline = session.baseline;
   const latest = session.observations.at(-1) ?? null;
-  if (!baseline || !latest) {
+  if (!baseline || !latest || (baseline.scope ?? 'site') !== (latest.scope ?? 'site')) {
     return [];
   }
   return Object.keys(baseline.values)
@@ -328,4 +335,36 @@ function listOf(value: unknown): string[] {
     return [];
   }
   return value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
+}
+
+export interface DeviceStateObservation {
+  captured_at: string;
+  device: Record<string, unknown>;
+  radios: Record<string, unknown>[];
+  wlans: Record<string, unknown>[];
+  clients: Record<string, unknown>[];
+  ports: Record<string, unknown>[];
+  bgp: Record<string, unknown>[];
+  ospf: Record<string, unknown>[];
+  tunnels: Record<string, unknown>[];
+  vpn_peers: Record<string, unknown>[];
+  available: string[];
+  errors: Record<string, string>;
+}
+export interface DeviceStateFinding {
+  kind: string;
+  subject: string;
+  before: string;
+  after: string;
+  severity: string;
+  detail: string;
+  affected_clients: number;
+}
+
+export interface DeviceStateComparison {
+  triggered_at: string;
+  baseline: DeviceStateObservation;
+  due_at: string;
+  followup: DeviceStateObservation | null;
+  findings: DeviceStateFinding[];
 }

@@ -16,9 +16,6 @@ class OrganizationCreateRequest(BaseModel):
 
     cloud_region: MistCloudRegion = MistCloudRegion.GLOBAL_01
     service_token: SecretStr = Field(min_length=1, max_length=2048)
-    # Introducing a credential the deployment authenticates with, so the caller
-    # proves who they are now rather than who signed in earlier.
-    password: SecretStr = Field(min_length=1, max_length=1024)
     reconciliation_cron: str = Field(default="0 2 * * *", min_length=1, max_length=120)
     configuration_retention_days: int = Field(default=365, ge=1, le=3650)
     monitoring_retention_days: int = Field(default=90, ge=1, le=3650)
@@ -37,17 +34,6 @@ class ServiceTokenUpdateRequest(BaseModel):
     """Replace the organization's read-only service token."""
 
     service_token: SecretStr = Field(min_length=1, max_length=2048)
-    password: SecretStr = Field(min_length=1, max_length=1024)
-
-
-class WebhookSecretRotateRequest(BaseModel):
-    """Rotate the organization's webhook signing secret.
-
-    The new secret is returned once, so this asks for the password the way
-    every other credential change does.
-    """
-
-    password: SecretStr = Field(min_length=1, max_length=1024)
 
 
 class OrganizationResponse(BaseModel):

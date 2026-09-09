@@ -447,19 +447,8 @@
             "maxLength": 255,
             "title": "Model",
             "type": "string"
-          },
-          "password": {
-            "format": "password",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
           }
         },
-        "required": [
-          "password"
-        ],
         "title": "AiSettingsUpdate",
         "type": "object"
       },
@@ -1376,6 +1365,187 @@
         "title": "ConfigurationDiff",
         "type": "object"
       },
+      "DeviceStateComparison": {
+        "description": "One trigger's initial state and independently scheduled follow-up.",
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/DeviceStateObservation"
+          },
+          "due_at": {
+            "format": "date-time",
+            "title": "Due At",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceStateFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "followup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceStateObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "triggered_at": {
+            "format": "date-time",
+            "title": "Triggered At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "triggered_at",
+          "baseline",
+          "due_at"
+        ],
+        "title": "DeviceStateComparison",
+        "type": "object"
+      },
+      "DeviceStateFinding": {
+        "description": "Explainable before/after evidence, independent of AI assistance.",
+        "properties": {
+          "affected_clients": {
+            "default": 0,
+            "title": "Affected Clients",
+            "type": "integer"
+          },
+          "after": {
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "title": "Before",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "severity": {
+            "default": "warning",
+            "title": "Severity",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "subject",
+          "before",
+          "after",
+          "detail"
+        ],
+        "title": "DeviceStateFinding",
+        "type": "object"
+      },
+      "DeviceStateObservation": {
+        "description": "A bounded device snapshot with explicit collection coverage.",
+        "properties": {
+          "available": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available",
+            "type": "array"
+          },
+          "bgp": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Bgp",
+            "type": "array"
+          },
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "clients": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Clients",
+            "type": "array"
+          },
+          "device": {
+            "additionalProperties": true,
+            "title": "Device",
+            "type": "object"
+          },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "object"
+          },
+          "ospf": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Ospf",
+            "type": "array"
+          },
+          "ports": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Ports",
+            "type": "array"
+          },
+          "radios": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Radios",
+            "type": "array"
+          },
+          "tunnels": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tunnels",
+            "type": "array"
+          },
+          "vpn_peers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Vpn Peers",
+            "type": "array"
+          },
+          "wlans": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Wlans",
+            "type": "array"
+          }
+        },
+        "title": "DeviceStateObservation",
+        "type": "object"
+      },
       "DiffChangeKind": {
         "description": "Classification of one changed configuration leaf.",
         "enum": [
@@ -2249,6 +2419,18 @@
               }
             ]
           },
+          "change_triggered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Triggered At"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -2295,6 +2477,20 @@
               }
             ],
             "title": "Deterministic Summary"
+          },
+          "device_comparisons": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceStateComparison"
+            },
+            "title": "Device Comparisons",
+            "type": "array"
+          },
+          "device_findings": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceStateFinding"
+            },
+            "title": "Device Findings",
+            "type": "array"
           },
           "device_mac": {
             "title": "Device Mac",
@@ -2571,6 +2767,54 @@
         "title": "NotificationUnreadCountResponse",
         "type": "object"
       },
+      "ObjectFacet": {
+        "description": "A complete catalogue facet, independent of object pagination.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count"
+        ],
+        "title": "ObjectFacet",
+        "type": "object"
+      },
+      "ObjectFacets": {
+        "properties": {
+          "sites": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectFacet"
+            },
+            "title": "Sites",
+            "type": "array"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectFacet"
+            },
+            "title": "Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "types",
+          "sites"
+        ],
+        "title": "ObjectFacets",
+        "type": "object"
+      },
       "ObjectVersionListResponse": {
         "description": "Complete version timeline for one logical object.",
         "properties": {
@@ -2713,14 +2957,6 @@
             "title": "Monitoring Retention Days",
             "type": "integer"
           },
-          "password": {
-            "format": "password",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
-          },
           "reconciliation_cron": {
             "default": "0 2 * * *",
             "maxLength": 120,
@@ -2738,8 +2974,7 @@
           }
         },
         "required": [
-          "service_token",
-          "password"
+          "service_token"
         ],
         "title": "OrganizationCreateRequest",
         "type": "object"
@@ -4420,14 +4655,6 @@
       "ServiceTokenUpdateRequest": {
         "description": "Replace the organization's read-only service token.",
         "properties": {
-          "password": {
-            "format": "password",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
-          },
           "service_token": {
             "format": "password",
             "maxLength": 2048,
@@ -4438,8 +4665,7 @@
           }
         },
         "required": [
-          "service_token",
-          "password"
+          "service_token"
         ],
         "title": "ServiceTokenUpdateRequest",
         "type": "object"
@@ -4574,12 +4800,52 @@
             "title": "Errors",
             "type": "array"
           },
+          "no_data": {
+            "items": {
+              "type": "string"
+            },
+            "title": "No Data",
+            "type": "array"
+          },
+          "scope": {
+            "default": "site",
+            "enum": [
+              "site",
+              "device"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
           "values": {
             "additionalProperties": {
               "type": "number"
             },
             "title": "Values",
             "type": "object"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
           }
         },
         "required": [
@@ -5333,24 +5599,6 @@
           "secret"
         ],
         "title": "WebhookSecretResponse",
-        "type": "object"
-      },
-      "WebhookSecretRotateRequest": {
-        "description": "Rotate the organization's webhook signing secret.\n\nThe new secret is returned once, so this asks for the password the way\nevery other credential change does.",
-        "properties": {
-          "password": {
-            "format": "password",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
-          }
-        },
-        "required": [
-          "password"
-        ],
-        "title": "WebhookSecretRotateRequest",
         "type": "object"
       }
     },
@@ -6473,7 +6721,7 @@
         ]
       },
       "put": {
-        "description": "Update AI provider settings, keeping the stored key when none is sent.\n\nThese settings hold a provider API key, so this is a credential change and\nasks for the password like one.",
+        "description": "Update AI provider settings, keeping the stored key when none is sent.\n\nAdministrator authorization and the session CSRF check protect this update.",
         "operationId": "update_ai_settings_api_v1_ai_settings_put",
         "requestBody": {
           "content": {
@@ -8372,6 +8620,26 @@
           },
           {
             "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "org",
+                    "site"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "in": "query",
             "name": "include_deleted",
             "required": false,
             "schema": {
@@ -8452,6 +8720,67 @@
           }
         ],
         "summary": "List Objects",
+        "tags": [
+          "Configuration History"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/objects/facets": {
+      "get": {
+        "description": "Return type/site filters for the entire organization's stored catalogue.",
+        "operationId": "object_facets_api_v1_organizations__organization_id__objects_facets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Deleted",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectFacets"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Object Facets",
         "tags": [
           "Configuration History"
         ]
@@ -9922,16 +10251,6 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebhookSecretRotateRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
