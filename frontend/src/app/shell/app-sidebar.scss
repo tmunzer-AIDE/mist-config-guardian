@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 :host {
   background: var(--nav-background);
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.06);
@@ -99,6 +101,10 @@ nav {
   }
 }
 
+.nav-label {
+  min-width: 0;
+}
+
 .nav-item--on {
   background: var(--nav-active-fill);
   box-shadow: inset 2px 0 0 var(--nav-accent);
@@ -130,4 +136,52 @@ nav {
   border-top: 1px solid var(--nav-rule);
   font: 400 10.5px/1.5 var(--font-mono);
   color: var(--nav-meta);
+}
+
+
+// --------------------------------------------------------------- icon rail
+// Below `mid` the sidebar keeps its icons and drops its words. The labels stay
+// in the accessibility tree rather than being removed: an icon-only link whose
+// text is `display: none` has no accessible name at all.
+@include bp.below(mid) {
+  :host {
+    padding: 14px 0 12px;
+  }
+
+  .brand {
+    justify-content: center;
+    padding: 0 0 16px;
+  }
+
+  .nav-item {
+    position: relative;
+    justify-content: center;
+    gap: 0;
+    padding: 11px 0;
+  }
+
+  .build {
+    padding: 0 12px;
+  }
+
+  .brand-text,
+  .nav-label,
+  .build-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .nav-badge {
+    position: absolute;
+    top: 5px;
+    right: 9px;
+    margin-left: 0;
+  }
 }

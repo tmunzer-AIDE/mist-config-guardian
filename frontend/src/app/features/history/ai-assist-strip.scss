@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 :host {
   display: block;
 }
@@ -226,7 +228,7 @@
   margin: 0;
 }
 
-@media (max-width: 980px) {
+@include bp.below(mid) {
   .ai-body {
     grid-template-columns: minmax(0, 1fr);
   }

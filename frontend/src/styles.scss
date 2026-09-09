@@ -1,3 +1,4 @@
+@use 'styles/breakpoints' as bp;
 @use 'styles/fonts';
 @use 'styles/tokens';
 @use 'styles/keyframes';
@@ -51,4 +52,21 @@ textarea {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+
+// Every feature page is a `.page` with 20px of padding. Below `narrow` that is
+// most of a phone's width spent on margin, so it is reclaimed globally rather
+// than in each of the eight page stylesheets.
+@include bp.below(narrow) {
+  .page {
+    padding: 14px 12px;
+  }
+}
+
+// Content that cannot reflow — a fixed-column action table, a wide diff —
+// scrolls inside its own box. The page itself must never scroll sideways.
+.cg-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }

@@ -725,6 +725,20 @@
         "title": "BootstrapAdminRequest",
         "type": "object"
       },
+      "BootstrapStateResponse": {
+        "description": "Whether the first-administrator form should be offered at all.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "BootstrapStateResponse",
+        "type": "object"
+      },
       "ChangeEvidenceResponse": {
         "description": "One deterministic statement supporting a group's assessment.",
         "properties": {
@@ -6456,6 +6470,26 @@
       }
     },
     "/api/v1/auth/bootstrap": {
+      "get": {
+        "description": "Report whether the first administrator can still be created.\n\nUnauthenticated, because the sign-in page reads it before anyone has a\nsession. It discloses nothing the bootstrap route does not already: posting\nto it answers the same question through its status code.",
+        "operationId": "bootstrap_state_api_v1_auth_bootstrap_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Bootstrap State",
+        "tags": [
+          "Authentication"
+        ]
+      },
       "post": {
         "description": "Create the first local administrator.",
         "operationId": "bootstrap_administrator_api_v1_auth_bootstrap_post",
@@ -8182,7 +8216,7 @@
     },
     "/api/v1/organizations/{organization_id}/objects": {
       "get": {
-        "description": "List stable objects with optional type, site, and deletion filters.",
+        "description": "List stable objects with optional type, site, free-text, and deletion filters.",
         "operationId": "list_objects_api_v1_organizations__organization_id__objects_get",
         "parameters": [
           {
@@ -8233,6 +8267,22 @@
               "default": false,
               "title": "Include Deleted",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
             }
           },
           {
@@ -8291,6 +8341,65 @@
           }
         ],
         "summary": "List Objects",
+        "tags": [
+          "Configuration History"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/objects/{logical_object_id}": {
+      "get": {
+        "description": "Return one object's identity.\n\nThe history rail holds a page rather than the whole catalogue, so the\nobject being compared is not always in it — a link can name one that sorts\npast the first page, and a search can hide it. This resolves that object on\nits own so the comparison can still be labelled.",
+        "operationId": "get_object_api_v1_organizations__organization_id__objects__logical_object_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_object_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogicalObjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Get Object",
         "tags": [
           "Configuration History"
         ]

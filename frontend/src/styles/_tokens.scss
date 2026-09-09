@@ -129,6 +129,8 @@
 
   // ---- Geometry ----
   --sidebar-width: 216px;
+  /* The collapsed sidebar below the `mid` breakpoint: icons only, no labels. */
+  --sidebar-rail: 64px;
   --header-height: 56px;
   --track-height: 58px;
   --radius-xs: 2px;

@@ -52,8 +52,11 @@ export const POLL_INTERVAL_MS = 2000;
 /** Upper bound on polls so a stuck worker cannot keep a tab requesting forever. */
 export const MAX_POLL_ATTEMPTS = 300;
 
-/** The targets endpoint caps a page at 200; the picker asks for the whole cap. */
-const TARGET_PAGE_SIZE = 200;
+/** Page sizes the picker offers. The targets endpoint caps a page at 200. */
+export const TARGET_PAGE_SIZES: readonly number[] = [25, 50, 100];
+
+/** Rows per page before anyone chooses. */
+export const DEFAULT_TARGET_PAGE_SIZE = 25;
 
 export const HISTORICAL_NOTE =
   'You are viewing a past point in time, so restores are read-only here. Return to now to plan, authorize, or run one.';
@@ -136,6 +139,10 @@ export class RestorePage {
    * the visible rows alone.
    */
   private readonly labels = signal<Record<string, string>>({});
+  protected readonly pageSize = signal(DEFAULT_TARGET_PAGE_SIZE);
+  protected readonly skip = signal(0);
+  protected readonly pageSizes = TARGET_PAGE_SIZES;
+
   protected readonly scope = signal<TargetScope>('all');
   protected readonly siteId = signal('');
   protected readonly objectType = signal('');
@@ -223,8 +230,21 @@ export class RestorePage {
     }));
   });
 
-  /** True when the filtered match count exceeds the page the picker holds. */
-  protected readonly capped = computed(() => this.matched() > this.targets().length);
+  /** The 1-based row window this page shows, as "n-m of N". */
+  protected readonly pageLabel = computed(() => {
+    const total = this.matched();
+    if (total === 0) {
+      return '0 of 0';
+    }
+    const first = this.skip() + 1;
+    const last = Math.min(this.skip() + this.targets().length, total);
+    return `${first}\u2013${last} of ${total}`;
+  });
+
+  protected readonly hasPrevPage = computed(() => this.skip() > 0);
+  protected readonly hasNextPage = computed(
+    () => this.skip() + this.targets().length < this.matched(),
+  );
 
   protected readonly preflightErrors = computed(
     () => this.activeOperation()?.preflight_errors ?? [],
@@ -269,7 +289,8 @@ export class RestorePage {
         siteId: this.siteId() || undefined,
         objectType: this.objectType() || undefined,
         q: this.query() || undefined,
-        limit: TARGET_PAGE_SIZE,
+        skip: this.skip(),
+        limit: this.pageSize(),
       };
       if (!organizationId) {
         return;
@@ -438,6 +459,7 @@ export class RestorePage {
     this.siteId.set('');
     this.objectType.set('');
     this.query.set('');
+    this.skip.set(0);
     this.targets.set([]);
     this.matched.set(0);
     this.catalogTotal.set(0);
@@ -534,6 +556,7 @@ export class RestorePage {
 
   protected setScope(scope: TargetScope): void {
     this.scope.set(scope);
+    this.firstPage();
     if (scope !== 'site') {
       this.siteId.set('');
     }
@@ -541,14 +564,17 @@ export class RestorePage {
 
   protected setSite(siteId: string): void {
     this.siteId.set(siteId);
+    this.firstPage();
   }
 
   protected setType(objectType: string): void {
     this.objectType.set(objectType);
+    this.firstPage();
   }
 
   protected setQuery(query: string): void {
     this.query.set(query.trim());
+    this.firstPage();
   }
 
   protected clearFilters(): void {
@@ -556,6 +582,38 @@ export class RestorePage {
     this.siteId.set('');
     this.objectType.set('');
     this.query.set('');
+    this.firstPage();
+  }
+
+  // ---- paging -------------------------------------------------------------
+  protected setPageSize(size: number): void {
+    this.pageSize.set(size);
+    // The window a page number names moves with its size, so the only offset
+    // that still means the same thing after a resize is the first one.
+    this.firstPage();
+  }
+
+  protected nextPage(): void {
+    if (this.hasNextPage()) {
+      this.skip.update((skip) => skip + this.pageSize());
+    }
+  }
+
+  protected previousPage(): void {
+    if (this.hasPrevPage()) {
+      this.skip.update((skip) => Math.max(0, skip - this.pageSize()));
+    }
+  }
+
+  /**
+   * Return to the first page.
+   *
+   * Every filter change calls this: a narrower filter can leave fewer matches
+   * than the current offset, which would otherwise show an empty page for a
+   * filter that does match objects.
+   */
+  private firstPage(): void {
+    this.skip.set(0);
   }
 
   protected toggleTarget(versionId: string): void {

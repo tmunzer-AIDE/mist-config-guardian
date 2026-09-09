@@ -43,6 +43,25 @@
     } @else if (noMatches()) {
       <p class="col-empty">No object matches that filter.</p>
     }
+
+    @if (objectsTotal() > 0) {
+      <div class="more">
+        <p class="more-count" role="status" aria-live="polite">{{ objectCountLabel() }}</p>
+        @if (hasMoreObjects()) {
+          <button
+            class="cg-btn cg-btn--sm more-btn"
+            type="button"
+            [disabled]="loadingMore()"
+            (click)="loadMoreObjects()"
+          >
+            @if (loadingMore()) {
+              <span class="cg-spinner" aria-hidden="true"></span>
+            }
+            {{ loadingMore() ? 'Loading…' : 'Load more ' + objectPageSize }}
+          </button>
+        }
+      </div>
+    }
   </div>
 
   <div class="col-foot">

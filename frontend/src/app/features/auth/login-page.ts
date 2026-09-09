@@ -29,6 +29,13 @@ export class LoginPage {
   protected readonly health = inject(SystemHealthService);
 
   protected readonly mode = signal<Mode>('login');
+  /**
+   * Whether the deployment still has a first administrator to create.
+   *
+   * Null until the answer arrives, which is what keeps the page from flashing
+   * the wrong form: neither branch is offered before it is known.
+   */
+  protected readonly bootstrapAvailable = signal<boolean | null>(null);
   protected readonly busy = signal(false);
   protected readonly error = signal('');
   protected readonly notice = signal('');
@@ -68,6 +75,27 @@ export class LoginPage {
 
   constructor() {
     void this.health.loadVersion();
+    void this.resolveBootstrapState();
+  }
+
+  /**
+   * Choose which form this deployment can actually use.
+   *
+   * With no account yet there is nothing to sign in to, so the page opens on
+   * the setup form; once one exists, setup is closed and is not offered. A
+   * failed read leaves sign-in, which is the case that is true far more often
+   * and the one a returning administrator needs.
+   */
+  private async resolveBootstrapState(): Promise<void> {
+    try {
+      const available = await this.auth.bootstrapAvailable();
+      this.bootstrapAvailable.set(available);
+      if (available) {
+        this.mode.set('bootstrap');
+      }
+    } catch {
+      this.bootstrapAvailable.set(false);
+    }
   }
 
   protected switchMode(mode: Mode): void {

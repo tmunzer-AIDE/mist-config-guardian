@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 :host {
   display: block;
 }
@@ -287,10 +289,38 @@
   margin-top: 3px;
 }
 
-.capped {
+// ---------------------------------------------------------------- pager
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px solid var(--hairline);
+}
+
+.pager-count {
   font-size: 11.5px;
   color: var(--ink-soft);
-  margin: 11px 0 0;
+  margin: 0;
+}
+
+.pager-size {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.pager-select {
+  padding: 4px 7px;
+  font-size: 11.5px;
+}
+
+.pager-steps {
+  display: flex;
+  gap: 7px;
 }
 
 // ----------------------------------------------------------------- mode card
@@ -445,7 +475,7 @@
   line-height: 1.6;
 }
 
-@media (max-width: 1000px) {
+@include bp.below(mid) {
   .columns {
     grid-template-columns: minmax(0, 1fr);
   }

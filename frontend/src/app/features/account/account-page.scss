@@ -25,9 +25,10 @@
 // The account strip sits tighter than the shared tab primitive: each tab is a
 // padded target rather than a spaced label, so the gap and padding are local.
 .tabs {
+  --cg-tabs-rule: var(--hairline-strong);
+
   gap: 2px;
   margin-top: 15px;
-  border-bottom-color: var(--hairline-strong);
   overflow-x: auto;
   scrollbar-width: thin;
 }

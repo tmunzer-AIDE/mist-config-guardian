@@ -117,3 +117,9 @@ class LogoutResponse(BaseModel):
     """Result of ending the current session."""
 
     signed_out: bool = True
+
+
+class BootstrapStateResponse(BaseModel):
+    """Whether the first-administrator form should be offered at all."""
+
+    available: bool

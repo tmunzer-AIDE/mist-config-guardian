@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 // The action list shares the five-column track step 2 defines.
 $columns: minmax(0, 0.32fr) minmax(0, 0.8fr) minmax(150px, 2.6fr) minmax(0, 1fr) minmax(0, 0.85fr);
 $sunken: rgba(251, 250, 247, 0.55);
@@ -311,7 +313,7 @@ $sunken: rgba(251, 250, 247, 0.55);
   }
 }
 
-@media (max-width: 860px) {
+@include bp.below(page) {
   .row {
     grid-template-columns: minmax(0, 0.4fr) minmax(0, 0.9fr) minmax(0, 2.6fr) minmax(0, 1fr);
   }

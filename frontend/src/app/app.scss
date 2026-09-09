@@ -1,19 +1,30 @@
+@use 'breakpoints' as bp;
+
 :host {
   display: block;
   height: 100vh;
+  // Mobile browsers count their collapsing chrome in `vh` but not in `dvh`, so
+  // the shell is measured against the space actually on screen.
+  height: 100dvh;
 }
 
 .shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  height: 100vh;
-  min-height: 620px;
+  height: 100%;
+  // No minimum height: the shell is exactly as tall as the viewport and `main`
+  // scrolls inside it. A floor taller than the window pushed the footer of
+  // every page out of reach, because this element also clips its overflow.
   background: var(--app-background);
   font-size: var(--text-base);
   line-height: var(--leading-base);
   color: var(--ink);
   position: relative;
   overflow: hidden;
+
+  @include bp.below(mid) {
+    grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
+  }
 }
 
 .frame {
@@ -64,7 +75,6 @@
   margin: 14px 20px 0;
   background: var(--tone-critical-soft);
   border: 1px solid var(--tone-critical-line);
-  border-left: 3px solid var(--tone-critical-ink);
   border-radius: var(--radius-md);
   padding: 11px 14px;
   display: flex;

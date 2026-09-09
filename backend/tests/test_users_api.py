@@ -134,6 +134,9 @@ def users(monkeypatch: pytest.MonkeyPatch) -> _FakeUsers:
     async def _get(user_id: PydanticObjectId) -> User | None:
         return next((item for item in fake.records if item.id == user_id), None)
 
+    async def _count() -> int:
+        return len(fake.records)
+
     class _Collection:
         """Accepts the field-scoped writes `write_user_fields` issues.
 
@@ -153,6 +156,7 @@ def users(monkeypatch: pytest.MonkeyPatch) -> _FakeUsers:
     monkeypatch.setattr(User, "find_one", _find_one)
     monkeypatch.setattr(User, "find", _find)
     monkeypatch.setattr(User, "get", _get)
+    monkeypatch.setattr(User, "count", _count)
     return fake
 
 
@@ -476,3 +480,64 @@ async def test_authentication_does_not_reveal_unknown_accounts(users: _FakeUsers
     assert await service.authenticate("known@example.com", "wrong-password") is None
     assert await service.authenticate("missing@example.com", "wrong-password") is None
     assert await service.authenticate("KNOWN@example.com", "a-long-enough-password") is known
+
+
+# --------------------------------------------------------------- bootstrap gate
+def _bootstrappable_settings() -> Settings:
+    return Settings(
+        environment="test",
+        database_enabled=False,
+        secret_key="unit-test-signing-key-that-is-long-enough",
+        bootstrap_admin_token="a-configured-bootstrap-token",
+    )
+
+
+async def test_bootstrap_is_offered_while_no_account_exists(users: _FakeUsers) -> None:
+    assert users.records == []
+    settings = _bootstrappable_settings()
+    app = create_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    async with _client(app) as client:
+        response = await client.get("/api/v1/auth/bootstrap")
+
+    assert response.status_code == 200
+    assert response.json() == {"available": True}
+
+
+async def test_bootstrap_closes_once_an_account_exists(users: _FakeUsers) -> None:
+    users.records.append(_user(email="admin@example.com", role=UserRole.ADMINISTRATOR))
+    settings = _bootstrappable_settings()
+    app = create_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    async with _client(app) as client:
+        response = await client.get("/api/v1/auth/bootstrap")
+
+    assert response.status_code == 200
+    assert response.json() == {"available": False}
+
+
+async def test_bootstrap_is_closed_when_no_token_is_configured(users: _FakeUsers) -> None:
+    """An empty deployment with no token cannot be bootstrapped, so it may not offer to be."""
+    assert users.records == []
+    app = create_app(_settings())
+
+    async with _client(app) as client:
+        response = await client.get("/api/v1/auth/bootstrap")
+
+    assert response.status_code == 200
+    assert response.json() == {"available": False}
+
+
+async def test_the_bootstrap_gate_needs_no_session(users: _FakeUsers) -> None:
+    """The page that reads it is the sign-in page, which has no session yet."""
+    assert users.records == []
+    settings = _bootstrappable_settings()
+    app = create_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    async with _client(app) as client:
+        response = await client.get("/api/v1/auth/bootstrap")
+
+    assert response.status_code != 401

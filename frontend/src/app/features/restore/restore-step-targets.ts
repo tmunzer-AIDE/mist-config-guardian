@@ -63,7 +63,12 @@ export class RestoreStepTargets {
   readonly total = input.required<number>();
   /** Objects matching the current filters, which can exceed one page. */
   readonly matched = input.required<number>();
-  readonly capped = input.required<boolean>();
+  /** The row window this page shows, already formatted as "n-m of N". */
+  readonly pageLabel = input.required<string>();
+  readonly pageSize = input.required<number>();
+  readonly pageSizes = input.required<readonly number[]>();
+  readonly hasPrevPage = input.required<boolean>();
+  readonly hasNextPage = input.required<boolean>();
   readonly mode = input.required<RestoreMode>();
   readonly includeDependencies = input.required<boolean>();
   readonly history = input.required<RestoreOperation[]>();
@@ -81,6 +86,9 @@ export class RestoreStepTargets {
   readonly cleared = output<void>();
   readonly filtersCleared = output<void>();
   readonly changeGroupCleared = output<void>();
+  readonly pageSizePicked = output<number>();
+  readonly nextPageRequested = output<void>();
+  readonly previousPageRequested = output<void>();
   readonly modePicked = output<RestoreMode>();
   readonly dependenciesToggled = output<boolean>();
   readonly planRequested = output<void>();
@@ -131,6 +139,10 @@ export class RestoreStepTargets {
 
   protected selectValue(event: Event): string {
     return (event.target as HTMLSelectElement).value;
+  }
+
+  protected numericValue(event: Event): number {
+    return Number((event.target as HTMLSelectElement).value);
   }
 }
 

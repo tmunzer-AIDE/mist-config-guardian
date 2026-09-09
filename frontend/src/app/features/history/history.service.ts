@@ -3,7 +3,12 @@ import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { orgPath } from '../../core/api';
-import { ConfigurationObjectList, ConfigurationVersionList, ObjectQuery } from './history.model';
+import {
+  ConfigurationObject,
+  ConfigurationObjectList,
+  ConfigurationVersionList,
+  ObjectQuery,
+} from './history.model';
 
 /** Logical configuration objects and their captured version chains. */
 @Injectable({ providedIn: 'root' })
@@ -21,6 +26,9 @@ export class HistoryService {
     if (query.includeDeleted !== undefined) {
       params = params.set('include_deleted', query.includeDeleted);
     }
+    if (query.q) {
+      params = params.set('q', query.q);
+    }
     if (query.skip !== undefined) {
       params = params.set('skip', query.skip);
     }
@@ -29,6 +37,18 @@ export class HistoryService {
     }
     return firstValueFrom(
       this.http.get<ConfigurationObjectList>(orgPath(organizationId, '/objects'), { params }),
+    );
+  }
+
+  /**
+   * One object's identity.
+   *
+   * The rail holds a page, so the object being compared is not always in it;
+   * this resolves the ones that are not.
+   */
+  object(organizationId: string, logicalObjectId: string): Promise<ConfigurationObject> {
+    return firstValueFrom(
+      this.http.get<ConfigurationObject>(orgPath(organizationId, `/objects/${logicalObjectId}`)),
     );
   }
 

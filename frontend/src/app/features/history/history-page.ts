@@ -46,6 +46,12 @@ import {
 import { HistoryService } from './history.service';
 
 /** Which end of the comparison a version is pinned to. */
+/** Objects fetched per read of the rail. */
+const OBJECT_PAGE_SIZE = 50;
+
+/** How long typing pauses before the term is sent to the server. */
+const SEARCH_DEBOUNCE_MS = 250;
+
 export type AbSlot = 'a' | 'b';
 
 interface ObjectRow {
@@ -101,13 +107,46 @@ export class HistoryPage {
   protected readonly time = inject(TimeContextService);
 
   protected readonly questionMaxLength = AI_QUESTION_MAX_LENGTH;
+  protected readonly objectPageSize = OBJECT_PAGE_SIZE;
 
   // ------------------------------------------------------------------ state
+  /** What is in the search box right now. */
   protected readonly query = signal('');
+  /**
+   * The term the list on screen was read for.
+   *
+   * Searching is server-side — the rail holds one page, not the catalogue, so
+   * a term the browser could filter against would only ever find what had
+   * already been fetched. It trails `query` by a keystroke pause so typing a
+   * word is one request rather than one per letter.
+   */
+  private readonly searchTerm = signal('');
+  private searchDebounce: ReturnType<typeof setTimeout> | null = null;
   protected readonly showDeleted = signal(false);
   protected readonly objectsLoaded = signal(false);
+  /** Objects matching the current filters, which is more than the rail holds. */
+  protected readonly objectsTotal = signal(0);
+  protected readonly loadingMore = signal(false);
 
   private readonly objects = signal<ConfigurationObject[]>([]);
+  /**
+   * The selected object when the loaded page does not contain it.
+   *
+   * The rail is one page of many, so the object being compared can sit outside
+   * it — a link naming one that sorts later, or a search that hides it. The
+   * comparison is still labelled from this.
+   */
+  private readonly offPageObject = signal<ConfigurationObject | null>(null);
+  /** The id being resolved right now, so a re-run cannot ask for it twice. */
+  private resolvingObjectId: string | null = null;
+  /**
+   * Bumped whenever an object resolution starts or is abandoned.
+   *
+   * Every write the resolver makes is checked against it, so an answer for an
+   * object nobody is looking at any more — including a failure, which has no
+   * value of its own to compare — cannot touch what is on screen.
+   */
+  private objectDetailRequest = 0;
   private readonly versions = signal<ConfigurationVersion[]>([]);
   protected readonly selectedObjectId = signal<string | null>(null);
   private objectsRequest = 0;
@@ -144,13 +183,11 @@ export class HistoryPage {
 
   // -------------------------------------------------------------- selections
   protected readonly objectGroups = computed<ObjectGroup[]>(() => {
-    const needle = this.query().trim().toLowerCase();
+    // Every object held has already been matched by the server, so grouping is
+    // all that is left to do here.
     const selected = this.selectedObjectId();
     const groups = new Map<string, ObjectRow[]>();
     for (const object of this.objects()) {
-      if (needle && !`${object.name} ${object.object_type}`.toLowerCase().includes(needle)) {
-        continue;
-      }
       const label = objectGroupLabel(object);
       const rows = groups.get(label) ?? [];
       rows.push({
@@ -166,15 +203,28 @@ export class HistoryPage {
     return [...groups.entries()].map(([label, items]) => ({ label, items }));
   });
 
-  protected readonly matchCount = computed(() =>
-    this.objectGroups().reduce((total, group) => total + group.items.length, 0),
+  protected readonly noObjects = computed(
+    () => this.objectsLoaded() && this.objectsTotal() === 0 && this.searchTerm() === '',
   );
-  protected readonly noObjects = computed(() => this.objectsLoaded() && this.objects().length === 0);
-  protected readonly noMatches = computed(() => this.objects().length > 0 && this.matchCount() === 0);
+  protected readonly noMatches = computed(
+    () => this.objectsLoaded() && this.objectsTotal() === 0 && this.searchTerm() !== '',
+  );
+  protected readonly hasMoreObjects = computed(() => this.objects().length < this.objectsTotal());
+  /** "Showing n of N", so a partial rail never reads as the whole catalogue. */
+  protected readonly objectCountLabel = computed(
+    () => `Showing ${this.objects().length} of ${this.objectsTotal()}`,
+  );
 
-  protected readonly selectedObject = computed(
-    () => this.objects().find((object) => object.id === this.selectedObjectId()) ?? null,
-  );
+  protected readonly selectedObject = computed(() => {
+    const id = this.selectedObjectId();
+    if (id === null) {
+      return null;
+    }
+    return (
+      this.objects().find((object) => object.id === id) ??
+      (this.offPageObject()?.id === id ? this.offPageObject() : null)
+    );
+  });
 
   protected readonly objectKind = computed(() => {
     const object = this.selectedObject();
@@ -334,6 +384,7 @@ export class HistoryPage {
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
       const includeDeleted = this.showDeleted();
+      const term = this.searchTerm();
       this.organizations.revision();
       if (!organizationId) {
         return;
@@ -346,7 +397,9 @@ export class HistoryPage {
           this.resetSelection();
         }
         this.loadedOrganization = organizationId;
-        void this.ui.track('Loading configuration objects', () => this.loadObjects(organizationId, includeDeleted));
+        void this.ui.track('Loading configuration objects', () =>
+          this.loadObjects(organizationId, includeDeleted, term, 0),
+        );
       });
     });
 
@@ -358,6 +411,21 @@ export class HistoryPage {
         return;
       }
       void untracked(() => this.loadVersions(organizationId, objectId));
+    });
+
+    // Resolving the compared object is its own effect because it depends on
+    // the rail as well as the selection: a search or a later page can stop
+    // holding the object without the selection changing, and the comparison
+    // panel is named from it. Tracking this alongside the version read would
+    // re-read the versions on every page of the rail.
+    effect(() => {
+      const organizationId = this.organizations.selected()?.id;
+      const objectId = this.selectedObjectId();
+      const loaded = this.objects();
+      if (!organizationId || !objectId || this.loadedOrganization !== organizationId) {
+        return;
+      }
+      void untracked(() => this.resolveOffPageObject(organizationId, objectId, loaded));
     });
 
     effect(() => {
@@ -392,7 +460,34 @@ export class HistoryPage {
   // ----------------------------------------------------------------- objects
 
   protected setQuery(event: Event): void {
-    this.query.set((event.target as HTMLInputElement).value);
+    const value = (event.target as HTMLInputElement).value;
+    this.query.set(value);
+    if (this.searchDebounce !== null) {
+      clearTimeout(this.searchDebounce);
+    }
+    this.searchDebounce = setTimeout(() => {
+      this.searchDebounce = null;
+      this.searchTerm.set(value.trim());
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  /** Fetch the next page and append it, keeping what is already on screen. */
+  protected async loadMoreObjects(): Promise<void> {
+    const organizationId = this.organizations.selected()?.id;
+    if (!organizationId || this.loadingMore() || !this.hasMoreObjects()) {
+      return;
+    }
+    this.loadingMore.set(true);
+    try {
+      await this.loadObjects(
+        organizationId,
+        this.showDeleted(),
+        this.searchTerm(),
+        this.objects().length,
+      );
+    } finally {
+      this.loadingMore.set(false);
+    }
   }
 
   protected toggleDeleted(): void {
@@ -408,6 +503,7 @@ export class HistoryPage {
   }
 
   private resetSelection(): void {
+    this.discardObjectResolution();
     this.versions.set([]);
     this.versionAId.set(null);
     this.versionBId.set(null);
@@ -649,20 +745,106 @@ export class HistoryPage {
 
   // ---------------------------------------------------------------- loading
 
-  private async loadObjects(organizationId: string, includeDeleted: boolean): Promise<void> {
+  /**
+   * Read one page of objects.
+   *
+   * `skip` of zero replaces the rail — a new organization, filter, or search
+   * term — and anything else appends the next page to what is already shown.
+   */
+  private async loadObjects(
+    organizationId: string,
+    includeDeleted: boolean,
+    term: string,
+    skip: number,
+  ): Promise<void> {
     const request = ++this.objectsRequest;
-    const response = await this.history.objects(organizationId, { includeDeleted });
-    // A slow answer for a previous organization or filter must not replace the
-    // list on screen.
+    const response = await this.history.objects(organizationId, {
+      includeDeleted,
+      q: term || undefined,
+      skip,
+      limit: OBJECT_PAGE_SIZE,
+    });
+    // A slow answer for a previous organization, filter, or term must not
+    // replace the list on screen.
     if (request !== this.objectsRequest) {
       return;
     }
-    this.objects.set(response.items);
+    const items = skip === 0 ? response.items : [...this.objects(), ...response.items];
+    this.objects.set(items);
+    this.objectsTotal.set(response.total ?? items.length);
     this.objectsLoaded.set(true);
-    const current = this.selectedObjectId();
-    if (!current || !response.items.some((object) => object.id === current)) {
-      this.selectedObjectId.set(response.items[0]?.id ?? null);
+    // Appending must not move the selection: the object being compared is the
+    // reason the rest of the page is on screen.
+    if (skip > 0) {
+      return;
     }
+    // Only an empty selection is filled in. The rail holds one page of many, so
+    // an object missing from it is no longer an object that does not exist: a
+    // deep link can name one that sorts past this page, and a search can hide
+    // the object being compared without meaning to end the comparison. An id
+    // that names nothing surfaces as a failed version read, which is a better
+    // answer than quietly opening a different object.
+    if (this.selectedObjectId() !== null) {
+      return;
+    }
+    const first = items[0]?.id ?? null;
+    if (first !== null) {
+      // Through the same path a click takes, so the versions, pins and diff of
+      // whatever was shown before cannot outlive the object they describe.
+      this.resetSelection();
+      this.selectedObjectId.set(first);
+    }
+  }
+
+  /**
+   * Resolve a selected object the loaded page does not hold.
+   *
+   * Nothing is fetched while the rail already describes it, which is the usual
+   * case. A failure is left silent: the comparison itself is driven by the
+   * version reads, and those report their own errors rather than raising a
+   * second banner for the same missing object.
+   */
+  private async resolveOffPageObject(
+    organizationId: string,
+    objectId: string,
+    loaded: ConfigurationObject[],
+  ): Promise<void> {
+    if (loaded.some((object) => object.id === objectId)) {
+      this.discardObjectResolution();
+      return;
+    }
+    // This runs again whenever the rail changes, which can happen while the
+    // read it already started is still in flight.
+    if (this.offPageObject()?.id === objectId || this.resolvingObjectId === objectId) {
+      return;
+    }
+    const request = ++this.objectDetailRequest;
+    this.resolvingObjectId = objectId;
+    try {
+      const object = await this.history.object(organizationId, objectId);
+      // The rail may have caught up with the object while this was in flight,
+      // in which case it describes it and this copy is not needed.
+      if (request === this.objectDetailRequest && !this.objects().some((item) => item.id === objectId)) {
+        this.offPageObject.set(object);
+      }
+    } catch {
+      if (request === this.objectDetailRequest) {
+        this.offPageObject.set(null);
+      }
+    } finally {
+      // Keyed on the read, not on the object: a later read for the same id
+      // owns the marker by now, and clearing it would let a third go out.
+      if (request === this.objectDetailRequest) {
+        this.resolvingObjectId = null;
+      }
+    }
+  }
+
+  /** Forget the resolved object, and disown any read still in flight. */
+  private discardObjectResolution(): void {
+    this.objectDetailRequest += 1;
+    this.resolvingObjectId = null;
+    this.offPageObject.set(null);
   }
 
   private async loadVersions(organizationId: string, objectId: string): Promise<void> {

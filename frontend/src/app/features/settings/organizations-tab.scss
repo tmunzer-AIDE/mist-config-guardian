@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 .tab-body {
   padding-top: 16px;
   display: flex;
@@ -138,7 +140,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
-@media (max-width: 900px) {
+@include bp.below(page) {
   .detail {
     grid-template-columns: minmax(0, 1fr);
   }

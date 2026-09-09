@@ -1,3 +1,5 @@
+@use 'breakpoints' as bp;
+
 :host {
   height: var(--header-height);
   flex: none;
@@ -337,4 +339,49 @@
 
 .menu-row--danger {
   color: var(--tone-critical-ink);
+}
+
+
+// ------------------------------------------------------------- narrow chrome
+// The header keeps the organization picker, search, and the two action buttons
+// at every width. What goes first is the text that repeats something already on
+// screen or one tap away: the region code, the signed-in name and role.
+@include bp.below(mid) {
+  .search {
+    max-width: 220px;
+  }
+
+  .user-text {
+    display: none;
+  }
+}
+
+@include bp.below(narrow) {
+  :host {
+    gap: 9px;
+    padding: 0 12px;
+  }
+
+  .org-name {
+    max-width: 22vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .org-region,
+  .divider {
+    display: none;
+  }
+
+  .search {
+    // Search is the only way into the search page, so it shrinks rather than
+    // being dropped.
+    max-width: none;
+    min-width: 0;
+  }
+
+  .menu {
+    max-width: calc(100vw - 24px);
+  }
 }

@@ -1,9 +1,10 @@
 """Restorable object discovery and facet counts for restore step one."""
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from beanie import PydanticObjectId
 
@@ -75,8 +76,15 @@ class RestoreTargetQuery:
     limit: int = 50
 
 
-class RestoreTargetStore(Protocol):
-    """Organization-scoped reads the target service depends on."""
+class RestoreTargetSearch(Protocol):
+    """One page of restore targets, filtered and faceted."""
+
+    async def search(self, query: RestoreTargetQuery) -> RestoreTargetPage:
+        """Return one page of restore targets with its filter facet counts."""
+
+
+class RestoreTargetReader(Protocol):
+    """Organization-scoped reads the in-memory search depends on."""
 
     async def logical_objects(self, organization_id: PydanticObjectId) -> list[LogicalObject]:
         """Return every logical object recorded for one organization."""
@@ -88,7 +96,7 @@ class RestoreTargetStore(Protocol):
         """Return the newest non-deleted version per logical object."""
 
 
-class MongoRestoreTargetStore:
+class MongoRestoreTargetReader:
     """MongoDB-backed target reads, scoped by organization on every query."""
 
     async def logical_objects(self, organization_id: PydanticObjectId) -> list[LogicalObject]:
@@ -123,16 +131,21 @@ class MongoRestoreTargetStore:
         }
 
 
-class RestoreTargetService:
-    """Filter, facet, and paginate the restorable objects of one organization."""
+class InMemoryRestoreTargetSearch:
+    """Filter, facet, and paginate in Python, over everything the reader holds.
 
-    def __init__(self, store: RestoreTargetStore | None = None) -> None:
-        self._store = store or MongoRestoreTargetStore()
+    This is the reference the behaviour is specified against. It reads the whole
+    organization per request, so it is not what a deployment runs — see
+    ``MongoRestoreTargetSearch``, which must agree with it.
+    """
+
+    def __init__(self, reader: RestoreTargetReader) -> None:
+        self._reader = reader
 
     async def search(self, query: RestoreTargetQuery) -> RestoreTargetPage:
         """Return one page of restore targets with its filter facet counts."""
-        logical_objects = await self._store.logical_objects(query.organization_id)
-        versions = await self._store.restorable_versions(query.organization_id)
+        logical_objects = await self._reader.logical_objects(query.organization_id)
+        versions = await self._reader.restorable_versions(query.organization_id)
         site_names = {
             item.current_mist_id: item.name
             for item in logical_objects
@@ -213,3 +226,173 @@ class RestoreTargetService:
             RestoreTargetSite(id=site_id, name=name)
             for site_id, name in sorted(sites.items(), key=lambda item: (item[1].lower(), item[0]))
         ]
+
+
+class MongoRestoreTargetSearch:
+    """Filter, facet, and paginate inside MongoDB, in one round trip.
+
+    The page, its unpaged total, and both facet vocabularies are branches of a
+    single ``$facet``: they read the same filtered set but apply different
+    subsets of it, which is what lets a facet row survive being selected.
+    """
+
+    async def search(self, query: RestoreTargetQuery) -> RestoreTargetPage:
+        """Return one page of restore targets with its filter facet counts."""
+        rows = await LogicalObject.aggregate(_pipeline(query)).to_list()
+        result: dict[str, Any] = rows[0] if rows else {}
+        total = result.get("total") or []
+        return RestoreTargetPage(
+            items=[_target(row) for row in result.get("page") or []],
+            total=int(total[0]["value"]) if total else 0,
+            types=[
+                RestoreTargetTypeCount(type=row["_id"], count=int(row["count"])) for row in result.get("types") or []
+            ],
+            sites=[RestoreTargetSite(id=row["_id"], name=row["name"]) for row in result.get("sites") or []],
+        )
+
+
+def _target(row: dict[str, Any]) -> RestoreTarget:
+    newest = row["newest"]
+    return RestoreTarget(
+        logical_object_id=str(row["_id"]),
+        version_id=str(newest["_id"]),
+        name=row["name"],
+        object_type=row["object_type"],
+        scope=row["scope"],
+        site_mist_id=row.get("site_mist_id"),
+        site_name=row.get("site_name"),
+        version=int(newest["version"]),
+        observed_at=newest["observed_at"],
+    )
+
+
+def _pipeline(query: RestoreTargetQuery) -> list[dict[str, Any]]:
+    """Build the one aggregation that answers a target page."""
+    organization_id = query.organization_id
+
+    stages: list[dict[str, Any]] = [
+        {"$match": {"organization_id": organization_id}},
+        # The newest version that is not a deletion is what a restore would
+        # write back. An object with none of those is not a target at all,
+        # which is what the $unwind below drops.
+        {
+            "$lookup": {
+                "from": "object_versions",
+                "let": {"logical_id": "$_id"},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "organization_id": organization_id,
+                            "is_deleted": False,
+                            "$expr": {"$eq": ["$logical_object_id", "$$logical_id"]},
+                        }
+                    },
+                    {"$sort": {"version": -1}},
+                    {"$limit": 1},
+                    {"$project": {"version": 1, "observed_at": 1}},
+                ],
+                "as": "newest",
+            }
+        },
+        {"$unwind": "$newest"},
+        # A site-scoped object shows the name of its site, which is itself a
+        # logical object in this collection.
+        {
+            "$lookup": {
+                "from": "logical_objects",
+                "let": {"site_id": "$site_mist_id"},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "organization_id": organization_id,
+                            "object_type": "sites",
+                            "is_deleted": False,
+                            "$expr": {"$eq": ["$current_mist_id", "$$site_id"]},
+                        }
+                    },
+                    {"$limit": 1},
+                    {"$project": {"name": 1}},
+                ],
+                "as": "site",
+            }
+        },
+        {
+            "$addFields": {
+                "site_name": {"$first": "$site.name"},
+                # Sorting and the free-text match are case-insensitive, and a
+                # collation would apply to the whole pipeline rather than these
+                # two fields, so the folded forms are materialised here.
+                "sort_name": {"$toLower": "$name"},
+            }
+        },
+    ]
+
+    common = _common_match(query)
+    if common:
+        stages.append({"$match": common})
+
+    site_match = {"site_mist_id": query.site_id} if query.site_id else {}
+    type_match = {"object_type": query.object_type} if query.object_type else {}
+    both = {**site_match, **type_match}
+
+    stages.append(
+        {
+            "$facet": {
+                "page": [
+                    *_maybe_match(both),
+                    {"$sort": {"object_type": 1, "sort_name": 1, "_id": 1}},
+                    {"$skip": query.skip},
+                    {"$limit": query.limit},
+                ],
+                "total": [*_maybe_match(both), {"$count": "value"}],
+                # The type row honours the site but not the type it drives, and
+                # the site row the reverse.
+                "types": [
+                    *_maybe_match(site_match),
+                    {"$group": {"_id": "$object_type", "count": {"$sum": 1}}},
+                    {"$sort": {"count": -1, "_id": 1}},
+                ],
+                "sites": [
+                    *_maybe_match(type_match),
+                    {"$match": {"site_mist_id": {"$ne": None}}},
+                    {"$group": {"_id": "$site_mist_id", "name": {"$first": "$site_name"}}},
+                    # A site whose own object is gone is still named by the
+                    # objects in it, so it falls back to its Mist identifier.
+                    {"$addFields": {"name": {"$ifNull": ["$name", "$_id"]}}},
+                    {"$addFields": {"sort_name": {"$toLower": "$name"}}},
+                    {"$sort": {"sort_name": 1, "_id": 1}},
+                ],
+            }
+        }
+    )
+    return stages
+
+
+def _common_match(query: RestoreTargetQuery) -> dict[str, Any]:
+    """The filters every facet branch honours."""
+    match: dict[str, Any] = {}
+    if query.scope != "all":
+        match["scope"] = query.scope
+    needle = (query.q or "").strip()
+    if needle:
+        pattern = re.escape(needle)
+        match["$or"] = [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"object_type": {"$regex": pattern, "$options": "i"}},
+        ]
+    return match
+
+
+def _maybe_match(criteria: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"$match": criteria}] if criteria else []
+
+
+class RestoreTargetService:
+    """Filter, facet, and paginate the restorable objects of one organization."""
+
+    def __init__(self, search: RestoreTargetSearch | None = None) -> None:
+        self._search = search or MongoRestoreTargetSearch()
+
+    async def search(self, query: RestoreTargetQuery) -> RestoreTargetPage:
+        """Return one page of restore targets with its filter facet counts."""
+        return await self._search.search(query)

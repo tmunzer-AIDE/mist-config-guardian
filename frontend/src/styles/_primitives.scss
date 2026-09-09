@@ -335,9 +335,18 @@
 
 // --------------------------------------------------------------------- tabs
 .cg-tabs {
+  --cg-tabs-rule: var(--rule-strong);
+
   display: flex;
   gap: 22px;
-  border-bottom: 1px solid var(--rule-strong);
+  // The rule is painted on the padding box rather than drawn as a border, so an
+  // active tab's underline can sit flush on it. A border would need the tab to
+  // be pulled down over it, and that 1px of overhang made every horizontally
+  // scrollable strip report vertical overflow and grow a stray scrollbar.
+  background-image: linear-gradient(var(--cg-tabs-rule), var(--cg-tabs-rule));
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 100%;
 }
 
 .cg-tab {
@@ -351,7 +360,6 @@
   font-size: 12.5px;
   color: var(--ink-soft);
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
 
   &:focus-visible {
     outline: 2px solid var(--brand);

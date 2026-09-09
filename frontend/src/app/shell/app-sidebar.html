@@ -14,6 +14,7 @@
   @for (item of items; track item.path) {
     <a
       class="nav-item"
+      [attr.title]="item.label"
       [routerLink]="item.path"
       routerLinkActive="nav-item--on"
       [routerLinkActiveOptions]="{ exact: item.exact }"
@@ -64,7 +65,7 @@
           }
         }
       </svg>
-      {{ item.label }}
+      <span class="nav-label">{{ item.label }}</span>
       @if (item.icon === 'changes' && changeBadge() > 0) {
         <span class="nav-badge">{{ changeBadge() }}</span>
       }
