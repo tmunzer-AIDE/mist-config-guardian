@@ -69,19 +69,29 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         end: datetime | None = None,
         device_mac: str | None = None,
     ) -> SleObservation:
-        """Capture all relevant site-level metrics concurrently."""
+        """Capture relevant metrics for the selected site or device scope."""
         end = end or utc_now()
         start = start or end - timedelta(hours=1)
         scope = device_type.value if device_mac else "site"
         scope_id = device_id(device_mac) if device_mac else site_id
+        base_path = f"/api/v1/sites/{site_id}/sle/{scope}/{scope_id}"
+        metrics = [(metric, metric) for metric in _METRICS[device_type]]
+        if device_type is DeviceType.SWITCH:
+            # STC variants differ by deployment. Ask the exact scope instead of
+            # assuming that every switch exposes switch-stc-new.
+            metrics, error = await self._switch_metrics(base_path)
+            if error:
+                return SleObservation(
+                    errors=[error], window_start=start, window_end=end, scope="device" if device_mac else "site"
+                )
         tasks = [
             self._fetch_metric(
                 metric,
-                f"/api/v1/sites/{site_id}/sle/{scope}/{scope_id}/metric/{metric}/summary-trend",
+                f"{base_path}/metric/{api_metric}/summary-trend",
                 start=start,
                 end=end,
             )
-            for metric in _METRICS[device_type]
+            for metric, api_metric in metrics
         ]
         results = await asyncio.gather(*tasks)
         values = {metric: value for metric, value, _error in results if value is not None}
@@ -94,6 +104,34 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
             window_end=end,
             scope="device" if device_mac else "site",
         )
+
+    async def _switch_metrics(self, base_path: str) -> tuple[list[tuple[str, str]], str | None]:
+        """Use only supported, enabled switch metrics; preserve API spelling in URLs."""
+        try:
+            response = await self._client.get(f"{base_path}/metrics")
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict) or any(
+                not isinstance(payload.get(key), list) or any(not isinstance(value, str) for value in payload[key])
+                for key in ("supported", "enabled")
+            ):
+                return [], "metric discovery: invalid SLE metrics response"
+            available = set(payload["supported"]) & set(payload["enabled"])
+            # Published examples use underscores; other deployments advertise
+            # hyphens. Keep stored keys stable without guessing the request URL.
+            metrics = []
+            for metric in _METRICS[DeviceType.SWITCH]:
+                for spelling in (metric, metric.replace("-", "_")):
+                    if spelling in available:
+                        metrics.append((metric, spelling))
+                        break
+            if not metrics:
+                return [], "metric discovery: no supported and enabled switch SLE metrics"
+        except httpx.HTTPStatusError as exc:
+            return [], f"metric discovery: HTTP {exc.response.status_code} from the SLE metrics endpoint"
+        except (httpx.HTTPError, ValueError):
+            return [], "metric discovery: unavailable"
+        return metrics, None
 
     async def _fetch_metric(
         self,
