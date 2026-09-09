@@ -737,9 +737,21 @@ export class HistoryPage {
     if (skip > 0) {
       return;
     }
-    const current = this.selectedObjectId();
-    if (!current || !items.some((object) => object.id === current)) {
-      this.selectedObjectId.set(items[0]?.id ?? null);
+    // Only an empty selection is filled in. The rail holds one page of many, so
+    // an object missing from it is no longer an object that does not exist: a
+    // deep link can name one that sorts past this page, and a search can hide
+    // the object being compared without meaning to end the comparison. An id
+    // that names nothing surfaces as a failed version read, which is a better
+    // answer than quietly opening a different object.
+    if (this.selectedObjectId() !== null) {
+      return;
+    }
+    const first = items[0]?.id ?? null;
+    if (first !== null) {
+      // Through the same path a click takes, so the versions, pins and diff of
+      // whatever was shown before cannot outlive the object they describe.
+      this.resetSelection();
+      this.selectedObjectId.set(first);
     }
   }
 

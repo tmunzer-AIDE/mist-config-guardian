@@ -2,7 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 
 import { API_ROOT } from '../../core/api';
 import { Organization } from '../../core/organization.model';
@@ -203,6 +203,58 @@ describe('HistoryPage', () => {
   function railText(fixture: ComponentFixture<HistoryPage>): string {
     return ((fixture.nativeElement as HTMLElement).textContent ?? '').replace(/\s+/g, ' ');
   }
+
+  /** Open the page with `?object=` already set, as a notification link does. */
+  async function openDeepLinked(objectId: string, items: ConfigurationObject[], total: number) {
+    // The page reads the link from the route snapshot in its constructor, so
+    // the URL has to carry it before the component exists.
+    await TestBed.inject(Router).navigate([], { queryParams: { object: objectId } });
+    const fixture = TestBed.createComponent(HistoryPage);
+    fixture.detectChanges();
+    http.expectOne(`${API_ROOT}/ai/settings`).flush(SETTINGS);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
+      .flush({ items, total });
+    await settle(fixture);
+    return fixture;
+  }
+
+  it('keeps a deep-linked object that sorts past the page it loaded', async () => {
+    // obj-99 matches the filters but falls on a later page, so the rail does
+    // not contain it. Replacing the selection would quietly open a different
+    // object than the link named.
+    const fixture = await openDeepLinked('obj-99', [object('obj-1', 'NW-Corp')], 124);
+
+    const versions = http.expectOne(
+      (request) => request.url === '/api/v1/organizations/org-1/objects/obj-99/versions',
+    );
+    expect(versions.request.method).toBe('GET');
+    http.expectNone((request) => request.url.includes('/objects/obj-1/versions'));
+  });
+
+  it('selects the first row only when nothing is selected yet', async () => {
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
+
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1/versions')
+      .flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    // A search that hides the object being compared must not end the
+    // comparison, so the selection survives a page it is absent from.
+    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    filter!.value = 'guest';
+    filter!.dispatchEvent(new Event('input'));
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    await settle(fixture);
+
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
+      .flush({ items: [object('obj-7', 'Guest WLAN')], total: 1 });
+    await settle(fixture);
+
+    http.expectNone((request) => request.url.includes('/objects/obj-7/versions'));
+  });
 
   it('reads the rail one page at a time and says how much it is showing', async () => {
     const page = [object('obj-1', 'NW-Corp'), object('obj-2', 'Guest')];

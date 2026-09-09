@@ -38,6 +38,13 @@ class ObjectListFilters(BaseModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
+# Paging needs a total order. `object_type` and `name` do not give one: two
+# objects can share both, and MongoDB is then free to order them differently
+# between the query that fetches one page and the query that fetches the next,
+# which shows an object twice or not at all. The unique `_id` breaks the tie.
+OBJECT_LIST_SORT = ("object_type", "name", "_id")
+
+
 def object_list_criteria(
     organization_id: PydanticObjectId,
     filters: ObjectListFilters,
@@ -80,7 +87,7 @@ async def list_objects(
 
     query = LogicalObject.find(object_list_criteria(organization_id, filters))
     total = await query.count()
-    objects = await query.sort("object_type", "name").skip(filters.skip).limit(filters.limit).to_list()
+    objects = await query.sort(*OBJECT_LIST_SORT).skip(filters.skip).limit(filters.limit).to_list()
     return LogicalObjectListResponse(
         items=[LogicalObjectResponse.from_document(item) for item in objects],
         total=total,

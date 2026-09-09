@@ -3,6 +3,7 @@
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.api.routes.history import (
+    OBJECT_LIST_SORT,
     ObjectListFilters,
     object_list_criteria,
 )
@@ -53,3 +54,12 @@ def test_a_term_of_regex_syntax_is_matched_literally() -> None:
         {"name": {"$regex": r"wlan\ \(guest\)\.", "$options": "i"}},
         {"object_type": {"$regex": r"wlan\ \(guest\)\.", "$options": "i"}},
     ]
+
+
+def test_the_sort_ends_in_a_unique_field() -> None:
+    """Without a tie-breaker, paging can repeat or skip an object.
+
+    Two objects may share a type and a name, and MongoDB is free to order them
+    differently between the query for one page and the query for the next.
+    """
+    assert OBJECT_LIST_SORT[-1] == "_id"
