@@ -832,7 +832,9 @@ export class HistoryPage {
         this.offPageObject.set(null);
       }
     } finally {
-      if (this.resolvingObjectId === objectId) {
+      // Keyed on the read, not on the object: a later read for the same id
+      // owns the marker by now, and clearing it would let a third go out.
+      if (request === this.objectDetailRequest) {
         this.resolvingObjectId = null;
       }
     }

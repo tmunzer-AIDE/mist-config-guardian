@@ -323,6 +323,58 @@ describe('HistoryPage', () => {
     ).toContain('NW-Corp');
   });
 
+  it('lets an abandoned read finish without disowning the one that replaced it', async () => {
+    const objectsUrl = '/api/v1/organizations/org-1/objects';
+    const detailUrl = `${objectsUrl}/obj-1`;
+
+    async function search(term: string, items: ConfigurationObject[]): Promise<void> {
+      const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+      filter!.value = term;
+      filter!.dispatchEvent(new Event('input'));
+      await new Promise((resolve) => setTimeout(resolve, 320));
+      await settle(fixture);
+      http.expectOne((request) => request.url === objectsUrl).flush({ items, total: 124 });
+      await settle(fixture);
+    }
+
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
+    http.expectOne((request) => request.url === `${detailUrl}/versions`).flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    // Off the rail: the first read starts. It is never answered until later.
+    await search('guest', [object('obj-7', 'Guest WLAN')]);
+    const abandoned = http.expectOne((request) => request.url === detailUrl);
+
+    // Back on the rail, which abandons that read, then off it again, which
+    // starts a second one for the very same object.
+    await search('', [object('obj-1', 'NW-Corp')]);
+    await search('guest', [object('obj-7', 'Guest WLAN')]);
+    // Deliberately left in flight, and not consumed by an expectation: the
+    // assertion at the end counts what is still outstanding.
+    expect(http.match((request) => request.url === detailUrl)).toHaveLength(1);
+
+    // The abandoned read answers last. Its cleanup names an id, and that id
+    // now belongs to the read that replaced it.
+    abandoned.flush(object('obj-1', 'NW-Corp'));
+    await settle(fixture);
+
+    // Any later run of the resolver must still see a read in flight.
+    const more = [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')].find((node) =>
+      (node.textContent ?? '').includes('Load more'),
+    ) as HTMLButtonElement;
+    more.click();
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === objectsUrl)
+      .flush({ items: [object('obj-8', 'Lab')], total: 124 });
+    await settle(fixture);
+
+    // With the cleanup keyed on the id rather than the read, the abandoned
+    // one disowns its replacement and a third request goes out for the same
+    // object.
+    expect(http.match((request) => request.url === detailUrl)).toHaveLength(0);
+  });
+
   it('does not re-fetch an object the rail already describes', async () => {
     const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
 
