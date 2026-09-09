@@ -73,10 +73,18 @@ class _FakeProbes:
             raise ConnectionError(msg)
 
 
+# Not a version this will ever be released as, so the assertion below is about
+# the report naming the version it is running rather than about the number
+# happening to match. Pinning the real one here made every release fail its own
+# `make check` until someone edited this line.
+VERSION = "9.9.9-test"
+
+
 def _settings(*, influx_configured: bool = True) -> Settings:
     return Settings(
         environment="test",
         database_enabled=False,
+        app_version=VERSION,
         influxdb_token="influx-token" if influx_configured else "",
     )
 
@@ -117,7 +125,7 @@ async def test_healthy_stack_reports_every_component_ok() -> None:
         "mist",
     ]
     components = _by_key(report)
-    assert components["api"].detail == "Serving version 0.2.2"
+    assert components["api"].detail == f"Serving version {VERSION}"
     assert components["workers"].detail == "2 online"
     assert components["storage"].detail == "1,284 versions · 96 monitoring sessions · 412 MB · 365-day retention"
     assert components["mist"].detail == "global_01 reachable"
