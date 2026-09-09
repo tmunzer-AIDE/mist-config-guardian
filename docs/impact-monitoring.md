@@ -29,6 +29,17 @@ initial capture. SLE polls run every five minutes for at least one hour; receipt
 of the configured event guarantees a further hour from that point. A missing
 configured event no longer prevents collection.
 
+Source timestamps are accepted from 24 hours before receipt through one minute
+after receipt (clock skew). Missing, malformed or out-of-range timestamps fall
+back to receipt time. These bounds use the persisted receipt time so queue delays
+and retries cannot change which timestamp is selected.
+
+A switch or gateway configuration-reverted event ends that change's session as
+failed with critical severity and cancels further polling. The reverted configuration
+is no longer under test. The next configuration trigger starts a separate session
+with a fresh baseline and its own hour of monitoring; it cannot extend the reverted
+change's window. Retrying the revert receipt does not duplicate the incident.
+
 SLE aggregation remains the mean of valid bucket success rates, matching existing
 stored baselines. Observations now record whether their scope is a site or a
 device. Legacy baselines without that field default to site scope and continue
@@ -85,6 +96,12 @@ unknown and cannot be interpreted as removed resources. Collection is bounded to
 five pages of 1,000 records per source. Pagination URLs must retain the exact
 regional origin and endpoint. Only allowlisted operational fields are persisted;
 raw configuration, credentials and provider error bodies are discarded.
+
+The Impact page shows source counts while collapsed. Expanding a source mounts
+two independent, paginated capture tables, with at most 50 records each. Only the
+visible page is formatted; first/previous/next/last controls expose every collected
+record. Closing the source removes its tables. Pending, unavailable and successfully
+captured empty sources remain distinct.
 
 Device comparisons and findings appear even when SLE is unavailable. Their
 severity contributes to the deterministic result and derived evidence is included

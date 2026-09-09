@@ -118,7 +118,7 @@ def _install_active_session(monkeypatch: pytest.MonkeyPatch, session: Monitoring
     async def find_one(*_args: object, **_kwargs: object) -> MonitoringSession | None:
         if len(_args) == 1 and isinstance(_args[0], dict) and "receipt_ids" in _args[0]:
             return session if session and _args[0]["receipt_ids"] in session.receipt_ids else None
-        return session
+        return session if session and session.active else None
 
     async def save(self: MonitoringSession, *_args: object, **_kwargs: object) -> MonitoringSession:
         return self
@@ -285,3 +285,67 @@ async def test_overlapping_triggers_capture_separately_and_receipt_retries_are_i
     assert len(session.receipt_ids) == 2
     assert session.monitoring_ends_at == NOW + timedelta(hours=1)
     assert len(session.warnings) == 1
+
+
+@pytest.mark.parametrize("event_type", ["GW_CONFIG_REVERTED", "SW_CONFIG_REVERTED"])
+@pytest.mark.parametrize("status", [MonitoringStatus.MONITORING, MonitoringStatus.AWAITING_CONFIG])
+async def test_revert_closes_session_and_next_change_gets_a_new_baseline(monkeypatch, event_type, status):
+    previous = _session(status=status, audit_ids=["reverted-audit"])
+    previous.next_poll_at = NOW
+    _install_active_session(monkeypatch, previous)
+    monkeypatch.setattr(MonitoringSession, "get_pymongo_collection", classmethod(lambda _cls: None))
+    monkeypatch.setattr(MonitoringSession, "insert", AsyncMock())
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW)
+    handler = _handler()
+    baseline = AsyncMock(return_value=SleObservation(values={"capacity": 95}))
+    monkeypatch.setattr(handler, "_capture", baseline)
+    monkeypatch.setattr(handler, "_capture_state", AsyncMock(return_value=DeviceStateObservation(captured_at=NOW)))
+    receipt = _receipt()
+    payload = {"type": event_type, "mac": MAC, "site_id": "site-1"}
+
+    assert await handler.handle(receipt, payload, _organization()) is previous
+    assert previous.status is MonitoringStatus.FAILED
+    assert previous.active is False
+    assert previous.completed_at == NOW
+    assert previous.next_poll_at is None
+    assert previous.impact_severity is ImpactSeverity.CRITICAL
+    assert "reverted" in previous.deterministic_summary
+    # A retry must find the closed session, without duplicating its incident.
+    assert await handler.handle(receipt, payload, _organization()) is previous
+    assert len(previous.incidents) == 1
+
+    next_receipt = _receipt()
+    next_receipt.audit_id = "next-audit"
+    next_session = await handler.handle(
+        next_receipt,
+        {**payload, "type": event_type.replace("REVERTED", "CHANGED_BY_USER")},
+        _organization(),
+    )
+    assert next_session is not previous
+    assert next_session.active is True
+    assert next_session.status is MonitoringStatus.MONITORING
+    assert next_session.baseline is baseline.return_value
+    assert next_session.audit_ids == ["next-audit"]
+    assert previous.audit_ids == ["reverted-audit"]
+    assert next_session.monitoring_ends_at == NOW + timedelta(hours=1)
+    baseline.assert_awaited_once()
+
+
+@pytest.mark.parametrize("value", [0, -1, 1e100, float("nan"), float("inf"), True, "bad", None])
+def test_invalid_event_times_fall_back_to_receipt(value):
+    event = monitoring.DeviceEvent(
+        event_type="AP_CONFIG_CHANGED_BY_USER", device_mac=MAC, site_id="site-1", payload={"timestamp": value}
+    )
+    assert monitoring.event_time(event, _receipt()) == NOW
+
+
+@pytest.mark.parametrize("offset", [-86401, -86400, -300, 0, 60, 61])
+@pytest.mark.parametrize("key", ["timestamp", "time"])
+def test_event_time_bounds_are_relative_to_receipt_even_on_delayed_processing(monkeypatch, offset, key):
+    monkeypatch.setattr(monitoring, "utc_now", lambda: NOW + timedelta(days=5))
+    reported = NOW + timedelta(seconds=offset)
+    event = monitoring.DeviceEvent(
+        event_type="AP_CONFIG_CHANGED_BY_USER", device_mac=MAC, site_id="site-1", payload={key: reported.timestamp()}
+    )
+    expected = reported if -86400 <= offset <= 60 else NOW
+    assert monitoring.event_time(event, _receipt()) == expected

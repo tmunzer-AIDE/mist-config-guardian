@@ -180,7 +180,13 @@ class MonitoringEventService:
             session.completed_at = utc_now()
             session.deterministic_summary = "The configuration failed before monitoring could begin."
         elif event_type in _REVERT_EVENTS:
-            session.next_poll_at = utc_now()
+            # The reverted configuration is no longer under test. Release the
+            # unique active-device slot so a later change gets a fresh baseline.
+            session.status = MonitoringStatus.FAILED
+            session.active = False
+            session.completed_at = utc_now()
+            session.next_poll_at = None
+            session.deterministic_summary = "The configuration was reverted; monitoring for this change has ended."
         session.touch()
         await session.save()
 
@@ -527,12 +533,13 @@ def max_severity(left: ImpactSeverity, right: ImpactSeverity) -> ImpactSeverity:
 
 
 def event_time(event: DeviceEvent, receipt: WebhookReceipt) -> datetime:
-    """Anchor the baseline to source event time, falling back to receipt time."""
+    """Accept source times within 24 hours before receipt, allowing one minute of clock skew."""
     value = event.payload.get("timestamp", event.payload.get("time"))
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
             reported = datetime.fromtimestamp(value, tz=UTC)
-            if reported <= utc_now() + timedelta(minutes=1):
+            # Receipt-relative bounds stay stable when processing is retried.
+            if receipt.created_at - timedelta(hours=24) <= reported <= receipt.created_at + timedelta(minutes=1):
                 return reported
         except (ValueError, OverflowError, OSError):
             pass
