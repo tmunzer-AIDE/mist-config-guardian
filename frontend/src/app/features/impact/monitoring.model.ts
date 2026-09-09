@@ -10,6 +10,7 @@ export type StatusFilter = 'all' | MonitoringStatus;
 export type SeverityFilter = 'any' | ImpactSeverity;
 
 export interface SleObservation {
+  no_data?: string[];
   scope?: 'site' | 'device';
   captured_at: string;
   window_start?: string | null;

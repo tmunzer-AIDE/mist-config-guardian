@@ -37,11 +37,20 @@ def compare_device_states(before: DeviceStateObservation, after: DeviceStateObse
     common = set(before.available) & set(after.available)
     if "device" in common:
         findings.extend(_device_findings(before.device, after.device))
-    findings.extend(_wlans(before, after))
+    if "wlans" in common:
+        findings.extend(_wlans(before, after))
     if "ports" in common:
         findings.extend(_ports(before, after))
-    findings.extend(_peers(before, after))
-    findings.extend(_radios(before, after))
+    if "radios" in common:
+        findings.extend(_radios(before, after))
+    for source, keys in [
+        ("bgp", ("vrf_name", "neighbor", "node")),
+        ("ospf", ("vrf_name", "peer_ip", "port_id")),
+        ("tunnels", ("tunnel_name", "wan_name", "node")),
+        ("vpn_peers", ("peer_mac", "port_id", "peer_port_id")),
+    ]:
+        if source in common:
+            findings.extend(_peers(before, after, source, keys))
     return findings
 
 
@@ -137,113 +146,100 @@ def _device_findings(before: dict[str, object], after: dict[str, object]) -> lis
 
 def _wlans(before: DeviceStateObservation, after: DeviceStateObservation) -> list[DeviceStateFinding]:
     findings: list[DeviceStateFinding] = []
-    common = set(before.available) & set(after.available)
-    if "wlans" in common:
-        old = _index(before.wlans, ("id",))
-        new = _index(after.wlans, ("id",))
-        for key, wlan in old.items():
-            if wlan.get("enabled") is False:
-                continue
-            if key in new and new[key].get("enabled") is not False:
-                continue
-            clients = len(
-                {
-                    str(client.get("mac"))
-                    for client in before.clients
-                    if client.get("mac")
-                    and (
-                        client.get("wlan_id") == key
-                        or (wlan.get("ssid") is not None and client.get("ssid") == wlan.get("ssid"))
-                    )
-                }
-            )
-            findings.append(
-                _finding(
-                    "ssid_removed",
-                    str(wlan.get("ssid", key)),
-                    "configured",
-                    "removed or disabled",
-                    (
-                        f"SSID removed or disabled; {clients} clients were observed on it at the initial capture."
-                        if "clients" in before.available
-                        else (
-                            "SSID removed or disabled; initial client data was unavailable, "
-                            "so the affected client count is unknown."
-                        )
-                    ),
-                    clients=clients,
+    old = _index(before.wlans, ("id",))
+    new = _index(after.wlans, ("id",))
+    for key, wlan in old.items():
+        if wlan.get("enabled") is False:
+            continue
+        if key in new and new[key].get("enabled") is not False:
+            continue
+        clients = len(
+            {
+                str(client.get("mac"))
+                for client in before.clients
+                if client.get("mac")
+                and (
+                    client.get("wlan_id") == key
+                    or (wlan.get("ssid") is not None and client.get("ssid") == wlan.get("ssid"))
                 )
+            }
+        )
+        findings.append(
+            _finding(
+                "ssid_removed",
+                str(wlan.get("ssid", key)),
+                "configured",
+                "removed or disabled",
+                (
+                    f"SSID removed or disabled; {clients} clients were observed on it at the initial capture."
+                    if "clients" in before.available
+                    else (
+                        "SSID removed or disabled; initial client data was unavailable, "
+                        "so the affected client count is unknown."
+                    )
+                ),
+                clients=clients,
             )
+        )
     return findings
 
 
-def _peers(before: DeviceStateObservation, after: DeviceStateObservation) -> list[DeviceStateFinding]:
+def _peers(
+    before: DeviceStateObservation, after: DeviceStateObservation, source: str, keys: tuple[str, ...]
+) -> list[DeviceStateFinding]:
     findings: list[DeviceStateFinding] = []
-    common = set(before.available) & set(after.available)
-    for source, keys in [
-        ("bgp", ("vrf_name", "neighbor", "node")),
-        ("ospf", ("vrf_name", "peer_ip", "port_id")),
-        ("tunnels", ("tunnel_name", "wan_name", "node")),
-        ("vpn_peers", ("peer_mac", "port_id", "peer_port_id")),
-    ]:
-        if source not in common:
-            continue
-        old = _index(getattr(before, source), keys)
-        new = _index(getattr(after, source), keys)
-        for key, peer in old.items():
-            current = new.get(key)
-            if peer.get("up") is True and (current is None or current.get("up") is False):
-                findings.append(
-                    _finding(
-                        f"{source}_down",
-                        key,
-                        "up",
-                        "missing" if current is None else "down",
-                        f"Previously established {source.replace('_', ' ')} is no longer up.",
-                        severity="critical",
-                    )
+    old = _index(getattr(before, source), keys)
+    new = _index(getattr(after, source), keys)
+    for key, peer in old.items():
+        current = new.get(key)
+        if peer.get("up") is True and (current is None or current.get("up") is False):
+            findings.append(
+                _finding(
+                    f"{source}_down",
+                    key,
+                    "up",
+                    "missing" if current is None else "down",
+                    f"Previously established {source.replace('_', ' ')} is no longer up.",
+                    severity="critical",
                 )
-            if source == "vpn_peers" and current:
-                findings.extend(_rise("vpn_loss", key, peer.get("loss"), current.get("loss"), threshold=5, increase=5))
+            )
+        if source == "vpn_peers" and current:
+            findings.extend(_rise("vpn_loss", key, peer.get("loss"), current.get("loss"), threshold=5, increase=5))
     return findings
 
 
 def _radios(before: DeviceStateObservation, after: DeviceStateObservation) -> list[DeviceStateFinding]:
     findings: list[DeviceStateFinding] = []
-    common = set(before.available) & set(after.available)
-    if "radios" in common:
-        old = _index(before.radios, ("band",))
-        new = _index(after.radios, ("band",))
-        for key, radio in old.items():
-            current = new.get(key)
-            clients = int(_number(radio.get("num_clients")) or 0)
-            if current is None and clients:
+    old = _index(before.radios, ("band",))
+    new = _index(after.radios, ("band",))
+    for key, radio in old.items():
+        current = new.get(key)
+        clients = int(_number(radio.get("num_clients")) or 0)
+        if current is None and clients:
+            findings.append(
+                _finding(
+                    "radio_missing",
+                    key,
+                    "present",
+                    "missing",
+                    f"Radio with {clients} observed clients disappeared.",
+                    clients=clients,
+                )
+            )
+        elif current:
+            findings.extend(
+                _rise("rf_utilization", key, radio.get("util_all"), current.get("util_all"), threshold=85, increase=25)
+            )
+            old_wlans, new_wlans = _number(radio.get("num_wlans")), _number(current.get("num_wlans"))
+            if old_wlans is not None and new_wlans is not None and new_wlans < old_wlans:
                 findings.append(
                     _finding(
-                        "radio_missing",
+                        "radio_wlans_reduced",
                         key,
-                        "present",
-                        "missing",
-                        f"Radio with {clients} observed clients disappeared.",
+                        old_wlans,
+                        new_wlans,
+                        f"Fewer WLANs are advertised on this radio; {clients} clients were initially observed.",
                         clients=clients,
                     )
                 )
-            elif current:
-                findings.extend(
-                    _rise(
-                        "rf_utilization", key, radio.get("util_all"), current.get("util_all"), threshold=85, increase=25
-                    )
-                )
-                old_wlans, new_wlans = _number(radio.get("num_wlans")), _number(current.get("num_wlans"))
-                if old_wlans is not None and new_wlans is not None and new_wlans < old_wlans:
-                    findings.append(
-                        _finding(
-                            "radio_wlans_reduced",
-                            key,
-                            old_wlans,
-                            new_wlans,
-                            f"Fewer WLANs are advertised on this radio; {clients} clients were initially observed.",
-                            clients=clients,
-                        )
-                    )
     return findings

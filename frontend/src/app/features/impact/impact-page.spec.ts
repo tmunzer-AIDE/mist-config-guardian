@@ -222,6 +222,19 @@ describe('ImpactPage', () => {
     monitoring.reset();
   });
 
+  it('labels zero-sample metrics without presenting them as collection failures', async () => {
+    await render([session({
+      status: 'completed', impact_severity: 'none', baseline_confidence: 'high',
+      baseline: { captured_at: '2026-09-09T10:00:00Z', values: { 'ap-health': 99, roaming: 99 }, errors: [] },
+      observations: [{ captured_at: '2026-09-09T11:00:00Z', values: { 'ap-health': 99 }, no_data: ['roaming'], errors: [] }],
+    })]);
+    const quiet = fixture.nativeElement.querySelector('[aria-label="SLE metrics without sampled traffic"]') as HTMLElement;
+    expect(quiet.textContent).toContain('Roaming');
+    expect(quiet.textContent).toContain('not treated as collection failures');
+    expect(fixture.nativeElement.querySelector('[aria-label="SLE collection problems"]')).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('NO IMPACT DETECTED');
+  });
+
   it('shows SLE collection failures separately from the network verdict', async () => {
     await render([session({
       status: 'completed', impact_severity: 'info',

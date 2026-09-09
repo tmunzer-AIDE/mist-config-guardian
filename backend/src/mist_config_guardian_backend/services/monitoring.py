@@ -72,11 +72,9 @@ _RESOLUTIONS = {
     "GW_OSPF_NEIGHBOR_UP": "GW_OSPF_NEIGHBOR_DOWN",
     "SW_VC_PORT_UP": "SW_VC_PORT_DOWN",
 }
-_WINDOWS: dict[DeviceType, tuple[int, int]] = {
-    DeviceType.AP: (60, 5),
-    DeviceType.SWITCH: (60, 5),
-    DeviceType.GATEWAY: (60, 5),
-}
+_MONITORING_DURATION = timedelta(hours=1)
+_POLL_INTERVAL = timedelta(minutes=5)
+_DEVICE_COMPARISON_DELAY = timedelta(minutes=5)
 
 
 logger = logging.getLogger(__name__)
@@ -222,14 +220,14 @@ class MonitoringEventService:
                     DeviceStateComparison(
                         triggered_at=triggered_at,
                         baseline=device_baseline,
-                        due_at=device_baseline.captured_at + timedelta(minutes=5),
+                        due_at=device_baseline.captured_at + _DEVICE_COMPARISON_DELAY,
                     )
                 ],
                 change_triggered_at=triggered_at,
                 status=MonitoringStatus.MONITORING,
                 monitoring_started_at=now,
-                monitoring_ends_at=now + timedelta(hours=1),
-                next_poll_at=device_baseline.captured_at + timedelta(minutes=5),
+                monitoring_ends_at=now + _MONITORING_DURATION,
+                next_poll_at=device_baseline.captured_at + _DEVICE_COMPARISON_DELAY,
             )
             try:
                 await session.insert()
@@ -251,7 +249,7 @@ class MonitoringEventService:
         self, session: MonitoringSession, organization: Organization, event: DeviceEvent, receipt: WebhookReceipt
     ) -> None:
         initial = await self._capture_state(organization, event.site_id, session.device_type, event.device_mac)
-        due = initial.captured_at + timedelta(minutes=5)
+        due = initial.captured_at + _DEVICE_COMPARISON_DELAY
         session.device_comparisons.append(
             DeviceStateComparison(
                 triggered_at=event_time(event, receipt),
@@ -261,7 +259,7 @@ class MonitoringEventService:
         )
         session.status = MonitoringStatus.MONITORING
         session.monitoring_started_at = session.monitoring_started_at or utc_now()
-        session.monitoring_ends_at = utc_now() + timedelta(hours=1)
+        session.monitoring_ends_at = utc_now() + _MONITORING_DURATION
         session.next_poll_at = min(session.next_poll_at, due) if session.next_poll_at else due
         warning = (
             "Multiple configuration triggers overlap; device comparisons are separate, "
@@ -284,13 +282,12 @@ class MonitoringEventService:
                 "initial device state was captured after configuration and may already include its effects."
             )
 
-        duration_minutes, interval_minutes = _WINDOWS[session.device_type]
         now = utc_now()
         session.status = MonitoringStatus.MONITORING
         session.config_applied_at = session.config_applied_at or event_time(event, receipt)
         session.monitoring_started_at = now
-        session.monitoring_ends_at = now + timedelta(minutes=duration_minutes)
-        session.next_poll_at = now + timedelta(minutes=interval_minutes)
+        session.monitoring_ends_at = now + _MONITORING_DURATION
+        session.next_poll_at = now + _POLL_INTERVAL
         for comparison in session.device_comparisons:
             if comparison.followup is None:
                 session.next_poll_at = min(session.next_poll_at, comparison.due_at)
@@ -394,7 +391,7 @@ class MonitoringPollService:
                 warning = "A monitoring poll failed; collection will be retried."
                 if warning not in session.warnings:
                     session.warnings.append(warning)
-                session.next_poll_at = now + timedelta(minutes=5)
+                session.next_poll_at = now + _POLL_INTERVAL
                 session.touch()
                 await session.save()
         return len(sessions)
@@ -449,8 +446,7 @@ class MonitoringPollService:
             session.completed_at = now
             session.next_poll_at = None
         else:
-            _duration, interval = _WINDOWS[session.device_type]
-            session.next_poll_at = now + timedelta(minutes=interval)
+            session.next_poll_at = now + _POLL_INTERVAL
             for comparison in session.device_comparisons:
                 if comparison.followup is None:
                     session.next_poll_at = min(session.next_poll_at, comparison.due_at)

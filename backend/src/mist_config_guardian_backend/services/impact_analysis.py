@@ -57,12 +57,15 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
         severity = ImpactSeverity.CRITICAL
     elif unresolved or degraded or device_findings:
         severity = ImpactSeverity.WARNING
-    elif deltas and _complete_sle_comparison(baseline, latest):
+    elif _complete_sle_comparison(baseline, latest):
         severity = ImpactSeverity.NONE
     else:
         severity = ImpactSeverity.INFO
 
     summary = _summary(severity, device_findings)
+    if severity is ImpactSeverity.NONE and ((baseline and baseline.no_data) or (latest and latest.no_data)):
+        summary += " Metrics with no sampled traffic were excluded from numeric comparisons."
+
     return ImpactAssessment(
         severity=severity,
         summary=summary,
@@ -93,5 +96,6 @@ def _complete_sle_comparison(baseline: SleObservation | None, latest: SleObserva
         and baseline.scope == latest.scope
         and not baseline.errors
         and not latest.errors
-        and baseline.values.keys() == latest.values.keys()
+        and (set(baseline.values) | set(baseline.no_data))
+        and (set(baseline.values) | set(baseline.no_data)) == (set(latest.values) | set(latest.no_data))
     )

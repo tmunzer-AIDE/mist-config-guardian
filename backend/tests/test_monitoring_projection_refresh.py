@@ -263,4 +263,5 @@ async def test_legacy_baseline_keeps_site_scope_and_bucket_mean_across_deploymen
     assert session.observations[0].values["coverage"] == 50
     assert session.observations[0].scope == session.baseline.scope == "site"
     assert session.degraded_metrics == []
-    assert session.impact_severity is ImpactSeverity.INFO  # Other metrics are unavailable, not healthy.
+    # The legacy baseline has no coverage record for the other requested metrics.
+    assert session.impact_severity is ImpactSeverity.INFO

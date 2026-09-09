@@ -21,6 +21,7 @@ class SleObservationResponse(BaseModel):
     window_start: datetime | None = None
     window_end: datetime | None = None
     values: dict[str, float]
+    no_data: list[str] = Field(default_factory=list)
     errors: list[str]
 
 

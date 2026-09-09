@@ -60,3 +60,28 @@ def test_partial_sle_failure_cannot_produce_a_healthy_verdict():
     assert result.severity is ImpactSeverity.INFO
     assert "not a healthy verdict" in result.summary
     assert result.metric_deltas == {"coverage": 0}
+
+
+def test_quiet_roaming_and_join_metrics_do_not_block_a_clean_comparison():
+    baseline = SleObservation(
+        values={"ap-health": 99, "roaming": 98, "successful-connect": 99}, no_data=["time-to-connect"]
+    )
+    latest = SleObservation(values={"ap-health": 99}, no_data=["roaming", "successful-connect", "time-to-connect"])
+    result = assess_impact(baseline, latest, [])
+    assert result.severity is ImpactSeverity.NONE
+    assert result.metric_deltas == {"ap-health": 0}
+    assert "no sampled traffic" in result.summary
+
+
+def test_quiet_metrics_do_not_hide_failure_or_degradation_in_other_metrics():
+    baseline = SleObservation(values={"ap-health": 99}, no_data=["roaming"])
+    latest = SleObservation(values={"ap-health": 50}, no_data=["roaming"])
+    assert assess_impact(baseline, latest, []).severity is ImpactSeverity.CRITICAL
+    latest = SleObservation(no_data=["roaming"], errors=["ap-health: HTTP 503"])
+    assert assess_impact(baseline, latest, []).severity is ImpactSeverity.INFO
+
+
+def test_unexplained_missing_metric_is_not_equivalent_to_explicit_no_traffic():
+    baseline = SleObservation(values={"ap-health": 99, "roaming": 99})
+    latest = SleObservation(values={"ap-health": 99})
+    assert assess_impact(baseline, latest, []).severity is ImpactSeverity.INFO

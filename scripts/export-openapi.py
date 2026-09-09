@@ -22,10 +22,18 @@ OUTPUT = ROOT / "docs" / "openapi.json"
 def build_document() -> dict[str, object]:
     """Return the OpenAPI document for a deterministic, database-free app."""
     sys.path.insert(0, str(BACKEND_SRC))
-    from mist_config_guardian_backend.config import Settings  # noqa: PLC0415
-    from mist_config_guardian_backend.main import create_app  # noqa: PLC0415
+    from mist_config_guardian_backend import __version__
+    from mist_config_guardian_backend.config import Settings
+    from mist_config_guardian_backend.main import create_app
 
-    settings = Settings(environment="test", database_enabled=False)
+    # Contract generation must not inherit deployment versions from .env or
+    # APP_VERSION, and must produce the same document from any working directory.
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_enabled=False,
+        app_version=__version__,
+    )
     return create_app(settings).openapi()
 
 
@@ -48,7 +56,10 @@ def main() -> int:
 
     if arguments.check:
         if not OUTPUT.exists():
-            print(f"{OUTPUT.relative_to(ROOT)} is missing; run: make openapi", file=sys.stderr)
+            print(
+                f"{OUTPUT.relative_to(ROOT)} is missing; run: make openapi",
+                file=sys.stderr,
+            )
             return 1
         if OUTPUT.read_text(encoding="utf-8") != rendered:
             print(

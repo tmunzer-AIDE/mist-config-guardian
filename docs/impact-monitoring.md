@@ -33,8 +33,14 @@ SLE aggregation remains the mean of valid bucket success rates, matching existin
 stored baselines. Observations now record whether their scope is a site or a
 device. Legacy baselines without that field default to site scope and continue
 polling site SLE; new device baselines continue polling device SLE. Different
-scopes are never compared. Missing metrics or collection errors prevent a healthy
-verdict and appear explicitly in the Impact page, including HTTP failure codes.
+scopes are never compared. HTTP failures, malformed responses and unexplained
+missing metrics prevent a clean verdict and appear explicitly in the Impact page.
+Valid responses with no sampled traffic are recorded in `no_data`, separately
+from `errors`. They contribute to collection coverage but receive no invented
+success rate or numeric delta. A quiet roaming or join metric therefore does not
+block a clean result for the other measured metrics; an entirely unsampled window
+is explicitly labelled as having no sampled traffic. Disruptive device evidence
+and incidents still take precedence over quiet SLEs.
 
 Actual collection happens when the worker processes the webhook and when the
 scheduler processes due work. Recorded capture times make delays visible. The
@@ -92,3 +98,8 @@ Availability depends on the device family, firmware, subscriptions and service-t
 privileges. Automated tests use documented response shapes and mocked HTTP; live
 Mist behavior still needs a read-only check against a live tenant; mocked HTTP
 and documentation checks do not establish live endpoint compatibility.
+
+
+The committed OpenAPI document is generated with `make openapi` and validated by
+`make check`. Its version comes from the backend package, independent of the
+working directory, local `.env` files and `APP_VERSION` overrides.

@@ -95,6 +95,13 @@
         }
       </div>
 
+      @if (noTrafficMetrics().length) {
+        <section class="no-traffic" role="status" aria-label="SLE metrics without sampled traffic">
+          <h3>No sampled traffic for some SLE metrics</h3>
+          <p>{{ noTrafficMetrics().join(', ') }}</p>
+          <p>Mist returned no samples for these metrics in one or both windows. They are excluded from numeric comparisons, not treated as collection failures or 100% success.</p>
+        </section>
+      }
       @if (collectionErrors().length) {
         <section class="collection-errors" role="status" aria-label="SLE collection problems">
           <h3>SLE collection is incomplete</h3>

@@ -253,6 +253,12 @@ export class ImpactPage {
     ];
   });
 
+  protected readonly noTrafficMetrics = computed(() => {
+    const session = this.selected();
+    return [...new Set([...(session?.baseline?.no_data ?? []), ...(session?.observations.at(-1)?.no_data ?? [])])]
+      .map(metricLabel);
+  });
+
   /** Rich no-evidence panel, standing in for the chart and the comparison. */
   protected readonly state = computed<StatePanel | null>(() => {
     const session = this.selected();
