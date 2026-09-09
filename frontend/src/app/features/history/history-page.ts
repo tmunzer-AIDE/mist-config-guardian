@@ -139,6 +139,14 @@ export class HistoryPage {
   private readonly offPageObject = signal<ConfigurationObject | null>(null);
   /** The id being resolved right now, so a re-run cannot ask for it twice. */
   private resolvingObjectId: string | null = null;
+  /**
+   * Bumped whenever an object resolution starts or is abandoned.
+   *
+   * Every write the resolver makes is checked against it, so an answer for an
+   * object nobody is looking at any more — including a failure, which has no
+   * value of its own to compare — cannot touch what is on screen.
+   */
+  private objectDetailRequest = 0;
   private readonly versions = signal<ConfigurationVersion[]>([]);
   protected readonly selectedObjectId = signal<string | null>(null);
   private objectsRequest = 0;
@@ -495,8 +503,7 @@ export class HistoryPage {
   }
 
   private resetSelection(): void {
-    this.resolvingObjectId = null;
-    this.offPageObject.set(null);
+    this.discardObjectResolution();
     this.versions.set([]);
     this.versionAId.set(null);
     this.versionBId.set(null);
@@ -803,8 +810,7 @@ export class HistoryPage {
     loaded: ConfigurationObject[],
   ): Promise<void> {
     if (loaded.some((object) => object.id === objectId)) {
-      this.resolvingObjectId = null;
-      this.offPageObject.set(null);
+      this.discardObjectResolution();
       return;
     }
     // This runs again whenever the rail changes, which can happen while the
@@ -812,21 +818,31 @@ export class HistoryPage {
     if (this.offPageObject()?.id === objectId || this.resolvingObjectId === objectId) {
       return;
     }
+    const request = ++this.objectDetailRequest;
     this.resolvingObjectId = objectId;
     try {
       const object = await this.history.object(organizationId, objectId);
       // The rail may have caught up with the object while this was in flight,
       // in which case it describes it and this copy is not needed.
-      if (this.selectedObjectId() === objectId && !this.objects().some((item) => item.id === objectId)) {
+      if (request === this.objectDetailRequest && !this.objects().some((item) => item.id === objectId)) {
         this.offPageObject.set(object);
       }
     } catch {
-      this.offPageObject.set(null);
+      if (request === this.objectDetailRequest) {
+        this.offPageObject.set(null);
+      }
     } finally {
       if (this.resolvingObjectId === objectId) {
         this.resolvingObjectId = null;
       }
     }
+  }
+
+  /** Forget the resolved object, and disown any read still in flight. */
+  private discardObjectResolution(): void {
+    this.objectDetailRequest += 1;
+    this.resolvingObjectId = null;
+    this.offPageObject.set(null);
   }
 
   private async loadVersions(organizationId: string, objectId: string): Promise<void> {

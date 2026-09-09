@@ -275,6 +275,54 @@ describe('HistoryPage', () => {
     ).toContain('NW-Corp');
   });
 
+  it('ignores a resolver failure for an object that is no longer selected', async () => {
+    // A read for the deep-linked object is left in flight while the selection
+    // moves on and a second read succeeds for a different object.
+    const fixture = await openDeepLinked('obj-99', [object('obj-1', 'NW-Corp')], 124);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-99/versions')
+      .flush({ items: [], total: 0 });
+    const stale = http.expectOne(
+      (request) => request.url === '/api/v1/organizations/org-1/objects/obj-99',
+    );
+    await settle(fixture);
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.object')!.click();
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1/versions')
+      .flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    // A search pushes the now-selected object off the rail, so it is resolved
+    // on its own and the panel is named from that.
+    const filter = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.filter-input');
+    filter!.value = 'guest';
+    filter!.dispatchEvent(new Event('input'));
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
+      .flush({ items: [object('obj-7', 'Guest WLAN')], total: 1 });
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1')
+      .flush(object('obj-1', 'NW-Corp'));
+    await settle(fixture);
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+    ).toContain('NW-Corp');
+
+    // The abandoned read fails last. It describes an object nobody is looking
+    // at, so it must not blank the panel that is on screen.
+    stale.flush('gone', { status: 404, statusText: 'Not Found' });
+    await settle(fixture);
+
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+    ).toContain('NW-Corp');
+  });
+
   it('does not re-fetch an object the rail already describes', async () => {
     const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
 
