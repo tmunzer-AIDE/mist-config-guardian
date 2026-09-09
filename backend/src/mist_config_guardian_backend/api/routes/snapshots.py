@@ -10,7 +10,8 @@ from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.api.dependencies import (
     get_organization_service,
-    require_administrator,
+    require_operator,
+    require_viewer,
 )
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.snapshot import (
@@ -39,7 +40,7 @@ async def trigger_snapshot(
     organization_id: PydanticObjectId,
     request: SnapshotTriggerRequest,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _operator: Annotated[User, Depends(require_operator)],
 ) -> SnapshotTaskResponse:
     """Queue a snapshot unless one is already active."""
     try:
@@ -94,7 +95,7 @@ async def trigger_snapshot(
 async def list_snapshots(
     organization_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 25,
 ) -> SnapshotManifestListResponse:

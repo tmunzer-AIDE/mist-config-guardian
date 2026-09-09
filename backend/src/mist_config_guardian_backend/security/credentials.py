@@ -3,6 +3,7 @@
 import base64
 import binascii
 import hashlib
+import hmac
 import secrets
 
 from cryptography.exceptions import InvalidTag
@@ -26,6 +27,16 @@ class CredentialVault:
     def __init__(self, settings: Settings) -> None:
         secret = settings.credential_encryption_key.get_secret_value().encode()
         self._key = hashlib.sha256(secret).digest()
+
+    def fingerprint(self, plaintext: str) -> str:
+        """Return a stable keyed digest of a secret.
+
+        Two protected values can be compared for equality through their
+        fingerprints without decrypting either one. The digest is keyed by the
+        master key, so it is useless to anyone who does not already hold it.
+        """
+        digest = hmac.new(self._key, plaintext.encode(), hashlib.sha256).hexdigest()
+        return digest[:32]
 
     def encrypt(self, plaintext: str) -> str:
         """Encrypt a non-empty credential using a unique nonce."""

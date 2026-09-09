@@ -1,0 +1,53 @@
+<div class="page">
+  <header class="head">
+    <h1 class="cg-page-title">Search</h1>
+    <p class="head-sub">{{ subtitle() }}</p>
+  </header>
+
+  @if (available().length > 1) {
+    <div class="filters" role="group" aria-label="Result kind">
+      <button
+        class="cg-chip"
+        type="button"
+        [class.cg-chip--on]="kinds() === 'all'"
+        [attr.aria-pressed]="kinds() === 'all'"
+        (click)="kinds.set('all')"
+      >
+        All
+      </button>
+      @for (facet of available(); track facet.kind) {
+        <button
+          class="cg-chip"
+          type="button"
+          [class.cg-chip--on]="kinds() === facet.kind"
+          [attr.aria-pressed]="kinds() === facet.kind"
+          (click)="kinds.set(facet.kind)"
+        >
+          {{ facet.label }} {{ facet.count }}
+        </button>
+      }
+    </div>
+  }
+
+  @if (results().length > 0) {
+    <ul class="cg-panel results">
+      @for (result of results(); track result.kind + result.id) {
+        <li>
+          <button class="row" type="button" (click)="open(result)">
+            <span class="cg-badge row-kind">{{ result.kindLabel }}</span>
+            <span class="row-text">
+              <span class="row-title">{{ result.title }}</span>
+              <span class="row-subtitle">{{ result.subtitle }}</span>
+            </span>
+            <span class="row-meta">{{ result.meta }}</span>
+          </button>
+        </li>
+      }
+    </ul>
+  } @else if (query().trim().length >= 2) {
+    <p class="empty">
+      Nothing matched. Search covers configuration object names and types, change-group actors and audit IDs, sites,
+      and restore operations in the selected organization.
+    </p>
+  }
+</div>

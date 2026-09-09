@@ -1,0 +1,108 @@
+<div class="stack">
+  @if (blocked()) {
+    <section class="notice notice--crit preflight" role="alert">
+      <p class="cg-label notice-label">PREFLIGHT ERRORS</p>
+      <p class="notice-lead">
+        This plan cannot be authorized. Each error below describes a state the plan reads now that it
+        did not expect; rebuild the plan once it is resolved.
+      </p>
+      <ul class="notice-list">
+        @for (error of preflightErrors(); track $index) {
+          <li>{{ error }}</li>
+        }
+      </ul>
+    </section>
+  }
+
+  <section class="cg-card table-card">
+    <header class="table-head">
+      <h2 class="table-title">Plan · {{ count() }} actions</h2>
+      @if (plannedAt()) {
+        <span class="cg-badge cg-badge--info">{{ plannedAt() }}</span>
+      }
+      @if (deleteCount() > 0) {
+        <span class="cg-badge cg-badge--crit">{{ deleteCount() }} DELETE</span>
+      }
+      <span class="table-meta">{{ meta() }}</span>
+      <button class="cg-btn cg-btn--link table-back" type="button" (click)="backRequested.emit()">
+        Change targets
+      </button>
+    </header>
+
+    <table class="table" role="table" aria-label="Planned restore actions">
+      <thead role="rowgroup">
+        <tr class="row row--head" role="row">
+          @for (column of columns; track column) {
+            <th class="head-cell" role="columnheader" scope="col">{{ column }}</th>
+          }
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        @for (row of rows(); track row.key) {
+          <tr class="row" role="row" [class.row--failed]="row.failed">
+            <td class="cell cell-index" role="cell">{{ row.index }}</td>
+            <td class="cell" role="cell">
+              <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.opTone">{{ row.op }}</span>
+            </td>
+            <td class="cell cell-object" role="cell">
+              <span class="object-name">{{ row.name }}</span>
+              <span class="object-detail">{{ row.detail }}</span>
+              @if (row.error) {
+                <span class="object-error">{{ row.error }}</span>
+              }
+            </td>
+            <td class="cell cell-kind" role="cell">{{ row.kind }}</td>
+            <td class="cell" role="cell">
+              <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.statusTone">
+                {{ row.status }}
+              </span>
+            </td>
+          </tr>
+        }
+        @if (rows().length === 0) {
+          <tr class="row" role="row">
+            <td class="cell cell-empty" role="cell" colspan="5">
+              This plan contains no actions — the selected versions already match the current state.
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </section>
+
+  @if (warnings().length > 0) {
+    <section class="notice notice--warn">
+      <p class="cg-label notice-label">PLAN WARNINGS</p>
+      <ul class="notice-list">
+        @for (warning of warnings(); track $index) {
+          <li>{{ warning }}</li>
+        }
+      </ul>
+    </section>
+  }
+
+  <section class="cg-card foot">
+    <button
+      class="cg-btn cg-btn--primary cg-btn--lg"
+      type="button"
+      [disabled]="!canContinue()"
+      (click)="authorizeRequested.emit()"
+    >
+      Continue to authorize
+    </button>
+    <button class="cg-btn cg-btn--lg" type="button" (click)="backRequested.emit()">
+      Back to targets
+    </button>
+    <p class="foot-note">
+      @if (blocked()) {
+        Authorization stays closed until the preflight errors above are cleared and the plan is
+        rebuilt.
+      } @else if (readOnly()) {
+        {{ readOnlyNote() }}
+      } @else {
+        Nothing has been written. The next step asks for a fresh administrator token and verifies its
+        write scope before the first action.
+      }
+    </p>
+  </section>
+</div>

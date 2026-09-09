@@ -1,0 +1,153 @@
+<div class="tab-body">
+  <p class="intro-text">
+    Local application accounts. Mist super-user authentication is separate and unaffected.
+  </p>
+
+  @if (!canManage()) {
+    <p class="readonly" role="note">
+      Account administration is administrator-only. Ask an administrator to invite a colleague, change a
+      role, or deactivate an account.
+    </p>
+  } @else {
+    @if (notice()) {
+      <p class="notice" role="status">{{ notice() }}</p>
+    }
+    @if (error()) {
+      <p class="failure" role="alert">{{ error() }}</p>
+    }
+    @if (invitationToken(); as invitation) {
+      <div class="token">
+        <span class="cg-badge cg-badge--warn">SHOWN ONCE</span>
+        <p class="token-text">Invitation token for {{ invitation.email }}:</p>
+        <code class="cg-mono token-value">{{ invitation.token }}</code>
+      </div>
+    }
+
+    <section class="cg-card table-card">
+      <header class="table-head">
+        <h3 class="table-title">Users</h3>
+        <button class="cg-btn cg-btn--sm cg-btn--primary head-action" type="button" (click)="openInvite()">
+          Invite user
+        </button>
+      </header>
+
+      @if (inviteOpen()) {
+        <form class="invite" [formGroup]="inviteForm" (ngSubmit)="invite()">
+          <div class="invite-field">
+            <label class="cg-label" for="invite-email">EMAIL</label>
+            <input class="cg-input" id="invite-email" type="email" autocomplete="off" formControlName="email" />
+          </div>
+          <div class="invite-field">
+            <label class="cg-label" for="invite-name">DISPLAY NAME</label>
+            <input class="cg-input" id="invite-name" type="text" autocomplete="off" formControlName="display_name" />
+          </div>
+          <div class="invite-field invite-field--narrow">
+            <label class="cg-label" for="invite-role">ROLE</label>
+            <select class="cg-select" id="invite-role" formControlName="role">
+              @for (role of roles; track role) {
+                <option [value]="role">{{ role }}</option>
+              }
+            </select>
+          </div>
+          <div class="invite-actions">
+            <button class="cg-btn cg-btn--primary" type="submit" [disabled]="isBusy('invite')">
+              {{ isBusy('invite') ? 'Inviting…' : 'Send invitation' }}
+            </button>
+            <button class="cg-btn" type="button" (click)="closeInvite()">Cancel</button>
+          </div>
+          <p class="hint invite-hint">
+            Viewers browse history. Operators build restore plans. Administrators authorize restores and
+            manage this page.
+          </p>
+        </form>
+      }
+
+      <table class="table">
+        <caption class="cg-visually-hidden">Local application accounts</caption>
+        <thead>
+          <tr>
+            <th scope="col">User</th>
+            <th scope="col">Role</th>
+            <th scope="col">Status</th>
+            <th scope="col">MFA</th>
+            <th scope="col">Last sign-in</th>
+            <th scope="col"><span class="cg-visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.id) {
+            <tr>
+              <td>
+                <div class="user-name">{{ row.name }}</div>
+                <div class="user-email">{{ row.email }}</div>
+              </td>
+              <td>
+                @if (row.guard) {
+                  <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.roleTone" [title]="row.guard">
+                    {{ row.roleLabel }}
+                  </span>
+                } @else {
+                  <select
+                    class="cg-select role-select"
+                    [attr.aria-label]="'Role for ' + row.name"
+                    [value]="row.role"
+                    [disabled]="isBusy(row.id)"
+                    (change)="changeRole(row.user, $event)"
+                  >
+                    @for (role of roles; track role) {
+                      <option [value]="role" [selected]="role === row.role">{{ role }}</option>
+                    }
+                  </select>
+                }
+              </td>
+              <td>
+                <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.statusTone">{{ row.status }}</span>
+              </td>
+              <td>
+                <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.mfaTone">{{ row.mfa }}</span>
+              </td>
+              <td class="cg-mono last-seen">{{ row.lastSignIn }}</td>
+              <td class="actions">
+                @if (row.canResend) {
+                  <button
+                    class="cg-btn cg-btn--link"
+                    type="button"
+                    [disabled]="isBusy(row.id)"
+                    (click)="resend(row.user)"
+                  >
+                    Resend invitation
+                  </button>
+                }
+                @if (row.canActivate) {
+                  <button
+                    class="cg-btn cg-btn--link"
+                    type="button"
+                    [disabled]="isBusy(row.id)"
+                    (click)="activate(row.user)"
+                  >
+                    Activate
+                  </button>
+                } @else {
+                  <button
+                    class="cg-btn cg-btn--link danger"
+                    type="button"
+                    [disabled]="!row.canDeactivate || isBusy(row.id)"
+                    [title]="row.guard"
+                    (click)="requestDeactivate(row.user)"
+                  >
+                    Deactivate
+                  </button>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <p class="table-foot">
+        Operators can browse history and build plans. Administrators can authorize restores and approve exact
+        point-in-time operations. At least one active administrator must always remain.
+      </p>
+    </section>
+  }
+</div>

@@ -1,0 +1,188 @@
+<div class="page">
+  <header class="head">
+    <h1 class="cg-page-title">Settings</h1>
+    <p class="head-sub">Organizations, accounts, AI Assist and service health.</p>
+  </header>
+
+  <div class="cg-tabs tabs" role="tablist" aria-label="Settings sections">
+    @for (item of tabs(); track item.key; let index = $index) {
+      <button
+        #tabButton
+        class="cg-tab tab"
+        type="button"
+        role="tab"
+        [id]="'settings-tab-' + item.key"
+        [class.cg-tab--on]="item.current"
+        [attr.aria-selected]="item.current"
+        [attr.aria-controls]="'settings-panel-' + item.key"
+        [attr.tabindex]="item.current ? 0 : -1"
+        (click)="select(item.key)"
+        (keydown)="onTabKey($event, index)"
+      >
+        <span class="tab-label">{{ item.label }}</span>
+        @if (item.hint) {
+          <span class="tab-hint">{{ item.hint }}</span>
+        }
+      </button>
+    }
+  </div>
+
+  <div
+    class="panel"
+    role="tabpanel"
+    tabindex="0"
+    [id]="'settings-panel-' + active()"
+    [attr.aria-labelledby]="'settings-tab-' + active()"
+  >
+    @switch (active()) {
+      @case ('organizations') {
+        <app-organizations-tab
+          (cronRequested)="openCron($event)"
+          (confirmRequested)="openConfirm($event)"
+          (secretRevealed)="openSecret($event)"
+        />
+      }
+      @case ('users') {
+        <app-users-tab (confirmRequested)="openConfirm($event)" />
+      }
+      @case ('ai') {
+        <app-ai-tab />
+      }
+      @case ('health') {
+        <app-health-tab />
+      }
+    }
+  </div>
+</div>
+
+@if (cron(); as dialog) {
+  <div class="scrim" (click)="closeDialogs()" (keydown)="onDialogKey($event)">
+    <div
+      #dialogBody
+      class="cg-menu modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="cron-dialog-title"
+      tabindex="-1"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="modal-head">
+        <h2 class="modal-title" id="cron-dialog-title">Schedule for {{ dialog.name }}</h2>
+      </div>
+      <div class="modal-body">
+        <p class="modal-text">
+          The presets write a cron expression the scheduler evaluates in UTC. This is what
+          <b>{{ dialog.preset }}</b> becomes.
+        </p>
+        <div class="cg-mono modal-value">{{ dialog.expression }}</div>
+        <p class="modal-note">Next run {{ dialog.nextRun }}.</p>
+        @if (copyNotice()) {
+          <p class="modal-note" role="status">{{ copyNotice() }}</p>
+        }
+      </div>
+      <div class="modal-foot">
+        <button class="cg-btn cg-btn--lg" type="button" (click)="copy(dialog.expression, 'Cron expression')">
+          Copy expression
+        </button>
+        <button class="cg-btn cg-btn--lg cg-btn--primary" type="button" (click)="closeDialogs()">Close</button>
+      </div>
+    </div>
+  </div>
+}
+
+@if (confirm(); as dialog) {
+  <div class="scrim" (click)="closeDialogs()" (keydown)="onDialogKey($event)">
+    <div
+      #dialogBody
+      class="cg-menu modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
+      tabindex="-1"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="modal-head">
+        <h2 class="modal-title" id="confirm-dialog-title">{{ dialog.title }}</h2>
+      </div>
+      <div class="modal-body">
+        <p class="modal-text">{{ dialog.body }}</p>
+        @if (dialog.detail) {
+          <p class="modal-note">{{ dialog.detail }}</p>
+        }
+        @if (dialog.requiresPassword) {
+          <div class="field">
+            <label class="cg-label" for="confirm-password">Current password</label>
+            <input
+              id="confirm-password"
+              class="cg-input password-input"
+              type="password"
+              autocomplete="current-password"
+              [value]="confirmPassword()"
+              (input)="setConfirmPassword($event)"
+            />
+            <p class="cg-meta">
+              This replaces a credential the deployment authenticates with, so it confirms who is
+              asking rather than who signed in earlier.
+            </p>
+          </div>
+        }
+      </div>
+      <div class="modal-foot modal-foot--split">
+        <button class="cg-btn cg-btn--lg" type="button" [disabled]="confirmBusy()" (click)="closeDialogs()">
+          Cancel
+        </button>
+        <button
+          class="cg-btn cg-btn--lg"
+          type="button"
+          [class.cg-btn--danger]="dialog.danger"
+          [class.cg-btn--primary]="!dialog.danger"
+          [disabled]="confirmBusy() || (dialog.requiresPassword && !confirmPassword())"
+          (click)="runConfirmed()"
+        >
+          @if (confirmBusy()) {
+            <span class="cg-spinner" aria-hidden="true"></span>
+          }
+          {{ confirmBusy() ? 'Working…' : dialog.confirmLabel }}
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+@if (secret(); as dialog) {
+  <div class="scrim" (keydown)="onDialogKey($event)">
+    <div
+      #dialogBody
+      class="cg-menu modal modal--wide"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="secret-dialog-title"
+      tabindex="-1"
+    >
+      <div class="modal-head modal-head--flag">
+        <span class="cg-badge once">SHOWN ONCE</span>
+        <h2 class="modal-title" id="secret-dialog-title">{{ dialog.title }}</h2>
+      </div>
+      <div class="modal-body">
+        <p class="modal-text">{{ dialog.body }}</p>
+        <div class="cg-mono modal-value modal-value--secret">{{ dialog.value }}</div>
+        @if (dialog.endpoint) {
+          <p class="modal-note">Endpoint <span class="cg-mono">{{ dialog.endpoint }}</span></p>
+        }
+        <p class="modal-warn">
+          This value is stored hashed. Closing this dialog discards it, and no page in this application can
+          display it again.
+        </p>
+        @if (copyNotice()) {
+          <p class="modal-note" role="status">{{ copyNotice() }}</p>
+        }
+      </div>
+      <div class="modal-foot">
+        <button class="cg-btn cg-btn--lg cg-btn--primary" type="button" (click)="copy(dialog.value, 'Secret')">
+          Copy secret
+        </button>
+        <button class="cg-btn cg-btn--lg" type="button" (click)="closeDialogs()">I have stored it</button>
+      </div>
+    </div>
+  </div>
+}

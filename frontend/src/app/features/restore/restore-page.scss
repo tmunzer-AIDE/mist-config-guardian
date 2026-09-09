@@ -1,0 +1,112 @@
+.page {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  animation: cg-in 0.2s ease-out;
+}
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+
+  h1 {
+    font-size: 21px;
+    line-height: 1.2;
+  }
+}
+
+.head-sub {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  padding-bottom: 2px;
+  margin: 0;
+  max-width: 640px;
+}
+
+.read-only {
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--tone-warning-line);
+  border-left: 3px solid var(--tone-warning-ink);
+  border-radius: var(--radius-md);
+  background: var(--tone-warning-wash);
+  color: var(--tone-warning-ink);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 720px;
+}
+
+// ------------------------------------------------------------ step indicator
+.steps {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step {
+  display: flex;
+}
+
+.step-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--ink-soft);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.85);
+    color: var(--ink);
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
+// A step that has not been reached is disabled and stays quiet.
+.step-button:disabled:not(.step-button--on):not(.step-button--done) {
+  opacity: 0.55;
+}
+
+.step-button--done {
+  background: linear-gradient(180deg, rgba(232, 243, 236, 0.95), rgba(232, 243, 236, 0.65));
+  color: var(--tone-ok-ink);
+  border-color: rgba(18, 107, 52, 0.22);
+
+  &:hover:not(:disabled) {
+    background: linear-gradient(180deg, rgba(232, 243, 236, 1), rgba(232, 243, 236, 0.8));
+    color: var(--tone-ok-ink);
+  }
+}
+
+.step-button--on {
+  background: var(--brand-gradient);
+  color: var(--ink-invert);
+  font-weight: 600;
+  border-color: transparent;
+  box-shadow: 0 4px 12px -6px rgba(39, 67, 163, 0.7);
+  opacity: 1;
+}

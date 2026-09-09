@@ -1,0 +1,46 @@
+<div class="tab-body">
+  <section class="cg-card card">
+    <header class="card-head">
+      <h3 class="cg-label">SERVICE HEALTH</h3>
+      <button class="cg-btn cg-btn--sm head-action" type="button" [disabled]="refreshing()" (click)="refresh()">
+        @if (refreshing()) {
+          <span class="cg-spinner" aria-hidden="true"></span>
+        }
+        {{ refreshing() ? 'Checking…' : 'Refresh' }}
+      </button>
+    </header>
+
+    @if (aggregate(); as summary) {
+      <div class="aggregate">
+        <span class="dot" [attr.data-tone]="summary.tone" aria-hidden="true"></span>
+        <span class="cg-badge" [class]="'cg-badge cg-badge--' + summary.tone">{{ summary.statusLabel }}</span>
+        <span class="aggregate-text">{{ summary.summary }}</span>
+      </div>
+
+      <ul class="rows">
+        @for (row of rows(); track row.key) {
+          <li class="row">
+            <span class="dot" [attr.data-tone]="row.tone" aria-hidden="true"></span>
+            <div class="row-copy">
+              <div class="row-title">{{ row.label }} · {{ row.statusLabel }}</div>
+              <div class="row-detail">{{ row.detail }}</div>
+            </div>
+            @if (row.latency) {
+              <span class="cg-mono latency">{{ row.latency }}</span>
+            }
+          </li>
+        }
+      </ul>
+
+      <p class="foot">
+        Checked {{ summary.checkedAt }}. Readiness and liveness endpoints back this panel, so it can be
+        scraped by an external monitor.
+      </p>
+    } @else {
+      <p class="foot">
+        Health has not been read yet. Refresh to query the API, database, queue, workers, time series and
+        Mist reachability.
+      </p>
+    }
+  </section>
+</div>

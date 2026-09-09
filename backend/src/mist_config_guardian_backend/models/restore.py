@@ -68,6 +68,38 @@ class RestoreAction(BaseModel):
     error: str | None = None
 
 
+class RestoreOperationStateRecord(TimestampedModel, Document):
+    """Plan-lifecycle state stored beside a restore operation.
+
+    Kept out of ``RestoreOperation`` because the executor rewrites that document
+    on every action it completes; holding the plan hash, safety snapshot, and
+    verification result separately means a progress write can never erase them.
+    """
+
+    organization_id: PydanticObjectId
+    operation_id: PydanticObjectId
+    plan_hash: str
+    triggered_rules: list[dict[str, object]] = Field(default_factory=list)
+    safety_snapshot: list[dict[str, object]] = Field(default_factory=list)
+    verification: dict[str, object] | None = None
+    compensates_operation_id: PydanticObjectId | None = None
+    compensation_operation_id: PydanticObjectId | None = None
+
+    class Settings:
+        name = "restore_operation_state"
+        indexes: ClassVar[list[IndexModel]] = [
+            IndexModel(
+                [("organization_id", 1), ("operation_id", 1)],
+                unique=True,
+                name="restore_state_operation_unique",
+            ),
+            IndexModel(
+                [("organization_id", 1), ("compensates_operation_id", 1)],
+                name="restore_state_compensates_lookup",
+            ),
+        ]
+
+
 class RestoreOperation(TimestampedModel, Document):
     """Reviewable and auditable restore operation."""
 
@@ -75,6 +107,12 @@ class RestoreOperation(TimestampedModel, Document):
     requested_by: PydanticObjectId
     mode: RestoreMode
     include_dependencies: bool = True
+    # The versions the requester chose, as chosen. The action list is derived
+    # from them and is lossy in both directions: a chosen version already in
+    # effect produces no action, and dependency expansion and forced deletes
+    # add actions nobody chose. Rebuilding the plan needs the inputs, not the
+    # output. Empty on operations planned before this was recorded.
+    requested_version_ids: list[PydanticObjectId] = Field(default_factory=list)
     target_at: datetime
     status: RestoreStatus = RestoreStatus.PLANNED
     actions: list[RestoreAction] = Field(default_factory=list)

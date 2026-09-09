@@ -1,0 +1,122 @@
+<div class="stack">
+  <section class="cg-card card">
+    <h2 class="card-title">Passkeys</h2>
+    <p class="card-sub">
+      Sign in with the device you already unlock — Touch ID, Windows Hello, or a hardware security
+      key. A passkey satisfies both factors, so it replaces password plus code rather than adding to
+      it.
+    </p>
+
+    <div class="confirm">
+      <label class="cg-label" for="passkey-password">Current password</label>
+      <input
+        id="passkey-password"
+        class="cg-input password-input"
+        type="password"
+        autocomplete="current-password"
+        [value]="passwordValue()"
+        (input)="setPassword($event)"
+      />
+      <p class="cg-meta confirm-note">
+        Adding or removing a passkey re-checks your password, because a passkey outlives this
+        session.
+      </p>
+    </div>
+
+    @if (supported()) {
+      <div class="row">
+        <button
+          class="cg-btn cg-btn--primary cg-btn--lg"
+          type="button"
+          [disabled]="adding() || !passwordValue()"
+          (click)="add()"
+        >
+          Add a passkey
+        </button>
+        @if (adding()) {
+          <span class="waiting">
+            <span class="cg-spinner" aria-hidden="true"></span>
+            Waiting for your device…
+          </span>
+        }
+      </div>
+    } @else {
+      <p class="unsupported">
+        This browser cannot register a passkey. Passkeys need WebAuthn, which needs a secure
+        connection (HTTPS or localhost) and a browser that exposes it. Your password and
+        authenticator app still work; open this page in a browser that supports passkeys to add one.
+      </p>
+    }
+  </section>
+
+  <section class="cg-card list">
+    <h3 class="cg-label list-head">Registered</h3>
+
+    @for (passkey of credentials(); track passkey.id) {
+      <div class="entry">
+        @if (renaming() === passkey.id) {
+          <div class="rename">
+            <label class="cg-label" [for]="'passkey-name-' + passkey.id">Passkey name</label>
+            <input
+              class="cg-input cg-input--sm rename-input"
+              type="text"
+              maxlength="80"
+              [id]="'passkey-name-' + passkey.id"
+              [value]="draft()"
+              (input)="setDraft($event)"
+            />
+            <div class="row rename-actions">
+              <button
+                class="cg-btn cg-btn--sm cg-btn--primary"
+                type="button"
+                [disabled]="!draft().trim() || busyId() === passkey.id"
+                (click)="saveRename(passkey.id)"
+              >
+                Save
+              </button>
+              <button class="cg-btn cg-btn--sm" type="button" (click)="cancelRename()">Cancel</button>
+            </div>
+          </div>
+        } @else {
+          <div class="entry-main">
+            <div class="entry-head">
+              <span class="entry-name">{{ passkey.name }}</span>
+              <span class="cg-badge" [class.cg-badge--info]="passkey.platform">{{ passkey.kind }}</span>
+            </div>
+            <div class="cg-meta entry-meta">{{ passkey.meta }}</div>
+          </div>
+          <div class="entry-actions">
+            <button class="cg-btn cg-btn--link" type="button" (click)="startRename(passkey)">
+              Rename
+            </button>
+            <button
+              class="cg-btn cg-btn--link danger-link"
+              type="button"
+              [disabled]="busyId() === passkey.id"
+              (click)="remove(passkey.id, passkey.name)"
+            >
+              Remove
+            </button>
+          </div>
+        }
+      </div>
+    }
+
+    @if (empty()) {
+      <p class="entry-empty">
+        No passkeys registered. With none registered, a password remains required.
+      </p>
+    }
+  </section>
+
+  <p class="status" role="status" aria-live="polite">
+    @if (notice()) {
+      <span class="status-text status-text--note">{{ notice() }}</span>
+    }
+  </p>
+  <p class="status" role="alert">
+    @if (error()) {
+      <span class="status-text status-text--bad">{{ error() }}</span>
+    }
+  </p>
+</div>

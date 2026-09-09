@@ -1,0 +1,224 @@
+.tab-body {
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 900px;
+}
+
+.readonly,
+.notice,
+.failure {
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+}
+
+.readonly {
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--rule);
+}
+
+.notice {
+  color: var(--tone-ok-ink);
+  background: var(--tone-ok-soft);
+  border: 1px solid var(--tone-ok-line);
+}
+
+.failure {
+  color: var(--tone-critical-ink);
+  background: var(--tone-critical-soft);
+  border: 1px solid var(--tone-critical-line);
+}
+
+.card {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card--row {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.card-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0;
+}
+
+.card-body {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+  margin: 6px 0 0;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+.current {
+  font-size: 11.5px;
+}
+
+.head-action {
+  margin-left: auto;
+}
+
+.toggle-text {
+  font-size: 12.5px;
+  color: var(--ink);
+  font-weight: 600;
+  text-align: left;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: flex-start;
+}
+
+.field-input {
+  max-width: 520px;
+}
+
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.key-masked {
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-lg);
+  padding: 9px 12px;
+  font-size: 12.5px;
+  flex: 1 1 260px;
+  max-width: 520px;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.warn {
+  font-size: 11.5px;
+  color: var(--tone-warning-ink);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+.test-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  padding: 6px 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+}
+
+.test-status--ok {
+  border-color: var(--tone-ok-line);
+  background: var(--tone-ok-soft);
+  color: var(--tone-ok-ink);
+}
+
+.test-status--failed {
+  border-color: var(--tone-critical-line);
+  background: var(--tone-critical-soft);
+  color: var(--tone-critical-ink);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.skeleton {
+  height: 42px;
+  max-width: 520px;
+}
+
+.unfetched {
+  border: 1px dashed rgba(20, 22, 26, 0.18);
+  background: rgba(255, 255, 255, 0.48);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.budget {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+  flex-wrap: wrap;
+}
+
+.budget-label {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+.budget-input {
+  width: 110px;
+}
+
+.behaviour {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.save-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+// The confirmation the save bar asks for, at the width of the fields above it.
+.confirm-field {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+  margin-bottom: 12px;
+}

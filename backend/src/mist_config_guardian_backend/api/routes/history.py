@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.api.dependencies import (
     get_organization_service,
-    require_administrator,
+    require_viewer,
 )
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.models.user import User
@@ -40,7 +40,7 @@ class ObjectListFilters(BaseModel):
 async def list_objects(
     organization_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
     filters: Annotated[ObjectListFilters, Query()],
 ) -> LogicalObjectListResponse:
     """List stable objects with optional type, site, and deletion filters."""
@@ -70,7 +70,7 @@ async def list_object_versions(
     organization_id: PydanticObjectId,
     logical_object_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
 ) -> ObjectVersionListResponse:
     """Return an object's immutable timeline newest first."""
     try:

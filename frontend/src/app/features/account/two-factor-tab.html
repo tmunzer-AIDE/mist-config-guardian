@@ -1,0 +1,213 @@
+<div class="stack">
+  @switch (mode()) {
+    @case ('off') {
+      <section class="cg-card card">
+        <div class="card-head">
+          <h2 class="card-title">Authenticator app</h2>
+          <span class="cg-badge cg-badge--warn">NOT CONFIGURED</span>
+        </div>
+        <p class="card-sub">
+          A time-based one-time code from any authenticator app. Required before you can authorize
+          an exact point-in-time restore.
+        </p>
+        <button
+          class="cg-btn cg-btn--primary cg-btn--lg card-action"
+          type="button"
+          [disabled]="busy()"
+          (click)="openPrompt('enroll')"
+        >
+          Set up authenticator
+        </button>
+      </section>
+    }
+
+    @case ('enrolling') {
+      <section class="cg-card card card--enrolling">
+        <h2 class="card-title">Add this key to your authenticator app</h2>
+
+        <div class="field">
+          <span class="cg-label" id="totp-secret-label">Setup key</span>
+          <p class="secret cg-mono" aria-labelledby="totp-secret-label">{{ secret() }}</p>
+          @if (issuer()) {
+            <p class="note">Add it under the account name {{ issuer() }}.</p>
+          }
+        </div>
+
+        @if (qrCode(); as qr) {
+          <div class="field">
+            <span class="cg-label" id="totp-qr-label">Scan this code</span>
+            <div
+              class="qr"
+              role="img"
+              aria-labelledby="totp-qr-label"
+              aria-describedby="totp-qr-note"
+              [innerHTML]="qr"
+            ></div>
+            <p class="note" id="totp-qr-note">
+              Point your authenticator app at this code, or type the setup key above if you cannot
+              scan it — both carry the same secret.
+            </p>
+          </div>
+        }
+
+        <div class="field">
+          <span class="cg-label" id="totp-uri-label">Setup link</span>
+          <p class="uri cg-mono" aria-labelledby="totp-uri-label">{{ otpauthUri() }}</p>
+          <p class="note">
+            Open this link on the device that holds your authenticator to add the account without
+            typing anything.
+          </p>
+        </div>
+
+        <div class="field">
+          <label class="cg-label" for="totp-code">Enter the 6-digit code</label>
+          <input
+            id="totp-code"
+            class="cg-input code-input"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            placeholder="000000"
+            [value]="codeValue()"
+            (input)="setCode($event)"
+          />
+        </div>
+
+        <div class="row">
+          <button
+            class="cg-btn cg-btn--primary cg-btn--lg"
+            type="button"
+            [disabled]="!codeValid() || busy()"
+            (click)="verify()"
+          >
+            {{ busy() ? 'Verifying…' : 'Verify and enable' }}
+          </button>
+          <button class="cg-btn cg-btn--lg" type="button" (click)="cancelEnrollment()">Cancel</button>
+        </div>
+      </section>
+    }
+
+    @case ('on') {
+      <section class="cg-card card card--on">
+        <div class="card-head">
+          <h2 class="card-title">Authenticator app</h2>
+          <span class="badge-on">ENABLED</span>
+          <button class="cg-btn cg-btn--link danger-link" type="button" (click)="openPrompt('disable')">
+            Turn off
+          </button>
+        </div>
+        <p class="card-sub">
+          You will be asked for a code when signing in and when authorizing a restore.
+        </p>
+      </section>
+
+      <section class="cg-card card">
+        <div class="card-head">
+          <h2 class="card-title">Recovery codes</h2>
+          <button class="cg-btn cg-btn--link brand-link" type="button" (click)="openPrompt('regenerate')">
+            Generate new set
+          </button>
+        </div>
+
+        @if (hasCodes()) {
+          <div class="codes">
+            <div class="codes-head">
+              <span class="badge-once">SHOWN ONCE</span>
+              <span class="codes-note">Store these somewhere safe. Each one works a single time.</span>
+            </div>
+            <ul class="codes-grid">
+              @for (code of recoveryCodes(); track code) {
+                <li class="code cg-mono">{{ code }}</li>
+              }
+            </ul>
+            <div class="row codes-actions">
+              @if (canCopy()) {
+                <button class="cg-btn cg-btn--sm" type="button" (click)="copyCodes()">
+                  {{ copied() ? 'Copied' : 'Copy codes' }}
+                </button>
+              }
+              <button class="cg-btn cg-btn--primary cg-btn--sm" type="button" (click)="downloadCodes()">
+                Download codes
+              </button>
+              <button class="cg-btn cg-btn--sm" type="button" (click)="dismissCodes()">
+                I have stored them
+              </button>
+            </div>
+          </div>
+        } @else {
+          <p class="card-sub">
+            Recovery codes are shown once, when they are issued. Generating a new set invalidates
+            the old one immediately.
+          </p>
+        }
+      </section>
+    }
+  }
+
+  @if (prompt() !== 'none') {
+    <section class="cg-card card card--prompt">
+      <h2 class="card-title">
+        @switch (prompt()) {
+          @case ('enroll') { Set up an authenticator }
+          @case ('disable') { Turn off two-factor authentication }
+          @default { Generate new recovery codes }
+        }
+      </h2>
+      <p class="card-sub">
+        @switch (prompt()) {
+          @case ('enroll') {
+            Re-enter your password to confirm. An authenticator is a durable second factor, so
+            adding one asks for your password the way removing one does.
+          }
+          @case ('disable') {
+            Re-enter your password to confirm. Sign-in will fall back to your password alone unless a
+            passkey is registered.
+          }
+          @default {
+            Re-enter your password to confirm. The set you have now stops working immediately.
+          }
+        }
+      </p>
+      <div class="field">
+        <label class="cg-label" for="totp-password">Current password</label>
+        <input
+          id="totp-password"
+          class="cg-input password-input"
+          type="password"
+          autocomplete="current-password"
+          [value]="passwordValue()"
+          (input)="setPassword($event)"
+        />
+      </div>
+      <div class="row">
+        <button
+          class="cg-btn cg-btn--lg"
+          type="button"
+          [class.cg-btn--danger]="prompt() === 'disable'"
+          [class.cg-btn--primary]="prompt() !== 'disable'"
+          [disabled]="!passwordValue() || busy()"
+          (click)="confirmPrompt()"
+        >
+          @switch (prompt()) {
+            @case ('enroll') { Continue }
+            @case ('disable') { Turn off }
+            @default { Generate }
+          }
+        </button>
+        <button class="cg-btn cg-btn--lg" type="button" (click)="closePrompt()">Cancel</button>
+      </div>
+    </section>
+  }
+
+  <p class="status" role="status" aria-live="polite">
+    @if (notice()) {
+      <span class="status-text status-text--ok">{{ notice() }}</span>
+    }
+  </p>
+  <p class="status" role="alert">
+    @if (error()) {
+      <span class="status-text status-text--bad">{{ error() }}</span>
+    }
+  </p>
+</div>

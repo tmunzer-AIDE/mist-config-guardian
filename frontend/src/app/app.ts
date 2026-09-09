@@ -1,20 +1,132 @@
-import { Component, inject } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
+import { filter } from 'rxjs';
 
 import { AuthService } from './core/auth.service';
+import { formatDuration, formatInstant } from './core/format';
+import { NotificationService } from './core/notification.service';
+import { OrganizationContextService } from './core/organization-context.service';
+import { OverviewService } from './core/overview.service';
+import { SystemHealthService } from './core/system-health.service';
+import { TimeContextService } from './core/time-context.service';
+import { TimelineService } from './core/timeline.service';
+import { UiStateService } from './core/ui-state.service';
+import { AppHeader } from './shell/app-header';
+import { AppSidebar } from './shell/app-sidebar';
+import { AppTimeBar } from './shell/app-time-bar';
+import { NotificationDrawer } from './shell/notification-drawer';
+import { StepUpPrompt } from './shell/step-up-prompt';
+
+/** Pages that participate in point-in-time navigation. */
+const TIME_BAR_ROUTES = ['/', '/changes', '/history', '/impact'];
 
 @Component({
   selector: 'app-root',
-  imports: [RouterLink, RouterLinkActive, RouterOutlet],
+  imports: [RouterOutlet, AppSidebar, AppHeader, AppTimeBar, NotificationDrawer, StepUpPrompt],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './app.html',
   styleUrl: './app.scss',
 })
 export class App {
   protected readonly auth = inject(AuthService);
+  protected readonly ui = inject(UiStateService);
+  protected readonly time = inject(TimeContextService);
+  protected readonly organizations = inject(OrganizationContextService);
+  protected readonly notifications = inject(NotificationService);
+  protected readonly overview = inject(OverviewService);
+  protected readonly health = inject(SystemHealthService);
+  private readonly timeline = inject(TimelineService);
   private readonly router = inject(Router);
 
-  protected logout(): void {
-    this.auth.logout();
-    void this.router.navigate(['/login']);
+  protected readonly drawerOpen = signal(false);
+  /** The organization, window and instant the shell's outcome data was read for. */
+  private shownScope: string | null = null;
+  private readonly currentUrl = signal(this.router.url);
+
+  protected readonly buildLabel = computed(() => {
+    const version = this.health.version();
+    return version ? `v${version}` : '';
+  });
+
+  protected readonly chrome = computed(() => this.auth.isAuthenticated() && !this.currentUrl().startsWith('/login'));
+
+  protected readonly showTimeBar = computed(() => {
+    const url = this.currentUrl().split('?')[0];
+    return this.chrome() && TIME_BAR_ROUTES.some((route) => (route === '/' ? url === '/' : url.startsWith(route)));
+  });
+
+  protected readonly asOfLabel = computed(() => {
+    const asOf = this.time.asOf();
+    return asOf ? formatInstant(asOf) : '';
+  });
+
+  protected readonly pastDelta = computed(() => {
+    const asOf = this.time.asOf();
+    return asOf ? formatDuration(asOf) : '';
+  });
+
+  protected readonly skeletons = [96, 132, 72, 72];
+
+  constructor() {
+    this.router.events.pipe(filter((event) => event instanceof NavigationEnd)).subscribe((event) => {
+      this.currentUrl.set(event.urlAfterRedirects);
+    });
+
+    void this.health.loadVersion();
+
+    // Load the organization list once the user is known, then keep the shell's
+    // scope-derived data (badges, notifications, timeline) in step with it.
+    effect(() => {
+      if (!this.auth.isAuthenticated()) {
+        return;
+      }
+      void untracked(() => this.organizations.load());
+    });
+
+    effect(() => {
+      const organizationId = this.organizations.selected()?.id;
+      const range = this.time.range();
+      // The markers and the change badge are outcome data, so the instant is
+      // an input to them: scrubbing must re-read both, not leave today's
+      // severities painted along a past track.
+      const asOf = this.time.asOf();
+      if (!organizationId) {
+        return;
+      }
+      untracked(() => {
+        // The markers and the badge describe one organization over one window
+        // ending at one instant. Any of the three moving makes what is on
+        // screen wrong, not merely out of date.
+        const scope = `${organizationId}|${range}|${asOf?.toISOString() ?? 'now'}`;
+        if (scope !== this.shownScope) {
+          this.shownScope = scope;
+          // Cleared here, not when the re-reads answer: a request that is slow
+          // or never answers would otherwise leave the previous scope's
+          // severities and badge on screen under the new one.
+          this.timeline.reset();
+          this.overview.clearBadge();
+        }
+      });
+      void untracked(async () => {
+        await Promise.allSettled([
+          this.notifications.refreshUnread(organizationId),
+          this.timeline.load(organizationId, range),
+          this.overview.loadBadges(organizationId, range, asOf),
+          this.health.load(),
+        ]);
+      });
+    });
+  }
+
+  protected async openDrawer(): Promise<void> {
+    this.drawerOpen.set(true);
+    const organizationId = this.organizations.selected()?.id;
+    if (organizationId) {
+      await this.notifications.load(organizationId);
+    }
+  }
+
+  protected returnToNow(): void {
+    this.time.returnToNow();
   }
 }

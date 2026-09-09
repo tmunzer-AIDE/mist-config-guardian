@@ -9,7 +9,7 @@ import httpx
 
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 
-_REGION_HOSTS = {
+REGION_HOSTS = {
     MistCloudRegion.GLOBAL_01: "https://api.mist.com",
     MistCloudRegion.GLOBAL_02: "https://api.gc1.mist.com",
     MistCloudRegion.GLOBAL_03: "https://api.ac2.mist.com",
@@ -25,6 +25,11 @@ _REGION_HOSTS = {
 }
 _READ_ONLY_ROLES = {"read", "readonly", "read_only", "viewer"}
 _WRITE_ROLES = {"admin", "super_admin", "write"}
+
+
+def region_base_url(region: MistCloudRegion) -> str:
+    """Return the Mist API base URL for one cloud region."""
+    return REGION_HOSTS[region]
 
 
 class MistAccessMode(StrEnum):
@@ -112,7 +117,7 @@ class MistVerificationService:
         region: MistCloudRegion,
     ) -> dict[str, Any]:
         async with httpx.AsyncClient(
-            base_url=_REGION_HOSTS[region],
+            base_url=REGION_HOSTS[region],
             headers={"Authorization": f"Token {token}"},
             timeout=30,
         ) as client:

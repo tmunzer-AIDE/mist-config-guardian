@@ -1,0 +1,184 @@
+<form class="cg-card card" [formGroup]="form" (input)="touched()" (ngSubmit)="save()">
+  <div class="field">
+    <label class="cg-label" for="account-display-name">Display name</label>
+    <input
+      id="account-display-name"
+      class="cg-input name-input"
+      type="text"
+      autocomplete="name"
+      formControlName="display_name"
+    />
+  </div>
+
+  <div class="field">
+    <span class="cg-label" id="account-email-label">Email</span>
+    <div class="email-row">
+      <output class="email-value" aria-labelledby="account-email-label">{{ email() }}</output>
+      <button class="cg-btn cg-btn--sm" type="button" (click)="openEmailForm()">Change email</button>
+    </div>
+    <p class="note">
+      A confirmation link has to be used before the new address takes effect.
+    </p>
+
+    @if (emailFormOpen()) {
+      <div class="email-form">
+        <div class="field">
+          <label class="cg-label" for="account-new-email">New email</label>
+          <input
+            id="account-new-email"
+            class="cg-input"
+            type="email"
+            autocomplete="email"
+            [formControl]="emailForm.controls.new_email"
+          />
+        </div>
+        <div class="field">
+          <label class="cg-label" for="account-email-password">Current password</label>
+          <input
+            id="account-email-password"
+            class="cg-input"
+            type="password"
+            autocomplete="current-password"
+            [formControl]="emailForm.controls.password"
+          />
+        </div>
+        <div class="row">
+          <button
+            class="cg-btn cg-btn--primary cg-btn--sm"
+            type="button"
+            [disabled]="emailBusy() || emailForm.invalid"
+            (click)="requestEmailChange()"
+          >
+            Request change
+          </button>
+          <button class="cg-btn cg-btn--sm" type="button" (click)="closeEmailForm()">Cancel</button>
+        </div>
+      </div>
+    }
+
+    @if (pendingEmail()) {
+      <div class="pending">
+        <div class="pending-head">
+          <span class="cg-badge cg-badge--warn">PENDING</span>
+          <span class="pending-target cg-mono">{{ pendingEmail() }}</span>
+        </div>
+        @if (hasInlineToken()) {
+          <p class="note">
+            No email was sent: this deployment has no mail transport configured. Confirm the change
+            here instead. It expires {{ pendingExpiry() }}.
+          </p>
+          <div class="row">
+            <button
+              class="cg-btn cg-btn--primary cg-btn--sm"
+              type="button"
+              [disabled]="emailBusy()"
+              (click)="confirmEmailChange()"
+            >
+              Confirm new address
+            </button>
+            <button
+              class="cg-btn cg-btn--sm"
+              type="button"
+              [disabled]="emailBusy()"
+              (click)="cancelPending()"
+            >
+              Discard request
+            </button>
+          </div>
+        } @else {
+          <p class="note">
+            The change is recorded and expires {{ pendingExpiry() }}. It takes effect once the
+            confirmation link is used. No email was sent: this deployment has no mail transport, so
+            the link has to be delivered out of band.
+          </p>
+          <div class="row">
+            <button
+              class="cg-btn cg-btn--sm"
+              type="button"
+              [disabled]="emailBusy()"
+              (click)="cancelPending()"
+            >
+              Discard request
+            </button>
+          </div>
+        }
+      </div>
+    }
+
+    <p class="status" role="status" aria-live="polite">
+      @if (emailConfirmed()) {
+        <span class="status-text status-text--ok">Email address updated</span>
+      }
+    </p>
+    <p class="status" role="alert">
+      @if (emailError()) {
+        <span class="status-text status-text--bad">{{ emailError() }}</span>
+      }
+    </p>
+  </div>
+
+  <hr class="divider" />
+
+  <div class="field">
+    <label class="cg-label" for="account-timezone">Time zone</label>
+    <select id="account-timezone" class="cg-select wide" formControlName="timezone">
+      @for (zone of timezones; track zone.value) {
+        <option [value]="zone.value">{{ zone.label }}</option>
+      }
+    </select>
+    <p class="note">
+      Audit correlation is easier when everyone reads the same clock, so UTC stays the default.
+    </p>
+  </div>
+
+  <div class="field">
+    <span class="cg-label" id="account-clock-label">Clock</span>
+    <div class="clock" role="radiogroup" aria-labelledby="account-clock-label">
+      <button
+        class="cg-chip"
+        type="button"
+        role="radio"
+        [class.cg-chip--on]="form.controls.clock.value === '24h'"
+        [attr.aria-checked]="form.controls.clock.value === '24h'"
+        (click)="setClock('24h')"
+      >
+        24-hour
+      </button>
+      <button
+        class="cg-chip"
+        type="button"
+        role="radio"
+        [class.cg-chip--on]="form.controls.clock.value === '12h'"
+        [attr.aria-checked]="form.controls.clock.value === '12h'"
+        (click)="setClock('12h')"
+      >
+        12-hour
+      </button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label class="cg-label" for="account-landing">Landing page</label>
+    <select id="account-landing" class="cg-select wide" formControlName="landing_page">
+      @for (page of landingOptions; track page.value) {
+        <option [value]="page.value">{{ page.label }}</option>
+      }
+    </select>
+  </div>
+
+  <div class="row actions">
+    <button class="cg-btn cg-btn--primary cg-btn--lg" type="submit" [disabled]="saving()">
+      {{ saving() ? 'Saving…' : 'Save changes' }}
+    </button>
+    <span class="status" role="status" aria-live="polite">
+      @if (saved()) {
+        <span class="status-text status-text--ok">Saved</span>
+      }
+    </span>
+    <span class="status" role="alert">
+      @if (error()) {
+        <span class="status-text status-text--bad">{{ error() }}</span>
+      }
+    </span>
+  </div>
+</form>

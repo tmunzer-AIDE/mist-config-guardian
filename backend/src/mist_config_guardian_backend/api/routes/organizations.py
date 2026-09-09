@@ -5,7 +5,11 @@ from typing import Annotated
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from mist_config_guardian_backend.api.dependencies import get_organization_service, require_administrator
+from mist_config_guardian_backend.api.dependencies import (
+    get_organization_service,
+    require_administrator,
+    require_viewer,
+)
 from mist_config_guardian_backend.integrations.mist import MistVerificationError
 from mist_config_guardian_backend.models.user import User
 from mist_config_guardian_backend.schemas.organization import (
@@ -15,12 +19,16 @@ from mist_config_guardian_backend.schemas.organization import (
     OrganizationUpdateRequest,
     ServiceTokenUpdateRequest,
     WebhookSecretResponse,
+    WebhookSecretRotateRequest,
 )
+from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 from mist_config_guardian_backend.services.organizations import (
     OrganizationAlreadyExistsError,
     OrganizationNotFoundError,
     OrganizationService,
 )
+from mist_config_guardian_backend.services.reauthentication import confirm_password
+from mist_config_guardian_backend.services.throttling import ThrottleService, get_throttle_service
 
 router = APIRouter(prefix="/organizations")
 
@@ -29,9 +37,12 @@ router = APIRouter(prefix="/organizations")
 async def create_organization(
     request: OrganizationCreateRequest,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> OrganizationResponse:
     """Verify and onboard a Mist organization."""
+    await confirm_password(administrator, request.password.get_secret_value(), throttle)
     try:
         organization = await organizations.create(request)
     except MistVerificationError as exc:
@@ -44,10 +55,14 @@ async def create_organization(
 @router.post("/{organization_id}/webhook-secret/rotate")
 async def rotate_webhook_secret(
     organization_id: PydanticObjectId,
+    request: WebhookSecretRotateRequest,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> WebhookSecretResponse:
     """Rotate and return a webhook secret exactly once."""
+    await confirm_password(administrator, request.password.get_secret_value(), throttle)
     try:
         organization, webhook_secret = await organizations.rotate_webhook_secret(organization_id)
     except OrganizationNotFoundError as exc:
@@ -61,7 +76,7 @@ async def rotate_webhook_secret(
 @router.get("")
 async def list_organizations(
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> OrganizationListResponse:
@@ -77,7 +92,7 @@ async def list_organizations(
 async def get_organization(
     organization_id: PydanticObjectId,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    _viewer: Annotated[User, Depends(require_viewer)],
 ) -> OrganizationResponse:
     """Return one managed organization."""
     try:
@@ -107,9 +122,12 @@ async def replace_service_token(
     organization_id: PydanticObjectId,
     request: ServiceTokenUpdateRequest,
     organizations: Annotated[OrganizationService, Depends(get_organization_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> OrganizationResponse:
     """Replace and verify an organization's read-only service token."""
+    await confirm_password(administrator, request.password.get_secret_value(), throttle)
     try:
         organization = await organizations.replace_service_token(
             organization_id,

@@ -110,7 +110,7 @@ class RestoreAuthorizationService:
                 definition.sensitive_fields,
             )
             if missing:
-                fields = ", ".join(sorted(missing))
+                fields = ", ".join(sorted(format_secret_path(path) for path in missing))
                 msg = f"{action.object_name} requires unavailable secret values: {fields}"
                 raise RestoreAuthorizationError(msg)
 
@@ -154,18 +154,34 @@ class RestoreAuthorizationService:
         return result.modified_count
 
 
+# One step into a configuration: a mapping key, or a position in a sequence.
+SecretPath = tuple[str | int, ...]
+
+
+def format_secret_path(path: SecretPath) -> str:
+    """Render a location for a person to read. Never for comparing two."""
+    return ".".join(str(step) for step in path)
+
+
 def find_unavailable_secrets(
     value: object,
     sensitive_fields: frozenset[str],
     *,
-    path: str = "",
-) -> set[str]:
-    """Find explicitly masked secrets that cannot be replayed safely."""
-    missing: set[str] = set()
+    path: SecretPath = (),
+) -> set[SecretPath]:
+    """Find explicitly masked secrets that cannot be replayed safely.
+
+    Each location is reported as the steps taken to reach it rather than as a
+    dotted string. A configuration is an arbitrary document: a key may itself
+    contain a dot, and a mapping key may look like a list index, so joining the
+    steps gives two different locations the same name. Anything deciding
+    whether two locations are the same has to compare the steps.
+    """
+    missing: set[SecretPath] = set()
     if isinstance(value, dict):
         for key, child in value.items():
-            child_path = f"{path}.{key}" if path else key
-            if key.lower() in sensitive_fields and (
+            child_path = (*path, str(key))
+            if str(key).lower() in sensitive_fields and (
                 child is None or child == "" or (isinstance(child, str) and set(child) == {"*"})
             ):
                 missing.add(child_path)
@@ -183,7 +199,7 @@ def find_unavailable_secrets(
                 find_unavailable_secrets(
                     child,
                     sensitive_fields,
-                    path=f"{path}.{index}",
+                    path=(*path, index),
                 )
             )
     return missing

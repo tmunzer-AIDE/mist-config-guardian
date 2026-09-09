@@ -1,0 +1,55 @@
+<div class="page">
+  <header class="head">
+    <h1 class="cg-page-title">Your account</h1>
+    <p class="head-sub">This is a local application account. Your Mist credentials are separate.</p>
+  </header>
+
+  <div class="cg-tabs tabs" role="tablist" aria-label="Account sections">
+    @for (item of tabs(); track item.key; let index = $index) {
+      <button
+        #tabButton
+        class="cg-tab tab"
+        type="button"
+        role="tab"
+        [id]="'account-tab-' + item.key"
+        [class.cg-tab--on]="item.current"
+        [attr.aria-selected]="item.current"
+        [attr.aria-controls]="'account-panel-' + item.key"
+        [attr.tabindex]="item.current ? 0 : -1"
+        (click)="select(item.key)"
+        (keydown)="onTabKey($event, index)"
+      >
+        <span class="tab-label">{{ item.label }}</span>
+        @if (item.hint) {
+          <span class="tab-hint">{{ item.hint }}</span>
+        }
+      </button>
+    }
+  </div>
+
+  <div
+    class="panel"
+    role="tabpanel"
+    tabindex="0"
+    [id]="'account-panel-' + active()"
+    [attr.aria-labelledby]="'account-tab-' + active()"
+  >
+    @switch (active()) {
+      @case ('profile') {
+        <app-profile-tab />
+      }
+      @case ('password') {
+        <app-password-tab />
+      }
+      @case ('two-factor') {
+        <app-two-factor-tab />
+      }
+      @case ('passkeys') {
+        <app-passkeys-tab />
+      }
+      @case ('sessions') {
+        <app-sessions-tab />
+      }
+    }
+  </div>
+</div>
