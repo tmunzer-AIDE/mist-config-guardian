@@ -1,6 +1,7 @@
 """Network impact monitoring API schemas."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,7 @@ class SleObservationResponse(BaseModel):
     """Safe numeric SLE observation."""
 
     captured_at: datetime
+    scope: Literal["site", "device"] = "site"
     window_start: datetime | None = None
     window_end: datetime | None = None
     values: dict[str, float]

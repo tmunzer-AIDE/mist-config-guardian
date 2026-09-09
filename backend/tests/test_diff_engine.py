@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from mist_config_guardian_backend.schemas.diff import DIFF_SECRET_MASK, DiffChangeKind
 from mist_config_guardian_backend.services.diff import (
     build_json_patch,
@@ -335,7 +337,7 @@ def test_uncertain_encrypted_fields_follow_real_changes_without_security_flags()
 def test_comparison_ignores_image_and_url_metadata_at_every_depth():
     from mist_config_guardian_backend.services.diff import comparison_document  # noqa: PLC0415
 
-    fields = ["image1_url", "image2_url", "image3_url", "url", "thumbnail_url", "created_time", "modified_time"]
+    fields = ["image1_url", "image2_url", "image3_url", "thumbnail_url", "created_time", "modified_time"]
     before = dict.fromkeys(fields, "before")
     after = dict.fromkeys(fields, "after")
     before["nested"] = [{**before, "ssid": "Staff"}]
@@ -343,3 +345,32 @@ def test_comparison_ignores_image_and_url_metadata_at_every_depth():
     assert comparison_document(before) == {"nested": [{"ssid": "Staff"}]}
     assert not diff_configurations(before, after).entries
     assert before["image1_url"] == "before"
+
+
+@pytest.mark.parametrize("scope", ["org", "site"])
+def test_webhook_destination_changes_survive_diff_redaction_and_patch(scope):
+    before = {
+        "name": "Audit collector",
+        "url": "https://old.example.test/events",
+        "scope": scope,
+        "secret": {"$encrypted": "never-return-this"},
+    }
+    after = {**before, "url": "https://new.example.test/events"}
+    diff = diff_configurations(before, after)
+    assert diff.counts.changed == 1
+    assert diff.entries[0].field == "url"
+    assert diff.entries[0].after == after["url"]
+    assert redact_document(after)["url"] == after["url"]
+    assert "never-return-this" not in str(redact_document(after))
+    assert build_json_patch(before, after) == [{"op": "replace", "path": "/url", "value": after["url"]}]
+
+
+def test_nested_functional_urls_are_not_hidden_with_image_metadata():
+    before = {"destinations": [{"id": "a", "url": "https://old.example.test", "image1_url": "old-image"}]}
+    after = {"destinations": [{"id": "a", "url": "https://new.example.test", "image1_url": "new-image"}]}
+    diff = diff_configurations(before, after)
+    assert diff.counts.changed == 1
+    assert diff.entries[0].field.endswith(".url")
+    assert build_json_patch(before, after) == [
+        {"op": "replace", "path": "/destinations/0/url", "value": "https://new.example.test"}
+    ]

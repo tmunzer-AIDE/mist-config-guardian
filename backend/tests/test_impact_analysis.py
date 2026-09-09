@@ -41,3 +41,22 @@ def test_assessment_handles_missing_baseline() -> None:
     assessment = assess_impact(None, SleObservation(values={}), [])
 
     assert assessment.severity is ImpactSeverity.INFO
+
+
+def test_site_and_device_sle_must_not_be_compared():
+    result = assess_impact(
+        SleObservation(values={"coverage": 99}), SleObservation(scope="device", values={"coverage": 40}), []
+    )
+    assert result.severity is ImpactSeverity.INFO
+    assert result.metric_deltas == {}
+
+
+def test_partial_sle_failure_cannot_produce_a_healthy_verdict():
+    result = assess_impact(
+        SleObservation(values={"coverage": 99, "capacity": 99}),
+        SleObservation(values={"coverage": 99}, errors=["capacity: HTTP 404"]),
+        [],
+    )
+    assert result.severity is ImpactSeverity.INFO
+    assert "not a healthy verdict" in result.summary
+    assert result.metric_deltas == {"coverage": 0}

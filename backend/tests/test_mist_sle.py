@@ -3,7 +3,7 @@
 from mist_config_guardian_backend.integrations.mist_sle import extract_sle_value
 
 
-def test_extract_sle_value_weights_valid_samples_by_traffic() -> None:
+def test_extract_sle_value_preserves_the_mean_of_rates_used_by_existing_baselines() -> None:
     payload = {
         "sle": {
             "samples": {
@@ -13,7 +13,7 @@ def test_extract_sle_value_weights_valid_samples_by_traffic() -> None:
         }
     }
 
-    assert extract_sle_value(payload) == 86.67
+    assert extract_sle_value(payload) == 85
 
 
 def test_extract_sle_value_rejects_invalid_payload() -> None:
@@ -48,3 +48,19 @@ async def test_sle_requests_exact_24_hour_baseline_for_the_changed_device(httpx_
     assert result.window_end == end
     assert result.values["coverage"] == 98
     assert len(httpx_mock.get_requests()) == 7
+
+
+async def test_scope_failure_preserves_http_status_without_disclosing_provider_error_body(httpx_mock):
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+
+    httpx_mock.add_callback(lambda _request: httpx.Response(404, json={"private": "do-not-return"}), is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_01) as client:
+        result = await client.capture(site_id="site-1", device_type=DeviceType.GATEWAY, device_mac="aabbccddeeff")
+    assert result.scope == "device"
+    assert result.values == {}
+    assert all("HTTP 404" in error for error in result.errors)
+    assert "do-not-return" not in result.model_dump_json()

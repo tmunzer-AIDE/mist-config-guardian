@@ -95,6 +95,16 @@
         }
       </div>
 
+      @if (collectionErrors().length) {
+        <section class="collection-errors" role="status" aria-label="SLE collection problems">
+          <h3>SLE collection is incomplete</h3>
+          <p>Missing SLE data cannot establish that the network is healthy. Check the Mist API scope, permissions and data availability.</p>
+          <details><summary>Show collection errors</summary>
+            <ul>@for (error of collectionErrors(); track $index) { <li>{{ error }}</li> }</ul>
+          </details>
+        </section>
+      }
+
       @if (selected(); as session) {
         <app-device-evidence [session]="session" />
       }

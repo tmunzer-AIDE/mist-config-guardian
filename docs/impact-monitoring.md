@@ -14,7 +14,8 @@ Stored credentials remain encrypted. Account authentication and restore executio
 authorization retain their separate checks.
 
 Comparison normalization omits `created_time`, `modified_time`, `image1_url`,
-`image2_url`, `image3_url`, `url` and `thumbnail_url` recursively. This applies to
+`image2_url`, `image3_url` and `thumbnail_url` recursively. Functional `url`
+fields remain visible at every depth, including webhook destinations. This applies to
 structured comparisons, comparison JSON and patches. Original stored snapshots
 and restore payloads retain those fields.
 
@@ -27,6 +28,13 @@ state concurrently. The first operational follow-up is due five minutes after th
 initial capture. SLE polls run every five minutes for at least one hour; receipt
 of the configured event guarantees a further hour from that point. A missing
 configured event no longer prevents collection.
+
+SLE aggregation remains the mean of valid bucket success rates, matching existing
+stored baselines. Observations now record whether their scope is a site or a
+device. Legacy baselines without that field default to site scope and continue
+polling site SLE; new device baselines continue polling device SLE. Different
+scopes are never compared. Missing metrics or collection errors prevent a healthy
+verdict and appear explicitly in the Impact page, including HTTP failure codes.
 
 Actual collection happens when the worker processes the webhook and when the
 scheduler processes due work. Recorded capture times make delays visible. The
@@ -82,4 +90,5 @@ specification](https://github.com/mistsys/mist_openapi) and [OSPF statistics
 reference](https://www.juniper.net/documentation/us/en/software/mist/api/http/api/sites/stats/ospf/search-site-ospf-stats).
 Availability depends on the device family, firmware, subscriptions and service-token
 privileges. Automated tests use documented response shapes and mocked HTTP; live
-Mist behavior still needs verification after deployment.
+Mist behavior still needs a read-only check against a live tenant; mocked HTTP
+and documentation checks do not establish live endpoint compatibility.

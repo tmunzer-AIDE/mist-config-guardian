@@ -483,3 +483,13 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.collection-errors {
+  margin: 16px 20px;
+  padding: 16px;
+  border-left: 3px solid var(--tone-warning-ink);
+  background: var(--tone-warning-wash);
+  h3 { margin: 0 0 8px; font-size: 15px; }
+  p, li { font-size: 12px; line-height: 1.5; }
+  summary { cursor: pointer; }
+}

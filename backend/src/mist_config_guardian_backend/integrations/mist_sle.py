@@ -81,7 +81,13 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         results = await asyncio.gather(*tasks)
         values = {metric: value for metric, value, _error in results if value is not None}
         errors = [error for _metric, _value, error in results if error is not None]
-        return SleObservation(values=values, errors=errors, window_start=start, window_end=end)
+        return SleObservation(
+            values=values,
+            errors=errors,
+            window_start=start,
+            window_end=end,
+            scope="device" if device_mac else "site",
+        )
 
     async def _fetch_metric(
         self,
@@ -96,13 +102,15 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
             response = await self._client.get(path, params=params)
             response.raise_for_status()
             value = extract_sle_value(response.json())
+        except httpx.HTTPStatusError as exc:
+            return metric, None, f"{metric}: HTTP {exc.response.status_code} from the SLE endpoint"
         except (httpx.HTTPError, ValueError):
             return metric, None, f"{metric}: unavailable"
         return metric, value, None if value is not None else f"{metric}: no data"
 
 
 def extract_sle_value(payload: object) -> float | None:
-    """Compute average success rate from valid total/degraded buckets."""
+    """Retain the mean of bucket rates used by existing persisted baselines."""
     if not isinstance(payload, dict):
         return None
     sle = payload.get("sle")
@@ -115,8 +123,7 @@ def extract_sle_value(payload: object) -> float | None:
     degraded = samples.get("degraded")
     if not isinstance(totals, list) or not isinstance(degraded, list):
         return None
-    total_samples = 0.0
-    failed_samples = 0.0
+    rates: list[float] = []
     for total, failed in zip(totals, degraded, strict=False):
         if (
             isinstance(total, (int, float))
@@ -126,6 +133,5 @@ def extract_sle_value(payload: object) -> float | None:
             and total > 0
             and 0 <= failed <= total
         ):
-            total_samples += total
-            failed_samples += failed
-    return None if not total_samples else round((total_samples - failed_samples) / total_samples * 100, 2)
+            rates.append((total - failed) / total * 100)
+    return None if not rates else round(sum(rates) / len(rates), 2)

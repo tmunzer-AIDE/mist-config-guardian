@@ -4800,6 +4800,15 @@
             "title": "Errors",
             "type": "array"
           },
+          "scope": {
+            "default": "site",
+            "enum": [
+              "site",
+              "device"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
           "values": {
             "additionalProperties": {
               "type": "number"

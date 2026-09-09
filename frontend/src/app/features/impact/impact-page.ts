@@ -243,6 +243,16 @@ export class ImpactPage {
    */
   protected readonly hasData = computed(() => this.metrics().length > 0);
 
+  protected readonly collectionErrors = computed(() => {
+    const session = this.selected();
+    if (!session) return [];
+    const latest = session.observations.at(-1);
+    return [
+      ...(session.baseline?.errors ?? []).map(error => 'Baseline: ' + error),
+      ...(latest?.errors ?? []).map(error => 'Latest: ' + error),
+    ];
+  });
+
   /** Rich no-evidence panel, standing in for the chart and the comparison. */
   protected readonly state = computed<StatePanel | null>(() => {
     const session = this.selected();

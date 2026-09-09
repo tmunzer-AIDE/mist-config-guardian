@@ -42,12 +42,23 @@ describe('History and restore workspace routing', () => {
     expect(TestBed.inject(Router).url).toContain('object=o1&a=v1&b=v2');
   });
 
-  it('keeps the restore panel hidden from viewers on legacy links', async () => {
+  it('rejects viewer restore access through legacy and direct links', async () => {
     const harness = await setup('viewer');
-    for (const url of ['/history/restore', '/restore']) {
+    for (const url of ['/history/restore', '/restore', '/history?restore=1', '/history?versions=v1', '/history?operation=op1']) {
       await harness.navigateByUrl(url);
-      expect(TestBed.inject(Router).url).toBe('/history?restore=1');
+      expect(TestBed.inject(Router).url).toBe('/');
       expect(harness.routeNativeElement?.querySelector('app-restore-page')).toBeNull();
     }
+  });
+});
+
+
+describe('Restore access on query-only navigation', () => {
+  it('reruns the role guard when a viewer adds restore parameters to history', async () => {
+    const harness = await setup('viewer');
+    await harness.navigateByUrl('/history?object=o1', HistoryPage);
+    await harness.navigateByUrl('/history?object=o1&restore=1');
+    expect(TestBed.inject(Router).url).toBe('/');
+    expect(harness.routeNativeElement?.querySelector('app-restore-page')).toBeNull();
   });
 });

@@ -43,7 +43,7 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
 ) -> ImpactAssessment:
     """Classify impact from SLE deltas and unresolved incidents."""
     deltas: dict[str, float] = {}
-    if baseline is not None and latest is not None:
+    if baseline is not None and latest is not None and baseline.scope == latest.scope:
         for metric, baseline_value in baseline.values.items():
             current = latest.values.get(metric)
             if current is not None:
@@ -57,7 +57,7 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
         severity = ImpactSeverity.CRITICAL
     elif unresolved or degraded or device_findings:
         severity = ImpactSeverity.WARNING
-    elif deltas:
+    elif deltas and _complete_sle_comparison(baseline, latest):
         severity = ImpactSeverity.NONE
     else:
         severity = ImpactSeverity.INFO
@@ -78,9 +78,20 @@ def _summary(severity: ImpactSeverity, findings: Sequence[DeviceStateFinding]) -
         ImpactSeverity.CRITICAL: "Critical degradation detected after the configuration change.",
         ImpactSeverity.WARNING: "Potential negative impact detected after the configuration change.",
         ImpactSeverity.NONE: "No negative impact was detected during the monitoring window.",
-        ImpactSeverity.INFO: "Monitoring completed with insufficient SLE data for a full comparison.",
+        ImpactSeverity.INFO: "Insufficient SLE evidence to assess network health; this is not a healthy verdict.",
     }
     summary = descriptions[severity]
     if findings:
         summary += f" {len(findings)} operational differences detected at the five-minute comparison."
     return summary
+
+
+def _complete_sle_comparison(baseline: SleObservation | None, latest: SleObservation | None) -> bool:
+    return bool(
+        baseline
+        and latest
+        and baseline.scope == latest.scope
+        and not baseline.errors
+        and not latest.errors
+        and baseline.values.keys() == latest.values.keys()
+    )

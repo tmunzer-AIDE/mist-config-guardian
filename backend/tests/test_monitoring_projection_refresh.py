@@ -148,7 +148,8 @@ async def test_a_session_with_no_audit_correlation_rebuilds_nothing(
     assert projector.rebuilt == []
 
 
-async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for_an_hour(monkeypatch):
+@pytest.mark.parametrize("scope", ["site", "device"])
+async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for_an_hour(monkeypatch, scope):
     from unittest.mock import AsyncMock  # noqa: PLC0415
 
     from mist_config_guardian_backend.models.monitoring import SleObservation  # noqa: PLC0415
@@ -164,7 +165,7 @@ async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for
     session.monitoring_started_at = NOW
     session.monitoring_ends_at = NOW + timedelta(hours=1)
     session.change_triggered_at = NOW
-    session.baseline = SleObservation(values={"coverage": 99})
+    session.baseline = SleObservation(scope=scope, values={"coverage": 99})
     initial = DeviceStateObservation(
         captured_at=NOW,
         available=["wlans", "clients"],
@@ -189,7 +190,7 @@ async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for
 
         async def capture(self, **kwargs):
             windows.append(kwargs)
-            return SleObservation(values={"coverage": 99})
+            return SleObservation(scope=scope, values={"coverage": 99})
 
     class TelemetryClient(SleClient):
         async def capture(self, **kwargs):
@@ -223,3 +224,43 @@ async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for
     assert len(captures) == 1
     assert all(window["start"] == NOW for window in windows)
     assert windows[-1]["end"] == NOW + timedelta(hours=1)
+    assert all(window["device_mac"] == (session.device_mac if scope == "device" else None) for window in windows)
+
+
+async def test_legacy_baseline_keeps_site_scope_and_bucket_mean_across_deployment(monkeypatch, httpx_mock):
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.models.monitoring import ImpactSeverity, SleObservation  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion, Organization  # noqa: PLC0415
+    from mist_config_guardian_backend.services import monitoring  # noqa: PLC0415
+
+    session = _session(MonitoringStatus.MONITORING, [])
+    session.active = True
+    session.config_applied_at = NOW
+    session.monitoring_ends_at = NOW + timedelta(hours=1)
+    # Stored before the release: no scope/window fields; mean([0%, 100%]) = 50%.
+    session.baseline = SleObservation.model_validate({"values": {"coverage": 50}})
+
+    def respond(request):
+        assert f"/sle/site/{session.site_id}/metric/" in request.url.path
+        if request.url.path.endswith("/coverage/summary-trend"):
+            return httpx.Response(200, json={"sle": {"samples": {"total": [10, 1000], "degraded": [10, 0]}}})
+        return httpx.Response(200, json={"sle": {"samples": {"total": [], "degraded": []}}})
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    monkeypatch.setattr(monitoring, "service_token", AsyncMock(return_value="read-token"))
+    monkeypatch.setattr(
+        Organization,
+        "get",
+        AsyncMock(
+            return_value=Organization.model_construct(id=ORGANIZATION_ID, cloud_region=MistCloudRegion.GLOBAL_01)
+        ),
+    )
+    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    await _service(_RecordingProjector())._poll_session(session, NOW + timedelta(minutes=5))  # noqa: SLF001
+    assert session.observations[0].values["coverage"] == 50
+    assert session.observations[0].scope == session.baseline.scope == "site"
+    assert session.degraded_metrics == []
+    assert session.impact_severity is ImpactSeverity.INFO  # Other metrics are unavailable, not healthy.

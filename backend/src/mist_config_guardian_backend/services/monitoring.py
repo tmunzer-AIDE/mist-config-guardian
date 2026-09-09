@@ -417,7 +417,9 @@ class MonitoringPollService:
             observation = await client.capture(
                 site_id=session.site_id,
                 device_type=session.device_type,
-                device_mac=session.device_mac,
+                # Older persisted baselines were site-wide. Keep polling their
+                # original scope rather than comparing a site to one device.
+                device_mac=session.device_mac if session.baseline and session.baseline.scope == "device" else None,
                 start=session.config_applied_at or session.change_triggered_at or session.monitoring_started_at,
                 end=now,
             )

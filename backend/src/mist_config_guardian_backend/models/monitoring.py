@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from beanie import Document, PydanticObjectId
 from pydantic import BaseModel, Field
@@ -42,6 +42,7 @@ class SleObservation(BaseModel):
     """Numeric SLE values captured over a bounded window."""
 
     captured_at: datetime = Field(default_factory=utc_now)
+    scope: Literal["site", "device"] = "site"
     window_start: datetime | None = None
     window_end: datetime | None = None
     values: dict[str, float] = Field(default_factory=dict)

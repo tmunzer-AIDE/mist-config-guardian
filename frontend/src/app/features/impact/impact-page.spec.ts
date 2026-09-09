@@ -222,6 +222,20 @@ describe('ImpactPage', () => {
     monitoring.reset();
   });
 
+  it('shows SLE collection failures separately from the network verdict', async () => {
+    await render([session({
+      status: 'completed', impact_severity: 'info',
+      baseline: { captured_at: '2026-09-09T10:00:00Z', values: {}, errors: ['coverage: HTTP 404 from the SLE endpoint'] },
+      observations: [{ captured_at: '2026-09-09T11:00:00Z', values: {}, errors: ['coverage: HTTP 403 from the SLE endpoint'] }],
+    })]);
+    const problems = fixture.nativeElement.querySelector('[aria-label="SLE collection problems"]') as HTMLElement;
+    expect(problems.textContent).toContain('SLE collection is incomplete');
+    expect(problems.textContent).toContain('cannot establish that the network is healthy');
+    expect(problems.textContent).toContain('HTTP 403');
+    expect(problems.textContent).toContain('HTTP 404');
+    expect(fixture.nativeElement.textContent).not.toContain('NO IMPACT DETECTED');
+  });
+
   it('forgets a session resolved for another organization when switching', async () => {
     // The resolved session is keyed by identifier alone. Under the next
     // organization the same identifier would keep rendering the previous

@@ -29,7 +29,7 @@ COMPACT_MODE_LIMIT: Final = 8
 MAX_ENTRIES: Final = 5000
 MAX_NOTABLE: Final = 10
 COMPARISON_IGNORED_FIELDS: Final = frozenset(
-    {"created_time", "modified_time", "image1_url", "image2_url", "image3_url", "url", "thumbnail_url"}
+    {"created_time", "modified_time", "image1_url", "image2_url", "image3_url", "thumbnail_url"}
 )
 
 _VALUE_DISPLAY_LIMIT: Final = 120
@@ -665,7 +665,7 @@ def comparison_document(configuration: Mapping[str, object]) -> dict[str, object
 
 
 def redact_document(configuration: Mapping[str, object]) -> dict[str, object]:
-    """Return the redacted form of a stored configuration document."""
+    """Return a redacted comparison view, omitting only comparison metadata."""
     return redact_configuration(comparison_document(configuration))
 
 

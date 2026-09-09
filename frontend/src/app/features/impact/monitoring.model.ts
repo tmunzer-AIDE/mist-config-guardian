@@ -10,6 +10,7 @@ export type StatusFilter = 'all' | MonitoringStatus;
 export type SeverityFilter = 'any' | ImpactSeverity;
 
 export interface SleObservation {
+  scope?: 'site' | 'device';
   captured_at: string;
   window_start?: string | null;
   window_end?: string | null;
@@ -244,7 +245,7 @@ export function changeMarkerPercent(bars: SleBar[]): number | null {
 export function metricDeltas(session: MonitoringSession): MetricDelta[] {
   const baseline = session.baseline;
   const latest = session.observations.at(-1) ?? null;
-  if (!baseline || !latest) {
+  if (!baseline || !latest || (baseline.scope ?? 'site') !== (latest.scope ?? 'site')) {
     return [];
   }
   return Object.keys(baseline.values)
