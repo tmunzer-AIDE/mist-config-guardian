@@ -1,0 +1,474 @@
+<div class="impact-workspace" [class.has-selection]="selection()" [class.rail-open]="railOpen()">
+  <header class="mobile-toolbar">
+    <button
+      class="cg-btn"
+      type="button"
+      (click)="railOpen.set(!railOpen())"
+      [attr.aria-expanded]="railOpen()"
+    >
+      Changes <span>{{ total() }}</span></button
+    ><strong>{{ siteName() }}</strong>
+    @if (selection()) {
+      <button class="text-button" type="button" (click)="clear()">Clear</button>
+    }
+  </header>
+  <aside class="rail" aria-label="Site configuration changes">
+    <div class="rail-head">
+      <label class="eyebrow" for="impact-site">Site</label>
+      <select
+        id="impact-site"
+        [value]="siteId()"
+        (change)="selectSite($any($event.target).value)"
+        [disabled]="!sites().length"
+      >
+        @for (site of sites(); track site.id) {
+          <option [value]="site.id">{{ site.name }}</option>
+        } @empty {
+          <option>No stored sites</option>
+        }
+      </select>
+      <div class="rail-title">
+        <h1>Changes</h1>
+        <span>{{ total() }}</span>
+      </div>
+      <div class="filters" role="group" aria-label="Change phase">
+        @for (phase of ['all', 'pending', 'monitoring', 'settled']; track phase) {
+          <button
+            type="button"
+            [class.active]="filter() === phase"
+            [attr.aria-pressed]="filter() === phase"
+            (click)="filter.set($any(phase))"
+          >
+            {{ label(phase) }}
+          </button>
+        }
+      </div>
+      <input
+        type="search"
+        aria-label="Filter loaded changes"
+        placeholder="Filter loaded changes"
+        [value]="search()"
+        (input)="search.set($any($event.target).value)"
+      />
+    </div>
+    <div class="change-list">
+      @for (change of visibleChanges(); track change.id) {
+        <button
+          type="button"
+          class="change-row"
+          [class.selected]="selectedChangeId() === change.id"
+          [attr.aria-pressed]="selectedChangeId() === change.id"
+          (click)="chooseChange(change.id)"
+        >
+          <span class="row-meta"
+            ><time [attr.datetime]="change.occurred_at">{{ at(change.occurred_at) }}</time
+            ><span class="cg-health" [attr.data-health]="health(change)">{{
+              phase(change) === 'pending' ? 'Pending' : healthLabel(health(change))
+            }}</span></span
+          >
+          <strong>{{ change.change_type }}</strong
+          ><span class="change-title">{{ change.title }}</span>
+          <span class="row-progress"
+            ><span>{{ change.impacts.length }} devices</span
+            ><progress
+              max="100"
+              [value]="progress(change)"
+              aria-label="Monitoring time elapsed"
+            ></progress
+            ><span>{{ progress(change) }}%</span></span
+          >
+        </button>
+      } @empty {
+        <div class="empty-rail">
+          {{ busy() ? 'Loading site changes…' : 'No changes match this filter at this site.' }}
+        </div>
+      }
+      @if (changes().length < total()) {
+        <button class="load-more" type="button" [disabled]="moreBusy()" (click)="more()">
+          {{ moreBusy() ? 'Loading…' : 'Load more · ' + changes().length + ' of ' + total() }}
+        </button>
+      }
+    </div>
+  </aside>
+  <section class="topology-region" aria-label="Site topology">
+    <header class="topology-head">
+      <div>
+        <h2>{{ siteName() }}</h2>
+        <p>
+          {{ selectedChange() ? 'Change impact and site connectivity' : 'Current connectivity' }} ·
+          {{ devices().length }} devices
+        </p>
+      </div>
+      <div
+        class="legend"
+        aria-label="Device health legend"
+        [title]="
+          selectedChange()
+            ? 'Impact for the selected change'
+            : 'Current connectivity; SLE health is unknown without a selected change'
+        "
+      >
+        @for (tone of ['ok', 'warning', 'error', 'critical', 'unknown']; track tone) {
+          <span><i [attr.data-health]="tone"></i>{{ healthLabel($any(tone)) }}</span>
+        }
+        <span><i class="pending-dot"></i>Pending</span
+        ><span><i class="applied-dot"></i>Applied</span>
+      </div>
+    </header>
+    @if (time.isHistorical()) {
+      <div class="context-note">
+        Historical inventory · current health and later verdicts are withheld.
+      </div>
+    }
+    @if (failure()) {
+      <div class="failure" role="alert">
+        <span>{{ failure() }}</span
+        ><button class="cg-btn" type="button" (click)="retry()">Retry</button>
+      </div>
+    }
+    @if (warnings().length) {
+      <details class="source-note">
+        <summary>
+          {{
+            topology()?.source === 'historical'
+              ? 'Historical inventory'
+              : topology()?.complete
+                ? 'Topology notes'
+                : 'Topology is incomplete'
+          }}
+        </summary>
+        @for (warning of warnings(); track warning) {
+          <p>{{ warning }}</p>
+        }
+      </details>
+    }
+    <div class="diagram-body">
+      @if (busy() && !topology()) {
+        <div class="loading-state" role="status">
+          <div class="cg-skeleton"></div>
+          <p>Loading site topology and changes…</p>
+        </div>
+      } @else if (failure() && !topology()) {
+        <!-- The collection alert above explains the unavailable data. -->
+      } @else if (!devices().length) {
+        <div class="empty-state">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <rect x="16" y="4" width="16" height="10" rx="2" />
+            <rect x="2" y="34" width="16" height="10" rx="2" />
+            <rect x="30" y="34" width="16" height="10" rx="2" />
+            <path d="M24 14v10H10v10m14-10h14v10" />
+          </svg>
+          <h3>No site topology</h3>
+          <p>
+            {{
+              sites().length
+                ? 'No devices were returned for this site. Stored monitoring devices will appear here when evidence arrives.'
+                : 'This organization has no stored sites yet. Complete its first snapshot to discover the topology.'
+            }}
+          </p>
+        </div>
+      } @else {
+        <app-topology-canvas
+          [site]="siteId()"
+          [initialZoom]="preferredZoom()"
+          (zoomChanged)="preferredZoom.set($event)"
+          [devices]="devices()"
+          [selectedDevice]="selectedDeviceId()"
+          [impacted]="impacted()"
+          [scoped]="!!selectedChange()"
+          [decorations]="decorations()"
+          [healthOverrides]="nodeHealth()"
+          (deviceSelected)="chooseDevice($event)"
+        />
+      }
+    </div>
+    <footer class="topology-foot">
+      <span
+        >{{
+          selectedChange()
+            ? 'Affected devices: change impact · Others: connectivity · '
+            : 'Colors: connectivity · '
+        }}{{ topology()?.source === 'mist' ? 'Mist statistics' : 'Stored inventory' }}
+        @if (topology()?.collected_at) {
+          · {{ at(topology()!.collected_at) }}
+        }</span
+      ><button class="text-button" type="button" [disabled]="busy()" (click)="retry()">
+        {{ busy() ? 'Refreshing…' : 'Refresh' }}
+      </button>
+    </footer>
+  </section>
+  <aside
+    class="details"
+    aria-label="Impact details"
+    [attr.data-panel]="
+      selectedImpact()
+        ? 'device-change'
+        : selectedDevice()
+          ? 'device'
+          : selectedChange()
+            ? 'change'
+            : 'site'
+    "
+  >
+    @if (selectedDevice(); as device) {
+      <header class="detail-head">
+        <div class="detail-actions">
+          <span
+            class="cg-health"
+            [attr.data-health]="selectedImpact()?.severity ?? device.health"
+            >{{ healthLabel(selectedImpact()?.severity ?? device.health) }}</span
+          ><button class="text-button" type="button" (click)="selectedImpact() ? back() : clear()">
+            {{ selectedImpact() ? 'Back to change' : 'Clear' }}
+          </button>
+        </div>
+        <h2>{{ device.name }}</h2>
+        <p class="mono">
+          {{ device.mac }}<br />{{ device.ip || 'IP unavailable' }} ·
+          {{ device.model || label(device.kind) }}
+        </p>
+        <p>
+          {{ device.clients === null ? 'Client count unavailable' : device.clients + ' clients' }} ·
+          {{ device.uplink || 'Uplink unknown' }}
+        </p>
+      </header>
+      @if (selectedImpact(); as impact) {
+        <section class="detail-section">
+          <p class="eyebrow">For this change</p>
+          <h3>{{ selectedChange()?.change_type }}</h3>
+          <p>{{ selectedChange()?.title }}</p>
+          @if (impact.shared_window) {
+            <p class="notice">
+              Overlapping changes share this monitoring window. Attribution is not exclusive.
+            </p>
+          }
+        </section>
+        <section class="detail-section">
+          <h3 class="eyebrow">Configuration progress</h3>
+          <ol class="steps">
+            @for (step of steps(); track step.label) {
+              <li [class.observed]="!!step.at">
+                <strong>{{ step.label }}</strong
+                ><time [attr.datetime]="step.at" [title]="step.at ?? ''">{{
+                  preciseAt(step.at)
+                }}</time>
+              </li>
+            }
+          </ol>
+          <span class="config-chip" [attr.data-config]="impact.config_state">{{
+            label(impact.config_state)
+          }}</span>
+        </section>
+        <section class="detail-section">
+          <div class="section-heading">
+            <h3 class="eyebrow">Monitoring</h3>
+            <strong>{{ impact.progress }}%</strong>
+          </div>
+          <progress
+            class="large-progress"
+            max="100"
+            [value]="impact.progress"
+            aria-label="Monitoring time elapsed"
+          ></progress>
+          <p class="mono">
+            {{ label(impact.monitoring_state) }} · {{ impact.observation_count }} observations
+          </p>
+          <p>{{ impact.headline }}</p>
+          <small>Progress measures elapsed time, not evidence quality.</small>
+        </section>
+        @if (impact.metrics.length) {
+          <section class="detail-section">
+            <h3 class="eyebrow">Baseline vs latest</h3>
+            @for (metric of impact.metrics; track metric.name) {
+              <div class="metric">
+                <div>
+                  <strong>{{ metricLabel(metric.name) }}</strong
+                  ><span [class.negative]="metric.delta < 0" [class.positive]="metric.delta > 0"
+                    >{{ metric.delta > 0 ? '+' : '' }}{{ metric.delta }} pp</span
+                  >
+                </div>
+                <div class="metric-track">
+                  <span class="baseline-bar" [style.width.%]="metric.baseline"></span
+                  ><span
+                    class="latest-bar"
+                    [class.degraded]="metric.delta < 0"
+                    [style.width.%]="metric.latest"
+                  ></span>
+                </div>
+                <small>Baseline {{ metric.baseline }}% · latest {{ metric.latest }}%</small>
+              </div>
+            }
+          </section>
+        }
+        @if (impact.collection_errors.length) {
+          <section class="detail-section">
+            <details class="collection-errors">
+              <summary>
+                Incomplete SLE evidence · {{ impact.collection_errors.length }} errors
+              </summary>
+              @for (error of impact.collection_errors; track $index) {
+                <p>{{ error }}</p>
+              }
+            </details>
+          </section>
+        }
+        <section class="detail-section actions">
+          <a
+            class="cg-btn"
+            [class.disabled]="time.isHistorical()"
+            [attr.aria-disabled]="time.isHistorical()"
+            [attr.tabindex]="time.isHistorical() ? -1 : null"
+            [routerLink]="time.isHistorical() ? null : ['/impact/sessions']"
+            [queryParams]="{ session: impact.session_id }"
+            >Inspect collected evidence</a
+          >
+          @if (selectedChange()?.change_group_id) {
+            <a
+              class="cg-btn"
+              [class.disabled]="time.isHistorical()"
+              [attr.aria-disabled]="time.isHistorical()"
+              [attr.tabindex]="time.isHistorical() ? -1 : null"
+              [routerLink]="time.isHistorical() ? null : ['/changes']"
+              [queryParams]="{ group: selectedChange()?.change_group_id }"
+              >Open change group</a
+            >
+          }
+        </section>
+      } @else {
+        @if (selectedChange()) {
+          <p class="notice out-of-scope">
+            Not in the scope of this change — showing this device's own history instead.
+          </p>
+        }
+        <section class="detail-section">
+          <h3 class="eyebrow">Change history · {{ deviceHistory().length }}</h3>
+          @for (change of deviceHistory(); track change.id) {
+            @if (historyImpact(change); as impact) {
+              <button class="history-row" type="button" (click)="chooseChange(change.id, true)">
+                <div class="row-meta">
+                  <time>{{ at(change.occurred_at) }}</time
+                  ><span class="cg-health" [attr.data-health]="impact.severity">{{
+                    healthLabel(impact.severity)
+                  }}</span>
+                </div>
+                <strong>{{ change.change_type }}</strong
+                ><span class="config-chip" [attr.data-config]="impact.config_state">{{
+                  label(impact.config_state)
+                }}</span>
+                <p>{{ label(impact.monitoring_state) }} · {{ impact.progress }}%</p>
+                <p>{{ impact.headline }}</p>
+              </button>
+            }
+          } @empty {
+            <p>No changes for this device in the loaded range.</p>
+            @if (changes().length < total()) {
+              <button class="text-button" type="button" (click)="more()">
+                Search more changes
+              </button>
+            }
+          }
+        </section>
+      }
+    } @else if (selectedChange(); as change) {
+      <header class="detail-head">
+        <div class="detail-actions">
+          <span class="cg-health" [attr.data-health]="health(change)">{{
+            healthLabel(health(change))
+          }}</span
+          ><button class="text-button" type="button" (click)="clear()">Clear</button>
+        </div>
+        <h2>{{ change.change_type }}</h2>
+        <p class="change-heading">{{ change.title }}</p>
+        <p class="mono">{{ at(change.occurred_at) }} · {{ change.actor || 'Actor unavailable' }}</p>
+        @if (change.summary && change.summary !== change.title) {
+          <p>{{ change.summary }}</p>
+        }
+      </header>
+      <section class="detail-section">
+        <div class="section-heading">
+          <h3 class="eyebrow">Monitoring progress</h3>
+          <strong>{{ progress(change) }}%</strong>
+        </div>
+        <progress
+          class="large-progress"
+          max="100"
+          [value]="progress(change)"
+          aria-label="Average monitoring time elapsed"
+        ></progress>
+        <p>
+          {{ change.impacts.length }} devices ·
+          {{
+            phase(change) === 'pending'
+              ? 'awaiting configuration evidence'
+              : phase(change) === 'monitoring'
+                ? 'monitoring is in progress'
+                : 'monitoring windows have settled'
+          }}
+        </p>
+      </section>
+      <section class="detail-section">
+        <h3 class="eyebrow">{{ change.impacts.length }} devices impacted</h3>
+        @for (impact of change.impacts; track impact.session_id) {
+          <button type="button" class="impact-card" (click)="chooseDevice(impact.device_id)">
+            <div class="row-meta">
+              <strong>{{ deviceName(impact.device_id) }}</strong
+              ><span class="cg-health" [attr.data-health]="impact.severity">{{
+                healthLabel(impact.severity)
+              }}</span>
+            </div>
+            <span class="config-chip" [attr.data-config]="impact.config_state">{{
+              label(impact.config_state)
+            }}</span
+            ><time>{{ at(impact.configured_at) }}</time>
+            <div class="row-progress">
+              <span>{{ label(impact.monitoring_state) }}</span
+              ><progress
+                max="100"
+                [value]="impact.progress"
+                aria-label="Monitoring time elapsed"
+              ></progress
+              ><span>{{ impact.progress }}%</span>
+            </div>
+            <p>{{ impact.headline }}</p>
+          </button>
+        } @empty {
+          <p>No device configuration reports are linked to this change yet. Impact is unknown.</p>
+        }
+      </section>
+      @if (change.change_group_id) {
+        <section class="detail-section">
+          <a
+            class="cg-btn"
+            [class.disabled]="time.isHistorical()"
+            [attr.aria-disabled]="time.isHistorical()"
+            [attr.tabindex]="time.isHistorical() ? -1 : null"
+            [routerLink]="time.isHistorical() ? null : ['/changes']"
+            [queryParams]="{ group: change.change_group_id }"
+            >Open change group</a
+          >
+        </section>
+      }
+    } @else {
+      <header class="detail-head">
+        <p class="eyebrow">Site rollup</p>
+        <h2>Explore this site's changes</h2>
+        <p>Select a change to see where it landed, or a device to inspect its change history.</p>
+      </header>
+      <section class="detail-section rollup">
+        @for (row of rollup(); track row.health) {
+          <div>
+            <span><i [attr.data-health]="row.health"></i>{{ healthLabel(row.health) }}</span
+            ><strong>{{ row.count }}</strong>
+          </div>
+        }
+        <div>
+          <span><i class="pending-dot"></i>Awaiting configuration</span
+          ><strong>{{ pending() }}</strong>
+        </div>
+        <p class="rollup-note">
+          Connectivity and change impact are separate. Unknown means a health verdict is
+          unavailable.
+        </p>
+      </section>
+    }
+  </aside>
+</div>

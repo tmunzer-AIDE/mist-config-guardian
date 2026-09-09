@@ -3,6 +3,7 @@
 @use 'styles/tokens';
 @use 'styles/keyframes';
 @use 'styles/primitives';
+@use 'styles/health';
 
 * {
   box-sizing: border-box;
@@ -40,6 +41,37 @@ textarea {
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
+}
+
+:where(button:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+::selection {
+  background: var(--brand-soft);
+  color: var(--ink);
+}
+
+:where(.cg-mono, time, output) {
+  font-variant-numeric: tabular-nums;
+}
+
+:where(.cg-scroll, .library-table, .table-card, .change-list, .details) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+  overscroll-behavior: contain;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .cg-visually-hidden {

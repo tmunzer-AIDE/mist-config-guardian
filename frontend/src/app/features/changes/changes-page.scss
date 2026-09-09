@@ -4,7 +4,7 @@
 // body rows share it so the columns line up without a fixed table layout.
 $columns: minmax(0, 0.8fr) minmax(150px, 2.6fr) minmax(0, 1fr) minmax(0, 0.45fr) minmax(0, 1fr)
   minmax(0, 1.15fr);
-$sunken: rgba(251, 250, 247, 0.55);
+$sunken: var(--surface-sunken);
 
 .page {
   height:100%;
@@ -115,8 +115,8 @@ $sunken: rgba(251, 250, 247, 0.55);
 }
 
 .head-cell {
-  font: 600 9.5px var(--font-mono);
-  letter-spacing: 0.08em;
+  font: 600 11px var(--font-sans);
+  letter-spacing: 0.02em;
   color: var(--ink-soft);
   text-align: left;
   padding: 0;
@@ -142,10 +142,10 @@ $sunken: rgba(251, 250, 247, 0.55);
   padding: 13px 15px;
   border-bottom: 1px solid var(--hairline);
   cursor: pointer;
-  box-shadow: inset 3px 0 0 var(--tone-none-line);
+
 
   &:hover {
-    background: rgba(255, 255, 255, 0.55);
+    background: var(--surface-selected-soft);
   }
 
   &:focus-visible {
@@ -155,25 +155,25 @@ $sunken: rgba(251, 250, 247, 0.55);
 }
 
 .row--group[data-tone='crit'] {
-  box-shadow: inset 3px 0 0 var(--tone-critical-ink);
+
 }
 
 .row--group[data-tone='warn'] {
-  box-shadow: inset 3px 0 0 var(--tone-warning-ink);
+
 }
 
 .row--group[data-tone='ok'] {
-  box-shadow: inset 3px 0 0 var(--tone-ok-ink);
+
 }
 
 .row--group[data-tone='info'] {
-  box-shadow: inset 3px 0 0 var(--tone-info-ink);
+
 }
 
 .row--group.row--on,
 .row--group.row--on[data-tone] {
   background: var(--surface-selected);
-  box-shadow: inset 3px 0 0 var(--brand);
+
 }
 
 .cell {

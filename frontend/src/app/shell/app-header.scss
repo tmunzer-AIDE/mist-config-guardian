@@ -5,8 +5,6 @@
   flex: none;
   background: var(--header-fill);
   border-bottom: 1px solid var(--header-rule);
-  backdrop-filter: blur(16px) saturate(1.1);
-  -webkit-backdrop-filter: blur(16px) saturate(1.1);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -42,9 +40,9 @@
   align-items: center;
   gap: 9px;
   border: 1px solid rgba(20, 22, 26, 0.13);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(251, 250, 247, 0.6));
+  background: var(--surface-raised);
   border-radius: var(--radius-lg);
-  padding: 5px 10px;
+  padding: 7px 10px;
   box-shadow: var(--shadow-hairline);
   cursor: pointer;
   color: var(--ink);
@@ -65,11 +63,16 @@
   align-items: center;
   gap: 8px;
   flex: 1;
-  max-width: 290px;
+  max-width: 360px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.62);
+  padding: 8px 12px;
+
+  &:focus-within {
+    border-color: var(--brand-line);
+    box-shadow: 0 0 0 3px var(--surface-selected);
+  }
+  background: var(--surface-sunken);
 
   input {
     border: 0;
@@ -157,7 +160,7 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, var(--brand-tint), var(--brand-tint-deep));
+  background: var(--brand-soft);
   border: 1px solid rgba(39, 67, 163, 0.22);
   box-shadow: var(--shadow-brand);
   font: 600 11px/26px var(--font-mono);
@@ -179,7 +182,7 @@
 
 .user-role {
   display: block;
-  font: 400 10px var(--font-mono);
+  font: 400 10px var(--font-sans);
   color: var(--ink-soft);
 }
 
@@ -193,10 +196,8 @@
   position: absolute;
   top: calc(100% + 2px);
   z-index: 41;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.82));
-  backdrop-filter: blur(20px) saturate(1.1);
-  -webkit-backdrop-filter: blur(20px) saturate(1.1);
-  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
   border-radius: 12px;
   box-shadow:
     0 18px 44px -18px rgba(20, 22, 26, 0.42),

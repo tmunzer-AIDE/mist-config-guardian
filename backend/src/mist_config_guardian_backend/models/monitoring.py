@@ -107,6 +107,7 @@ class MonitoringSession(TimestampedModel, Document):
         indexes: ClassVar[list[IndexModel]] = [
             IndexModel([("organization_id", 1), ("created_at", -1)]),
             IndexModel([("organization_id", 1), ("status", 1)]),
+            IndexModel([("organization_id", 1), ("site_id", 1), ("created_at", -1)]),
             IndexModel([("organization_id", 1), ("audit_ids", 1)]),
             IndexModel([("organization_id", 1), ("receipt_ids", 1)]),
             IndexModel(

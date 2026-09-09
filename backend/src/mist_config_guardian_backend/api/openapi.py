@@ -137,6 +137,10 @@ TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "Site Impact",
+        "description": "Site-scoped configuration events, observed topology, and compact device impact evidence.",
+    },
+    {
         "name": "Impact Monitoring",
         "description": (
             "Per-device monitoring windows with baseline and post-change service-level evidence, "

@@ -282,3 +282,35 @@ async def test_all_device_families_use_advertised_metric_names(httpx_mock, famil
     assert observation.values == {metric: 90}
     assert observation.errors == []
     assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.parametrize(
+    ("family", "scope", "metrics"),
+    [
+        ("ap", "ap", ["failed-to-connect", "ap-availability"]),
+        ("switch", "switch", ["switch-bandwidth", "switch-stc"]),
+        ("gateway", "gateway", ["gateway-bandwidth", "application-health"]),
+    ],
+)
+async def test_sle_discovery_and_summaries_use_device_family_scope(httpx_mock, family, scope, metrics):
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+
+    root = f"/api/v1/sites/site-1/sle/{scope}/00000000-0000-0000-1000-aabbccddeeff"
+
+    def respond(request):
+        if request.url.path == f"{root}/metrics":
+            return httpx.Response(200, json={"supported": metrics, "enabled": metrics})
+        assert request.url.path in [f"{root}/metric/{metric}/summary-trend" for metric in metrics]
+        return httpx.Response(200, json={"sle": {"samples": {"total": [100], "degraded": [1]}}})
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_02) as client:
+        result = await client.capture(site_id="site-1", device_mac="aabbccddeeff", device_type=DeviceType(family))
+    assert result.values == dict.fromkeys(metrics, 99)
+    assert result.errors == []
+    assert result.scope == "device"
+    assert len(httpx_mock.get_requests()) == len(metrics) + 1

@@ -182,20 +182,20 @@
 }
 
 .card {
-  border-left: 3px solid var(--rule-heavy);
+  border: 1px solid var(--border-subtle);
   padding: 12px 15px;
 }
 
 .card[data-tone='crit'] {
-  border-left-color: var(--tone-critical-ink);
+  background: var(--surface-raised);
 }
 
 .card[data-tone='warn'] {
-  border-left-color: var(--tone-warning-ink);
+  background: var(--surface-raised);
 }
 
 .card[data-tone='ok'] {
-  border-left-color: var(--tone-ok-ink);
+  background: var(--surface-raised);
 }
 
 .card--prominent {

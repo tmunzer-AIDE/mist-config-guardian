@@ -42,8 +42,14 @@ export const routes: Routes = [
   {
     path: 'impact',
     canActivate: [authGuard],
-    loadComponent: () => import('./features/impact/impact-page').then((m) => m.ImpactPage),
+    loadComponent: () => import('./features/impact/site-impact-page').then((m) => m.SiteImpactPage),
     title: 'Impact · Config Guardian',
+  },
+  {
+    path: 'impact/sessions',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/impact/impact-page').then((m) => m.ImpactPage),
+    title: 'Impact evidence · Config Guardian',
   },
   {
     path: 'search',
