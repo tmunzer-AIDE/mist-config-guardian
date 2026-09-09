@@ -1,4 +1,6 @@
-"""Parity between the MongoDB target search and the Python reference.
+"""Database-backed checks that the rest of the suite cannot make.
+
+Parity between the MongoDB target search and the Python reference.
 
 The rest of the suite runs with no database, so the aggregation that a
 deployment actually executes is never exercised there. This module runs both
@@ -175,3 +177,37 @@ async def test_the_catalogue_is_not_trivially_empty() -> None:
     lab = next(item for item in page.items if item.name == "Lab WLAN")
     assert lab.version == 2
     assert lab.site_name == "Alpha"
+
+
+# ------------------------------------------------------- single object lookup
+async def test_an_object_is_readable_on_its_own() -> None:
+    """The history panel resolves a selection its page does not contain."""
+    logical = await LogicalObject.find_one(
+        LogicalObject.organization_id == ORGANIZATION_ID,
+        LogicalObject.name == "Corp WLAN",
+    )
+    assert logical is not None
+
+    found = await LogicalObject.find_one(
+        LogicalObject.id == logical.id,
+        LogicalObject.organization_id == ORGANIZATION_ID,
+    )
+
+    assert found is not None
+    assert found.name == "Corp WLAN"
+
+
+async def test_an_object_is_not_readable_from_another_organization() -> None:
+    """The id alone must never be enough; both conditions are load-bearing."""
+    logical = await LogicalObject.find_one(
+        LogicalObject.organization_id == ORGANIZATION_ID,
+        LogicalObject.name == "Corp WLAN",
+    )
+    assert logical is not None
+
+    leaked = await LogicalObject.find_one(
+        LogicalObject.id == logical.id,
+        LogicalObject.organization_id == OTHER_ORGANIZATION_ID,
+    )
+
+    assert leaked is None

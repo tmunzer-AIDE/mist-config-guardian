@@ -230,6 +230,32 @@ describe('HistoryPage', () => {
     );
     expect(versions.request.method).toBe('GET');
     http.expectNone((request) => request.url.includes('/objects/obj-1/versions'));
+    versions.flush({ items: [], total: 0 });
+
+    // The rail cannot describe an object it does not hold, so the object is
+    // resolved on its own — otherwise the comparison panel has no name to show
+    // and renders nothing at all.
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-99')
+      .flush(object('obj-99', 'Deep Linked WLAN'));
+    await settle(fixture);
+
+    const panel = (fixture.nativeElement as HTMLElement).querySelector('.panel-name');
+    expect(panel?.textContent).toContain('Deep Linked WLAN');
+  });
+
+  it('does not re-fetch an object the rail already describes', async () => {
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 124);
+
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1/versions')
+      .flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    http.expectNone((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1');
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.panel-name')?.textContent,
+    ).toContain('NW-Corp');
   });
 
   it('selects the first row only when nothing is selected yet', async () => {

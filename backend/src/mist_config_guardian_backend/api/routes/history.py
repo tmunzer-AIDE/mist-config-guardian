@@ -94,6 +94,34 @@ async def list_objects(
     )
 
 
+@router.get("/{logical_object_id}")
+async def get_object(
+    organization_id: PydanticObjectId,
+    logical_object_id: PydanticObjectId,
+    organizations: Annotated[OrganizationService, Depends(get_organization_service)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> LogicalObjectResponse:
+    """Return one object's identity.
+
+    The history rail holds a page rather than the whole catalogue, so the
+    object being compared is not always in it — a link can name one that sorts
+    past the first page, and a search can hide it. This resolves that object on
+    its own so the comparison can still be labelled.
+    """
+    try:
+        await organizations.get(organization_id)
+    except OrganizationNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    logical = await LogicalObject.find_one(
+        LogicalObject.id == logical_object_id,
+        LogicalObject.organization_id == organization_id,
+    )
+    if logical is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Object not found")
+    return LogicalObjectResponse.from_document(logical)
+
+
 @router.get("/{logical_object_id}/versions")
 async def list_object_versions(
     organization_id: PydanticObjectId,

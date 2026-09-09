@@ -129,6 +129,14 @@ export class HistoryPage {
   protected readonly loadingMore = signal(false);
 
   private readonly objects = signal<ConfigurationObject[]>([]);
+  /**
+   * The selected object when the loaded page does not contain it.
+   *
+   * The rail is one page of many, so the object being compared can sit outside
+   * it — a link naming one that sorts later, or a search that hides it. The
+   * comparison is still labelled from this.
+   */
+  private readonly offPageObject = signal<ConfigurationObject | null>(null);
   private readonly versions = signal<ConfigurationVersion[]>([]);
   protected readonly selectedObjectId = signal<string | null>(null);
   private objectsRequest = 0;
@@ -197,9 +205,16 @@ export class HistoryPage {
     () => `Showing ${this.objects().length} of ${this.objectsTotal()}`,
   );
 
-  protected readonly selectedObject = computed(
-    () => this.objects().find((object) => object.id === this.selectedObjectId()) ?? null,
-  );
+  protected readonly selectedObject = computed(() => {
+    const id = this.selectedObjectId();
+    if (id === null) {
+      return null;
+    }
+    return (
+      this.objects().find((object) => object.id === id) ??
+      (this.offPageObject()?.id === id ? this.offPageObject() : null)
+    );
+  });
 
   protected readonly objectKind = computed(() => {
     const object = this.selectedObject();
@@ -386,6 +401,7 @@ export class HistoryPage {
         return;
       }
       void untracked(() => this.loadVersions(organizationId, objectId));
+      void untracked(() => this.resolveOffPageObject(organizationId, objectId));
     });
 
     effect(() => {
@@ -463,6 +479,7 @@ export class HistoryPage {
   }
 
   private resetSelection(): void {
+    this.offPageObject.set(null);
     this.versions.set([]);
     this.versionAId.set(null);
     this.versionBId.set(null);
@@ -752,6 +769,32 @@ export class HistoryPage {
       // whatever was shown before cannot outlive the object they describe.
       this.resetSelection();
       this.selectedObjectId.set(first);
+    }
+  }
+
+  /**
+   * Resolve a selected object the loaded page does not hold.
+   *
+   * Nothing is fetched while the rail already describes it, which is the usual
+   * case. A failure is left silent: the comparison itself is driven by the
+   * version reads, and those report their own errors rather than raising a
+   * second banner for the same missing object.
+   */
+  private async resolveOffPageObject(organizationId: string, objectId: string): Promise<void> {
+    if (this.objects().some((object) => object.id === objectId)) {
+      this.offPageObject.set(null);
+      return;
+    }
+    if (this.offPageObject()?.id === objectId) {
+      return;
+    }
+    try {
+      const object = await this.history.object(organizationId, objectId);
+      if (this.selectedObjectId() === objectId) {
+        this.offPageObject.set(object);
+      }
+    } catch {
+      this.offPageObject.set(null);
     }
   }
 

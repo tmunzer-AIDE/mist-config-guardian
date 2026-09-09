@@ -8346,6 +8346,65 @@
         ]
       }
     },
+    "/api/v1/organizations/{organization_id}/objects/{logical_object_id}": {
+      "get": {
+        "description": "Return one object's identity.\n\nThe history rail holds a page rather than the whole catalogue, so the\nobject being compared is not always in it — a link can name one that sorts\npast the first page, and a search can hide it. This resolves that object on\nits own so the comparison can still be labelled.",
+        "operationId": "get_object_api_v1_organizations__organization_id__objects__logical_object_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_object_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogicalObjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Get Object",
+        "tags": [
+          "Configuration History"
+        ]
+      }
+    },
     "/api/v1/organizations/{organization_id}/objects/{logical_object_id}/versions": {
       "get": {
         "description": "Return an object's immutable timeline newest first.",
