@@ -1049,7 +1049,7 @@ wheels = [
 
 [[package]]
 name = "mist-config-guardian-backend"
-version = "0.6.4"
+version = "0.6.5"
 source = { editable = "." }
 dependencies = [
     { name = "beanie" },
