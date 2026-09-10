@@ -6,9 +6,10 @@ from typing import Any
 import httpx
 
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
+from mist_config_guardian_backend.integrations.mist_neighbors import fetch_neighbor_ports
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.organization import MistCloudRegion
-from mist_config_guardian_backend.schemas.impact import SiteTopology, TopologyDevice
+from mist_config_guardian_backend.schemas.impact import SiteTopology, TopologyDevice, TopologyLink
 
 _MAC_LENGTH = 12
 _MAX_TIMESTAMP = 253402300799
@@ -54,36 +55,116 @@ def device_from_stats(record: dict[str, Any]) -> TopologyDevice | None:
     )
 
 
-def topology_from_stats(site_id: str, rows: list[dict[str, Any]]) -> SiteTopology:
-    devices = {item.id: item for row in rows if (item := device_from_stats(row)) is not None}
-    # AP LLDP chassis identities are evidence. Names and guessed subnets are not.
-    aliases = {
-        normalized_mac(module.get("mac")): normalized_mac(row.get("mac"))
-        for row in rows
-        for module in (row["module_stat"] if isinstance(row.get("module_stat"), list) else [])
-        if isinstance(module, dict)
-    }
+def _identities(rows: list[dict[str, Any]], devices: dict[str, TopologyDevice]) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = {}
     for row in rows:
-        child = devices.get(normalized_mac(row.get("mac")))
-        lldp = row.get("lldp_stat")
-        if child is None or not isinstance(lldp, dict):
+        owner = normalized_mac(row.get("mac"))
+        if owner not in devices:
             continue
-        parent_id = normalized_mac(lldp.get("chassis_id"))
-        parent_id = aliases.get(parent_id, parent_id)
-        parent = devices.get(parent_id)
-        if parent is not None and parent.id != child.id and parent.tier < child.tier:
-            child.parent = parent.id
-            child.uplink = str(lldp.get("port_id") or "LLDP neighbor")
+        modules = row.get("module_stat")
+        identities = [owner] + [
+            normalized_mac(module.get("mac"))
+            for module in (modules if isinstance(modules, list) else [])
+            if isinstance(module, dict)
+        ]
+        for identity in identities:
+            if len(identity) == _MAC_LENGTH and all(c in "0123456789abcdef" for c in identity):
+                aliases.setdefault(identity, set()).add(owner)
+    return aliases
+
+
+def _resolve(aliases: dict[str, set[str]], value: object) -> str | None:
+    matches = aliases.get(normalized_mac(value), set())
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _add_port_aliases(aliases: dict[str, set[str]], ports: list[dict[str, Any]]) -> None:
+    # Port chassis MACs can differ from the management/virtual-chassis MAC.
+    port_aliases: dict[str, set[str]] = {}
+    for port in ports:
+        owner = _resolve(aliases, port.get("mac"))
+        identity = normalized_mac(port.get("port_mac"))
+        if owner and len(identity) == _MAC_LENGTH and all(c in "0123456789abcdef" for c in identity):
+            port_aliases.setdefault(identity, set()).add(owner)
+    for identity, owners in port_aliases.items():
+        aliases.setdefault(identity, set()).update(owners)
+
+
+def _observed_links(
+    rows: list[dict[str, Any]], ports: list[dict[str, Any]], devices: dict[str, TopologyDevice]
+) -> list[TopologyLink]:
+    aliases = _identities(rows, devices)
+    _add_port_aliases(aliases, ports)
+    # One adjacency per pair, retaining all observed ports on each endpoint.
+    links: dict[tuple[str, str], dict[str, set[str]]] = {}
+    hints: dict[tuple[str, str], dict[str, set[str]]] = {}
+
+    def add(a: str | None, b: str | None, local: object, remote: object) -> None:
+        if not a or not b or a == b:
+            return
+        pair = (a, b) if a < b else (b, a)
+        observed = links.setdefault(pair, {a: set(), b: set()})
+        descriptions = hints.setdefault(pair, {a: set(), b: set()})
+        if isinstance(local, str) and local:
+            observed[a].add(local)
+        if isinstance(remote, str) and remote:
+            descriptions[b].add(remote)
+
+    for row in rows:
+        child = _resolve(aliases, row.get("mac"))
+        lldp = row.get("lldp_stat")
+        if child and isinstance(lldp, dict):
+            add(child, _resolve(aliases, lldp.get("chassis_id")), None, lldp.get("port_id"))
+    for port in ports:
+        add(
+            _resolve(aliases, port.get("mac")),
+            _resolve(aliases, port.get("neighbor_mac")),
+            port.get("port_id"),
+            port.get("neighbor_port_desc"),
+        )
+    return [
+        TopologyLink(
+            source=a,
+            target=b,
+            source_ports=sorted(observed[a] or hints[(a, b)][a]),
+            target_ports=sorted(observed[b] or hints[(a, b)][b]),
+        )
+        for (a, b), observed in sorted(links.items())
+    ]
+
+
+def topology_from_stats(
+    site_id: str, rows: list[dict[str, Any]], ports: list[dict[str, Any]] | None = None
+) -> SiteTopology:
+    devices = {item.id: item for row in rows if (item := device_from_stats(row)) is not None}
+    links = _observed_links(rows, [p for p in ports or [] if p.get("site_id") == site_id], devices)
+    neighbors: dict[str, dict[str, TopologyLink]] = {identity: {} for identity in devices}
+    for link in links:
+        neighbors[link.source][link.target] = link
+        neighbors[link.target][link.source] = link
+    # This is only a layout convention; links retain loops and redundant peers.
+    for item in devices.values():
+        if item.kind == "switch" and any(devices[n].kind == "gateway" for n in neighbors[item.id]):
+            item.tier = 1
+    for item in devices.values():
+        parents = [n for n in neighbors[item.id] if devices[n].tier < item.tier]
+        if len(parents) == 1:
+            item.parent = parents[0]
+            link = neighbors[item.id][item.parent]
+            upstream_ports = link.source_ports if link.source == item.parent else link.target_ports
+            item.uplink = ", ".join(upstream_ports) or "LLDP neighbor"
     ordered = sorted(devices.values(), key=lambda item: (item.tier, item.name.casefold(), item.id))
     for tier in range(4):
-        peers = [item for item in ordered if item.tier == tier]
-        for index, item in enumerate(peers):
+        for index, item in enumerate(d for d in ordered if d.tier == tier):
             item.col = float(index)
-    return SiteTopology(site_id=site_id, devices=ordered, source="mist", collected_at=utc_now(), complete=True)
+    return SiteTopology(
+        site_id=site_id, devices=ordered, links=links, source="mist", collected_at=utc_now(), complete=True
+    )
 
 
-async def fetch_site_topology(*, site_id: str, token: str, region: MistCloudRegion) -> SiteTopology:
+async def fetch_site_topology(*, site_id: str, org_id: str, token: str, region: MistCloudRegion) -> SiteTopology:
     rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
     async with httpx.AsyncClient(
         base_url=REGION_HOSTS[region], headers={"Authorization": f"Token {token}"}, timeout=20
     ) as client:
@@ -98,8 +179,18 @@ async def fetch_site_topology(*, site_id: str, token: str, region: MistCloudRegi
                 raise ValueError(message)
             rows.extend(batch)
             if len(batch) < _PAGE_SIZE:
-                return topology_from_stats(site_id, rows)
-    result = topology_from_stats(site_id, rows)
-    result.complete = False
-    result.warnings.append("Device collection reached its 5000-device limit; topology is incomplete.")
+                break
+        else:
+            warnings.append("Device collection reached its 5000-device limit; topology is incomplete.")
+        devices = {item.id: item for row in rows if (item := device_from_stats(row)) is not None}
+        aliases = _identities(rows, devices)
+        macs = sorted(
+            identity
+            for identity, owners in aliases.items()
+            if len(owners) == 1 and devices[next(iter(owners))].kind in {"switch", "gateway"}
+        )
+        ports, port_warnings = await fetch_neighbor_ports(client, org_id=org_id, site_id=site_id, macs=macs)
+    result = topology_from_stats(site_id, rows, ports)
+    result.warnings = warnings + port_warnings
+    result.complete = not result.warnings
     return result

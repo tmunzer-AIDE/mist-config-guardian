@@ -99,6 +99,8 @@ def test_optional_provider_stats_do_not_crash_topology(malformed):
 async def test_all_device_statistics_are_paginated_and_requests_are_read_only(httpx_mock):
     def respond(request):
         assert request.method == "GET"
+        if request.url.path == "/api/v1/orgs/mist-org/stats/ports/search":
+            return httpx.Response(200, json={"results": [], "total": 0})
         assert request.url.path == f"/api/v1/sites/{SITE}/stats/devices"
         assert request.url.params["type"] == "all"
         assert request.url.params["limit"] == "1000"
@@ -110,15 +112,17 @@ async def test_all_device_statistics_are_paginated_and_requests_are_read_only(ht
         return httpx.Response(200, json=rows)
 
     httpx_mock.add_callback(respond, is_reusable=True)
-    result = await fetch_site_topology(site_id=SITE, token="test-read-token", region=MistCloudRegion.GLOBAL_02)
-    assert len(httpx_mock.get_requests()) == 2
+    result = await fetch_site_topology(
+        site_id=SITE, org_id="mist-org", token="test-read-token", region=MistCloudRegion.GLOBAL_02
+    )
+    assert len(httpx_mock.get_requests()) == 3
     assert len(result.devices) == 1001
     assert result.complete
 
 
 async def test_topology_cap_is_explicit_and_malformed_response_is_not_empty(httpx_mock):
     httpx_mock.add_response(json=[{"mac": MAC, "type": "ap"}] * 1000, is_reusable=True)
-    result = await fetch_site_topology(site_id=SITE, token="test", region=MistCloudRegion.GLOBAL_02)
+    result = await fetch_site_topology(site_id=SITE, org_id="mist-org", token="test", region=MistCloudRegion.GLOBAL_02)
     assert not result.complete
     assert "5000" in result.warnings[0]
     assert len(httpx_mock.get_requests()) == 5
@@ -128,7 +132,7 @@ async def test_topology_cap_is_explicit_and_malformed_response_is_not_empty(http
 async def test_invalid_stats_raise(payload, httpx_mock):
     httpx_mock.add_response(json=payload)
     with pytest.raises(ValueError, match="Invalid site"):
-        await fetch_site_topology(site_id=SITE, token="test", region=MistCloudRegion.GLOBAL_02)
+        await fetch_site_topology(site_id=SITE, org_id="mist-org", token="test", region=MistCloudRegion.GLOBAL_02)
 
 
 def test_progress_measures_time_while_health_requires_comparable_measurements():
@@ -236,7 +240,7 @@ async def test_event_page_scopes_both_collections_before_expanding_devices(monke
 def api(monkeypatch):
     app = FastAPI()
     app.include_router(impact.router, prefix="/api/v1")
-    org = SimpleNamespace(id=PydanticObjectId(), cloud_region=MistCloudRegion.GLOBAL_02)
+    org = SimpleNamespace(id=PydanticObjectId(), mist_org_id="mist-org", cloud_region=MistCloudRegion.GLOBAL_02)
     app.dependency_overrides[require_organization] = lambda: org
     app.dependency_overrides[require_viewer] = lambda: SimpleNamespace(role="viewer")
     app.dependency_overrides[get_credential_vault] = object
@@ -353,3 +357,12 @@ async def test_expansion_limit_is_explicit_instead_of_silently_hiding_devices(mo
     assert not result.complete
     assert result.warnings
     assert len(result.items[0].impacts) == 1
+
+
+def test_live_topology_uses_provider_org_id_not_guardian_id(api):
+    client, _app, org = api
+    response = client.get(f"/api/v1/organizations/{org.id}/impact/sites/{SITE}/topology")
+    assert response.status_code == 200
+    impact.fetch_site_topology.assert_awaited_once_with(
+        site_id=SITE, org_id="mist-org", token="read-token", region=org.cloud_region
+    )

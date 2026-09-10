@@ -12,7 +12,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { boundedView, Health, TopologyDevice, Viewport, zoomAt } from './site-impact.model';
+import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } from './site-impact.model';
 
 @Component({
   selector: 'app-topology-canvas',
@@ -334,6 +334,7 @@ import { boundedView, Health, TopologyDevice, Viewport, zoomAt } from './site-im
 })
 export class TopologyCanvas implements AfterViewInit, OnDestroy {
   readonly devices = input.required<TopologyDevice[]>();
+  readonly observedLinks = input<TopologyLink[] | null>(null);
   readonly site = input('');
   readonly selectedDevice = input<string | null>(null);
   readonly healthOverrides = input<Partial<Record<string, Health>>>({});
@@ -379,21 +380,25 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
         node = all.get(node.parent);
       }
     }
-    return this.devices().flatMap((d) => {
-      const p = d.parent ? all.get(d.parent) : undefined;
-      if (!p) return [];
+    const connections = this.observedLinks() ?? this.devices().flatMap((d) =>
+      d.parent ? [{ source: d.parent, target: d.id }] : [],
+    );
+    return connections.flatMap((link) => {
+      const source = all.get(link.source), target = all.get(link.target);
+      if (!source || !target) return [];
+      const [p, d] = source.tier <= target.tier ? [source, target] : [target, source];
       const x1 = 40 + p.col * 176,
-        y1 = this.ys[p.tier] + 21,
         x2 = 40 + d.col * 176,
         y2 = this.ys[d.tier] - 21,
-        m = (y1 + y2) / 2;
-      return [
-        {
-          id: d.id,
-          path: `M ${x1} ${y1} C ${x1} ${m} ${x2} ${m} ${x2} ${y2}`,
-          active: paths.has(d.id),
-        },
-      ];
+        lateral = p.tier === d.tier,
+        y1 = this.ys[p.tier] + (lateral ? -21 : 21),
+        m = lateral ? y1 - 55 : (y1 + y2) / 2;
+      return [{
+        id: `${link.source}:${link.target}`,
+        path: `M ${x1} ${y1} C ${x1} ${m} ${x2} ${m} ${x2} ${y2}`,
+        active: this.observedLinks() === null ? paths.has(d.id) :
+          this.impacted().includes(source.id) || this.impacted().includes(target.id),
+      }];
     });
   });
   constructor() {

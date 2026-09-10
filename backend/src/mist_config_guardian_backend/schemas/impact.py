@@ -34,9 +34,19 @@ class TopologyDevice(BaseModel):
     last_seen: datetime | None = None
 
 
+class TopologyLink(BaseModel):
+    """Observed device adjacency; port lists do not imply a one-to-one circuit map."""
+
+    source: str
+    target: str
+    source_ports: list[str] = Field(default_factory=list)
+    target_ports: list[str] = Field(default_factory=list)
+
+
 class SiteTopology(BaseModel):
     site_id: str
     devices: list[TopologyDevice] = Field(default_factory=list)
+    links: list[TopologyLink] = Field(default_factory=list)
     collected_at: datetime | None = None
     source: Literal["mist", "stored", "historical"] = "stored"
     complete: bool = False

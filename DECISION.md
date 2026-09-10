@@ -34,7 +34,7 @@ The implementation, departures and validation evidence follow.
 
 ## Implementation departures and tradeoffs
 
-- The topology uses only exact LLDP identities from site device statistics; therefore it can show disconnected tiers when the provider does not supply switch/gateway neighbor evidence. Inventing a visually complete tree would be misleading.
+- The topology uses exact LLDP identities from site device statistics and organization switch/gateway port search. Missing or ambiguous identities remain unlinked; visually completing the tree would be misleading.
 - Site colors describe connectivity until a change is selected; then affected devices describe that change's measured impact while other devices retain connectivity state. The header and footer identify the active meaning. Current healthy SLE is not fabricated from a device's connected status.
 - Fit uses the actual occupied canvas width with a 400px minimum, and considers height too. Small sites keep readable labels; larger sites can pan and zoom. This departs from a mandatory 880px canvas. Manual zoom remains between 30% and 260%.
 - Historical mode shows stored inventory and observed lifecycle evidence, withholding mutable verdicts and physical links. Site selector names are current labels. Evidence/action deep links are disabled in historical mode; return to Live for the full current session.
@@ -78,3 +78,13 @@ The API contract, historical restrictions, collection limits, sources and browse
 
 
 Final validation: `make check` passed with `MONGO_TEST_URL` set: **706 backend tests, 305 frontend tests, no skipped database tests**, OpenAPI validation and production build. The **five Chrome scenarios** also passed. The disposable MongoDB and design-reference server were shut down afterward. Existing application services were left running.
+
+
+## Switch and gateway neighbor enhancement
+
+- Use the documented organization port-search endpoint with the provider organization ID and MAC filters from the selected site's inventory. Validate returned organization/site membership and resolve only exact, unambiguous device, module, or port MACs.
+- Return explicit device-pair links in the existing topology response. Preserve redundant and same-tier neighbors rather than forcing a single-parent hierarchy; aggregate the observed ports without claiming one-to-one circuit pairing. Existing parent/uplink fields remain a compatibility convenience only when the upstream layout neighbor is unique.
+- Expose neighbor/port evidence in a collapsed device section with navigation to the peer. Keep link health unknown: Mist's endpoint contains current/last reports, not a proof of availability.
+- Bound port collection independently to five requests / 5000 records and 15 seconds. Copy only validated pagination cursors into requests with fixed filters; no provider-directed credential forwarding. Port failures preserve device inventory and available AP evidence with an incomplete-collection warning. Historical mode remains inventory-only.
+- Regenerate OpenAPI for the additive link schema; test membership, provider org IDs, virtual-chassis/port aliases, pagination, partial failures, bounds, redundant edges, and peer navigation. See `docs/design/site-impact-workspace.md` for the published Mist sources and API contract.
+- Validation: 709 backend tests passed (20 MongoDB integration tests skipped because the disposable database was not started); 306 frontend tests and all six Chrome scenarios passed. Production build, formatting, lint, type checks, and OpenAPI consistency passed. The final adjacency lookup cleanup also passed all 44 focused neighbor/site regressions. `docs/design/neighbor-topology-preview.png` captures the inspected view with synthetic data. No live Mist validation was performed.

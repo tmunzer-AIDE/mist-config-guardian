@@ -6,7 +6,7 @@ import { signal } from '@angular/core';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { TimeContextService } from '../../core/time-context.service';
 import { SiteImpactPage } from './site-impact-page';
-import { SiteChange, impactDevices } from './site-impact.model';
+import { SiteChange, TopologyLink, impactDevices } from './site-impact.model';
 import { change, impact } from './site-impact.fixtures';
 
 describe('site Impact workspace', () => {
@@ -21,11 +21,12 @@ describe('site Impact workspace', () => {
       impacts: [impact({ device_id: '112233445566', device_name: 'Other AP', session_id: 's2' })],
     }),
   ];
-  function flushSite(items = changes, total = items.length) {
+  function flushSite(items = changes, total = items.length, links?: TopologyLink[]) {
     http
       .expectOne((r) => r.url.endsWith('/topology'))
       .flush({
         site_id: 'site1',
+        links,
         source: 'mist',
         devices: impactDevices([], changes),
         warnings: [],
@@ -76,7 +77,7 @@ describe('site Impact workspace', () => {
     http.verify();
     vi.unstubAllGlobals();
   });
-  function load() {
+  function load(links?: TopologyLink[]) {
     http
       .expectOne((r) => r.url.endsWith('/sites'))
       .flush({
@@ -86,7 +87,7 @@ describe('site Impact workspace', () => {
         ],
       });
     fixture.detectChanges();
-    flushSite();
+    flushSite(changes, changes.length, links);
   }
   it('mounts one contextual panel and follows all four selection states', () => {
     load();
@@ -102,6 +103,21 @@ describe('site Impact workspace', () => {
     fixture.detectChanges();
     expect(panel()).toBe('device-change');
     expect(fixture.nativeElement.querySelectorAll('.details').length).toBe(1);
+  });
+  it('renders explicit neighbor links and lets the operator open a peer from its port evidence', () => {
+    load([{
+      source: 'aabbccddeeff', target: '112233445566',
+      source_ports: ['ge-0/0/0'], target_ports: ['eth0'],
+    }]);
+    expect(fixture.nativeElement.querySelectorAll('.links path').length).toBe(1);
+    chooseNode();
+    const neighbors = fixture.nativeElement.querySelector('details.detail-section');
+    expect(neighbors.textContent).toContain('Observed neighbors · 1');
+    expect(neighbors.textContent).toContain('ge-0/0/0 → eth0');
+    neighbors.querySelector('button').click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.detail-head h2').textContent).toContain('Other AP');
+    expect(fixture.nativeElement.querySelector('details.detail-section').textContent).toContain('eth0 → ge-0/0/0');
   });
   it('toggles a change and clears its device selection', () => {
     load();
