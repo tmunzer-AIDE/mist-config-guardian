@@ -19,9 +19,16 @@ export interface TopologyDevice {
   health_label: string;
   last_seen: string | null;
 }
+export interface TopologyLink {
+  source: string;
+  target: string;
+  source_ports: string[];
+  target_ports: string[];
+}
 export interface SiteTopology {
   site_id: string;
   devices: TopologyDevice[];
+  links?: TopologyLink[];
   collected_at: string | null;
   source: 'mist' | 'stored' | 'historical';
   complete: boolean;

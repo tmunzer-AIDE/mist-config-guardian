@@ -80,6 +80,25 @@ export class SiteImpactPage implements OnDestroy {
   protected readonly selectedDevice = computed(
     () => this.devices().find((d) => d.id === this.selectedDeviceId()) ?? null,
   );
+  protected readonly neighbors = computed(() => {
+    const selected = this.selectedDeviceId();
+    const devices = new Map(this.devices().map((device) => [device.id, device]));
+    const ports = (values: string[]) =>
+      values.slice(0, 4).join(', ') +
+      (values.length > 4 ? ` +${values.length - 4} more` : '');
+    return (this.topology()?.links ?? []).flatMap((link) => {
+      const source = link.source === selected;
+      if (!source && link.target !== selected) return [];
+      const device = devices.get(source ? link.target : link.source);
+      return device
+        ? [{
+            device,
+            local: ports(source ? link.source_ports : link.target_ports) || 'Port unknown',
+            remote: ports(source ? link.target_ports : link.source_ports) || 'Port unknown',
+          }]
+        : [];
+    });
+  });
   protected readonly selectedImpact = computed(
     () =>
       this.selectedChange()?.impacts.find((i) => i.device_id === this.selectedDeviceId()) ?? null,

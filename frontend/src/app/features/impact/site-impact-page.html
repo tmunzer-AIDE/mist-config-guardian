@@ -173,6 +173,7 @@
           [initialZoom]="preferredZoom()"
           (zoomChanged)="preferredZoom.set($event)"
           [devices]="devices()"
+          [observedLinks]="topology()?.links ?? null"
           [selectedDevice]="selectedDeviceId()"
           [impacted]="impacted()"
           [scoped]="!!selectedChange()"
@@ -231,6 +232,18 @@
           {{ device.uplink || 'Uplink unknown' }}
         </p>
       </header>
+      @if (neighbors().length) {
+        <details class="detail-section">
+          <summary>Observed neighbors · {{ neighbors().length }}</summary>
+          <p>Last reported LLDP connections; these do not establish current link health.</p>
+          @for (neighbor of neighbors(); track neighbor.device.id) {
+            <button type="button" class="history-row" (click)="chooseDevice(neighbor.device.id)">
+              <strong>{{ neighbor.device.name }}</strong>
+              <p>{{ neighbor.local }} → {{ neighbor.remote }}</p>
+            </button>
+          }
+        </details>
+      }
       @if (selectedImpact(); as impact) {
         <section class="detail-section">
           <p class="eyebrow">For this change</p>

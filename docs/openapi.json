@@ -5300,6 +5300,13 @@
             "title": "Devices",
             "type": "array"
           },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/TopologyLink"
+            },
+            "title": "Links",
+            "type": "array"
+          },
           "site_id": {
             "title": "Site Id",
             "type": "string"
@@ -5767,6 +5774,39 @@
           "mac"
         ],
         "title": "TopologyDevice",
+        "type": "object"
+      },
+      "TopologyLink": {
+        "description": "Observed device adjacency; port lists do not imply a one-to-one circuit map.",
+        "properties": {
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ports": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ports",
+            "type": "array"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "target_ports": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Target Ports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ],
+        "title": "TopologyLink",
         "type": "object"
       },
       "TotpConfirmRequest": {
@@ -9021,7 +9061,7 @@
     },
     "/api/v1/organizations/{organization_id}/impact/sites/{site_id}/topology": {
       "get": {
-        "description": "Read live all-device statistics; historical requests use stored inventory only.",
+        "description": "Read live device statistics and observed neighbors; historical requests use stored inventory only.",
         "operationId": "site_topology_api_v1_organizations__organization_id__impact_sites__site_id__topology_get",
         "parameters": [
           {

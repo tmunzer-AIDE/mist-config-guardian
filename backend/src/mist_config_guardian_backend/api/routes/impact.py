@@ -56,14 +56,16 @@ async def site_topology(
     vault: Annotated[CredentialVault, Depends(get_credential_vault)],
     as_of: datetime | None = None,
 ) -> SiteTopology:
-    """Read live all-device statistics; historical requests use stored inventory only."""
+    """Read live device statistics and observed neighbors; historical requests use stored inventory only."""
     site = str(site_id)
     end = as_utc(as_of) if as_of else utc_now()
     await _site(organization, site, end)
     if as_of is None:
         try:
             token = await service_token(organization, vault)
-            return await fetch_site_topology(site_id=site, token=token, region=organization.cloud_region)
+            return await fetch_site_topology(
+                site_id=site, org_id=organization.mist_org_id, token=token, region=organization.cloud_region
+            )
         except (httpx.HTTPError, ValueError):
             # Retain a useful inventory while explicitly withholding live health.
             result = await site_impact.stored_topology(_identifier(organization), site, end, historical=False)

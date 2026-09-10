@@ -80,6 +80,16 @@ const devices = [
     clients: 22,
   },
 ].map((d) => ({ ...d, mac: d.id, last_seen: now, uplink: d.parent ? 'ge-0/0/3' : null }));
+const links = [
+  [0, 1, 'ge-0/0/0', 'ge-0/0/48'],
+  [1, 2, 'ge-0/0/47', 'ge-0/0/48'],
+  [1, 3, 'ge-0/0/1', 'eth0'],
+  [1, 4, 'ge-0/0/2', 'eth0'],
+  [2, 5, 'ge-0/0/3', 'eth0'],
+].map(([source, target, local, remote]) => ({
+  source: devices[source].id, target: devices[target].id,
+  source_ports: [local], target_ports: [remote],
+}));
 const deviceImpact = (index, overrides = {}) => ({
   device_id: devices[index].id,
   device_name: devices[index].name,
@@ -215,6 +225,7 @@ test.beforeEach(async ({ page }) => {
         site_id: 'site1',
         source: url.searchParams.has('as_of') ? 'historical' : 'mist',
         devices: path.includes('/site2/') ? [] : devices,
+        links: path.includes('/site2/') || url.searchParams.has('as_of') ? [] : links,
         warnings: [],
         complete: true,
         collected_at: now,
@@ -290,7 +301,7 @@ test('four selection states, safe panning, zoom, clearing and site isolation', a
   await node.click();
   await expect(panel).toHaveAttribute('data-panel', 'device');
   await expect(panel).toContainText('Not in the scope');
-  await page.locator('.history-row').click();
+  await page.locator('.history-row:visible').click();
   await expect(panel).toHaveAttribute('data-panel', 'device-change');
   await page.screenshot({ path: info.outputPath('ap-change.png') });
   await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
@@ -398,4 +409,19 @@ test('existing monitoring links keep the detailed evidence accessible', async ({
   await page.goto('/impact?session=s1');
   await expect(page).toHaveURL(/\/impact\/sessions\?session=s1/);
   await expect(page.locator('app-configuration-timeline')).toBeVisible();
+});
+
+
+test('gateway and switch neighbor edges expose observed ports without inventing link health', async ({ page }, info) => {
+  await page.goto('/impact');
+  await expect(page.locator('.links path')).toHaveCount(5);
+  await page.getByRole('button', { name: /Paris gateway,/ }).click();
+  await page.getByText('Observed neighbors · 1', { exact: true }).click();
+  const neighbors = page.locator('details.detail-section');
+  await expect(neighbors).toContainText('ge-0/0/0 → ge-0/0/48');
+  await neighbors.getByRole('button', { name: /Access switch 1/ }).click();
+  await expect(page.locator('.detail-head h2')).toHaveText('Access switch 1');
+  await expect(neighbors).toContainText('Observed neighbors · 4');
+  await expect(neighbors).toContainText('do not establish current link health');
+  await page.screenshot({ path: info.outputPath('switch-neighbors.png') });
 });
