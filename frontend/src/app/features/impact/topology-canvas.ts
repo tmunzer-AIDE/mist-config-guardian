@@ -497,7 +497,16 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
         (this.dimensions.height - 64) / this.canvasHeight(),
       ),
     );
-    this.view.set(this.bound({ zoom, x: 24, y: 32 }));
+    // A small site cannot fill the pane, and zoom is capped at 1 rather than
+    // magnified to fit, so centre whatever slack is left instead of pinning the
+    // graph to the inset corner.
+    this.view.set(
+      this.bound({
+        zoom,
+        x: Math.max(24, (this.dimensions.width - this.canvasWidth() * zoom) / 2),
+        y: Math.max(32, (this.dimensions.height - this.canvasHeight() * zoom) / 2),
+      }),
+    );
   }
   protected zoom(factor: number) {
     this.customZoom = true;
