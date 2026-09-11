@@ -174,6 +174,25 @@ For evaluation environments, the form can create this Secret by enabling
 `secrets.create`. External secret management is recommended for production
 because chart-managed secret values are retained in Helm release data.
 
+### Passkeys and the public address
+
+WebAuthn checks two things the chart has to be told: the origin the browser
+reports, and the domain the credential is bound to. Both are derived, so a
+normal install needs no setting of its own — `ingress.host` over HTTPS when the
+ingress publishes the application, and otherwise the first entry of
+`config.corsOrigins`. The scheme is always HTTPS because browsers offer
+WebAuthn only in a secure context, so an application reached over plain HTTP on
+a real hostname cannot register a passkey at all.
+
+Set `config.webauthnOrigin` when the browser reaches the application at an
+address neither of those describes — a proxy on a different domain, or a
+non-standard port — and `config.webauthnRpId` to bind passkeys to a registrable
+parent domain, which is the one way a credential works across sibling
+hostnames. An origin that does not match what the browser sends is refused at
+registration and at every later sign-in, and a passkey already registered
+against one RP ID is not offered for another, so changing these invalidates the
+passkeys enrolled before the change.
+
 ### Network policy
 
 `networkPolicy.enabled` (on by default) denies every connection to every pod in

@@ -6,6 +6,10 @@ services:
       - path: .env
         required: false
     environment:
+      # This stack publishes the frontend on port 8080, and WebAuthn refuses an
+      # origin that is not the one the browser reports, so the origin is pinned
+      # here rather than left to the development default of the Angular server.
+      WEBAUTHN_ORIGIN: http://localhost:8080
       MONGODB_URL: mongodb://mongodb:27017
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
