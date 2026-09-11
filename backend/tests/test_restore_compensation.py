@@ -34,7 +34,6 @@ from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
-from mist_config_guardian_backend.services.restore_authorization import find_unavailable_secrets
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
@@ -50,6 +49,7 @@ from mist_config_guardian_backend.snapshots.canonical import (
 )
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
+    find_unavailable_secrets,
     is_protected,
     protect_configuration,
     reveal_configuration,
@@ -636,7 +636,10 @@ def _snapshot_state(entries) -> RestoreOperationState:
     )
 
 
-async def _applied_plan(monkeypatch: pytest.MonkeyPatch) -> tuple[RestoreOperation, _MemoryStateStore]:
+async def _applied_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    live: dict[str, dict[str, object]] | None = None,
+) -> tuple[RestoreOperation, _MemoryStateStore]:
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_compensation.latest_version",
         _no_stored_version,
@@ -648,7 +651,9 @@ async def _applied_plan(monkeypatch: pytest.MonkeyPatch) -> tuple[RestoreOperati
         _action(3, RestoreActionType.UPDATE, status=RestoreActionStatus.PENDING),
     ]
     operation = _operation(actions)
-    client = _FakeMistClient({"mist-1": dict(CORP_WLAN), "mist-2": dict(GUEST_WLAN), "mist-3": dict(GUEST_WLAN)})
+    client = _FakeMistClient(
+        live or {"mist-1": dict(CORP_WLAN), "mist-2": dict(GUEST_WLAN), "mist-3": dict(GUEST_WLAN)}
+    )
     for action in actions:
         if action.action is not RestoreActionType.CREATE:
             action.expected_current_hash = None
@@ -694,6 +699,49 @@ async def test_compensation_replays_the_captured_configuration(monkeypatch: pyte
     assert revert.protected_configuration["name"] == "Corp"
     assert is_protected(revert.protected_configuration["psk"])
     assert plan.actions[2].protected_configuration == {}
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_compensation_names_a_masked_secret_in_its_own_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compensation plan is reviewed like any other, so it must fail there too.
+
+    Compensation keeps the live snapshot when no stored version can supply a
+    secret Mist masked — mask and all, deliberately, so the plan is refused
+    rather than quietly dropping a credential. Refusing it only at
+    authorization means an administrator enters a token for a plan that was
+    never going to run.
+    """
+    operation, store = await _applied_plan(
+        monkeypatch,
+        live={
+            "mist-1": {"name": "Corp", "psk": "********", "enabled": True},
+            "mist-2": dict(GUEST_WLAN),
+            "mist-3": dict(GUEST_WLAN),
+        },
+    )
+
+    plan = await RestoreCompensationService(store, _vault()).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert plan.preflight_errors == ["wlan-1 requires unavailable secret values: psk"]
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_compensation_without_masked_secrets_passes_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+
+    plan = await RestoreCompensationService(store, _vault()).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert plan.preflight_errors == []
 
 
 @pytest.mark.usefixtures("offline_documents")

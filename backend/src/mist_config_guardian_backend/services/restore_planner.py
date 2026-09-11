@@ -16,6 +16,7 @@ from typing import Literal, Protocol
 from beanie import PydanticObjectId
 from pydantic import BaseModel, Field
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.approval import ApprovalPolicy, TriggeredRule
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
@@ -29,11 +30,17 @@ from mist_config_guardian_backend.models.snapshot import (
     ObjectIncarnation,
     ObjectVersion,
 )
+from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.approvals import (
     compute_plan_hash,
     evaluate_approval_policy,
 )
 from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.secrets import (
+    find_unavailable_secrets,
+    format_secret_path,
+    reveal_configuration,
+)
 
 VerificationStatus = Literal["ok", "failed", "skipped"]
 
@@ -295,6 +302,44 @@ def validate_action_capabilities(actions: Sequence[RestoreAction]) -> list[str]:
     return errors
 
 
+def unavailable_secret_errors(
+    actions: Sequence[RestoreAction],
+    vault: CredentialVault,
+) -> list[str]:
+    """Return one preflight error per action carrying a secret Mist never returned.
+
+    Mist masks values such as a RADIUS shared secret on read, so the snapshot
+    holds the mask and not the secret. The executor writes a version back
+    verbatim, which would replace a working credential with asterisks, so such
+    an action cannot run. Naming it here rather than at authorization is the
+    point: the reviewer sees it beside the plan, before an administrator
+    credential has been entered for a restore that was never going to run.
+    """
+    errors: list[str] = []
+    for action in actions:
+        if action.action is RestoreActionType.DELETE:
+            # A delete sends no configuration, so a mask cannot reach Mist.
+            continue
+        definition = get_definition(action.scope, action.object_type)
+        if definition is None:
+            errors.append(f"Unsupported restore type: {action.scope}:{action.object_type}")
+            continue
+        try:
+            configuration = reveal_configuration(action.protected_configuration, vault)
+        except CredentialDecryptionError:
+            # A version whose secrets will not decrypt cannot be replayed
+            # either, and this is where that is said. Letting it propagate
+            # would fail the whole planning request rather than describing the
+            # one action that cannot run.
+            errors.append(f"{action.object_name} has secrets that cannot be decrypted with the current key")
+            continue
+        missing = find_unavailable_secrets(configuration, definition.sensitive_fields)
+        if missing:
+            fields = ", ".join(sorted(format_secret_path(path) for path in missing))
+            errors.append(f"{action.object_name} requires unavailable secret values: {fields}")
+    return errors
+
+
 async def latest_version(logical_id: PydanticObjectId) -> ObjectVersion | None:
     """Return the newest immutable version recorded for a logical object."""
     return await ObjectVersion.find(ObjectVersion.logical_object_id == logical_id).sort("-version").first_or_none()
@@ -319,9 +364,14 @@ class RestorePlanner:
         self,
         store: RestoreStateStore | None = None,
         policy: ApprovalPolicy | None = None,
+        vault: CredentialVault | None = None,
     ) -> None:
         self._store = store or get_restore_state_store()
         self._policy = policy
+        # Reading a version's secrets is what decides whether it can be
+        # replayed at all, so planning needs the vault the snapshot was
+        # written with.
+        self._vault = vault or CredentialVault(get_settings())
 
     async def create_plan(
         self,
@@ -376,7 +426,7 @@ class RestorePlanner:
         )
         self._add_containment_delete_dependencies(actions)
         actions = order_restore_actions(actions)
-        preflight_errors = validate_action_capabilities(actions)
+        preflight_errors = validate_action_capabilities(actions) + unavailable_secret_errors(actions, self._vault)
         triggered = evaluate_approval_policy(self._policy or ApprovalPolicy(), actions, mode)
         warnings = [] if actions else ["Selected versions already match the recorded current state"]
         if triggered:

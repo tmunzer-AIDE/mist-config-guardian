@@ -32,6 +32,7 @@
     </header>
     <app-restore-page
       [embedded]="true"
+      [focus]="restoreFocus()"
       [versions]="routeParams().get('versions') ?? ''"
       [operation]="routeParams().get('operation') ?? ''"
       [changeGroup]="routeParams().get('changeGroup') ?? ''"
@@ -194,14 +195,23 @@
             <div class="version-at cg-mono">{{ row.at }}</div>
             <div class="version-actor">{{ row.actor }}</div>
             @if (restorable()) {
-              <button
-                class="cg-btn cg-btn--sm version-restore"
-                type="button"
-                [disabled]="time.isHistorical()"
-                (click)="restoreVersion(row.id)"
-              >
-                Restore {{ row.label }}
-              </button>
+              @if (row.isCurrent) {
+                <p class="version-current">Current version — nothing to restore.</p>
+              } @else {
+                <button
+                  class="cg-btn cg-btn--sm cg-btn--primary version-restore"
+                  type="button"
+                  [disabled]="!canRestore()"
+                  [attr.title]="
+                    time.isHistorical()
+                      ? 'Write operations are disabled while viewing the past'
+                      : null
+                  "
+                  (click)="restoreVersion(row.id)"
+                >
+                  Restore {{ row.label }}
+                </button>
+              }
             }
           </div>
         } @empty {
@@ -248,21 +258,6 @@
                   </div>
                 }
               </div>
-              @if (restorable()) {
-                <button
-                  class="cg-btn cg-btn--sm cg-btn--primary"
-                  type="button"
-                  [disabled]="!canRestore()"
-                  [attr.title]="
-                    time.isHistorical()
-                      ? 'Write operations are disabled while viewing the past'
-                      : null
-                  "
-                  (click)="restoreVersion()"
-                >
-                  Restore this version
-                </button>
-              }
             </div>
           </div>
 

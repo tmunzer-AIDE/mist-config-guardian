@@ -5,6 +5,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 
 import { API_ROOT } from '../../core/api';
+import { AuthService } from '../../core/auth.service';
 import { Organization } from '../../core/organization.model';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { UiStateService } from '../../core/ui-state.service';
@@ -32,7 +33,7 @@ const SETTINGS: AiSettings = {
   last_test_detail: null,
 };
 
-function object(id: string, name: string): ConfigurationObject {
+function object(id: string, name: string, isDeleted = false): ConfigurationObject {
   return {
     id,
     scope: 'org',
@@ -40,7 +41,7 @@ function object(id: string, name: string): ConfigurationObject {
     current_mist_id: '4d0e1111-2222-3333-4444-5555666677b2',
     site_mist_id: null,
     name,
-    is_deleted: false,
+    is_deleted: isDeleted,
     current_version: 15,
     updated_at: '2026-09-07T09:12:00Z',
   };
@@ -108,6 +109,8 @@ function diff(overrides: Partial<ConfigurationDiff> = {}): ConfigurationDiff {
 describe('HistoryPage', () => {
   let http: HttpTestingController;
   let ui: UiStateService;
+  /** Off by default, so the restore actions stay out of every other test. */
+  let restorable = false;
 
   beforeEach(async () => {
     try {
@@ -115,11 +118,13 @@ describe('HistoryPage', () => {
     } catch {
       // Storage is unavailable in the test environment; selection still applies.
     }
+    restorable = false;
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([{ path: '**', component: Blank }]),
+        { provide: AuthService, useValue: { can: () => restorable } },
       ],
     });
     http = TestBed.inject(HttpTestingController);
@@ -147,13 +152,14 @@ describe('HistoryPage', () => {
   async function open(
     versions: ConfigurationVersion[],
     meta: ConfigurationDiff,
+    subject: ConfigurationObject = object('obj-1', 'NW-Corp'),
   ): Promise<ComponentFixture<HistoryPage>> {
     const fixture = TestBed.createComponent(HistoryPage);
     fixture.detectChanges();
     http.expectOne(`${API_ROOT}/ai/settings`).flush(SETTINGS);
     http
       .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
-      .flush({ items: [object('obj-1', 'NW-Corp')], total: 1 });
+      .flush({ items: [subject], total: 1 });
     await settle(fixture);
 
     http
@@ -514,6 +520,69 @@ describe('HistoryPage', () => {
     expect(reload.request.params.get('from_version_id')).toBe('v-1');
     expect(reload.request.params.get('to_version_id')).toBe('v-3');
     reload.flush(diff());
+  });
+
+  // ---- restore entry points ------------------------------------------------
+
+  /** The restore control each version row offers, or its stand-in text. */
+  function restoreActions(fixture: ComponentFixture<HistoryPage>): (string | null)[] {
+    return [...(fixture.nativeElement as HTMLElement).querySelectorAll('.version')].map((row) => {
+      const action = row.querySelector('.version-restore') ?? row.querySelector('.version-current');
+      return action === null ? null : (action.textContent ?? '').replace(/\s+/g, ' ').trim();
+    });
+  }
+
+  async function openRestorable(
+    versions: ConfigurationVersion[],
+    subject?: ConfigurationObject,
+  ): Promise<ComponentFixture<HistoryPage>> {
+    restorable = true;
+    const fixture = await open(versions, diff(), subject);
+    http.expectOne((request) => request.url === '/api/v1/organizations/org-1/diff').flush(diff());
+    await settle(fixture);
+    return fixture;
+  }
+
+  it('offers a restore per version, and nothing for the one the object already holds', async () => {
+    const fixture = await openRestorable([version('v-3', 3), version('v-2', 2), version('v-1', 1)]);
+
+    // The newest version is the live one: a plan for it would hold no actions.
+    expect(restoreActions(fixture)).toEqual([
+      'Current version — nothing to restore.',
+      'Restore v2',
+      'Restore v1',
+    ]);
+  });
+
+  it('no longer offers the header action that restored whichever version was pinned', async () => {
+    // It read the B pin, which defaults to the newest version, so it planned
+    // nothing. Which version it meant was never visible from its label either.
+    const fixture = await openRestorable([version('v-3', 3), version('v-2', 2)]);
+
+    const labels = [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')].map(
+      (node) => (node.textContent ?? '').trim(),
+    );
+    expect(labels).not.toContain('Restore this version');
+  });
+
+  it('restores a deleted object from the newest version it has', async () => {
+    // Nothing is live to match, so the newest version recreates it.
+    const fixture = await openRestorable(
+      [version('v-2', 2), version('v-1', 1)],
+      object('obj-1', 'NW-Corp', true),
+    );
+
+    expect(restoreActions(fixture)).toEqual(['Restore v2', 'Restore v1']);
+  });
+
+  it('opens the restore flow for the version whose own button was pressed', async () => {
+    const fixture = await openRestorable([version('v-3', 3), version('v-2', 2), version('v-1', 1)]);
+
+    const rows = [...(fixture.nativeElement as HTMLElement).querySelectorAll('.version')];
+    rows[2].querySelector<HTMLButtonElement>('.version-restore')!.click();
+    await settle(fixture);
+
+    expect(TestBed.inject(Router).url).toContain('versions=v-1');
   });
 
   it('forgets the object and versions on screen when the organization changes', async () => {

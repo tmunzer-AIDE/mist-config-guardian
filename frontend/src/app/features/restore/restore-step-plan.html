@@ -99,6 +99,9 @@
         rebuilt.
       } @else if (readOnly()) {
         {{ readOnlyNote() }}
+      } @else if (count() === 0) {
+        There is nothing to authorize. Every object here already holds the version that was
+        selected, so choose an earlier one to change anything.
       } @else {
         Nothing has been written. The next step asks for a fresh administrator token and verifies its
         write scope before the first action.
