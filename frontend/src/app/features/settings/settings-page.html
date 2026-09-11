@@ -1,7 +1,7 @@
 <div class="page">
   <header class="head">
     <h1 class="cg-page-title">Settings</h1>
-    <p class="head-sub">Organizations, accounts, AI Assist and service health.</p>
+    <p class="head-sub">Organizations, accounts, AI Assist, email delivery and service health.</p>
   </header>
 
   <div class="cg-tabs tabs" role="tablist" aria-label="Settings sections">
@@ -47,6 +47,9 @@
       }
       @case ('ai') {
         <app-ai-tab />
+      }
+      @case ('email') {
+        <app-email-tab />
       }
       @case ('health') {
         <app-health-tab />

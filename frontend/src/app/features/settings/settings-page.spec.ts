@@ -49,6 +49,7 @@ describe('settings tab deep links', () => {
     expect(matchSettingsTab('organizations')).toBe('organizations');
     expect(matchSettingsTab('users')).toBe('users');
     expect(matchSettingsTab('ai')).toBe('ai');
+    expect(matchSettingsTab('email')).toBe('email');
     expect(matchSettingsTab('health')).toBe('health');
   });
 
@@ -98,6 +99,7 @@ describe('SettingsPage', () => {
     http.expectOne('/api/v1/system/health');
     http.expectNone('/api/v1/users');
     http.expectNone('/api/v1/ai/settings');
+    http.expectNone('/api/v1/settings/smtp');
     http.expectNone('/api/v1/organizations');
   });
 
@@ -105,7 +107,7 @@ describe('SettingsPage', () => {
     const fixture = await render('viewer');
     const element = fixture.nativeElement as HTMLElement;
 
-    expect(element.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(element.querySelectorAll('[role="tab"]')).toHaveLength(5);
     expect(element.querySelector('[role="tabpanel"]')).not.toBeNull();
     expect(element.textContent).toContain('administrator-only');
   });
@@ -121,6 +123,7 @@ describe('SettingsPage', () => {
     http.expectOne('/api/v1/organizations');
     http.expectOne((request) => request.url === '/api/v1/users');
     http.expectOne('/api/v1/ai/settings');
+    http.expectOne('/api/v1/settings/smtp');
   });
 
   it('shows the one-time secret and forgets it when the dialog closes', async () => {

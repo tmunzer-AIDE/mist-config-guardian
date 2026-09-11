@@ -19,19 +19,22 @@ import { SystemHealthService } from '../../core/system-health.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { AiSettingsService } from './ai-settings.service';
 import { AiTab } from './ai-tab';
+import { EmailTab } from './email-tab';
 import { HealthTab } from './health-tab';
 import { OrganizationsTab } from './organizations-tab';
+import { SmtpService } from './smtp.service';
 import { UsersService } from './users.service';
 import { UsersTab } from './users-tab';
 
-export type SettingsTab = 'organizations' | 'users' | 'ai' | 'health';
+export type SettingsTab = 'organizations' | 'users' | 'ai' | 'email' | 'health';
 
-export const SETTINGS_TABS: readonly SettingsTab[] = ['organizations', 'users', 'ai', 'health'];
+export const SETTINGS_TABS: readonly SettingsTab[] = ['organizations', 'users', 'ai', 'email', 'health'];
 
 const LABELS: Record<SettingsTab, string> = {
   organizations: 'Organizations',
   users: 'Users and roles',
   ai: 'AI Assist',
+  email: 'Email',
   health: 'Service health',
 };
 
@@ -50,6 +53,8 @@ const ALIASES: readonly (readonly [string, SettingsTab])[] = [
   ['ai', 'ai'],
   ['ai-assist', 'ai'],
   ['assist', 'ai'],
+  ['email', 'email'],
+  ['smtp', 'email'],
   ['health', 'health'],
   ['service-health', 'health'],
 ];
@@ -113,7 +118,7 @@ export interface CronReveal {
  */
 @Component({
   selector: 'app-settings-page',
-  imports: [OrganizationsTab, UsersTab, AiTab, HealthTab],
+  imports: [OrganizationsTab, UsersTab, AiTab, EmailTab, HealthTab],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-page.html',
   styleUrl: './settings-page.scss',
@@ -126,6 +131,7 @@ export class SettingsPage {
   private readonly organizations = inject(OrganizationContextService);
   private readonly users = inject(UsersService);
   private readonly ai = inject(AiSettingsService);
+  private readonly smtp = inject(SmtpService);
   private readonly systemHealth = inject(SystemHealthService);
 
   /** Bound from `?tab=` (or a `:tab` segment) by component input binding. */
@@ -177,6 +183,7 @@ export class SettingsPage {
         this.organizations.load(true),
         this.users.load({ limit: 200 }),
         this.ai.load(),
+        this.smtp.load(),
       ]);
     });
 
@@ -320,6 +327,10 @@ export class SettingsPage {
       }
       case 'ai': {
         const settings = this.ai.settings();
+        return settings === null ? '' : settings.enabled ? 'Enabled' : 'Disabled';
+      }
+      case 'email': {
+        const settings = this.smtp.settings();
         return settings === null ? '' : settings.enabled ? 'Enabled' : 'Disabled';
       }
       case 'health': {

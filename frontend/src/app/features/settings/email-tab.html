@@ -1,0 +1,201 @@
+<div class="tab-body">
+  @if (!canManage()) {
+    <p class="readonly" role="note">
+      Email delivery is configured by an administrator. Invitations can still be shared as a direct link
+      from the users tab when SMTP is not configured, so nothing here blocks onboarding an account.
+    </p>
+  } @else {
+    @if (notice()) {
+      <p class="notice" role="status">{{ notice() }}</p>
+    }
+    @if (error()) {
+      <p class="failure" role="alert">{{ error() }}</p>
+    }
+
+    <section class="cg-card card card--row">
+      <div class="card-copy">
+        <h3 class="card-title">Email delivery</h3>
+        <p class="card-body">
+          When enabled, invitation and notification mail is sent through the SMTP server configured below.
+          Disabled, or unconfigured, an administrator still gets a direct invitation link to share by hand.
+        </p>
+      </div>
+      <button
+        class="cg-toggle"
+        type="button"
+        role="switch"
+        [class.cg-toggle--on]="enabled()"
+        [attr.aria-checked]="enabled()"
+        (click)="toggleEnabled()"
+      >
+        <span class="cg-toggle__track" aria-hidden="true"><span class="cg-toggle__thumb"></span></span>
+        <span class="toggle-text">{{ enabled() ? 'Enabled' : 'Disabled' }}</span>
+      </button>
+    </section>
+
+    <section class="cg-card card">
+      <h3 class="card-title">SMTP server</h3>
+
+      <div class="field">
+        <label class="cg-label" for="smtp-host">HOST</label>
+        <input
+          class="cg-input cg-mono field-input"
+          id="smtp-host"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="smtp.example.com"
+          [value]="host()"
+          (input)="setHost($event)"
+        />
+      </div>
+
+      <div class="row-fields">
+        <div class="field">
+          <label class="cg-label" for="smtp-port">PORT</label>
+          <input
+            class="cg-input cg-input--sm cg-mono field-input"
+            id="smtp-port"
+            type="number"
+            min="1"
+            max="65535"
+            [value]="port()"
+            (change)="setPort($event)"
+          />
+        </div>
+
+        <div class="field">
+          <label class="cg-label" for="smtp-security">SECURITY</label>
+          <select class="cg-select field-input" id="smtp-security" (change)="setSecurity($event)">
+            <option value="starttls" [selected]="security() === 'starttls'">STARTTLS</option>
+            <option value="tls" [selected]="security() === 'tls'">Implicit TLS</option>
+            <option value="none" [selected]="security() === 'none'">None (unencrypted)</option>
+          </select>
+        </div>
+      </div>
+      <p class="hint">
+        STARTTLS upgrades a plain connection before authenticating; implicit TLS connects encrypted from
+        the start. None sends unencrypted and cannot carry a username or password.
+      </p>
+    </section>
+
+    <section class="cg-card card">
+      <h3 class="card-title">Authentication</h3>
+
+      <div class="field">
+        <label class="cg-label" for="smtp-username">USERNAME</label>
+        <input
+          class="cg-input field-input"
+          id="smtp-username"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          [value]="username()"
+          (input)="setUsername($event)"
+        />
+      </div>
+
+      <div class="field">
+        <label class="cg-label" for="smtp-password">PASSWORD</label>
+        <input
+          class="cg-input cg-mono field-input"
+          id="smtp-password"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Leave blank to keep the stored password"
+          [disabled]="clearPassword()"
+          [value]="passwordDraft()"
+          (input)="setPasswordDraft($event)"
+        />
+        <p class="hint">{{ passwordHint() }} Stored encrypted and never returned by the API — leaving this
+          field blank when you save keeps the stored password.</p>
+        @if (settings()?.password_set) {
+          <label class="clear-row">
+            <input type="checkbox" [checked]="clearPassword()" (change)="toggleClearPassword()" />
+            <span>Clear the stored password</span>
+          </label>
+        }
+      </div>
+    </section>
+
+    <section class="cg-card card">
+      <h3 class="card-title">Message identity</h3>
+
+      <div class="field">
+        <label class="cg-label" for="smtp-from-address">FROM ADDRESS</label>
+        <input
+          class="cg-input cg-mono field-input"
+          id="smtp-from-address"
+          type="email"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="noreply@example.com"
+          [value]="fromAddress()"
+          (input)="setFromAddress($event)"
+        />
+      </div>
+
+      <div class="field">
+        <label class="cg-label" for="smtp-from-name">FROM NAME</label>
+        <input
+          class="cg-input field-input"
+          id="smtp-from-name"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Mist Config Guardian"
+          [value]="fromName()"
+          (input)="setFromName($event)"
+        />
+      </div>
+    </section>
+
+    <section class="cg-card card">
+      <div class="test-row">
+        <button
+          class="cg-btn"
+          type="button"
+          [disabled]="testState() === 'testing' || !settings()?.host"
+          (click)="test()"
+        >
+          Test connection
+        </button>
+        @switch (testState()) {
+          @case ('testing') {
+            <span class="test-status" role="status">
+              <span class="cg-spinner" aria-hidden="true"></span>Contacting the server…
+            </span>
+          }
+          @case ('ok') {
+            <span class="test-status test-status--ok" role="status">Reachable · {{ testDetail() }}</span>
+          }
+          @case ('failed') {
+            <span class="test-status test-status--failed" role="status">Failed · {{ testDetail() }}</span>
+          }
+        }
+      </div>
+      <p class="hint">
+        Test connection always checks the saved settings, not unsaved changes above — save first if you
+        just edited the server, port, security, username or password.
+      </p>
+      @if (lastTest()) {
+        <p class="hint">{{ lastTest() }}</p>
+      }
+    </section>
+
+    <div class="save-bar">
+      @if (incomplete()) {
+        <p class="warn">A host and a from address are required while email delivery is enabled.</p>
+      }
+      <button
+        class="cg-btn cg-btn--lg cg-btn--primary"
+        type="button"
+        [disabled]="!dirty() || incomplete() || saving()"
+        (click)="saveSettings()"
+      >
+        {{ saving() ? 'Saving…' : 'Save SMTP settings' }}
+      </button>
+    </div>
+  }
+</div>
