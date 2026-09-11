@@ -38,6 +38,7 @@ from mist_config_guardian_backend.services.restore_planner import (
     get_restore_state_store,
     latest_version,
     load_or_build_state,
+    unavailable_secret_errors,
     validate_action_capabilities,
 )
 from mist_config_guardian_backend.snapshots.canonical import (
@@ -275,7 +276,10 @@ class RestoreCompensationService:
                     f"{len(actions)} applied actions in reverse dependency order"
                 ),
             ],
-            preflight_errors=validate_action_capabilities(actions),
+            # A compensation plan is reviewed like any other. It keeps a masked
+            # secret on purpose when no stored version can supply one, so it is
+            # exactly the plan most likely to carry one into authorization.
+            preflight_errors=(validate_action_capabilities(actions) + unavailable_secret_errors(actions, self._vault)),
         )
         await compensation.insert()
         if compensation.id is None:

@@ -30,7 +30,7 @@ from mist_config_guardian_backend.models.snapshot import (
     ObjectIncarnation,
     ObjectVersion,
 )
-from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.approvals import (
     compute_plan_hash,
     evaluate_approval_policy,
@@ -324,7 +324,15 @@ def unavailable_secret_errors(
         if definition is None:
             errors.append(f"Unsupported restore type: {action.scope}:{action.object_type}")
             continue
-        configuration = reveal_configuration(action.protected_configuration, vault)
+        try:
+            configuration = reveal_configuration(action.protected_configuration, vault)
+        except CredentialDecryptionError:
+            # A version whose secrets will not decrypt cannot be replayed
+            # either, and this is where that is said. Letting it propagate
+            # would fail the whole planning request rather than describing the
+            # one action that cannot run.
+            errors.append(f"{action.object_name} has secrets that cannot be decrypted with the current key")
+            continue
         missing = find_unavailable_secrets(configuration, definition.sensitive_fields)
         if missing:
             fields = ", ".join(sorted(format_secret_path(path) for path in missing))

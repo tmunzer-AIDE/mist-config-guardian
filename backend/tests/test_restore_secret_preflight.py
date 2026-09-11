@@ -87,6 +87,22 @@ def test_a_delete_needs_no_secret() -> None:
     assert unavailable_secret_errors([action], VAULT) == []
 
 
+def test_a_secret_that_will_not_decrypt_is_reported_rather_than_raised() -> None:
+    """Planning describes the action that cannot run; it does not fail outright.
+
+    A snapshot encrypted under a key this deployment no longer holds cannot be
+    replayed, which is a preflight matter. Letting the decryption error escape
+    would fail the whole planning request, and a plan is how anyone would find
+    out which object is affected.
+    """
+    action = _action({"radius_config": {"auth_servers": [{"secret": "a-real-shared-secret"}]}})
+    other_key = CredentialVault(Settings(environment="test", credential_encryption_key="another-key"))
+
+    assert unavailable_secret_errors([action], other_key) == [
+        "DNT-NTR has secrets that cannot be decrypted with the current key"
+    ]
+
+
 def test_an_unregistered_type_is_reported_rather_than_skipped() -> None:
     action = _action({}, object_type="not-a-real-type")
 

@@ -49,4 +49,21 @@ export class RestoreStepConfirm {
   protected readonly observedAt = computed(() => this.focus()?.observedAt ?? '');
   protected readonly actor = computed(() => this.focus()?.actor ?? '');
   protected readonly canPlan = computed(() => !this.readOnly() && !this.busy());
+
+  /**
+   * What the plan will reach beyond this object, said accurately.
+   *
+   * Only a restore with dependencies excluded touches this object alone. With
+   * them included the planner brings every related object to the same moment,
+   * and in exact mode it deletes the ones that did not exist then — so a flat
+   * "nothing else is touched" would be a promise the plan does not keep.
+   */
+  protected readonly scopeNote = computed(() => {
+    if (!this.includeDependencies()) {
+      return 'Only this object is written — nothing else is touched.';
+    }
+    return this.mode() === 'exact'
+      ? 'Objects it depends on are taken to the same moment, and any that did not exist then are deleted.'
+      : 'Objects it depends on are taken to the same moment if they have changed since. Nothing is deleted.';
+  });
 }

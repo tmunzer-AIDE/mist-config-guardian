@@ -424,6 +424,26 @@ describe('RestorePage', () => {
     httpMock.expectNone((request) => request.method === 'POST');
   });
 
+  it('describes what a focused restore reaches, rather than promising it reaches nothing', async () => {
+    // Dependencies are included by default, and the planner takes every
+    // related object to the same moment — deleting the ones that did not
+    // exist then, in exact mode. Only excluding them touches this object alone.
+    fixture.componentRef.setInput('embedded', true);
+    fixture.componentRef.setInput('versions', 'v-corp');
+    await boot();
+
+    expect(text()).toContain('Objects it depends on are taken to the same moment if they have changed since');
+    expect(text()).not.toContain('nothing else is touched');
+
+    all<HTMLInputElement>('.mode input')[1].click();
+    await settle();
+    expect(text()).toContain('any that did not exist then are deleted');
+
+    element().querySelector<HTMLButtonElement>('.cg-toggle')!.click();
+    await settle();
+    expect(text()).toContain('Only this object is written — nothing else is touched.');
+  });
+
   it('keeps a focused restore on its object when the mode or dependencies change', async () => {
     // Neither changes the selection, so the link that named it must survive.
     // It carries the version, and the version is how the object is named.
@@ -431,7 +451,7 @@ describe('RestorePage', () => {
     fixture.componentRef.setInput('versions', 'v-corp');
     await boot();
 
-    button('Exact point-in-time')?.click();
+    all<HTMLInputElement>('.mode input')[1].click();
     element().querySelector<HTMLButtonElement>('.cg-toggle')!.click();
     await settle();
 
