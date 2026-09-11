@@ -36,12 +36,16 @@
         </div>
       }
 
-      <main class="cg-scroll">
-        <!-- The outlet stays mounted while loading; the skeleton overlays it so
-             a page's own initial fetch cannot destroy and re-create the page. -->
-        <div class="page-host" [class.page-host--hidden]="ui.loading()">
-          <router-outlet />
-        </div>
+      <!-- The overlay is a sibling of the scroller, not a child: `main` cannot
+           be the positioned ancestor without pages growing its scroll area. -->
+      <div class="main-frame">
+        <main class="cg-scroll">
+          <!-- The outlet stays mounted while loading; the skeleton overlays it so
+               a page's own initial fetch cannot destroy and re-create the page. -->
+          <div class="page-host" [class.page-host--hidden]="ui.loading()">
+            <router-outlet />
+          </div>
+        </main>
 
         @if (ui.loading()) {
           <div class="loading" role="status" aria-live="polite">
@@ -54,7 +58,7 @@
             </div>
           </div>
         }
-      </main>
+      </div>
     </div>
 
   </div>

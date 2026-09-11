@@ -126,11 +126,25 @@
   background: none;
 }
 
+// The page area, as a box that is positioned but does not scroll.
+//
+// `main` must not be both: an absolutely positioned descendant counts towards
+// the scrollable overflow of whichever ancestor is its containing block, so a
+// positioned `main` lets page content it cannot see extend its scroll range,
+// and the page scrolls on past the end of itself. The loading overlay needs a
+// positioned ancestor covering exactly the page area, so it gets this one.
+.main-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 main {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  position: relative;
 }
 
 .page-host {
