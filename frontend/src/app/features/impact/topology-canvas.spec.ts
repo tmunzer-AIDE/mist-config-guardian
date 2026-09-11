@@ -87,6 +87,25 @@ describe('TopologyCanvas', () => {
     expect(active).toHaveLength(2);
     expect(fixture.nativeElement.querySelectorAll('.node.impacted')).toHaveLength(1);
   });
+  it('centres a graph too small to fill the pane instead of pinning it top-left', () => {
+    const fixture = render(),
+      canvas = fixture.nativeElement.querySelector('.canvas') as HTMLElement,
+      instance = fixture.componentInstance as unknown as {
+        canvasWidth: () => number;
+        canvasHeight: () => number;
+      };
+    const [x, y, zoom] = (
+      canvas.style.transform.match(/translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/) ??
+      []
+    )
+      .slice(1)
+      .map(Number);
+    // The pane measures 880x530 under test, and the fixture is far narrower, so
+    // the horizontal slack has to be split rather than left on one side.
+    expect(x).toBeGreaterThan(24);
+    expect(2 * x + instance.canvasWidth() * zoom).toBeCloseTo(880, 1);
+    expect(y).toBeGreaterThanOrEqual(32);
+  });
   it('drops a device the layout could not place rather than stacking it at the origin', () => {
     const fixture = render([], []);
     expect(fixture.nativeElement.querySelectorAll('.node')).toHaveLength(0);
