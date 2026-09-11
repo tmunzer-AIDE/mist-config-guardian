@@ -6,6 +6,7 @@ request line and lands in ingress logs, proxy logs, browser history, and
 at all.
 """
 
+import html
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -42,10 +43,16 @@ def build_invitation_message(
         f"This link expires in {expires_in_days} days. "
         "If you were not expecting this invitation, you can ignore this message."
     )
-    html = (
-        f"<p>{who} to {app_name}.</p>"
-        f'<p><a href="{activation_link}">Choose a password to activate your account</a></p>'
+
+    # Escape values for HTML to prevent stored injection
+    who_html = html.escape(who)
+    app_name_html = html.escape(app_name)
+    activation_link_html = html.escape(activation_link)
+
+    html_content = (
+        f"<p>{who_html} to {app_name_html}.</p>"
+        f'<p><a href="{activation_link_html}">Choose a password to activate your account</a></p>'
         f"<p>This link expires in {expires_in_days} days. "
         "If you were not expecting this invitation, you can ignore this message.</p>"
     )
-    return InvitationMessage(subject=subject, text=text, html=html)
+    return InvitationMessage(subject=subject, text=text, html=html_content)
