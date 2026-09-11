@@ -55,6 +55,35 @@ _MESSAGE_PATTERN = re.compile(
     r"^(?:add|create|delete|modify|remove|update)\s+([a-zA-Z ]+?)(?:\s+\"|$)",
     re.IGNORECASE,
 )
+# Mist writes the verb before the noun for most objects ("Update MxCluster") but
+# after it for some org-level ones ("Org API Token ... created"), so the verb is
+# matched anywhere in the message rather than only at the start.
+_CONFIG_VERBS = (
+    "add",
+    "added",
+    "assign",
+    "assigned",
+    "create",
+    "created",
+    "delete",
+    "deleted",
+    "disable",
+    "disabled",
+    "enable",
+    "enabled",
+    "modified",
+    "modify",
+    "remove",
+    "removed",
+    "rename",
+    "renamed",
+    "unassign",
+    "unassigned",
+    "update",
+    "updated",
+)
+_CONFIG_VERB_PATTERN = re.compile(rf"\b(?:{'|'.join(_CONFIG_VERBS)})\b", re.IGNORECASE)
+_QUOTED_SEGMENT = re.compile(r'"[^"]*"')
 
 
 @dataclass(frozen=True)
@@ -112,6 +141,27 @@ def resolve_audit_target(payload: dict[str, object]) -> AuditTarget | None:
         return None
     object_id = site_id if definition.key == "sites" else None
     return _target(definition, object_id, site_id, payload)
+
+
+def is_configuration_change(payload: dict[str, object]) -> bool:
+    """Report whether an audit event changed configuration rather than operated.
+
+    Mist audits every administrator action, most of which change nothing that
+    can be backed up or restored: accessing an org, starting a packet capture,
+    logging in. Storing those buries the changes that matter.
+
+    An event counts when it resolves to a registry object, or -- for the
+    org-level objects the registry does not carry -- when its message uses a
+    configuration verb. Quoted names are stripped before the verb is looked
+    for, so an org named "Update Test" does not make every access of it look
+    like a change.
+    """
+    if resolve_audit_target(payload) is not None:
+        return True
+    message = _string(payload.get("message"))
+    if message is None:
+        return False
+    return _CONFIG_VERB_PATTERN.search(_QUOTED_SEGMENT.sub(" ", message)) is not None
 
 
 def _target(

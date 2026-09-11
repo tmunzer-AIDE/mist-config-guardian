@@ -14,6 +14,7 @@ from mist_config_guardian_backend.models.webhook import (
     WebhookReceipt,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.webhooks.audits import is_configuration_change
 from mist_config_guardian_backend.webhooks.signatures import (
     SignatureVersion,
     verify_signature,
@@ -38,6 +39,7 @@ class WebhookIngestionResult:
 
     receipt_ids: list[PydanticObjectId] = field(default_factory=list)
     duplicate_count: int = 0
+    ignored_count: int = 0
 
 
 class WebhookIngestionService:
@@ -95,6 +97,13 @@ class WebhookIngestionService:
             event = {**payload, **raw_event}
             event.pop("events", None)
             self._validate_organization(event, organization.mist_org_id)
+            # Mist audits every administrator action. Only the ones that changed
+            # configuration are this application's business, and storing the
+            # rest buries them. Other topics carry the impact evidence a change
+            # is measured from and are never filtered.
+            if topic == "audits" and not is_configuration_change(event):
+                result.ignored_count += 1
+                continue
             serialized = json.dumps(event, sort_keys=True, separators=(",", ":"))
             payload_hash = hashlib.sha256(serialized.encode()).hexdigest()
             event_id = self._event_id(event, payload_hash, index)

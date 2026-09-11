@@ -2,7 +2,10 @@
 
 import pytest
 
-from mist_config_guardian_backend.webhooks.audits import resolve_audit_target
+from mist_config_guardian_backend.webhooks.audits import (
+    is_configuration_change,
+    resolve_audit_target,
+)
 
 
 def test_resolve_site_wlan_from_identifier() -> None:
@@ -68,3 +71,63 @@ def test_resolve_site_settings_audit(message: str) -> None:
 
 def test_site_settings_without_site_cannot_resolve_to_organization_settings() -> None:
     assert resolve_audit_target({"topic": "audits", "id": "audit-1", "message": "Update Site Settings"}) is None
+
+
+def test_registry_backed_audit_is_a_configuration_change() -> None:
+    assert is_configuration_change(
+        {
+            "topic": "audits",
+            "mxcluster_id": "72df7314-b11b-49d8-8570-c7b39ab7c0c0",
+            "message": 'Update MxCluster "campus_cluster"',
+            "before": {"tunterm_hosts_selection": "shuffle"},
+            "after": {"tunterm_hosts_selection": "shuffle-by-site"},
+            "site_id": None,
+        }
+    )
+
+
+def test_deletion_of_registry_object_is_a_configuration_change() -> None:
+    assert is_configuration_change(
+        {
+            "topic": "audits",
+            "message": 'Delete MxEdge "teleworker-x1"',
+            "mxedge_id": "None",
+            "site_id": None,
+        }
+    )
+
+
+def test_trailing_verb_is_a_configuration_change() -> None:
+    # Mist puts the verb after the noun for some org-level objects. The event
+    # resolves to no registry object, so only the verb can classify it.
+    assert is_configuration_change(
+        {
+            "topic": "audits",
+            "message": "Org API Token 1f258aca-3477-4c5a-a180-77d80929482b created",
+            "site_id": None,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        'Accessed Org "TM-LAB"',
+        "Packet Capture started",
+        "Packet Capture stopped",
+        "Logged in",
+        "Invoked Webshell",
+    ],
+)
+def test_operational_audit_is_not_a_configuration_change(message: str) -> None:
+    assert not is_configuration_change({"topic": "audits", "message": message, "site_id": None})
+
+
+def test_verb_inside_an_object_name_is_not_a_configuration_change() -> None:
+    # The org is named "Update Test". Matching the quoted name would let every
+    # access of it through as a configuration change.
+    assert not is_configuration_change({"topic": "audits", "message": 'Accessed Org "Update Test"', "site_id": None})
+
+
+def test_audit_without_a_message_is_not_a_configuration_change() -> None:
+    assert not is_configuration_change({"topic": "audits", "site_id": None})
