@@ -90,7 +90,10 @@ describe('AcceptInvitationPage', () => {
   it('clears the token from the address bar on load', async () => {
     const replaceState = vi.spyOn(history, 'replaceState');
     await render({ fragment: 'token=abc123' });
-    expect(replaceState).toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledTimes(1);
+    const url = String(replaceState.mock.calls[0][2]);
+    expect(url).not.toContain('#');
+    expect(url).not.toContain('abc123');
   });
 
   it('shows the failure message when there is no fragment', async () => {
