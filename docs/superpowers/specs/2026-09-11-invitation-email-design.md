@@ -162,6 +162,23 @@ with a host, no userinfo, no query, and no fragment. A trailing slash is
 accepted and normalised away. A value failing validation is a startup error,
 not a silently ignored one.
 
+**Production requires `https`.** The activation request carries the invitation
+credential and the password its owner is choosing, in one POST. Over plaintext
+both are readable by anything on the path, and the link is long-lived enough —
+seven days — for an intercepted one to be used later.
+
+This applies to the resolved `public_base_url` whatever its source, not only to
+an explicit override: a production deployment whose single CORS origin is
+`http://` is rejected on exactly the same grounds. Development and test are
+unaffected and keep `http`.
+
+A resolved `http` base URL in production is a startup error rather than a
+deferred one. Nothing working is broken by that: `session_cookie_secure` is
+already forced true in production, so a production deployment served over
+plaintext cannot hold a session at all and is therefore already non-functional.
+Failing at startup names the real problem instead of letting it surface later
+as an intercepted password.
+
 The Host header is not used. It is attacker-controlled, and §16 requires not
 trusting arbitrary forwarded headers; an activation link built from it would be
 spoofable by anyone who can reach the API.
@@ -182,6 +199,42 @@ inject a fake and no test touches a network.
 `smtp_security` maps to: `starttls` — connect plain, then `STARTTLS`; `tls` —
 connect wrapped (`SMTP_SSL`); `none` — connect plain, no upgrade. Authentication
 is attempted only when a username is set.
+
+#### TLS is verified explicitly
+
+Both TLS paths **must** pass an `ssl.create_default_context()`. Neither may be
+left to the default.
+
+This is not belt-and-braces. On this project's interpreter (3.13.7),
+`smtplib.SMTP.starttls` and `SMTP_SSL.__init__` both fall back to
+`ssl._create_stdlib_context()` when given no context, which has
+`check_hostname=False` and `verify_mode=CERT_NONE`, where
+`ssl.create_default_context()` has `check_hostname=True` and
+`CERT_REQUIRED`. Connecting with the default therefore encrypts to whoever
+answers, including an interceptor presenting any certificate at all, who would
+read both the invitation token and the SMTP password. A verified context is
+what makes `tls` and `starttls` mean anything.
+
+With `starttls`, a server that does not advertise STARTTLS is a failure — the
+send is never retried in the clear. `smtplib` raises `SMTPNotSupportedError`,
+which is a connect-phase error and therefore classifies as `failed`, since no
+message body was written.
+
+#### Plaintext delivery is constrained
+
+`smtp_security = "none"` puts the invitation token, and any credential used to
+send it, on the wire in the clear.
+
+- **`none` with a username is rejected in every environment.** Sending an SMTP
+  password in the clear is never the intended configuration, and offering it as
+  a checkbox invites it.
+- **`none` is rejected in production** unless the host is a loopback address.
+  The loopback exception exists for the one legitimate case — a mail relay
+  running as a sidecar or on the same host, where the traffic never reaches a
+  network — and is narrow enough to state as a rule rather than a judgement.
+- **Outside production `none` is allowed**, and the test-connection result says
+  in plain words that the connection was unencrypted, so it cannot be mistaken
+  for a working secure configuration.
 
 #### The sender classifies, the caller does not
 
@@ -383,6 +436,19 @@ since it never happened.
   leave it unresolved; none leaves it unresolved; the override wins over both.
 - `PUBLIC_BASE_URL` validation: relative, non-HTTP scheme, userinfo, query, and
   fragment are each rejected at startup; a trailing slash is normalised.
+- An `http` base URL is rejected in production and accepted in development and
+  test, whether it came from the override or was derived from a single CORS
+  origin; an `https` one is accepted everywhere.
+- Both TLS paths are constructed with a context that has `check_hostname` set
+  and `verify_mode` of `CERT_REQUIRED` — asserted on the context the transport
+  builds, so a future refactor that drops the argument and inherits
+  `smtplib`'s unverified default fails the test.
+- A `starttls` connection to a server not advertising STARTTLS is `failed`, and
+  no message is written in the clear.
+- `smtp_security="none"` is rejected with a username in every environment;
+  rejected in production against a non-loopback host; accepted in production
+  against a loopback host; accepted outside production, where the
+  test-connection detail states the connection was unencrypted.
 - Enabling SMTP is rejected without a host, without a from address, and with an
   unresolved public base URL.
 - The activation link carries the token in the fragment and never the query
@@ -425,6 +491,11 @@ The API contract changes: `UserInviteResponse.delivery` becomes an enum,
 `Scope` in `services/throttling.py` gains an optional per-scope window. Every
 existing scope leaves it unset and keeps the shared window, so sign-in and
 password-confirmation limits are unchanged.
+
+A production deployment whose resolved `public_base_url` is `http` will now
+refuse to start, where before it started and was quietly unable to hold a
+session. This surfaces an existing misconfiguration rather than creating one,
+but it is a behaviour change on upgrade and belongs in the release notes.
 
 Existing `INVITED` accounts stranded by the current behaviour are not migrated.
 Once this ships, an administrator resends the invitation and the token is
