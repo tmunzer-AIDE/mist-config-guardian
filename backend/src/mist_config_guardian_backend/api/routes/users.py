@@ -23,6 +23,7 @@ from mist_config_guardian_backend.schemas.users import (
     UserSummaryResponse,
     UserUpdateRequest,
 )
+from mist_config_guardian_backend.security.credentials import CredentialDecryptionError
 from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
 )
@@ -54,8 +55,20 @@ def _not_found(exc: UserNotFoundError) -> HTTPException:
 async def get_mail_sender(
     service: Annotated[ApplicationConfigurationService, Depends(get_application_configuration_service)],
 ) -> MailSender | None:
-    """Build a sender from the stored settings, or ``None`` when email is off."""
-    credentials = await service.smtp_credentials()
+    """Build a sender from the stored settings, or ``None`` when email is off.
+
+    A stored SMTP password that fails to decrypt - corrupted, or encrypted
+    under a key that has since rotated - is a broken mail configuration, not
+    a reason to refuse the request that depends on this. It runs outside
+    ``_deliver``'s protection, as a dependency resolved before the route body,
+    so it degrades to ``None`` (reported as ``not_configured``) here rather
+    than raising: onboarding must not 500 before an account is even created.
+    """
+    try:
+        credentials = await service.smtp_credentials()
+    except CredentialDecryptionError:
+        logger.exception("Stored SMTP credential could not be decrypted; email disabled for this request")
+        return None
     return SmtpMailSender(credentials) if credentials is not None else None
 
 
@@ -72,6 +85,13 @@ def _safe_detail(detail: str, token: str) -> str:
     Some SMTP servers echo a snippet of the rejected message back in their
     reply - the very message whose activation link carries the invitation
     token - so the token is scrubbed here rather than trusted to be absent.
+
+    This is best-effort against a cooperative-but-broken server, not a
+    guarantee: an exact ``str.replace`` misses a server that case-folds its
+    echo, inserts a quoted-printable soft break inside the token, or quotes
+    only a prefix of it. A scrub that looked total but was not would be worse
+    than one whose limits are written down, so they are written down here
+    instead of chasing every encoding a server might apply.
     """
     scrubbed = detail.replace(token, "[redacted]")
     return scrubbed[:_MAX_DELIVERY_DETAIL]
@@ -113,6 +133,14 @@ async def _deliver(
             outcome = SendOutcome("uncertain", "The mail transport failed unexpectedly.")
         status_value = outcome.status
         detail = _safe_detail(outcome.detail, token) if outcome.detail else None
+    elif sender is not None:
+        # Email is configured, but no activation link could be built. Saying
+        # so here is what stops an administrator from mistaking this for an
+        # SMTP problem when it is an unresolved `public_base_url` instead.
+        detail = (
+            "No activation link could be built: the application has no resolvable "
+            "public base URL. Set PUBLIC_BASE_URL, or configure exactly one CORS origin."
+        )
     logger.info("Invitation for %s: %s", user.email, status_value)
     delivered = status_value == "sent"
     return UserInviteResponse(
