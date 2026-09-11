@@ -1,5 +1,7 @@
 """Application-wide configuration management."""
 
+import asyncio
+import smtplib
 import time
 from dataclasses import dataclass
 from ipaddress import IPv6Address, ip_address
@@ -14,7 +16,7 @@ from mist_config_guardian_backend.integrations.ai_provider import (
     AiProviderError,
     OpenAiCompatibleProvider,
 )
-from mist_config_guardian_backend.integrations.smtp import SmtpCredentials
+from mist_config_guardian_backend.integrations.smtp import SmtpCredentials, verified_context
 from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.schemas.application_configuration import (
@@ -25,6 +27,7 @@ from mist_config_guardian_backend.schemas.application_configuration import (
     AiSettingsUpdate,
     ImpactAiSettingsResponse,
     ImpactAiSettingsUpdate,
+    SmtpConnectionTestResponse,
     SmtpSettingsResponse,
     SmtpSettingsUpdate,
 )
@@ -59,6 +62,37 @@ def is_loopback_host(host: str) -> bool:
     if isinstance(parsed, IPv6Address) and parsed.ipv4_mapped is not None:
         return False
     return parsed.is_loopback
+
+
+def _probe_smtp(credentials: SmtpCredentials) -> tuple[bool, str]:
+    """Connect, upgrade, and authenticate, reporting what happened.
+
+    Never sends a message: connecting, upgrading, and authenticating is the
+    whole check, and there is nobody to send a real message to.
+    """
+    try:
+        client: smtplib.SMTP
+        if credentials.security == "tls":
+            client = smtplib.SMTP_SSL(
+                credentials.host,
+                credentials.port,
+                timeout=10.0,
+                context=verified_context(),
+            )
+        else:
+            client = smtplib.SMTP(credentials.host, credentials.port, timeout=10.0)
+        try:
+            if credentials.security == "starttls":
+                client.starttls(context=verified_context())
+            if credentials.username:
+                client.login(credentials.username, credentials.password)
+        finally:
+            client.quit()
+    except (OSError, smtplib.SMTPException) as exc:
+        return False, str(exc)[:200]
+    if credentials.security == "none":
+        return True, "Connected. This connection is unencrypted."
+    return True, "Connected and authenticated over TLS."
 
 
 class ApplicationConfigurationError(ValueError):
@@ -336,6 +370,27 @@ class ApplicationConfigurationService:
         configuration.touch()
         await configuration.save()
         return self._smtp_response(configuration)
+
+    async def test_smtp_connection(self) -> SmtpConnectionTestResponse:
+        """Probe the stored SMTP server without sending a message.
+
+        Connecting, upgrading, and authenticating is the whole check: proving
+        a message can be sent would mean sending one, and there is nobody to
+        send it to.
+        """
+        configuration = await self._get_or_create()
+        credentials = await self.smtp_credentials()
+        if credentials is None:
+            ok, detail = False, "Email is not enabled."
+        else:
+            ok, detail = await asyncio.to_thread(_probe_smtp, credentials)
+        checked_at = utc_now()
+        configuration.smtp_last_test_at = checked_at
+        configuration.smtp_last_test_ok = ok
+        configuration.smtp_last_test_detail = detail
+        configuration.touch()
+        await configuration.save()
+        return SmtpConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
 
     def _validate_smtp(self, request: SmtpSettingsUpdate) -> None:
         """Refuse an enabled configuration that cannot deliver safely."""

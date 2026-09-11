@@ -5432,6 +5432,203 @@
         "title": "SleObservationResponse",
         "type": "object"
       },
+      "SmtpConnectionTestResponse": {
+        "description": "The outcome of probing the stored SMTP server without sending a message.",
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "detail",
+          "checked_at"
+        ],
+        "title": "SmtpConnectionTestResponse",
+        "type": "object"
+      },
+      "SmtpSettingsResponse": {
+        "description": "Stored SMTP settings with the password reduced to its last four characters.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "from_address": {
+            "title": "From Address",
+            "type": "string"
+          },
+          "from_name": {
+            "title": "From Name",
+            "type": "string"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "last_test_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test At"
+          },
+          "last_test_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test Detail"
+          },
+          "last_test_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test Ok"
+          },
+          "password_last_four": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Last Four"
+          },
+          "password_set": {
+            "title": "Password Set",
+            "type": "boolean"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "security": {
+            "enum": [
+              "starttls",
+              "tls",
+              "none"
+            ],
+            "title": "Security",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "host",
+          "port",
+          "security",
+          "username",
+          "password_set",
+          "password_last_four",
+          "from_address",
+          "from_name"
+        ],
+        "title": "SmtpSettingsResponse",
+        "type": "object"
+      },
+      "SmtpSettingsUpdate": {
+        "description": "Administrator-supplied SMTP settings; a blank password leaves it untouched.",
+        "properties": {
+          "clear_password": {
+            "default": false,
+            "title": "Clear Password",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "from_address": {
+            "default": "",
+            "maxLength": 320,
+            "title": "From Address",
+            "type": "string"
+          },
+          "from_name": {
+            "default": "",
+            "maxLength": 120,
+            "title": "From Name",
+            "type": "string"
+          },
+          "host": {
+            "default": "",
+            "maxLength": 255,
+            "title": "Host",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 1024,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "port": {
+            "default": 587,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "security": {
+            "default": "starttls",
+            "enum": [
+              "starttls",
+              "tls",
+              "none"
+            ],
+            "title": "Security",
+            "type": "string"
+          },
+          "username": {
+            "default": "",
+            "maxLength": 255,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "title": "SmtpSettingsUpdate",
+        "type": "object"
+      },
       "SnapshotError": {
         "description": "A scoped collection failure.",
         "properties": {
@@ -11425,6 +11622,117 @@
           }
         ],
         "summary": "Update Impact Ai Settings",
+        "tags": [
+          "Application Settings"
+        ]
+      }
+    },
+    "/api/v1/settings/smtp": {
+      "get": {
+        "description": "Return the stored SMTP settings without the password.",
+        "operationId": "read_smtp_settings_api_v1_settings_smtp_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Smtp Settings",
+        "tags": [
+          "Application Settings"
+        ]
+      },
+      "put": {
+        "description": "Persist SMTP settings, refusing what cannot deliver safely.",
+        "operationId": "update_smtp_settings_api_v1_settings_smtp_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmtpSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Update Smtp Settings",
+        "tags": [
+          "Application Settings"
+        ]
+      }
+    },
+    "/api/v1/settings/smtp/test": {
+      "post": {
+        "description": "Probe the stored SMTP server and record the outcome.",
+        "operationId": "check_smtp_connection_api_v1_settings_smtp_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpConnectionTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Check Smtp Connection",
         "tags": [
           "Application Settings"
         ]
