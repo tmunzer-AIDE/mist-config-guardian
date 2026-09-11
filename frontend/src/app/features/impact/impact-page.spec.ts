@@ -15,6 +15,7 @@ import {
   primaryMetric,
   readAiAssessment,
   sleSeries,
+  axisFor,
 } from './monitoring.model';
 import { MonitoringService } from './monitoring.service';
 
@@ -141,11 +142,55 @@ describe('monitoring.model', () => {
     expect(changeMarkerPercent(bars)).toBe(50);
   });
 
+  it('expands the baseline trend into one bar per sampled bucket', () => {
+    // Four hourly buckets; the second carried no traffic and invents no value.
+    const withTrend = session({
+      ...CRITICAL,
+      baseline: {
+        captured_at: '2026-09-07T08:14:00Z',
+        window_start: '2026-09-07T04:14:00Z',
+        window_end: '2026-09-07T08:14:00Z',
+        values: { capacity: 41 },
+        trend: { capacity: [50, null, 90, 95] },
+        baseline_window: 'last-hour',
+        errors: [],
+      },
+    });
+
+    const bars = sleSeries(withTrend, 'capacity');
+
+    expect(bars.map((bar) => bar.value)).toEqual([50, 90, 95, 40, 12, 13]);
+    // The 08:44 observation also precedes the 09:14 change, so four bars are pre.
+    expect(bars.map((bar) => bar.preChange)).toEqual([true, true, true, true, false, false]);
+    // Each bucket is placed at the instant it ends, not at the capture time.
+    expect(bars[0].at).toBe('2026-09-07T05:14:00.000Z');
+    expect(bars[2].at).toBe('2026-09-07T08:14:00.000Z');
+  });
+
   it('keeps the historical baseline before the change when the configured event is missing', () => {
     const bars = sleSeries(session({ ...CRITICAL, config_applied_at: null }), 'capacity');
 
     expect(bars.map((bar) => bar.preChange)).toEqual([true, false, false, false]);
     expect(changeMarkerPercent(bars)).toBe(25);
+  });
+
+  it('labels the axis from the bars actually plotted, not a assumed midpoint', () => {
+    // Bars: 05:14, 07:14, 08:14 (baseline buckets), 08:44, 09:44, 10:14.
+    const withTrend = session({
+      ...CRITICAL,
+      baseline: {
+        captured_at: '2026-09-07T08:14:00Z',
+        window_start: '2026-09-07T04:14:00Z',
+        window_end: '2026-09-07T08:14:00Z',
+        values: { capacity: 41 },
+        trend: { capacity: [50, null, 90, 95] },
+        errors: [],
+      },
+    });
+    const bars = sleSeries(withTrend, 'capacity');
+
+    // The change sits two thirds along, so no axis slot may claim it is halfway.
+    expect(axisFor(bars, withTrend)).toEqual(['−4H', '−2H', '−30M', '+30M', 'NOW']);
   });
 
   it('plots the degraded metric and ranks the deltas worst first', () => {

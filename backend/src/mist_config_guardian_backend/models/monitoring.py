@@ -48,6 +48,15 @@ class SleObservation(BaseModel):
     values: dict[str, float] = Field(default_factory=dict)
     no_data: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    # Per-bucket success rates across the whole window, in provider order, with
+    # None where a bucket carried no sampled traffic. Bucket instants are not
+    # stored: every metric shares window_start/window_end, so a series of k
+    # entries places bucket i at start + i * (end - start) / k. Legacy documents
+    # have no trend and keep rendering as the single averaged value they are.
+    trend: dict[str, list[float | None]] = Field(default_factory=dict)
+    # Which part of the window `values` averages. Legacy documents predate the
+    # anchored baseline and are truthfully described as full-window means.
+    baseline_window: Literal["last-hour", "full-window"] = "full-window"
 
 
 class MonitoringIncident(BaseModel):

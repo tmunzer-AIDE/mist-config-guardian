@@ -2,7 +2,7 @@
 
 import pytest
 
-from mist_config_guardian_backend.integrations.mist_sle import extract_sle_value
+from mist_config_guardian_backend.integrations.mist_sle import extract_sle_series, extract_sle_value
 
 AP_METRICS = ["time-to-connect", "successful-connect", "throughput", "roaming", "capacity", "coverage", "ap-health"]
 
@@ -314,3 +314,109 @@ async def test_sle_discovery_and_summaries_use_device_family_scope(httpx_mock, f
     assert result.errors == []
     assert result.scope == "device"
     assert len(httpx_mock.get_requests()) == len(metrics) + 1
+
+
+def test_extract_sle_series_keeps_one_entry_per_bucket_with_unsampled_gaps() -> None:
+    """The 24h trend needs each bucket, not the mean the baseline anchor uses."""
+    payload = {
+        "sle": {
+            "samples": {
+                "total": [100, None, 50, 0],
+                "degraded": [10, None, 10, 0],
+            }
+        }
+    }
+
+    assert extract_sle_series(payload) == [90.0, None, 80.0, None]
+
+
+async def test_baseline_anchors_on_the_final_hour_and_keeps_the_full_day_trend(httpx_mock):
+    """A 24h mean is not comparable to a post-change window measured in minutes."""
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+
+    end = datetime(2026, 9, 9, 12, tzinfo=UTC)
+    start = end - timedelta(hours=24)
+    # One bucket per hour: a quiet day at 50%, recovering to 90% in the last hour.
+    quiet_day = {"sle": {"samples": {"total": [100] * 24, "degraded": [50] * 23 + [10]}}}
+
+    def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"supported": AP_METRICS, "enabled": AP_METRICS})
+        return httpx.Response(200, json=quiet_day)
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_01) as client:
+        result = await client.capture(
+            site_id="site-1",
+            device_type=DeviceType.AP,
+            device_mac="aa:bb:cc:dd:ee:ff",
+            start=start,
+            end=end,
+            anchor=timedelta(hours=1),
+        )
+
+    assert result.values["coverage"] == 90
+    assert result.baseline_window == "last-hour"
+    assert result.trend["coverage"] == [50.0] * 23 + [90.0]
+
+
+async def test_capture_without_an_anchor_keeps_the_whole_window_mean(httpx_mock):
+    """Post-change polls measure everything since the change, not just its tail."""
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import MistSleClient  # noqa: PLC0415
+    from mist_config_guardian_backend.models.monitoring import DeviceType  # noqa: PLC0415
+    from mist_config_guardian_backend.models.organization import MistCloudRegion  # noqa: PLC0415
+
+    end = datetime(2026, 9, 9, 12, tzinfo=UTC)
+    quiet_day = {"sle": {"samples": {"total": [100] * 24, "degraded": [50] * 23 + [10]}}}
+
+    def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"supported": AP_METRICS, "enabled": AP_METRICS})
+        return httpx.Response(200, json=quiet_day)
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    async with MistSleClient(token="read-token", region=MistCloudRegion.GLOBAL_01) as client:
+        result = await client.capture(
+            site_id="site-1",
+            device_type=DeviceType.AP,
+            device_mac="aa:bb:cc:dd:ee:ff",
+            start=end - timedelta(hours=24),
+            end=end,
+        )
+
+    assert result.values["coverage"] == 51.67
+    assert result.baseline_window == "full-window"
+
+
+def test_anchor_reports_a_total_outage_instead_of_falling_back_to_the_day() -> None:
+    """0% is a measurement, not a missing one; it must not widen to the window."""
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import anchor_value  # noqa: PLC0415
+
+    end = datetime(2026, 9, 9, 12, tzinfo=UTC)
+    healthy_day_then_outage = [95.0] * 23 + [0.0]
+
+    assert anchor_value(healthy_day_then_outage, end - timedelta(hours=24), end, timedelta(hours=1)) == 0.0
+
+
+def test_anchor_widens_to_the_window_when_the_final_hour_had_no_traffic() -> None:
+    """An unsampled tail is absence of evidence, not evidence of an outage."""
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    from mist_config_guardian_backend.integrations.mist_sle import anchor_value  # noqa: PLC0415
+
+    end = datetime(2026, 9, 9, 12, tzinfo=UTC)
+    quiet_tail = [90.0] * 23 + [None]
+
+    assert anchor_value(quiet_tail, end - timedelta(hours=24), end, timedelta(hours=1)) == 90.0

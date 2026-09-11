@@ -32,9 +32,9 @@ are not presented as confirmed raw-text changes.
 
 A supported Mist `device-events` configuration trigger immediately starts an
 active monitoring session. Guardian requests device-scoped SLE summaries for the
-24 hours preceding the source event timestamp and captures current operational
-state concurrently. The first operational follow-up is due five minutes after the
-initial capture. SLE polls run every five minutes for at least one hour; receipt
+24 hours preceding the source event timestamp, retains every bucket of that
+window, and captures current operational state concurrently. The first
+operational follow-up is due five minutes after the initial capture. SLE polls run every five minutes for at least one hour; receipt
 of the configured event guarantees a further hour from that point. A missing
 configured event no longer prevents collection.
 
@@ -59,9 +59,20 @@ is no longer under test. The next configuration trigger starts a separate sessio
 with a fresh baseline and its own hour of monitoring; it cannot extend the reverted
 change's window. Retrying the revert receipt does not duplicate the incident.
 
-SLE aggregation remains the mean of valid bucket success rates, matching existing
-stored baselines. Observations now record whether their scope is a site or a
-device. Legacy baselines without that field default to site scope and continue
+SLE aggregation remains the mean of valid bucket success rates. The baseline
+keeps every bucket of its 24 hours as a stored trend and the Impact chart draws
+them, so the window before a change is visible rather than implied. The figure
+the verdict compares against is the mean of the final hour of that window, not
+of the whole day: a post-change poll measures minutes to an hour, and a 24-hour
+mean smooths across a day/night cycle the change had nothing to do with. A final
+hour with no sampled traffic widens back to the whole window, and the Impact page
+labels which of the two the figure came from. A measured 0% is an outage and is
+reported as one; only an unsampled tail widens. Post-change polls are not
+anchored and keep averaging everything they measured since the change. Sessions
+stored before this retain their whole-window baseline mean, carry no trend, and
+are drawn and labelled as the single average they are.
+
+Observations now record whether their scope is a site or a device. Legacy baselines without that field default to site scope and continue
 polling site SLE; new device baselines continue polling device SLE. Different
 scopes are never compared. HTTP failures, malformed responses and unexplained
 missing metrics prevent a clean verdict and appear explicitly in the Impact page.

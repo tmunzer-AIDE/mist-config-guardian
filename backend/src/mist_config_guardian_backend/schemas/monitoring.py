@@ -24,6 +24,12 @@ class SleObservationResponse(BaseModel):
     values: dict[str, float]
     no_data: list[str] = Field(default_factory=list)
     errors: list[str]
+    # Per-bucket rates spanning the whole window; None marks an unsampled
+    # bucket. Bucket instants derive from window_start/window_end and the
+    # series length. Absent on sessions stored before the anchored baseline.
+    trend: dict[str, list[float | None]] = Field(default_factory=dict)
+    # Which part of the window `values` averages.
+    baseline_window: Literal["last-hour", "full-window"] = "full-window"
 
 
 class MonitoringIncidentResponse(BaseModel):

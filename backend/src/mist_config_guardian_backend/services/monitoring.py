@@ -76,6 +76,7 @@ _RESOLUTIONS = {
 _MONITORING_DURATION = timedelta(hours=1)
 _POLL_INTERVAL = timedelta(minutes=5)
 _DEVICE_COMPARISON_DELAY = timedelta(minutes=5)
+_BASELINE_ANCHOR = timedelta(hours=1)
 
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,11 @@ class MonitoringEventService:
                 device_mac=device_mac,
                 start=triggered_at - timedelta(hours=24),
                 end=triggered_at,
+                # The whole day is kept as trend, but the comparison anchors on
+                # the final hour: post-change polls measure minutes to an hour,
+                # and a 24-hour mean smooths across a day/night cycle the change
+                # had nothing to do with.
+                anchor=_BASELINE_ANCHOR,
             )
 
     async def _capture_state(

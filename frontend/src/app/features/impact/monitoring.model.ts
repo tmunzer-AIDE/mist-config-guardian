@@ -17,6 +17,16 @@ export interface SleObservation {
   window_end?: string | null;
   values: Record<string, number>;
   errors: string[];
+  /**
+   * Per-bucket success rates spanning the whole window, `null` where a bucket
+   * carried no sampled traffic. Bucket instants are not transmitted: every
+   * metric shares the observation's window, so a series of `k` entries places
+   * bucket `i` at `window_start + i * (window_end - window_start) / k`.
+   * Absent on sessions stored before the anchored baseline landed.
+   */
+  trend?: Record<string, (number | null)[]>;
+  /** Which part of the window `values` averages. Absent means the whole of it. */
+  baseline_window?: 'last-hour' | 'full-window';
 }
 
 export interface MonitoringIncident {
@@ -235,23 +245,53 @@ export function primaryMetric(session: MonitoringSession): string | null {
  */
 export function sleSeries(session: MonitoringSession, metric: string): SleBar[] {
   const appliedAt = session.config_applied_at ? Date.parse(session.config_applied_at) : null;
-  const samples = session.baseline
-    ? [session.baseline, ...session.observations]
-    : [...session.observations];
-  return samples
+  const baseline = session.baseline;
+  const observations = session.observations
     .filter((sample) => Object.hasOwn(sample.values, metric))
-    .sort(
-      (left, right) =>
-        Date.parse(left.window_end ?? left.captured_at) -
-        Date.parse(right.window_end ?? right.captured_at),
-    )
     .map((sample) => ({
       at: sample.window_end ?? sample.captured_at,
       value: sample.values[metric],
-      preChange:
-        sample === session.baseline ||
-        (appliedAt !== null && Date.parse(sample.window_end ?? sample.captured_at) < appliedAt),
+      preChange: appliedAt !== null && Date.parse(sample.window_end ?? sample.captured_at) < appliedAt,
     }));
+  const before = baseline ? baselineBars(baseline, metric) : [];
+  return [...before, ...observations].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+}
+
+/**
+ * The pre-change bars for one metric.
+ *
+ * Prefers the stored per-bucket trend so the chart shows the day leading up to
+ * the change. Sessions recorded before the trend existed still carry a single
+ * averaged value, and one bar is the honest way to draw one average.
+ */
+function baselineBars(baseline: SleObservation, metric: string): SleBar[] {
+  const buckets = bucketInstants(baseline, baseline.trend?.[metric]);
+  if (buckets.length > 0) {
+    return buckets;
+  }
+  return Object.hasOwn(baseline.values, metric)
+    ? [{ at: baseline.window_end ?? baseline.captured_at, value: baseline.values[metric], preChange: true }]
+    : [];
+}
+
+/**
+ * Place each sampled bucket at the instant it ends.
+ *
+ * Unsampled buckets are dropped rather than drawn at zero: a quiet bucket is
+ * absence of evidence, and the rest of the page never invents a rate for one.
+ */
+function bucketInstants(baseline: SleObservation, series: (number | null)[] | undefined): SleBar[] {
+  const start = baseline.window_start ? Date.parse(baseline.window_start) : NaN;
+  const end = Date.parse(baseline.window_end ?? baseline.captured_at);
+  if (!series || series.length === 0 || Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+    return [];
+  }
+  const bucket = (end - start) / series.length;
+  return series.flatMap((value, index) =>
+    value === null
+      ? []
+      : [{ at: new Date(start + bucket * (index + 1)).toISOString(), value, preChange: true }],
+  );
 }
 
 /** Position of the "CHANGE APPLIED" marker as a 0..100 percentage of the plot. */
@@ -260,6 +300,51 @@ export function changeMarkerPercent(bars: SleBar[]): number | null {
     return null;
   }
   return (bars.filter((bar) => bar.preChange).length / bars.length) * 100;
+}
+
+/**
+ * How the baseline figure was measured, for the label beside it.
+ *
+ * Worth stating rather than implying: a baseline that widened back to the whole
+ * day because its final hour carried no traffic is a weaker comparison than one
+ * anchored on the hour before the change, and the two must not read alike.
+ */
+export function baselineWindowLabel(session: MonitoringSession): string {
+  return session.baseline?.baseline_window === 'last-hour' ? 'PRECEDING HOUR' : 'PRECEDING 24H';
+}
+
+/**
+ * Five axis labels, read from the bars actually plotted.
+ *
+ * The bars are equal width, so slot `j` reads the bar `j/4` of the way along.
+ * This used to hard-code the middle slot as the change instant, which only held
+ * while the baseline was a single bar; with a day of buckets ahead of it the
+ * change is rarely halfway, and the plot's own marker is the honest place to
+ * name it.
+ */
+export function axisFor(bars: SleBar[], session: MonitoringSession): string[] {
+  if (bars.length === 0) {
+    return [];
+  }
+  const applied = session.config_applied_at
+    ? Date.parse(session.config_applied_at)
+    : Date.parse(bars[0].at);
+  const live = session.status === 'monitoring' || session.status === 'awaiting_config';
+  const slots = 5;
+  return Array.from({ length: slots }, (_unused, slot) => {
+    if (live && slot === slots - 1) {
+      return 'NOW';
+    }
+    const index = Math.round((slot / (slots - 1)) * (bars.length - 1));
+    return offsetLabel(Date.parse(bars[index].at) - applied);
+  });
+}
+
+function offsetLabel(deltaMs: number): string {
+  const minutes = Math.round(deltaMs / 60_000);
+  const sign = minutes < 0 ? '−' : '+';
+  const magnitude = Math.abs(minutes);
+  return magnitude < 60 ? `${sign}${magnitude}M` : `${sign}${Math.round(magnitude / 60)}H`;
 }
 
 /** Baseline-versus-latest rows, worst mover first. */

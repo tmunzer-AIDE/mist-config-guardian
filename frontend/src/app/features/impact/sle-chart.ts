@@ -27,7 +27,7 @@ interface Geometry {
     <figure class="chart">
       <figcaption class="chart-head">
         <span class="chart-title">SLE over the monitoring window</span>
-        <span class="chart-hint">Grey is pre-change baseline; coloured is post-change</span>
+        <span class="chart-hint">Grey is the measured pre-change baseline; coloured is post-change</span>
       </figcaption>
 
       <div class="plot" [attr.data-tone]="tone()" aria-hidden="true">
