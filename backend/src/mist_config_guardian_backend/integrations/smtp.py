@@ -27,6 +27,13 @@ _REFUSALS = (
     smtplib.SMTPNotSupportedError,
 )
 
+# Everything this module treats as "the operation did not complete as asked"
+# rather than letting it escape ``send()``. ``send_message`` documents raising
+# a bare ``ValueError`` for an undeterminable envelope (no from/to address, or
+# repeated ``Resent-`` blocks); without it here that ``ValueError`` would break
+# the "reports rather than raises" contract this module exists to uphold.
+_TRANSPORT_ERRORS = (OSError, smtplib.SMTPException, ValueError)
+
 
 @dataclass(frozen=True, slots=True)
 class SendOutcome:
@@ -126,23 +133,31 @@ class SmtpMailSender:
         credentials = self._credentials
         try:
             client = self._connect()
-        except (OSError, smtplib.SMTPException) as exc:
+        except _TRANSPORT_ERRORS as exc:
             return SendOutcome("failed", _truncate(f"Could not connect: {exc}"))
-        try:
-            if credentials.security == "starttls":
+        if credentials.security == "starttls":
+            try:
                 client.starttls(context=verified_context())
-            if credentials.username:
+            except _TRANSPORT_ERRORS as exc:
+                # Nothing was written, so nothing can have been queued. STARTTLS
+                # carries no credential, so the server's own text is safe to show.
+                self._close(client)
+                return SendOutcome("failed", _truncate(f"Could not negotiate a session: {exc}"))
+        if credentials.username:
+            try:
                 client.login(credentials.username, credentials.password)
-        except (OSError, smtplib.SMTPException) as exc:
-            # Nothing was written, so nothing can have been queued.
-            self._close(client)
-            return SendOutcome("failed", _truncate(f"Could not negotiate a session: {exc}"))
+            except _TRANSPORT_ERRORS:
+                # A hostile or buggy server can echo the AUTH line back in its
+                # reply. Never interpolate it: a base64-encoded credential in
+                # this detail would be persisted (Task 5 stores it verbatim).
+                self._close(client)
+                return SendOutcome("failed", "Authentication was rejected by the server.")
         try:
             client.send_message(message)
         except _REFUSALS as exc:
             self._close(client)
             return SendOutcome("failed", _truncate(f"The server refused the message: {exc}"))
-        except (OSError, smtplib.SMTPException) as exc:
+        except _TRANSPORT_ERRORS as exc:
             # The body may have been written and queued with the reply unread.
             self._close(client)
             return SendOutcome("uncertain", _truncate(f"No confirmation was received: {exc}"))
