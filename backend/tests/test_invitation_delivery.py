@@ -3,6 +3,7 @@
 import re
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -16,8 +17,10 @@ from mist_config_guardian_backend.api.routes.users import get_mail_sender
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.integrations.smtp import SendOutcome
 from mist_config_guardian_backend.main import create_app
+from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
 from mist_config_guardian_backend.models.user import User, UserRole, UserStatus
-from mist_config_guardian_backend.security.credentials import CredentialDecryptionError
+from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
+from mist_config_guardian_backend.services.application_configuration import ApplicationConfigurationService
 
 BASE_URL = "http://test"
 
@@ -588,3 +591,55 @@ async def test_an_unresolved_base_url_is_distinguished_from_an_smtp_problem(
     assert body["delivery_detail"]
     assert "PUBLIC_BASE_URL" in body["delivery_detail"]
     assert not sender.calls, "no send should be attempted with no link to put in the message"
+
+
+async def test_an_invite_against_a_poisoned_production_configuration_still_creates_the_account(
+    fake_users: _FakeUsers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure scenario the fix closes: a configuration saved as safe
+    under ``environment=development`` (``security="none"`` against a
+    non-loopback host) must not go on shipping the activation token in the
+    clear once the same database is promoted to production.
+
+    ``smtp_credentials`` re-asserts the plaintext rules and degrades to
+    ``None`` rather than raising, so ``get_mail_sender`` reports the request
+    as unconfigured. The account must still be created and the activation
+    token still handed to the administrator - the safe degradation this
+    design is built around, not a 500 that strands the account.
+
+    This exercises the real ``ApplicationConfigurationService.smtp_credentials``
+    end to end through the invite route, rather than a fake that merely
+    asserts the route tolerates ``None`` - the other suite covers that.
+    """
+    settings = _production_settings()
+    vault = CredentialVault(settings)
+    configuration_service = ApplicationConfigurationService(vault, settings)
+    poisoned = ApplicationConfiguration.model_construct(
+        key="global",
+        smtp_enabled=True,
+        smtp_security="none",
+        smtp_host="mail.internal",
+        smtp_username="",
+        smtp_from_address="a@example.com",
+        smtp_from_name="Guardian",
+    )
+    monkeypatch.setattr(ApplicationConfiguration, "key", "global", raising=False)
+    monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=poisoned))
+
+    app = create_app(settings)
+    administrator = _administrator()
+    fake_users.records.append(administrator)
+    app.dependency_overrides[get_current_user] = lambda: administrator
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_application_configuration_service] = lambda: configuration_service
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/v1/users",
+            json={"email": "r@example.com", "display_name": "R", "role": "viewer"},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["delivery"] == "not_configured"
+    assert body["invitation_token"]

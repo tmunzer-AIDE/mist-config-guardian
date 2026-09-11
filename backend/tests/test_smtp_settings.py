@@ -260,3 +260,105 @@ async def test_a_stored_but_disabled_configuration_has_no_credentials(
     monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=configuration))
 
     assert await service.smtp_credentials() is None
+
+
+# -- smtp_credentials() re-asserts the plaintext rules at read time --------
+#
+# `_validate_smtp` only runs when an administrator submits `PUT /settings/smtp`
+# with `enabled=true`. A document saved as safe under one `environment` stays
+# on disk unchanged, so `smtp_credentials` - the single place both the mail
+# sender and the connection probe obtain credentials - must re-check the
+# stored document itself rather than trusting that it was validated once.
+
+
+def _poisoned_configuration(**overrides: object) -> ApplicationConfiguration:
+    """A stored document bypassing pydantic validation, as Beanie would return it."""
+    fields: dict[str, object] = {
+        "key": "global",
+        "smtp_enabled": True,
+        "smtp_security": "none",
+        "smtp_host": "mail.internal",
+        "smtp_username": "",
+        "smtp_from_address": "a@example.com",
+        "smtp_from_name": "Guardian",
+    }
+    fields.update(overrides)
+    return ApplicationConfiguration.model_construct(**fields)
+
+
+def _stub_stored_configuration(monkeypatch: pytest.MonkeyPatch, configuration: ApplicationConfiguration) -> None:
+    monkeypatch.setattr(ApplicationConfiguration, "key", "global", raising=False)
+    monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=configuration))
+
+
+async def test_stored_plaintext_against_a_non_loopback_host_is_refused_in_production(
+    make_service: Callable[[str], ApplicationConfigurationService],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The scenario the finding describes: a configuration saved as safe while
+    ``environment=development`` must not go on shipping the activation token
+    over plaintext to a non-loopback host once the same database is promoted
+    to production.
+    """
+    configured_service = make_service("production")
+    _stub_stored_configuration(monkeypatch, _poisoned_configuration())
+
+    with caplog.at_level("WARNING"):
+        credentials = await configured_service.smtp_credentials()
+
+    assert credentials is None
+    assert "mail.internal" in caplog.text
+
+
+async def test_stored_plaintext_against_a_non_loopback_host_is_usable_in_development(
+    make_service: Callable[[str], ApplicationConfigurationService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside production the same stored document is unaffected: the
+    plaintext restriction is scoped to production, matching write-time
+    validation.
+    """
+    configured_service = make_service("development")
+    _stub_stored_configuration(monkeypatch, _poisoned_configuration())
+
+    credentials = await configured_service.smtp_credentials()
+
+    assert credentials is not None
+    assert credentials.host == "mail.internal"
+    assert credentials.security == "none"
+
+
+@pytest.mark.parametrize("environment", ["development", "test", "production"])
+async def test_stored_plaintext_with_a_username_is_refused_in_every_environment(
+    environment: str,
+    make_service: Callable[[str], ApplicationConfigurationService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An SMTP password in the clear is never the intended configuration,
+    whatever ``environment`` the document is later read back under.
+    """
+    configured_service = make_service(environment)
+    _stub_stored_configuration(
+        monkeypatch,
+        _poisoned_configuration(smtp_host="127.0.0.1", smtp_username="postmaster"),
+    )
+
+    assert await configured_service.smtp_credentials() is None
+
+
+async def test_stored_loopback_plaintext_still_yields_credentials_in_production(
+    make_service: Callable[[str], ApplicationConfigurationService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loopback exception this re-check enforces must not become a blanket
+    refusal of every plaintext configuration in production.
+    """
+    configured_service = make_service("production")
+    _stub_stored_configuration(monkeypatch, _poisoned_configuration(smtp_host="127.0.0.1"))
+
+    credentials = await configured_service.smtp_credentials()
+
+    assert credentials is not None
+    assert credentials.host == "127.0.0.1"
+    assert credentials.security == "none"

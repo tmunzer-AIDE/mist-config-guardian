@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import smtplib
 import time
 from dataclasses import dataclass
@@ -44,6 +45,8 @@ from mist_config_guardian_backend.security.credentials import (
 _IMPACT_AI_KEY_CONTEXT = "impact-ai-api-key"
 _AI_PROVIDER_KEY_CONTEXT = "ai-provider-key"
 _SMTP_PASSWORD_CONTEXT = "smtp-password"  # noqa: S105 - an encryption context label, not a secret
+
+logger = logging.getLogger(__name__)
 
 
 def is_loopback_host(host: str) -> bool:
@@ -415,10 +418,42 @@ class ApplicationConfigurationService:
                 raise ApplicationConfigurationError(msg)
 
     async def smtp_credentials(self) -> SmtpCredentials | None:
-        """Return decrypted SMTP credentials when email is enabled."""
+        """Return decrypted SMTP credentials when email is enabled and safe to use.
+
+        ``_validate_smtp`` enforces the plaintext rules only when an
+        administrator submits ``PUT /settings/smtp``. A stored document is
+        never re-checked after that, so a configuration saved as safe -
+        ``security="none"`` against a loopback host while ``environment`` was
+        "development" - stays on disk unchanged if the same database is later
+        promoted to production, and would otherwise go on shipping the
+        activation token in the clear forever. Re-asserting the rules here,
+        the single place both the mail sender and the connection probe obtain
+        credentials, closes that gap.
+
+        A configuration that fails this check degrades to ``None`` rather
+        than raising: ``None`` means "email not configured" to every caller,
+        so the route reports ``not_configured`` and returns the activation
+        credential to the administrator instead of 500ing the invite and
+        stranding the account.
+        """
         configuration = await ApplicationConfiguration.find_one(ApplicationConfiguration.key == "global")
         if configuration is None or not configuration.smtp_enabled:
             return None
+        if configuration.smtp_security == "none":
+            if configuration.smtp_username:
+                logger.warning(
+                    "Refusing stored SMTP configuration for host %s: security=none "
+                    "may not be combined with a username in any environment",
+                    configuration.smtp_host,
+                )
+                return None
+            if self._settings.environment == "production" and not is_loopback_host(configuration.smtp_host):
+                logger.warning(
+                    "Refusing stored SMTP configuration for host %s: security=none is only "
+                    "allowed in production against a literal loopback address",
+                    configuration.smtp_host,
+                )
+                return None
         password = ""
         if configuration.encrypted_smtp_password is not None:
             password = self._vault.decrypt_for_context(
