@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     sign_in_throttle_window_minutes: int = 15
     sign_in_failures_per_account: int = 10
     sign_in_failures_per_address: int = 100
+    # An invitation scope bounds sending, not credential guessing, so each
+    # carries its own window instead of sharing the sign-in one above.
+    invitation_sends_per_target_per_minute: int = 1
+    invitation_sends_per_sender_per_hour: int = 20
 
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "Mist Config Guardian"
