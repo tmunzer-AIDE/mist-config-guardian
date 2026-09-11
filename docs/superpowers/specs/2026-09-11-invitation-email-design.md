@@ -183,12 +183,51 @@ inject a fake and no test touches a network.
 connect wrapped (`SMTP_SSL`); `none` — connect plain, no upgrade. Authentication
 is attempted only when a username is set.
 
+#### The sender classifies, the caller does not
+
+`MailSender.send` **returns** an outcome and never raises for a delivery
+problem:
+
+```python
+@dataclass(frozen=True, slots=True)
+class SendOutcome:
+    status: Literal["sent", "uncertain", "failed"]
+    detail: str   # bounded, credential-free; empty when status is "sent"
+```
+
+Classification lives in the transport because only the transport knows which
+protocol phase raised. An `SMTPException` or socket timeout does not by itself
+say whether the message body was written — the caller, seeing only an
+exception, would have to guess, and would guess `failed` for a message the
+server may have queued.
+
+The transport therefore tracks its phase explicitly and maps outcomes:
+
+| Phase | Raised | Outcome | Why |
+|---|---|---|---|
+| Connect, `STARTTLS`, `login` | anything | `failed` | No message body was written |
+| `send_message` | `SMTPRecipientsRefused`, `SMTPSenderRefused`, `SMTPDataError`, `SMTPNotSupportedError` | `failed` | A reply *was* read and it was a refusal |
+| `send_message` | timeout, `SMTPServerDisconnected`, any other error | `uncertain` | The body may have been written and queued with the reply unread |
+| `send_message` | nothing | `sent` | The `250` was read |
+
+This is the only place `uncertain` is produced, which is what makes the
+"Sending" section's rule — every non-`sent` outcome returns the credential —
+implementable rather than aspirational.
+
+`detail` is the transport's own short summary, capped in length, safe to show
+an administrator, and carrying no part of the token.
+
 ### Sending
 
 Sending is inline, within the invite request, because the delivery rule
-requires the response to know whether the message was accepted. Failures are
-caught and converted to the `failed` outcome; they never propagate as an HTTP
-error, and never prevent the account being created.
+requires the response to know whether the message was accepted.
+
+The route takes the `SendOutcome` the transport returns and maps it straight
+onto `delivery`; it performs no classification of its own. A `MailSender` that
+raises despite the contract — a bug, not a delivery problem — is caught and
+treated as `uncertain`, because an unexpected escape from `send` cannot rule
+out that the body was written. No delivery problem ever propagates as an HTTP
+error or prevents the account being created.
 
 The product specification's "queued, retried with backoff" describes the
 notification channels — high-volume, background, no user waiting. An invitation
@@ -236,12 +275,30 @@ it by hand. Returning a bare token would make them construct the URL
 themselves — and the current users UI renders exactly that, a bare
 `invitation_token` in a `<code>` block, which the new page cannot consume.
 
-`UserInviteResponse` therefore gains `invitation_url`, built by the backend,
-which already knows `public_base_url`. It is populated whenever a credential is
-returned and `public_base_url` resolves. When the base URL is unresolved the
-field is `null` and the token is still returned, because a token an
-administrator cannot turn into a link is worth more than nothing — the UI then
-says why there is no link.
+`UserInviteResponse` therefore gains two fields:
+
+- `invitation_url` — the complete activation link, built by the backend, which
+  already knows `public_base_url`. Populated whenever a credential is returned
+  and `public_base_url` resolves.
+- `delivery_detail` — the `SendOutcome.detail` the transport produced, or
+  `null`. Bounded in length and carrying no part of the token. This is what the
+  `failed` message interpolates; without it the UI would have a reason to show
+  and no field to read it from.
+
+**The administrator is never left with a bare token.** When `public_base_url`
+is unresolved, `invitation_url` is `null` and the frontend constructs the link
+itself from `document.baseURI` — the origin the administrator is looking at —
+and presents it identically. The backend-generated URL is always preferred when
+present, so the canonical address stays canonical.
+
+This does not reintroduce the Host-header risk rejected above, for two reasons.
+It is a client-side convenience for display and copying, not a server-side
+trust decision: the link is shown to an authenticated administrator already on
+that origin, the server neither reads nor sends it, and nobody else's security
+depends on it. And it is unreachable in any path that emails anything —
+enabling SMTP requires a resolved `public_base_url`, so `uncertain` and
+`failed` always carry a backend-built URL, and the fallback can only ever apply
+to `not_configured`.
 
 The users UI renders the link as the primary artefact with a copy control, not
 the raw token, and its message differs per outcome:
@@ -251,9 +308,7 @@ the raw token, and its message differs per outcome:
 | `sent` | Invitation emailed to `{email}`. |
 | `uncertain` | Sent to `{email}`, but the mail server did not confirm. Share this link if it does not arrive. |
 | `not_configured` | No SMTP server is configured, so no email was sent. Share this link with `{email}`. |
-| `failed` | Email to `{email}` failed: `{reason}`. Share this link instead. |
-
-`{reason}` is the transport's own summary, carrying no credential.
+| `failed` | Email to `{email}` failed: `{delivery_detail}`. Share this link instead. |
 
 ### Accept-invitation page
 
@@ -334,6 +389,17 @@ since it never happened.
   string, and the token appears in no log record for any of the four outcomes.
 - `invitation_url` is populated whenever a credential is returned and the base
   URL resolves, and is `null` — with the token still returned — when it does not.
+- Transport phase classification, against a fake SMTP client that raises at a
+  chosen phase: a connect, `STARTTLS`, or `login` error is `failed`; a
+  recipient, sender, or data refusal during `send_message` is `failed`; a
+  timeout or disconnection during `send_message` is `uncertain`; a clean send
+  is `sent`. The route maps each straight through without reclassifying, and a
+  `MailSender` that raises in breach of its contract yields `uncertain`.
+- `delivery_detail` is populated for `failed` and `uncertain`, is absent for
+  `sent`, is capped in length, and never contains any part of the token.
+- The frontend falls back to a `document.baseURI` link when `invitation_url` is
+  `null`, prefers the backend URL whenever it is present, and never shows a
+  bare token with no link.
 - `smtp_security` selects the right client and upgrade path.
 - The test-connection endpoint records its outcome to the `smtp_last_test_*`
   fields and sends no message.
@@ -352,9 +418,9 @@ No test performs real network I/O.
 ## Consequences
 
 The API contract changes: `UserInviteResponse.delivery` becomes an enum,
-`invitation_token` is populated under a new condition, and `invitation_url` is
-added. Both invitation endpoints can now answer `429`. `docs/openapi.json` must
-be regenerated, since `make check` compares it.
+`invitation_token` is populated under a new condition, and `invitation_url` and
+`delivery_detail` are added. Both invitation endpoints can now answer `429`.
+`docs/openapi.json` must be regenerated, since `make check` compares it.
 
 `Scope` in `services/throttling.py` gains an optional per-scope window. Every
 existing scope leaves it unset and keeps the shared window, so sign-in and
