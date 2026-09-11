@@ -1,6 +1,7 @@
 """User administration request and response schemas."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -57,16 +58,21 @@ class UserInviteRequest(BaseModel):
 
 
 class UserInviteResponse(BaseModel):
-    """A created invitation.
+    """A created invitation and what became of it.
 
-    ``invitation_token`` is populated only outside production, because this
-    deployment has no mail transport to deliver it with.
+    ``invitation_token`` and ``invitation_url`` are populated unless positive
+    SMTP acceptance was observed. "Email did not carry it" is not observable —
+    a server can queue a message while the client times out before reading the
+    reply — so the rule is one-directional and errs towards giving the
+    administrator something to pass on.
     """
 
     user: UserSummaryResponse
     invitation_expires_at: datetime | None
+    delivery: Literal["sent", "uncertain", "not_configured", "failed"]
     invitation_token: str | None = None
-    delivery: str = "not_implemented"
+    invitation_url: str | None = None
+    delivery_detail: str | None = None
 
 
 class UserUpdateRequest(BaseModel):

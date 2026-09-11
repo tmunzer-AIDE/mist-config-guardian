@@ -1,16 +1,19 @@
 """User administration endpoints."""
 
-from typing import Annotated
+import logging
+from typing import Annotated, Literal
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from mist_config_guardian_backend.api.dependencies import (
+    get_application_configuration_service,
     get_session_service,
     get_user_service,
     require_administrator,
 )
 from mist_config_guardian_backend.config import Settings, get_settings
+from mist_config_guardian_backend.integrations.smtp import MailSender, SendOutcome, SmtpMailSender
 from mist_config_guardian_backend.models.user import User, UserRole, UserStatus
 from mist_config_guardian_backend.schemas.auth import AcceptInvitationRequest, UserResponse
 from mist_config_guardian_backend.schemas.users import (
@@ -20,9 +23,18 @@ from mist_config_guardian_backend.schemas.users import (
     UserSummaryResponse,
     UserUpdateRequest,
 )
+from mist_config_guardian_backend.services.application_configuration import (
+    ApplicationConfigurationService,
+)
+from mist_config_guardian_backend.services.invitation_email import (
+    activation_url,
+    build_invitation_message,
+)
 from mist_config_guardian_backend.services.passkeys import PasskeyService, get_passkey_service
 from mist_config_guardian_backend.services.sessions import SessionService
+from mist_config_guardian_backend.services.throttling import ThrottleService, get_throttle_service, reserve_or_raise
 from mist_config_guardian_backend.services.users import (
+    INVITATION_LIFETIME_DAYS,
     InvitationError,
     LastAdministratorError,
     UserAlreadyExistsError,
@@ -32,21 +44,84 @@ from mist_config_guardian_backend.services.users import (
 
 router = APIRouter(prefix="/users")
 
+logger = logging.getLogger(__name__)
+
 
 def _not_found(exc: UserNotFoundError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
 
-def _invitation_response(
+async def get_mail_sender(
+    service: Annotated[ApplicationConfigurationService, Depends(get_application_configuration_service)],
+) -> MailSender | None:
+    """Build a sender from the stored settings, or ``None`` when email is off."""
+    credentials = await service.smtp_credentials()
+    return SmtpMailSender(credentials) if credentials is not None else None
+
+
+# The upper bound a mail server's own text may occupy in the response. This is
+# a second, independent bound alongside the transport's own truncation: any
+# ``MailSender`` implementation can report a ``detail``, and this is the
+# boundary where it becomes part of a public API response.
+_MAX_DELIVERY_DETAIL = 200
+
+
+def _safe_detail(detail: str, token: str) -> str:
+    """Bound and scrub server-supplied text before it reaches an administrator.
+
+    Some SMTP servers echo a snippet of the rejected message back in their
+    reply - the very message whose activation link carries the invitation
+    token - so the token is scrubbed here rather than trusted to be absent.
+    """
+    scrubbed = detail.replace(token, "[redacted]")
+    return scrubbed[:_MAX_DELIVERY_DETAIL]
+
+
+async def _deliver(
     user: User,
     token: str,
     settings: Settings,
+    sender: MailSender | None,
+    inviter: str | None,
 ) -> UserInviteResponse:
-    """Return an invitation, exposing its token only outside production."""
+    """Send the invitation and apply the delivery rule to what happened.
+
+    The credential is withheld only once positive SMTP acceptance was
+    observed; every other outcome, including one this deployment cannot even
+    attempt, returns it so an administrator is never left holding a rotated
+    token nobody can act on.
+    """
+    base_url = settings.public_base_url
+    link = activation_url(base_url, token) if base_url else None
+    status_value: Literal["sent", "uncertain", "not_configured", "failed"] = "not_configured"
+    detail: str | None = None
+    if sender is not None and link is not None:
+        message = build_invitation_message(
+            app_name=settings.app_name,
+            inviter=inviter,
+            activation_link=link,
+            expires_in_days=INVITATION_LIFETIME_DAYS,
+        )
+        try:
+            outcome = await sender.send(to=user.email, subject=message.subject, text=message.text, html=message.html)
+        except Exception:
+            # A blanket catch is deliberate: an unexpected escape cannot rule out
+            # that the body was written, so this is uncertain rather than failed -
+            # never a 500 that loses the account. Logging it via ``logger.exception``
+            # is what lets Ruff's BLE001 accept the catch without a suppression.
+            logger.exception("Invitation sender raised for %s", user.email)
+            outcome = SendOutcome("uncertain", "The mail transport failed unexpectedly.")
+        status_value = outcome.status
+        detail = _safe_detail(outcome.detail, token) if outcome.detail else None
+    logger.info("Invitation for %s: %s", user.email, status_value)
+    delivered = status_value == "sent"
     return UserInviteResponse(
         user=UserSummaryResponse.from_document(user),
         invitation_expires_at=user.invitation_expires_at,
-        invitation_token=token if settings.environment != "production" else None,
+        delivery=status_value,
+        invitation_token=None if delivered else token,
+        invitation_url=None if delivered else link,
+        delivery_detail=detail,
     )
 
 
@@ -95,18 +170,26 @@ async def list_users(  # noqa: PLR0913, PLR0917 - filters and pagination are sep
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def invite_user(
+async def invite_user(  # noqa: PLR0913, PLR0917 - one dependency per collaborator the delivery rule needs
     payload: UserInviteRequest,
     users: Annotated[UserService, Depends(get_user_service)],
     administrator: Annotated[User, Depends(require_administrator)],
     settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
+    sender: Annotated[MailSender | None, Depends(get_mail_sender)],
 ) -> UserInviteResponse:
-    """Invite a new local user.
+    """Invite a new local user and attempt to deliver its activation link.
 
-    Email delivery is not implemented: this deployment has no mail transport.
-    Outside production the invitation token is returned here so it can be shared
-    out of band; in production it is withheld.
+    The credential is withheld only once positive SMTP acceptance was
+    observed; every other outcome returns it so an administrator can always
+    share it out of band instead.
     """
+    if administrator.id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authenticated administrator is missing an identifier",
+        )
+    await reserve_or_raise(throttle, throttle.invitation_sender(administrator.id))
     try:
         user, token = await users.invite(
             email=str(payload.email),
@@ -116,24 +199,40 @@ async def invite_user(
         )
     except UserAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return _invitation_response(user, token, settings)
+    return await _deliver(user, token, settings, sender, administrator.display_name)
 
 
 @router.post("/{user_id}/resend-invitation")
-async def resend_invitation(
+async def resend_invitation(  # noqa: PLR0913, PLR0917 - one dependency per collaborator the delivery rule needs
     user_id: PydanticObjectId,
     users: Annotated[UserService, Depends(get_user_service)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
     settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
+    sender: Annotated[MailSender | None, Depends(get_mail_sender)],
 ) -> UserInviteResponse:
-    """Issue a fresh invitation token for a user who has not accepted yet."""
+    """Issue a fresh invitation token for a user who has not accepted yet.
+
+    Both scopes are reserved before the token is rotated: a refusal must
+    leave the previous token, still in flight to a legitimate invitee, valid.
+    """
+    if administrator.id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authenticated administrator is missing an identifier",
+        )
+    await reserve_or_raise(
+        throttle,
+        throttle.invitation_sender(administrator.id),
+        throttle.invitation_target(user_id),
+    )
     try:
         user, token = await users.resend_invitation(user_id)
     except UserNotFoundError as exc:
         raise _not_found(exc) from exc
     except InvitationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return _invitation_response(user, token, settings)
+    return await _deliver(user, token, settings, sender, administrator.display_name)
 
 
 @router.patch("/{user_id}")

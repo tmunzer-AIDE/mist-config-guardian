@@ -9,6 +9,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.api.dependencies import get_current_user, get_session_service
+from mist_config_guardian_backend.api.routes.users import get_mail_sender
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.user import User, UserRole, UserStatus
@@ -197,6 +198,7 @@ async def test_invite_returns_a_one_time_token_and_no_digests(users: _FakeUsers)
     administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
     users.records.append(administrator)
     app.dependency_overrides[get_current_user] = lambda: administrator
+    app.dependency_overrides[get_mail_sender] = lambda: None
 
     async with _client(app) as client:
         response = await client.post(
@@ -222,6 +224,7 @@ async def test_invite_rejects_a_duplicate_email(users: _FakeUsers) -> None:
     administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
     users.records.append(administrator)
     app.dependency_overrides[get_current_user] = lambda: administrator
+    app.dependency_overrides[get_mail_sender] = lambda: None
 
     async with _client(app) as client:
         response = await client.post(
@@ -232,7 +235,14 @@ async def test_invite_rejects_a_duplicate_email(users: _FakeUsers) -> None:
     assert response.status_code == 409
 
 
-async def test_invitation_token_is_withheld_in_production(users: _FakeUsers) -> None:
+async def test_invitation_token_is_no_longer_withheld_in_production(users: _FakeUsers) -> None:
+    """The `environment` special case is gone: production has no mail transport here either.
+
+    This used to assert the opposite - that production withheld the token -
+    which encoded the bug this deployment shipped with: an invited account
+    whose token was generated, hashed, stored, and then discarded unread,
+    because no mail was ever sent and nothing else could carry the credential.
+    """
     settings = Settings(
         environment="production",
         database_enabled=False,
@@ -245,6 +255,7 @@ async def test_invitation_token_is_withheld_in_production(users: _FakeUsers) -> 
     users.records.append(administrator)
     app.dependency_overrides[get_current_user] = lambda: administrator
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_mail_sender] = lambda: None
 
     async with _client(app) as client:
         response = await client.post(
@@ -253,7 +264,9 @@ async def test_invitation_token_is_withheld_in_production(users: _FakeUsers) -> 
         )
 
     assert response.status_code == 201
-    assert response.json()["invitation_token"] is None
+    body = response.json()
+    assert body["delivery"] == "not_configured"
+    assert body["invitation_token"] is not None
 
 
 async def test_accept_invitation_activates_the_account(users: _FakeUsers) -> None:
@@ -445,6 +458,7 @@ async def test_resending_an_invitation_replaces_the_token(users: _FakeUsers) -> 
         invited_by=administrator.id,
     )
     app.dependency_overrides[get_current_user] = lambda: administrator
+    app.dependency_overrides[get_mail_sender] = lambda: None
 
     async with _client(app) as client:
         response = await client.post(f"/api/v1/users/{invited.id}/resend-invitation")

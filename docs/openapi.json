@@ -6117,12 +6117,28 @@
         "type": "object"
       },
       "UserInviteResponse": {
-        "description": "A created invitation.\n\n``invitation_token`` is populated only outside production, because this\ndeployment has no mail transport to deliver it with.",
+        "description": "A created invitation and what became of it.\n\n``invitation_token`` and ``invitation_url`` are populated unless positive\nSMTP acceptance was observed. \"Email did not carry it\" is not observable —\na server can queue a message while the client times out before reading the\nreply — so the rule is one-directional and errs towards giving the\nadministrator something to pass on.",
         "properties": {
           "delivery": {
-            "default": "not_implemented",
+            "enum": [
+              "sent",
+              "uncertain",
+              "not_configured",
+              "failed"
+            ],
             "title": "Delivery",
             "type": "string"
+          },
+          "delivery_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Detail"
           },
           "invitation_expires_at": {
             "anyOf": [
@@ -6147,13 +6163,25 @@
             ],
             "title": "Invitation Token"
           },
+          "invitation_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitation Url"
+          },
           "user": {
             "$ref": "#/components/schemas/UserSummaryResponse"
           }
         },
         "required": [
           "user",
-          "invitation_expires_at"
+          "invitation_expires_at",
+          "delivery"
         ],
         "title": "UserInviteResponse",
         "type": "object"
@@ -11884,7 +11912,7 @@
         ]
       },
       "post": {
-        "description": "Invite a new local user.\n\nEmail delivery is not implemented: this deployment has no mail transport.\nOutside production the invitation token is returned here so it can be shared\nout of band; in production it is withheld.",
+        "description": "Invite a new local user and attempt to deliver its activation link.\n\nThe credential is withheld only once positive SMTP acceptance was\nobserved; every other outcome returns it so an administrator can always\nshare it out of band instead.",
         "operationId": "invite_user_api_v1_users_post",
         "requestBody": {
           "content": {
@@ -12140,7 +12168,7 @@
     },
     "/api/v1/users/{user_id}/resend-invitation": {
       "post": {
-        "description": "Issue a fresh invitation token for a user who has not accepted yet.",
+        "description": "Issue a fresh invitation token for a user who has not accepted yet.\n\nBoth scopes are reserved before the token is rotated: a refusal must\nleave the previous token, still in flight to a legitimate invitee, valid.",
         "operationId": "resend_invitation_api_v1_users__user_id__resend_invitation_post",
         "parameters": [
           {
