@@ -6,7 +6,7 @@ import { signal } from '@angular/core';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { TimeContextService } from '../../core/time-context.service';
 import { SiteImpactPage } from './site-impact-page';
-import { SiteChange, TopologyLink, impactDevices } from './site-impact.model';
+import { TopologyLink, impactDevices } from './site-impact.model';
 import { change, impact } from './site-impact.fixtures';
 
 describe('site Impact workspace', () => {
@@ -47,6 +47,19 @@ describe('site Impact workspace', () => {
   }
   function chooseNode(index = 0) {
     fixture.nativeElement.querySelectorAll('.node')[index].click();
+    fixture.detectChanges();
+  }
+  function zoomLevel() {
+    return fixture.nativeElement.querySelector('.zoom output').textContent.trim();
+  }
+  function zoomIn() {
+    fixture.nativeElement.querySelector('.zoom button[aria-label="Zoom in"]').click();
+    fixture.detectChanges();
+  }
+  function chooseSite(id: string) {
+    const select = fixture.nativeElement.querySelector('select');
+    select.value = id;
+    select.dispatchEvent(new Event('change'));
     fixture.detectChanges();
   }
   beforeEach(async () => {
@@ -105,10 +118,14 @@ describe('site Impact workspace', () => {
     expect(fixture.nativeElement.querySelectorAll('.details').length).toBe(1);
   });
   it('renders explicit neighbor links and lets the operator open a peer from its port evidence', () => {
-    load([{
-      source: 'aabbccddeeff', target: '112233445566',
-      source_ports: ['ge-0/0/0'], target_ports: ['eth0'],
-    }]);
+    load([
+      {
+        source: 'aabbccddeeff',
+        target: '112233445566',
+        source_ports: ['ge-0/0/0'],
+        target_ports: ['eth0'],
+      },
+    ]);
     expect(fixture.nativeElement.querySelectorAll('.links path').length).toBe(1);
     chooseNode();
     const neighbors = fixture.nativeElement.querySelector('details.detail-section');
@@ -116,8 +133,12 @@ describe('site Impact workspace', () => {
     expect(neighbors.textContent).toContain('ge-0/0/0 → eth0');
     neighbors.querySelector('button').click();
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('.detail-head h2').textContent).toContain('Other AP');
-    expect(fixture.nativeElement.querySelector('details.detail-section').textContent).toContain('eth0 → ge-0/0/0');
+    expect(fixture.nativeElement.querySelector('.detail-head h2').textContent).toContain(
+      'Other AP',
+    );
+    expect(fixture.nativeElement.querySelector('details.detail-section').textContent).toContain(
+      'eth0 → ge-0/0/0',
+    );
   });
   it('toggles a change and clears its device selection', () => {
     load();
@@ -183,6 +204,30 @@ describe('site Impact workspace', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelectorAll('.change-row').length).toBe(51);
     expect(panel()).toBe('change');
+  });
+  it('keeps a deliberate zoom while the same site is reloaded and rebuilt', () => {
+    load();
+    zoomIn();
+    expect(zoomLevel()).toBe('125%');
+    fixture.nativeElement.querySelector('.topology-foot button').click();
+    fixture.detectChanges();
+    flushSite();
+    expect(zoomLevel()).toBe('125%');
+    // A range change clears the topology, so the canvas really is destroyed here
+    // and has to be rebuilt from the zoom the page still holds.
+    time.setRange('7d');
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.node').length).toBe(0);
+    flushSite();
+    expect(zoomLevel()).toBe('125%');
+  });
+  it('returns to fit when the site changes, rather than inheriting its zoom', () => {
+    load();
+    zoomIn();
+    expect(zoomLevel()).toBe('125%');
+    chooseSite('site2');
+    flushSite();
+    expect(zoomLevel()).toBe('100%');
   });
   it('withholds drilldown links in historical inspection', () => {
     load();

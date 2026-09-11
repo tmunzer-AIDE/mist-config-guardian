@@ -84,18 +84,19 @@ export class SiteImpactPage implements OnDestroy {
     const selected = this.selectedDeviceId();
     const devices = new Map(this.devices().map((device) => [device.id, device]));
     const ports = (values: string[]) =>
-      values.slice(0, 4).join(', ') +
-      (values.length > 4 ? ` +${values.length - 4} more` : '');
+      values.slice(0, 4).join(', ') + (values.length > 4 ? ` +${values.length - 4} more` : '');
     return (this.topology()?.links ?? []).flatMap((link) => {
       const source = link.source === selected;
       if (!source && link.target !== selected) return [];
       const device = devices.get(source ? link.target : link.source);
       return device
-        ? [{
-            device,
-            local: ports(source ? link.source_ports : link.target_ports) || 'Port unknown',
-            remote: ports(source ? link.target_ports : link.source_ports) || 'Port unknown',
-          }]
+        ? [
+            {
+              device,
+              local: ports(source ? link.source_ports : link.target_ports) || 'Port unknown',
+              remote: ports(source ? link.target_ports : link.source_ports) || 'Port unknown',
+            },
+          ]
         : [];
     });
   });
@@ -171,6 +172,14 @@ export class SiteImpactPage implements OnDestroy {
   protected readonly healthLabel = (v: Health) =>
     ({ ok: 'OK', warning: 'Warning', error: 'Error', critical: 'Critical', unknown: 'Unknown' })[v];
   constructor() {
+    // Zoom is owned here because the canvas is destroyed whenever a site's
+    // topology clears. Keying the reset on siteId covers every transition —
+    // selectSite, and the automatic pick after an organization or as-of reload —
+    // where a fresh canvas would otherwise inherit the previous site's zoom.
+    effect(() => {
+      this.siteId();
+      this.preferredZoom.set(null);
+    });
     effect(() => {
       const linked = this.session();
       if (linked)
