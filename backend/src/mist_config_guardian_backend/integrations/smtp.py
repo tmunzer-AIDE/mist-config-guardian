@@ -79,6 +79,84 @@ def _truncate(value: str) -> str:
     return value[:_MAX_DETAIL]
 
 
+def _close(client: smtplib.SMTP) -> None:
+    # The client's fate is already decided; a failed teardown is noise.
+    with contextlib.suppress(OSError, smtplib.SMTPException):
+        client.quit()
+
+
+class SmtpNegotiationError(Exception):
+    """Connecting, upgrading, or authenticating failed before anything was sent.
+
+    ``detail`` is always safe to persist or return to an administrator: on a
+    login failure it is a fixed message, never the server's own reply, since
+    a hostile or buggy server can echo the AUTH line back in a 535 response
+    and that text must never carry a credential into storage or an API
+    response.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+def connect_and_authenticate(
+    credentials: SmtpCredentials,
+    *,
+    timeout: float,
+    client_factory: Callable[[], smtplib.SMTP] | None = None,
+) -> smtplib.SMTP:
+    """Connect, upgrade, and authenticate; leave sending to the caller.
+
+    Both the message transport and the settings connection-test probe reach
+    the server through this one function, so the verified TLS contexts and
+    the login-failure hardening below exist in exactly one place and cannot
+    drift between the two call sites. Raises :class:`SmtpNegotiationError`
+    with an already phase-appropriate, credential-free detail on failure;
+    the connection is closed before it raises, so a caller never has to.
+    """
+    if client_factory is not None:
+        try:
+            client = client_factory()
+        except _TRANSPORT_ERRORS as exc:
+            raise SmtpNegotiationError(_truncate(f"Could not connect: {exc}")) from exc
+    else:
+        try:
+            if credentials.security == "tls":
+                client = smtplib.SMTP_SSL(
+                    credentials.host,
+                    credentials.port,
+                    timeout=timeout,
+                    context=verified_context(),
+                )
+            else:
+                client = smtplib.SMTP(credentials.host, credentials.port, timeout=timeout)
+        except _TRANSPORT_ERRORS as exc:
+            raise SmtpNegotiationError(_truncate(f"Could not connect: {exc}")) from exc
+
+    if credentials.security == "starttls":
+        try:
+            client.starttls(context=verified_context())
+        except _TRANSPORT_ERRORS as exc:
+            # Nothing was written, so nothing can have been queued. STARTTLS
+            # carries no credential, so the server's own text is safe to show.
+            _close(client)
+            raise SmtpNegotiationError(_truncate(f"Could not negotiate a session: {exc}")) from exc
+
+    if credentials.username:
+        try:
+            client.login(credentials.username, credentials.password)
+        except _TRANSPORT_ERRORS as exc:
+            # A hostile or buggy server can echo the AUTH line back in its
+            # reply. Never interpolate it: a base64-encoded credential in
+            # this detail would be persisted (Task 5 stores it verbatim).
+            _close(client)
+            msg = "Authentication was rejected by the server."
+            raise SmtpNegotiationError(msg) from exc
+
+    return client
+
+
 class SmtpMailSender:
     """Send one message per call over a fresh connection."""
 
@@ -116,56 +194,23 @@ class SmtpMailSender:
         message.add_alternative(html, subtype="html")
         return message
 
-    def _connect(self) -> smtplib.SMTP:
-        if self._client_factory is not None:
-            return self._client_factory()
-        credentials = self._credentials
-        if credentials.security == "tls":
-            return smtplib.SMTP_SSL(
-                credentials.host,
-                credentials.port,
-                timeout=self._timeout,
-                context=verified_context(),
-            )
-        return smtplib.SMTP(credentials.host, credentials.port, timeout=self._timeout)
-
     def _send_blocking(self, message: EmailMessage) -> SendOutcome:
-        credentials = self._credentials
         try:
-            client = self._connect()
-        except _TRANSPORT_ERRORS as exc:
-            return SendOutcome("failed", _truncate(f"Could not connect: {exc}"))
-        if credentials.security == "starttls":
-            try:
-                client.starttls(context=verified_context())
-            except _TRANSPORT_ERRORS as exc:
-                # Nothing was written, so nothing can have been queued. STARTTLS
-                # carries no credential, so the server's own text is safe to show.
-                self._close(client)
-                return SendOutcome("failed", _truncate(f"Could not negotiate a session: {exc}"))
-        if credentials.username:
-            try:
-                client.login(credentials.username, credentials.password)
-            except _TRANSPORT_ERRORS:
-                # A hostile or buggy server can echo the AUTH line back in its
-                # reply. Never interpolate it: a base64-encoded credential in
-                # this detail would be persisted (Task 5 stores it verbatim).
-                self._close(client)
-                return SendOutcome("failed", "Authentication was rejected by the server.")
+            client = connect_and_authenticate(
+                self._credentials,
+                timeout=self._timeout,
+                client_factory=self._client_factory,
+            )
+        except SmtpNegotiationError as exc:
+            return SendOutcome("failed", exc.detail)
         try:
             client.send_message(message)
         except _REFUSALS as exc:
-            self._close(client)
+            _close(client)
             return SendOutcome("failed", _truncate(f"The server refused the message: {exc}"))
         except _TRANSPORT_ERRORS as exc:
             # The body may have been written and queued with the reply unread.
-            self._close(client)
+            _close(client)
             return SendOutcome("uncertain", _truncate(f"No confirmation was received: {exc}"))
-        self._close(client)
+        _close(client)
         return SendOutcome("sent")
-
-    @staticmethod
-    def _close(client: smtplib.SMTP) -> None:
-        # The message's fate is already decided; a failed teardown is noise.
-        with contextlib.suppress(OSError, smtplib.SMTPException):
-            client.quit()

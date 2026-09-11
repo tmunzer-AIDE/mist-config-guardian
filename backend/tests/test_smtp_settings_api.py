@@ -280,3 +280,29 @@ def test_probe_smtp_reports_a_connection_failure_without_raising(monkeypatch: py
 
     assert ok is False
     assert "Connection refused" in detail
+
+
+def test_probe_smtp_never_echoes_the_servers_login_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hostile or buggy server can echo the AUTH line back in a 535 reply.
+
+    That reply must never reach ``detail``: ``test_smtp_connection`` persists
+    it verbatim to ``smtp_last_test_detail`` and returns it from both
+    ``POST /smtp/test`` and every later ``GET /smtp``. This is the probe's
+    side of the same hardening ``test_smtp_transport.py``'s
+    ``test_a_login_failure_never_echoes_the_servers_reply`` pins down for the
+    message-sending transport; both now go through the one shared
+    ``connect_and_authenticate``.
+    """
+    credential_shaped = "cG9zdG1hc3RlcjpodW50ZXIy"  # base64("postmaster:hunter2")
+    error = smtplib.SMTPAuthenticationError(535, credential_shaped.encode())
+    client = MagicMock(spec=smtplib.SMTP)
+    client.login.side_effect = error
+    monkeypatch.setattr(smtplib, "SMTP", MagicMock(return_value=client))
+
+    ok, detail = _probe_smtp(_STARTTLS_CREDENTIALS)
+
+    assert ok is False
+    assert credential_shaped not in detail
+    assert detail == "Authentication was rejected by the server."
+    client.send_message.assert_not_called()
+    client.sendmail.assert_not_called()

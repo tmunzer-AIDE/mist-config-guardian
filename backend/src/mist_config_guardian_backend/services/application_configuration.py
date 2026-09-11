@@ -1,6 +1,7 @@
 """Application-wide configuration management."""
 
 import asyncio
+import contextlib
 import smtplib
 import time
 from dataclasses import dataclass
@@ -16,7 +17,11 @@ from mist_config_guardian_backend.integrations.ai_provider import (
     AiProviderError,
     OpenAiCompatibleProvider,
 )
-from mist_config_guardian_backend.integrations.smtp import SmtpCredentials, verified_context
+from mist_config_guardian_backend.integrations.smtp import (
+    SmtpCredentials,
+    SmtpNegotiationError,
+    connect_and_authenticate,
+)
 from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.schemas.application_configuration import (
@@ -68,28 +73,19 @@ def _probe_smtp(credentials: SmtpCredentials) -> tuple[bool, str]:
     """Connect, upgrade, and authenticate, reporting what happened.
 
     Never sends a message: connecting, upgrading, and authenticating is the
-    whole check, and there is nobody to send a real message to.
+    whole check, and there is nobody to send a real message to. Reaches the
+    server through the same ``connect_and_authenticate`` the mail transport
+    uses, so the verified TLS contexts and the login-failure hardening (a
+    hostile or buggy server can echo the AUTH line back in its reply) exist
+    in exactly one place rather than being reimplemented, and potentially
+    weakened, here.
     """
     try:
-        client: smtplib.SMTP
-        if credentials.security == "tls":
-            client = smtplib.SMTP_SSL(
-                credentials.host,
-                credentials.port,
-                timeout=10.0,
-                context=verified_context(),
-            )
-        else:
-            client = smtplib.SMTP(credentials.host, credentials.port, timeout=10.0)
-        try:
-            if credentials.security == "starttls":
-                client.starttls(context=verified_context())
-            if credentials.username:
-                client.login(credentials.username, credentials.password)
-        finally:
-            client.quit()
-    except (OSError, smtplib.SMTPException) as exc:
-        return False, str(exc)[:200]
+        client = connect_and_authenticate(credentials, timeout=10.0)
+    except SmtpNegotiationError as exc:
+        return False, exc.detail
+    with contextlib.suppress(OSError, smtplib.SMTPException):
+        client.quit()
     if credentials.security == "none":
         return True, "Connected. This connection is unencrypted."
     return True, "Connected and authenticated over TLS."
