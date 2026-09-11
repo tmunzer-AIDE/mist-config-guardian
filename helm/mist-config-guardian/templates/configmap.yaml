@@ -10,6 +10,8 @@ data:
   ENVIRONMENT: {{ .Values.config.environment | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  WEBAUTHN_ORIGIN: {{ include "mist-config-guardian.webauthnOrigin" . | quote }}
+  WEBAUTHN_RP_ID: {{ include "mist-config-guardian.webauthnRpId" . | quote }}
   MONGODB_DB_NAME: {{ .Values.config.mongodbDatabase | quote }}
 {{- /*
   A bundled datastore needs a credential in its URL, so that URL is assembled

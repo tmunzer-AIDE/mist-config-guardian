@@ -60,6 +60,24 @@ questions:
     label: Allowed CORS origins
     description: Comma-separated application origins, including scheme.
     group: Networking
+  - variable: config.webauthnOrigin
+    default: ""
+    type: string
+    label: Passkey origin
+    description: >-
+      The browser address of the application, with scheme, that passkeys are
+      verified against. Leave empty to use the ingress hostname over HTTPS, or
+      the first CORS origin when no ingress is enabled.
+    group: Networking
+  - variable: config.webauthnRpId
+    default: ""
+    type: string
+    label: Passkey domain
+    description: >-
+      The domain passkeys are bound to. Leave empty to use the host of the
+      passkey origin. Set a registrable parent domain to make one passkey work
+      across sibling hostnames.
+    group: Networking
 
   - variable: secrets.create
     default: false

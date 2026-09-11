@@ -84,6 +84,14 @@ config:
   environment: production
   apiV1Prefix: /api/v1
   corsOrigins: https://guardian.example.com
+  # The browser address passkeys are verified against, and the domain they are
+  # bound to. Both are derived from ingress.host, or from the first corsOrigins
+  # entry when no ingress is enabled, and only need a value here when the
+  # browser reaches the application somewhere else — through a proxy on another
+  # domain, or on a non-standard port. The origin includes the scheme; the RP ID
+  # is a bare domain, and only a registrable parent of the origin's host.
+  webauthnOrigin: ""
+  webauthnRpId: ""
   # These endpoints are used only when the corresponding bundled service is disabled.
   mongodbUrl: mongodb://mongodb:27017
   mongodbDatabase: mist_config_guardian

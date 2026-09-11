@@ -85,3 +85,47 @@ restarting the pods is the operator's step — the README says so.
 {{- define "mist-config-guardian.secretChecksum" -}}
 {{- include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
 {{- end }}
+
+{{/*
+The browser origin the application is served from.
+
+WebAuthn compares this against the origin the browser reports, so it has to be
+the address a person types and not anything internal: a passkey registered
+against the wrong one is refused at every later sign-in. The ingress host is
+that address whenever the ingress is what publishes the application, and the
+scheme is always https because browsers offer WebAuthn only in a secure
+context — an application reached over plain http on a real hostname cannot
+register a passkey at all. Without an ingress the first CORS origin is the
+closest thing this chart knows to the public address.
+
+Set config.webauthnOrigin when neither is what the browser sees: a proxy on a
+different domain, or a non-standard port.
+*/}}
+{{- define "mist-config-guardian.webauthnOrigin" -}}
+{{- if .Values.config.webauthnOrigin -}}
+{{- .Values.config.webauthnOrigin | trimSuffix "/" -}}
+{{- else if .Values.ingress.enabled -}}
+{{- printf "https://%s" (required "ingress.host is required when ingress.enabled is true" .Values.ingress.host) -}}
+{{- else -}}
+{{- $first := splitList "," (.Values.config.corsOrigins | default "") | first | trim | trimSuffix "/" -}}
+{{- required "config.webauthnOrigin is required when the ingress is disabled and config.corsOrigins is empty" $first -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The domain a passkey is bound to.
+
+A credential registered for one RP ID is never offered for another, so this
+defaults to the application's own host: the origin above with its scheme and
+any port removed. Override it with config.webauthnRpId to bind passkeys to a
+registrable parent domain instead, which is the one way a credential can be
+used across sibling hostnames.
+*/}}
+{{- define "mist-config-guardian.webauthnRpId" -}}
+{{- if .Values.config.webauthnRpId -}}
+{{- .Values.config.webauthnRpId -}}
+{{- else -}}
+{{- $host := include "mist-config-guardian.webauthnOrigin" . | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- splitList "/" $host | first | splitList ":" | first -}}
+{{- end -}}
+{{- end }}
