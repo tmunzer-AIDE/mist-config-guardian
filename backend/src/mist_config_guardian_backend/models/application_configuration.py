@@ -25,6 +25,19 @@ class ApplicationConfiguration(TimestampedModel, Document):
     impact_ai_last_test_ok: bool | None = None
     impact_ai_last_test_detail: str | None = None
 
+    smtp_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_security: Literal["starttls", "tls", "none"] = "starttls"
+    smtp_username: str = ""
+    encrypted_smtp_password: str | None = None
+    smtp_password_last_four: str | None = None
+    smtp_from_address: str = ""
+    smtp_from_name: str = ""
+    smtp_last_test_at: datetime | None = None
+    smtp_last_test_ok: bool | None = None
+    smtp_last_test_detail: str | None = None
+
     class Settings:
         name = "application_configuration"
         indexes: ClassVar[list[IndexModel]] = [
