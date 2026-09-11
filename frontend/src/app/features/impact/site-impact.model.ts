@@ -14,7 +14,6 @@ export interface TopologyDevice {
   parent: string | null;
   uplink: string | null;
   tier: number;
-  col: number;
   health: Health;
   health_label: string;
   last_seen: string | null;
@@ -109,8 +108,6 @@ export function impactDevices(topology: TopologyDevice[], changes: SiteChange[])
           parent: null,
           uplink: null,
           tier: 3,
-          // Placement is the layout's job; `col` is a legacy field it ignores.
-          col: 0,
           health: 'unknown',
           health_label: 'Not returned in topology',
           last_seen: null,

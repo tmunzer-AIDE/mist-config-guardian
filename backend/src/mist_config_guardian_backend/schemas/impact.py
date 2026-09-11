@@ -28,7 +28,6 @@ class TopologyDevice(BaseModel):
     parent: str | None = None
     uplink: str | None = None
     tier: int = 2
-    col: float = 0
     health: Health = "unknown"
     health_label: str = "No health evidence"
     last_seen: datetime | None = None

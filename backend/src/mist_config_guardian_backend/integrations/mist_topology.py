@@ -154,9 +154,6 @@ def topology_from_stats(
             upstream_ports = link.source_ports if link.source == item.parent else link.target_ports
             item.uplink = ", ".join(upstream_ports) or "LLDP neighbor"
     ordered = sorted(devices.values(), key=lambda item: (item.tier, item.name.casefold(), item.id))
-    for tier in range(4):
-        for index, item in enumerate(d for d in ordered if d.tier == tier):
-            item.col = float(index)
     return SiteTopology(
         site_id=site_id, devices=ordered, links=links, source="mist", collected_at=utc_now(), complete=True
     )

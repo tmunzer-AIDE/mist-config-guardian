@@ -72,10 +72,7 @@ def test_topology_only_links_observed_chassis_and_keeps_unknown_distinct_from_ok
     assert by_id["ffeeddccbbaa"].health == "error"
     assert by_id["123456abcdef"].parent is None
     assert "hidden" not in result.model_dump_json()
-    assert len({(d.tier, d.col) for d in result.devices}) == 3
-    assert [(d.id, d.col) for d in topology_from_stats(SITE, list(reversed(rows))).devices] == [
-        (d.id, d.col) for d in result.devices
-    ]
+    assert [d.id for d in topology_from_stats(SITE, list(reversed(rows))).devices] == [d.id for d in result.devices]
 
 
 @pytest.mark.parametrize("malformed", [None, [], 4, "unexpected"])

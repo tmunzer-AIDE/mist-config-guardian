@@ -14,7 +14,6 @@ function device(overrides: Partial<TopologyDevice> & { id: string }): TopologyDe
     parent: null,
     uplink: null,
     tier: 2,
-    col: 0,
     health: 'unknown',
     health_label: 'No health evidence',
     last_seen: null,

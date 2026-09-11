@@ -5667,11 +5667,6 @@
             ],
             "title": "Clients"
           },
-          "col": {
-            "default": 0,
-            "title": "Col",
-            "type": "number"
-          },
           "health": {
             "default": "unknown",
             "enum": [

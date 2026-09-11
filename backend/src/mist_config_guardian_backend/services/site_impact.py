@@ -259,9 +259,6 @@ async def stored_topology(org: PydanticObjectId, site: str, end: datetime, *, hi
             device.health_label = "Stored inventory · health unavailable"
             devices.append(device)
     devices.sort(key=lambda device: (device.tier, device.name.casefold(), device.id))
-    for tier in range(4):
-        for col, device in enumerate(item for item in devices if item.tier == tier):
-            device.col = col
     return SiteTopology(
         site_id=site,
         devices=devices,
