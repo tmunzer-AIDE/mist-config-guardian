@@ -1,5 +1,6 @@
 """SMTP settings persistence and its request schema."""
 
+from collections.abc import Callable
 from unittest.mock import AsyncMock
 
 import pytest
@@ -93,6 +94,48 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ApplicationConfigurationService:
     return configuration_service
 
 
+# `reject_development_secret_in_production` refuses the module defaults once
+# `environment` is "production", so a production `Settings` needs its own.
+_PRODUCTION_SECRETS = {
+    "secret_key": "x" * 64,
+    "credential_encryption_key": "y" * 64,
+    "bootstrap_admin_token": "z" * 64,
+}
+
+
+@pytest.fixture
+def make_service(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], ApplicationConfigurationService]:
+    """Build a service scoped to a given environment.
+
+    A factory rather than a second parametrized `service` fixture: only the
+    production/development loopback tests need a non-"test" environment, and
+    routing that through every other test's `service` would be noise.
+    """
+
+    def _make(environment: str) -> ApplicationConfigurationService:
+        secrets = _PRODUCTION_SECRETS if environment == "production" else {}
+        vault = CredentialVault(
+            Settings(
+                environment="test",
+                database_enabled=False,
+                credential_encryption_key=SecretStr("test-encryption-key"),
+            )
+        )
+        settings = Settings(
+            environment=environment,
+            database_enabled=False,
+            cors_origins="https://app.example.test",
+            **secrets,
+        )
+        configuration_service = ApplicationConfigurationService(vault, settings)
+        configuration = ApplicationConfiguration.model_construct(key="global")
+        monkeypatch.setattr(configuration_service, "_get_or_create", AsyncMock(return_value=configuration))
+        monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+        return configuration_service
+
+    return _make
+
+
 async def test_enabling_smtp_without_a_host_is_refused(service: ApplicationConfigurationService) -> None:
     with pytest.raises(ApplicationConfigurationError, match="host"):
         await service.update_smtp(SmtpSettingsUpdate(enabled=True, from_address="a@example.com"))
@@ -118,6 +161,70 @@ async def test_plaintext_with_a_username_is_refused(service: ApplicationConfigur
         )
 
 
+async def test_production_unencrypted_refuses_a_non_loopback_host(
+    make_service: Callable[[str], ApplicationConfigurationService],
+) -> None:
+    configured_service = make_service("production")
+
+    with pytest.raises(ApplicationConfigurationError) as exc_info:
+        await configured_service.update_smtp(
+            SmtpSettingsUpdate(
+                enabled=True,
+                host="mail.example.com",
+                from_address="a@example.com",
+                security="none",
+            )
+        )
+
+    # The refusal must be actionable: it names the two forms that would work.
+    assert "127.0.0.1" in str(exc_info.value)
+    assert "::1" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+async def test_production_unencrypted_accepts_a_literal_loopback_host(
+    host: str, make_service: Callable[[str], ApplicationConfigurationService]
+) -> None:
+    configured_service = make_service("production")
+
+    response = await configured_service.update_smtp(
+        SmtpSettingsUpdate(enabled=True, host=host, from_address="a@example.com", security="none")
+    )
+
+    assert response.enabled is True
+    assert response.host == host
+
+
+async def test_production_unencrypted_refuses_localhost(
+    make_service: Callable[[str], ApplicationConfigurationService],
+) -> None:
+    """``localhost`` usually resolves to loopback, but it is a name: what it
+    points at can be rebound between this check and the connection that
+    trusts it. Production must refuse it even though it "looks" safe — that
+    is the deliberate strictness this test exists to pin down.
+    """
+    configured_service = make_service("production")
+
+    with pytest.raises(ApplicationConfigurationError, match=r"127\.0\.0\.1"):
+        await configured_service.update_smtp(
+            SmtpSettingsUpdate(enabled=True, host="localhost", from_address="a@example.com", security="none")
+        )
+
+
+async def test_development_unencrypted_accepts_a_non_loopback_host(
+    make_service: Callable[[str], ApplicationConfigurationService],
+) -> None:
+    """The loopback restriction is scoped to production, not applied everywhere."""
+    configured_service = make_service("development")
+
+    response = await configured_service.update_smtp(
+        SmtpSettingsUpdate(enabled=True, host="mail.example.com", from_address="a@example.com", security="none")
+    )
+
+    assert response.enabled is True
+    assert response.host == "mail.example.com"
+
+
 async def test_a_blank_password_leaves_the_stored_one_untouched(service: ApplicationConfigurationService) -> None:
     await service.update_smtp(
         SmtpSettingsUpdate(enabled=True, host="mail.example.com", from_address="a@example.com", password="hunter2")
@@ -140,5 +247,16 @@ async def test_disabled_smtp_has_no_credentials(
     """
     monkeypatch.setattr(ApplicationConfiguration, "key", "global", raising=False)
     monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=None))
+
+    assert await service.smtp_credentials() is None
+
+
+async def test_a_stored_but_disabled_configuration_has_no_credentials(
+    service: ApplicationConfigurationService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document existing is not enough: it must also say ``smtp_enabled``."""
+    configuration = ApplicationConfiguration.model_construct(key="global", smtp_enabled=False)
+    monkeypatch.setattr(ApplicationConfiguration, "key", "global", raising=False)
+    monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=configuration))
 
     assert await service.smtp_credentials() is None
