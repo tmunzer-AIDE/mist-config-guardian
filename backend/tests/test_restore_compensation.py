@@ -34,7 +34,6 @@ from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
-from mist_config_guardian_backend.services.restore_authorization import find_unavailable_secrets
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
@@ -50,6 +49,7 @@ from mist_config_guardian_backend.snapshots.canonical import (
 )
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
+    find_unavailable_secrets,
     is_protected,
     protect_configuration,
     reveal_configuration,

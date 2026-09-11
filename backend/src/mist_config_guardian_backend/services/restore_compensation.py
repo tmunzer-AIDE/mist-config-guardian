@@ -31,11 +31,6 @@ from mist_config_guardian_backend.security.credentials import (
     CredentialVault,
 )
 from mist_config_guardian_backend.services.approvals import compute_plan_hash
-from mist_config_guardian_backend.services.restore_authorization import (
-    SecretPath,
-    find_unavailable_secrets,
-    format_secret_path,
-)
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     RestoreStateStore,
@@ -51,7 +46,13 @@ from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash_matches,
 )
 from mist_config_guardian_backend.snapshots.registry import get_definition
-from mist_config_guardian_backend.snapshots.secrets import protect_configuration, reveal_configuration
+from mist_config_guardian_backend.snapshots.secrets import (
+    SecretPath,
+    find_unavailable_secrets,
+    format_secret_path,
+    protect_configuration,
+    reveal_configuration,
+)
 
 logger = logging.getLogger(__name__)
 

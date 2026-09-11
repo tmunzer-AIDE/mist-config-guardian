@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from kombu.exceptions import OperationalError
 
 from mist_config_guardian_backend.api.dependencies import (
+    get_credential_vault,
     get_restore_authorization_service,
     require_administrator,
     require_operator,
@@ -28,6 +29,7 @@ from mist_config_guardian_backend.schemas.restore import (
     RestoreTargetListResponse,
     RestoreVerificationResponse,
 )
+from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import (
     ApprovalError,
     ApprovalService,
@@ -88,11 +90,12 @@ def get_restore_verification_service() -> RestoreVerificationService:
 
 
 @router.post("/plans", status_code=status.HTTP_201_CREATED)
-async def create_restore_plan(
+async def create_restore_plan(  # noqa: PLR0913, PLR0917 - each argument is a separate injected dependency
     organization_id: PydanticObjectId,
     request: RestorePlanRequest,
     organization: Annotated[Organization, Depends(require_organization)],
     store: Annotated[RestoreStateStore, Depends(get_plan_state_store)],
+    vault: Annotated[CredentialVault, Depends(get_credential_vault)],
     operator: Annotated[User, Depends(require_operator)],
 ) -> RestoreOperationResponse:
     """Create a side-effect-free dependency-aware restore plan."""
@@ -102,7 +105,7 @@ async def create_restore_plan(
             detail="Authenticated operator is missing an identifier",
         )
     try:
-        operation = await RestorePlanner(store, organization_policy(organization)).create_plan(
+        operation = await RestorePlanner(store, organization_policy(organization), vault).create_plan(
             organization_id=organization_id,
             requested_by=operator.id,
             version_ids=request.version_ids,

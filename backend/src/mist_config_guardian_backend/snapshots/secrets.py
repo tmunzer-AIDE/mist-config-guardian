@@ -96,3 +96,54 @@ def redact_configuration(configuration: Mapping[str, object]) -> dict[str, objec
         return value
 
     return {str(key): redact(value) for key, value in configuration.items()}
+
+
+# One step into a configuration: a mapping key, or a position in a sequence.
+SecretPath = tuple[str | int, ...]
+
+
+def format_secret_path(path: SecretPath) -> str:
+    """Render a location for a person to read. Never for comparing two."""
+    return ".".join(str(step) for step in path)
+
+
+def find_unavailable_secrets(
+    value: object,
+    sensitive_fields: frozenset[str],
+    *,
+    path: SecretPath = (),
+) -> set[SecretPath]:
+    """Find explicitly masked secrets that cannot be replayed safely.
+
+    Each location is reported as the steps taken to reach it rather than as a
+    dotted string. A configuration is an arbitrary document: a key may itself
+    contain a dot, and a mapping key may look like a list index, so joining the
+    steps gives two different locations the same name. Anything deciding
+    whether two locations are the same has to compare the steps.
+    """
+    missing: set[SecretPath] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = (*path, str(key))
+            if str(key).lower() in sensitive_fields and (
+                child is None or child == "" or (isinstance(child, str) and set(child) == {"*"})
+            ):
+                missing.add(child_path)
+            else:
+                missing.update(
+                    find_unavailable_secrets(
+                        child,
+                        sensitive_fields,
+                        path=child_path,
+                    )
+                )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            missing.update(
+                find_unavailable_secrets(
+                    child,
+                    sensitive_fields,
+                    path=(*path, index),
+                )
+            )
+    return missing

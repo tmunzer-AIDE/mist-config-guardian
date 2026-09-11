@@ -10,8 +10,7 @@ from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreStatus
 from mist_config_guardian_backend.security.credentials import CredentialVault
-from mist_config_guardian_backend.snapshots.registry import get_definition
-from mist_config_guardian_backend.snapshots.secrets import reveal_configuration
+from mist_config_guardian_backend.services.restore_planner import unavailable_secret_errors
 
 
 class RestoreAuthorizationError(ValueError):
@@ -94,25 +93,16 @@ class RestoreAuthorizationService:
         return refreshed
 
     def _validate_action_secrets(self, operation: RestoreOperation) -> None:
-        for action in operation.actions:
-            if action.action == "delete":
-                continue
-            definition = get_definition(action.scope, action.object_type)
-            if definition is None:
-                msg = f"Unsupported restore type: {action.scope}:{action.object_type}"
-                raise RestoreAuthorizationError(msg)
-            configuration = reveal_configuration(
-                action.protected_configuration,
-                self._vault,
-            )
-            missing = find_unavailable_secrets(
-                configuration,
-                definition.sensitive_fields,
-            )
-            if missing:
-                fields = ", ".join(sorted(format_secret_path(path) for path in missing))
-                msg = f"{action.object_name} requires unavailable secret values: {fields}"
-                raise RestoreAuthorizationError(msg)
+        """Refuse a plan whose secrets Mist never returned.
+
+        Planning names these in ``preflight_errors`` so a reviewer sees them
+        first. This is the same rule applied again at the last moment, because
+        a plan can be authorized long after it was built and the check is what
+        stands between a mask and a live credential.
+        """
+        errors = unavailable_secret_errors(operation.actions, self._vault)
+        if errors:
+            raise RestoreAuthorizationError(errors[0])
 
     @staticmethod
     async def release(operation_id: PydanticObjectId, task_id: str) -> None:
@@ -152,54 +142,3 @@ class RestoreAuthorizationService:
             }
         )
         return result.modified_count
-
-
-# One step into a configuration: a mapping key, or a position in a sequence.
-SecretPath = tuple[str | int, ...]
-
-
-def format_secret_path(path: SecretPath) -> str:
-    """Render a location for a person to read. Never for comparing two."""
-    return ".".join(str(step) for step in path)
-
-
-def find_unavailable_secrets(
-    value: object,
-    sensitive_fields: frozenset[str],
-    *,
-    path: SecretPath = (),
-) -> set[SecretPath]:
-    """Find explicitly masked secrets that cannot be replayed safely.
-
-    Each location is reported as the steps taken to reach it rather than as a
-    dotted string. A configuration is an arbitrary document: a key may itself
-    contain a dot, and a mapping key may look like a list index, so joining the
-    steps gives two different locations the same name. Anything deciding
-    whether two locations are the same has to compare the steps.
-    """
-    missing: set[SecretPath] = set()
-    if isinstance(value, dict):
-        for key, child in value.items():
-            child_path = (*path, str(key))
-            if str(key).lower() in sensitive_fields and (
-                child is None or child == "" or (isinstance(child, str) and set(child) == {"*"})
-            ):
-                missing.add(child_path)
-            else:
-                missing.update(
-                    find_unavailable_secrets(
-                        child,
-                        sensitive_fields,
-                        path=child_path,
-                    )
-                )
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            missing.update(
-                find_unavailable_secrets(
-                    child,
-                    sensitive_fields,
-                    path=(*path, index),
-                )
-            )
-    return missing
