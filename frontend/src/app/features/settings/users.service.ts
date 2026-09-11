@@ -125,6 +125,17 @@ export class UsersService {
     return user;
   }
 
+  /**
+   * Redeem an invitation token for a password, activating the account it was
+   * issued for. Unauthenticated: the token is the credential, and there is no
+   * signed-in user yet to attach this call to.
+   */
+  async acceptInvitation(token: string, password: string): Promise<void> {
+    await firstValueFrom(
+      this.http.post<void>(`${API_ROOT}/users/accept-invitation`, { token, password }),
+    );
+  }
+
   /** Forget the cached page, so the next visit refetches. */
   reset(): void {
     this.itemsState.set([]);

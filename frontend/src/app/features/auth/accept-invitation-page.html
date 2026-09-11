@@ -1,0 +1,57 @@
+<div class="auth">
+  <section class="card">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <i class="bar bar--dim"></i>
+        <i class="bar bar--lit"></i>
+        <i class="bar bar--dim"></i>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">Config Guardian</span>
+        <span class="brand-sub">MIST CONFIGURATION</span>
+      </span>
+    </div>
+
+    <h1 class="title">Accept your invitation</h1>
+
+    @if (!hasToken()) {
+      <p class="banner banner--error" role="alert">{{ failureMessage }}</p>
+    } @else {
+      <p class="intro">Choose a password to activate your account.</p>
+
+      @if (error()) {
+        <p class="banner banner--error" role="alert">{{ error() }}</p>
+      }
+
+      <form [formGroup]="acceptForm" (ngSubmit)="accept()">
+        <label class="field">
+          <span class="cg-label">PASSWORD</span>
+          <input
+            class="cg-input"
+            type="password"
+            formControlName="password"
+            autocomplete="new-password"
+            required
+          />
+          <span class="hint">At least 12 characters.</span>
+        </label>
+        <label class="field">
+          <span class="cg-label">CONFIRM PASSWORD</span>
+          <input
+            class="cg-input"
+            type="password"
+            formControlName="confirm"
+            autocomplete="new-password"
+            required
+          />
+          @if (acceptForm.hasError('mismatch') && acceptForm.controls.confirm.touched) {
+            <span class="hint hint--error">Passwords do not match.</span>
+          }
+        </label>
+        <button class="cg-btn cg-btn--primary cg-btn--lg submit" type="submit" [disabled]="busy()">
+          {{ busy() ? 'Activating…' : 'Activate account' }}
+        </button>
+      </form>
+    }
+  </section>
+</div>
