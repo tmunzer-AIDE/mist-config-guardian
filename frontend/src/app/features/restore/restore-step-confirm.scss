@@ -1,0 +1,167 @@
+:host {
+  display: block;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 760px;
+}
+
+.panel {
+  padding: 16px 18px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.panel-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0;
+}
+
+// ------------------------------------------------------------------- subject
+.subject {
+  margin-top: 13px;
+  padding: 13px 15px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.subject-object {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.subject-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.subject-kind {
+  font-size: 11px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+
+.subject-version {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.subject-at {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.subject-actor {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.subject-note {
+  margin: 11px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+// --------------------------------------------------------- mode, deps, build
+// The same controls step one shows for a multi-object restore, so the two
+// entry points do not look like two different features.
+.mode-title {
+  margin-bottom: 13px;
+}
+
+.modes {
+  display: flex;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+.mode {
+  flex: 1;
+  min-width: 230px;
+  padding: 14px 16px;
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.58);
+  transition: box-shadow 0.15s ease;
+
+  &:has(input:focus-visible) {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+
+  &:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+}
+
+.mode--on {
+  border-color: rgba(39, 67, 163, 0.4);
+  background: linear-gradient(180deg, rgba(246, 248, 253, 0.95), rgba(255, 255, 255, 0.75));
+  box-shadow:
+    inset 3px 0 0 var(--brand),
+    0 10px 26px -16px rgba(39, 67, 163, 0.4);
+}
+
+.mode-name {
+  display: block;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.mode-body {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  margin-top: 5px;
+  line-height: 1.5;
+}
+
+.deps {
+  margin-top: 15px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.build {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+}
+
+.build-note {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 0;
+  flex: 1;
+  min-width: 220px;
+}
+
+.read-only-note {
+  margin: 13px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--tone-warning-ink);
+}

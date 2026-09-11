@@ -1,0 +1,103 @@
+<div class="stack">
+  <section class="cg-card panel">
+    <div class="panel-head">
+      <h2 class="panel-title">Restore one object</h2>
+      <button class="cg-btn cg-btn--link" type="button" (click)="pickerRequested.emit()">
+        Restore several objects instead
+      </button>
+    </div>
+
+    <div class="subject">
+      <div class="subject-object">
+        <span class="subject-name">{{ objectName() }}</span>
+        @if (objectKind()) {
+          <span class="subject-kind cg-mono">{{ objectKind() }}</span>
+        }
+      </div>
+      @if (versionLabel()) {
+        <div class="subject-version">
+          <span class="cg-badge cg-badge--info">{{ versionLabel() }}</span>
+          <span class="subject-at cg-mono">{{ observedAt() }}</span>
+          <span class="subject-actor">{{ actor() }}</span>
+        </div>
+      }
+    </div>
+
+    <p class="subject-note">
+      The plan will bring this object back to the configuration it held at that version. Nothing
+      else is touched.
+    </p>
+  </section>
+
+  <section class="cg-card panel">
+    <h2 class="panel-title mode-title">Restore mode</h2>
+    <div class="modes" role="radiogroup" aria-label="Restore mode">
+      <label class="mode" [class.mode--on]="mode() === 'non_destructive'">
+        <input
+          class="cg-visually-hidden"
+          type="radio"
+          name="restore-mode"
+          value="non_destructive"
+          [checked]="mode() === 'non_destructive'"
+          [disabled]="readOnly()"
+          (change)="modePicked.emit('non_destructive')"
+        />
+        <span class="mode-name">Non-destructive</span>
+        <span class="mode-body">
+          Restore the selected state and leave everything else alone. Objects created since the
+          target moment survive.
+        </span>
+      </label>
+      <label class="mode" [class.mode--on]="mode() === 'exact'">
+        <input
+          class="cg-visually-hidden"
+          type="radio"
+          name="restore-mode"
+          value="exact"
+          [checked]="mode() === 'exact'"
+          [disabled]="readOnly()"
+          (change)="modePicked.emit('exact')"
+        />
+        <span class="mode-name">Exact point-in-time</span>
+        <span class="mode-body">
+          Reproduce the historical state exactly, deleting objects that did not exist then. Requires
+          approval.
+        </span>
+      </label>
+    </div>
+
+    <div class="deps">
+      <button
+        class="cg-toggle"
+        type="button"
+        role="switch"
+        [class.cg-toggle--on]="includeDependencies()"
+        [attr.aria-checked]="includeDependencies()"
+        [disabled]="readOnly()"
+        (click)="dependenciesToggled.emit(!includeDependencies())"
+      >
+        <span class="cg-toggle__track"><span class="cg-toggle__thumb"></span></span>
+        Include dependencies and contained objects
+      </button>
+    </div>
+
+    <div class="build">
+      <button
+        class="cg-btn cg-btn--primary cg-btn--lg"
+        type="button"
+        [disabled]="!canPlan()"
+        (click)="planRequested.emit()"
+      >
+        Build restore plan
+      </button>
+      <p class="build-note">
+        Planning is side-effect free — it reads the current state and computes an ordered action
+        list.
+      </p>
+    </div>
+
+    @if (readOnly()) {
+      <p class="read-only-note" role="note">{{ readOnlyNote() }}</p>
+    }
+  </section>
+</div>

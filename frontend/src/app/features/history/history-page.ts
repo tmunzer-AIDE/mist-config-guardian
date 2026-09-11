@@ -8,6 +8,7 @@ import {
   untracked,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
+import { RestoreFocus } from '../restore/restore-step-confirm';
 import { RestorePage } from '../restore/restore-page';
 import { ObjectFacets } from './history.model';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -83,6 +84,8 @@ interface VersionRow {
   actor: string;
   isA: boolean;
   isB: boolean;
+  /** The version the object already holds, which there is nothing to restore to. */
+  isCurrent: boolean;
 }
 
 /**
@@ -328,7 +331,13 @@ export class HistoryPage {
   protected readonly versionRows = computed<VersionRow[]>(() => {
     const a = this.versionAId();
     const b = this.versionBId();
-    return this.versions().map((version) => ({
+    const versions = this.versions();
+    // Restoring the version an object already holds produces a plan with no
+    // actions, so that button is closed here rather than four steps later. A
+    // deleted object is the exception: its newest version is the one that
+    // recreates it, which is very much an action.
+    const currentId = this.selectedObject()?.is_deleted ? null : (versions[0]?.id ?? null);
+    return versions.map((version) => ({
       id: version.id,
       label: `v${version.version}`,
       event: version.event.toUpperCase(),
@@ -337,7 +346,35 @@ export class HistoryPage {
       actor: version.actor ?? 'system',
       isA: version.id === a,
       isB: version.id === b,
+      isCurrent: version.id === currentId,
     }));
+  });
+
+  /**
+   * The object and version the embedded restore flow was opened for.
+   *
+   * Only this page can supply it: the restore targets endpoint lists each
+   * object's newest version, so an older version named in the URL matches no
+   * row there and could not be labelled from inside that flow.
+   */
+  protected readonly restoreFocus = computed<RestoreFocus | null>(() => {
+    const versionId = this.routeParams().get('versions');
+    const object = this.selectedObject();
+    if (!versionId || versionId.includes(',') || !object || this.routeParams().has('changeGroup')) {
+      return null;
+    }
+    const row = this.versionRows().find((candidate) => candidate.id === versionId);
+    if (!row) {
+      return null;
+    }
+    return {
+      versionId,
+      objectName: object.name,
+      objectKind: this.objectKind(),
+      versionLabel: row.label,
+      observedAt: row.at,
+      actor: row.actor,
+    };
   });
 
   protected readonly pairA = computed(() => this.pairLabel('A', this.versionAId()));
@@ -462,7 +499,7 @@ export class HistoryPage {
   // ------------------------------------------------------------------ rights
   protected readonly restorable = computed(() => this.auth.can('operator'));
   protected readonly canRestore = computed(
-    () => this.restorable() && !this.time.isHistorical() && this.versionBId() !== null,
+    () => this.restorable() && !this.time.isHistorical(),
   );
 
   constructor() {
@@ -780,9 +817,15 @@ export class HistoryPage {
     }
   }
 
-  protected async restoreVersion(selectedVersionId?: string): Promise<void> {
-    const versionId = selectedVersionId ?? this.versionBId();
-    if (!versionId || !this.canRestore()) {
+  /**
+   * Open the restore flow for one named version.
+   *
+   * The version is always the caller's: the header used to offer "restore this
+   * version" against whichever version the comparison had pinned as B, which
+   * defaults to the newest one — so its plan was empty by construction.
+   */
+  protected async restoreVersion(versionId: string): Promise<void> {
+    if (!this.canRestore()) {
       return;
     }
     await this.router.navigate(['/history'], {

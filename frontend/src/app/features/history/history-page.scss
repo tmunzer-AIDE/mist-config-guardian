@@ -138,6 +138,14 @@
 }
 .version-restore {
   margin-top: 10px;
+  width: 100%;
+}
+
+.version-current {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
 }
 
 // ------------------------------------------------------------------- columns

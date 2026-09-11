@@ -1,12 +1,12 @@
 <div class="page">
   @if (!embedded()) {
-  <header class="head">
-    <h1 class="cg-page-title">Restore center</h1>
-    <p class="head-sub">
-      Plans are built read-only. Nothing is written until you authorize with a separate write
-      credential.
-    </p>
-  </header>
+    <header class="head">
+      <h1 class="cg-page-title">Restore center</h1>
+      <p class="head-sub">
+        Plans are built read-only. Nothing is written until you authorize with a separate write
+        credential.
+      </p>
+    </header>
   }
 
   @if (readOnly()) {
@@ -36,47 +36,63 @@
 
   @switch (currentStep()) {
     @case ('targets') {
-      <app-restore-step-targets
-        [targets]="targets()"
-        [pills]="selectedPills()"
-        [selectedIds]="selectedIds()"
-        [typeOptions]="typeOptions()"
-        [siteOptions]="siteOptions()"
-        [scope]="scope()"
-        [siteId]="siteId()"
-        [objectType]="objectType()"
-        [query]="query()"
-        [total]="catalogTotal()"
-        [matched]="matched()"
-        [pageLabel]="pageLabel()"
-        [pageSize]="pageSize()"
-        [pageSizes]="pageSizes"
-        [hasPrevPage]="hasPrevPage()"
-        [hasNextPage]="hasNextPage()"
-        [mode]="mode()"
-        [includeDependencies]="includeDependencies()"
-        [history]="history()"
-        [readOnly]="readOnly()"
-        [readOnlyNote]="readOnlyNote()"
-        [busy]="busy()"
-        [changeGroupTitle]="changeGroupTitle()"
-        (scopePicked)="setScope($event)"
-        (sitePicked)="setSite($event)"
-        (typePicked)="setType($event)"
-        (queryChanged)="setQuery($event)"
-        (pageSizePicked)="setPageSize($event)"
-        (nextPageRequested)="nextPage()"
-        (previousPageRequested)="previousPage()"
-        (targetToggled)="toggleTarget($event)"
-        (targetRemoved)="removeTarget($event)"
-        (cleared)="clearSelection()"
-        (filtersCleared)="clearFilters()"
-        (changeGroupCleared)="clearChangeGroup()"
-        (modePicked)="setMode($event)"
-        (dependenciesToggled)="setIncludeDependencies($event)"
-        (planRequested)="buildPlan()"
-        (operationPicked)="pickOperation($event)"
-      />
+      @if (focused()) {
+        <app-restore-step-confirm
+          [focus]="focus()"
+          [fallbackLabel]="focusFallbackLabel()"
+          [mode]="mode()"
+          [includeDependencies]="includeDependencies()"
+          [readOnly]="readOnly()"
+          [readOnlyNote]="readOnlyNote()"
+          [busy]="busy()"
+          (modePicked)="setMode($event)"
+          (dependenciesToggled)="setIncludeDependencies($event)"
+          (planRequested)="buildPlan()"
+          (pickerRequested)="openPicker()"
+        />
+      } @else {
+        <app-restore-step-targets
+          [targets]="targets()"
+          [pills]="selectedPills()"
+          [selectedIds]="selectedIds()"
+          [typeOptions]="typeOptions()"
+          [siteOptions]="siteOptions()"
+          [scope]="scope()"
+          [siteId]="siteId()"
+          [objectType]="objectType()"
+          [query]="query()"
+          [total]="catalogTotal()"
+          [matched]="matched()"
+          [pageLabel]="pageLabel()"
+          [pageSize]="pageSize()"
+          [pageSizes]="pageSizes"
+          [hasPrevPage]="hasPrevPage()"
+          [hasNextPage]="hasNextPage()"
+          [mode]="mode()"
+          [includeDependencies]="includeDependencies()"
+          [history]="history()"
+          [readOnly]="readOnly()"
+          [readOnlyNote]="readOnlyNote()"
+          [busy]="busy()"
+          [changeGroupTitle]="changeGroupTitle()"
+          (scopePicked)="setScope($event)"
+          (sitePicked)="setSite($event)"
+          (typePicked)="setType($event)"
+          (queryChanged)="setQuery($event)"
+          (pageSizePicked)="setPageSize($event)"
+          (nextPageRequested)="nextPage()"
+          (previousPageRequested)="previousPage()"
+          (targetToggled)="toggleTarget($event)"
+          (targetRemoved)="removeTarget($event)"
+          (cleared)="clearSelection()"
+          (filtersCleared)="clearFilters()"
+          (changeGroupCleared)="clearChangeGroup()"
+          (modePicked)="setMode($event)"
+          (dependenciesToggled)="setIncludeDependencies($event)"
+          (planRequested)="buildPlan()"
+          (operationPicked)="pickOperation($event)"
+        />
+      }
     }
 
     @case ('plan') {

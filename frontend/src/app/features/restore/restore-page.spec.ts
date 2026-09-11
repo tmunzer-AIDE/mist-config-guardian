@@ -401,14 +401,16 @@ describe('RestorePage', () => {
     fixture.componentRef.setInput('versions', 'v-corp');
     await boot();
 
-    expect(pillText()).toEqual(['NW-Corp · v14 ✕']);
+    // One version names one object, so the catalogue picker is not what opens.
+    expect(all('.subject-name')[0].textContent).toContain('NW-Corp · v14');
+    expect(all('.target').length).toBe(0);
     expect(all('.step-button--on')[0].textContent).toContain('1 · Select targets');
     httpMock.expectNone((request) => request.method === 'POST');
 
     // Query-only navigation on the mounted workspace must also stay read-only.
     fixture.componentRef.setInput('versions', 'v-rf');
     await settle();
-    expect(pillText()).toEqual(['Indoor-Dense-6G · v3 ✕']);
+    expect(all('.subject-name')[0].textContent).toContain('Indoor-Dense-6G · v3');
     httpMock.expectNone((request) => request.method === 'POST');
 
     button('Build restore plan')!.click();
@@ -420,6 +422,21 @@ describe('RestorePage', () => {
     await settle();
     expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
     httpMock.expectNone((request) => request.method === 'POST');
+  });
+
+  it('keeps a focused restore on its object when the mode or dependencies change', async () => {
+    // Neither changes the selection, so the link that named it must survive.
+    // It carries the version, and the version is how the object is named.
+    fixture.componentRef.setInput('embedded', true);
+    fixture.componentRef.setInput('versions', 'v-corp');
+    await boot();
+
+    button('Exact point-in-time')?.click();
+    element().querySelector<HTMLButtonElement>('.cg-toggle')!.click();
+    await settle();
+
+    expect(all('.subject-name')[0].textContent).toContain('NW-Corp · v14');
+    expect(navigations).toEqual([]);
   });
 
   it('reopens an embedded existing plan without creating another one', async () => {
@@ -1233,6 +1250,10 @@ describe('RestorePage', () => {
     // A refresh must not bring back a selection the user has since changed.
     fixture.componentRef.setInput('versions', 'v-corp');
     await boot(targetList([NW_CORP, RF_DENSE]));
+
+    // The link opened one object; the catalogue is where a selection is edited.
+    button('Restore several objects instead')!.click();
+    await settle();
     expect(all('.pill').length).toBe(1);
 
     element().querySelector<HTMLButtonElement>('.pill-remove')!.click();
@@ -1306,6 +1327,14 @@ describe('RestorePage', () => {
     expect(text()).toContain('You are viewing a past point in time');
     expect(all('.read-only').length).toBe(1);
     expect(all('.read-only-note').length).toBe(1);
+
+    // The link opened the focused card, which is read-only too.
+    expect(button('Build restore plan')!.disabled).toBe(true);
+    expect(all('.mode input').every((input) => (input as HTMLInputElement).disabled)).toBe(true);
+    expect(element().querySelector<HTMLButtonElement>('.cg-toggle')!.disabled).toBe(true);
+
+    button('Restore several objects instead')!.click();
+    await settle();
 
     // The selection is present, so the plan button is disabled by the mode alone.
     expect(text()).toContain('1 selected');

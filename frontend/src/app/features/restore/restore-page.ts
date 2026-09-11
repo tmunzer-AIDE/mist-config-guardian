@@ -17,6 +17,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { TimeContextService } from '../../core/time-context.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { RestoreStepAuthorize } from './restore-step-authorize';
+import { RestoreFocus, RestoreStepConfirm } from './restore-step-confirm';
 import { RestoreStepExecute } from './restore-step-execute';
 import { RestoreStepPlan } from './restore-step-plan';
 import { RestoreStepTargets, SelectedPill, TargetSiteOption, TargetTypeOption } from './restore-step-targets';
@@ -85,7 +86,7 @@ function fromQuery(value: string | undefined): string {
  */
 @Component({
   selector: 'app-restore-page',
-  imports: [RestoreStepTargets, RestoreStepPlan, RestoreStepAuthorize, RestoreStepExecute],
+  imports: [RestoreStepConfirm, RestoreStepTargets, RestoreStepPlan, RestoreStepAuthorize, RestoreStepExecute],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './restore-page.html',
   styleUrl: './restore-page.scss',
@@ -102,6 +103,14 @@ export class RestorePage {
   // ---- deep links, bound by the router's component input binding ----------
   /** `?versions=a,b,c` — pre-select these object versions. */
   readonly embedded = input(false);
+  /**
+   * The object and version a single-object restore is about.
+   *
+   * Supplied by the page this one is embedded in, which already holds both. A
+   * version id alone cannot be resolved here: the targets endpoint lists only
+   * each object's newest version, so an older one appears in no response.
+   */
+  readonly focus = input<RestoreFocus | null>(null);
   readonly versions = input('', { transform: fromQuery });
   /** `?changeGroup=<id>` — pre-select the versions that group replaced. */
   readonly changeGroup = input('', { transform: fromQuery });
@@ -122,6 +131,20 @@ export class RestorePage {
   }));
 
   protected readonly currentStep = signal<RestoreStepName>('targets');
+
+  /**
+   * The version a single-object restore was opened for, if it was.
+   *
+   * Held rather than read back from the URL because building a plan rewrites
+   * the URL to name the operation instead; returning to step one after that
+   * must still show the object, not the catalogue.
+   */
+  private readonly focusedVersionId = signal<string | null>(null);
+  /** Set when someone asks for the full picker from a focused restore. */
+  private readonly picking = signal(false);
+  protected readonly focused = computed(
+    () => this.focusedVersionId() !== null && !this.picking(),
+  );
 
   // ---- step 1 state -------------------------------------------------------
   protected readonly targets = signal<RestoreTarget[]>([]);
@@ -229,6 +252,12 @@ export class RestorePage {
       id,
       label: known[id] ?? `version ${shortOperationId(id)}`,
     }));
+  });
+
+  /** What to call the focused version until the embedding page can name it. */
+  protected readonly focusFallbackLabel = computed(() => {
+    const versionId = this.focusedVersionId();
+    return versionId === null ? '' : (this.labels()[versionId] ?? `version ${shortOperationId(versionId)}`);
   });
 
   /** The 1-based row window this page shows, as "n-m of N". */
@@ -408,6 +437,10 @@ export class RestorePage {
     if (versionIds.length > 0) {
       this.selectedIds.set(versionIds);
     }
+    // One version, and nothing else asked for, is a restore of one object.
+    if (versionIds.length === 1 && !link.changeGroup && !link.operation) {
+      this.focusedVersionId.set(versionIds[0]);
+    }
 
     if (link.changeGroup) {
       await this.ui.track(
@@ -476,7 +509,14 @@ export class RestorePage {
     const token = this.clearOperation();
     this.selectedIds.set([]);
     this.changeGroupTitle.set(null);
+    this.focusedVersionId.set(null);
+    this.picking.set(false);
     return token;
+  }
+
+  /** Leave a focused restore for the full catalogue picker. */
+  protected openPicker(): void {
+    this.picking.set(true);
   }
 
   /**
@@ -623,17 +663,17 @@ export class RestorePage {
     this.selectedIds.update((ids) =>
       ids.includes(versionId) ? ids.filter((id) => id !== versionId) : [...ids, versionId],
     );
-    this.invalidatePlan();
+    this.invalidateSelection();
   }
 
   protected removeTarget(versionId: string): void {
     this.selectedIds.update((ids) => ids.filter((id) => id !== versionId));
-    this.invalidatePlan();
+    this.invalidateSelection();
   }
 
   protected clearSelection(): void {
     this.selectedIds.set([]);
-    this.invalidatePlan();
+    this.invalidateSelection();
   }
 
   protected clearChangeGroup(): void {
@@ -678,7 +718,19 @@ export class RestorePage {
     this.invalidatePlan();
   }
 
+  /** The plan no longer describes what would be done; the selection still stands. */
   private invalidatePlan(): void {
+    this.clearOperation();
+  }
+
+  /**
+   * The selection itself changed, so the link that described it is stale.
+   *
+   * Only the target set does this. A mode or dependency change rebuilds the
+   * plan but restores the same versions, and dropping the link for one would
+   * take the object a focused restore names out of the URL with it.
+   */
+  private invalidateSelection(): void {
     this.clearOperation();
     this.forgetLink();
   }
