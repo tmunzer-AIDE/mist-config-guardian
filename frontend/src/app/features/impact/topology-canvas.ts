@@ -12,7 +12,15 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } from './site-impact.model';
+import {
+  boundedView,
+  Health,
+  TopologyDevice,
+  TopologyLink,
+  Viewport,
+  zoomAt,
+} from './site-impact.model';
+import { edgePath, layoutTopology, NODE_PAD_LEFT, NODE_PAD_TOP } from './topology-layout';
 
 @Component({
   selector: 'app-topology-canvas',
@@ -34,16 +42,24 @@ import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } f
       <div
         class="canvas"
         [style.width.px]="canvasWidth()"
-        [style.height.px]="canvasHeight"
+        [style.height.px]="canvasHeight()"
         [style.transform]="transform()"
       >
         <svg
           class="links"
           [attr.width]="canvasWidth()"
-          [attr.height]="canvasHeight"
+          [attr.height]="canvasHeight()"
           aria-hidden="true"
         >
-          @for (link of links(); track link.id) {
+          @for (link of secondaryLinks(); track link.id) {
+            <path
+              class="secondary"
+              [attr.d]="link.path"
+              [class.in-path]="link.active"
+              [class.dim]="scoped() && !link.active"
+            />
+          }
+          @for (link of treeLinks(); track link.id) {
             <path
               [attr.d]="link.path"
               [class.in-path]="link.active"
@@ -51,7 +67,8 @@ import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } f
             />
           }
         </svg>
-        @for (device of devices(); track device.id) {
+        @for (placed of nodes(); track placed.device.id) {
+          @let device = placed.device;
           <button
             type="button"
             class="node"
@@ -59,8 +76,8 @@ import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } f
             [class.selected]="selectedDevice() === device.id"
             [class.impacted]="impacted().includes(device.id)"
             [class.dim]="scoped() && !impacted().includes(device.id)"
-            [style.left.px]="40 + device.col * 176 - 21"
-            [style.top.px]="ys[device.tier] - 21"
+            [style.left.px]="placed.left"
+            [style.top.px]="placed.top"
             [attr.aria-pressed]="selectedDevice() === device.id"
             [attr.aria-label]="
               device.name + ', ' + (healthOverrides()[device.id] ?? device.health_label)
@@ -154,13 +171,28 @@ import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } f
       vector-effect: non-scaling-stroke;
       opacity: 1;
     }
+    /* Secondary links carry no routing guarantee, so they read as background
+       evidence until one of their endpoints is actually in scope. */
+    .links path.secondary {
+      stroke: var(--ink-faint);
+      stroke-width: 1.5;
+      stroke-dasharray: 1 6;
+      opacity: 0.75;
+    }
     .links path.in-path {
       stroke: var(--brand);
       stroke-width: 2.5;
       opacity: 1;
     }
+    .links path.secondary.in-path {
+      stroke-width: 2;
+      opacity: 1;
+    }
     .links path.dim {
       opacity: 0.72;
+    }
+    .links path.secondary.dim {
+      opacity: 0.45;
     }
     .node {
       position: absolute;
@@ -168,6 +200,7 @@ import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } f
       align-items: center;
       gap: 10px;
       width: 173px;
+      height: 52px;
       background: none;
       border: 0;
       padding: 0;
@@ -238,16 +271,19 @@ import { boundedView, Health, TopologyDevice, TopologyLink, Viewport, zoomAt } f
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .node-label small {
+    .node-label small,
+    .node-label > span {
       display: block;
-      font: 9.5px var(--font-mono);
       color: var(--ink-soft);
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .node-label small {
+      font: 9.5px var(--font-mono);
     }
     .node-label > span {
       font-size: 10px;
-      color: var(--ink-soft);
-      display: block;
     }
     .pending:before {
       content: '';
@@ -346,11 +382,20 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
   readonly zoomChanged = output<number | null>();
   private readonly element = inject(ElementRef<HTMLElement>);
   private readonly surface = viewChild.required<ElementRef<HTMLElement>>('surface');
-  protected readonly ys = [50, 180, 310, 450];
-  protected readonly canvasHeight = 530;
-  protected readonly canvasWidth = computed(() =>
-    Math.max(400, ...this.devices().map((d) => d.col * 176 + 230)),
+  // Geometry is decided by the layout, which takes no viewport input; panning and
+  // zooming therefore never reflow the graph.
+  protected readonly layout = computed(() =>
+    layoutTopology(this.devices(), this.observedLinks() ?? []),
   );
+  protected readonly canvasWidth = computed(() => Math.max(400, this.layout().width));
+  protected readonly canvasHeight = computed(() => Math.max(300, this.layout().height));
+  protected readonly nodes = computed(() => {
+    const placed = this.layout().nodes;
+    return this.devices().flatMap((device) => {
+      const at = placed.get(device.id);
+      return at ? [{ device, left: at.x - NODE_PAD_LEFT, top: at.y - NODE_PAD_TOP }] : [];
+    });
+  });
   protected readonly view = signal<Viewport>({ zoom: 1, x: 0, y: 0 });
   protected readonly percent = computed(() => Math.round(this.view().zoom * 100));
   protected readonly transform = computed(
@@ -368,7 +413,7 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
     capture: HTMLElement;
   } | null = null;
   private suppressClick = false;
-  protected readonly links = computed(() => {
+  private readonly drawn = computed(() => {
     const all = new Map(this.devices().map((d) => [d.id, d]));
     const paths = new Set<string>();
     for (const id of this.impacted()) {
@@ -380,27 +425,20 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
         node = all.get(node.parent);
       }
     }
-    const connections = this.observedLinks() ?? this.devices().flatMap((d) =>
-      d.parent ? [{ source: d.parent, target: d.id }] : [],
-    );
-    return connections.flatMap((link) => {
-      const source = all.get(link.source), target = all.get(link.target);
-      if (!source || !target) return [];
-      const [p, d] = source.tier <= target.tier ? [source, target] : [target, source];
-      const x1 = 40 + p.col * 176,
-        x2 = 40 + d.col * 176,
-        y2 = this.ys[d.tier] - 21,
-        lateral = p.tier === d.tier,
-        y1 = this.ys[p.tier] + (lateral ? -21 : 21),
-        m = lateral ? y1 - 55 : (y1 + y2) / 2;
-      return [{
-        id: `${link.source}:${link.target}`,
-        path: `M ${x1} ${y1} C ${x1} ${m} ${x2} ${m} ${x2} ${y2}`,
-        active: this.observedLinks() === null ? paths.has(d.id) :
-          this.impacted().includes(source.id) || this.impacted().includes(target.id),
-      }];
-    });
+    return this.layout().edges.map((edge) => ({
+      id: edge.id,
+      kind: edge.kind,
+      path: edgePath(edge),
+      active:
+        this.observedLinks() === null
+          ? paths.has(edge.target)
+          : this.impacted().includes(edge.source) || this.impacted().includes(edge.target),
+    }));
   });
+  protected readonly treeLinks = computed(() => this.drawn().filter((e) => e.kind === 'tree'));
+  protected readonly secondaryLinks = computed(() =>
+    this.drawn().filter((e) => e.kind === 'secondary'),
+  );
   constructor() {
     effect(() => {
       this.site();
@@ -408,6 +446,7 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
     });
     effect(() => {
       this.canvasWidth();
+      this.canvasHeight();
       if (!this.customZoom) this.fit(false);
     });
   }
@@ -444,7 +483,7 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
       this.dimensions.width,
       this.dimensions.height,
       this.canvasWidth(),
-      this.canvasHeight,
+      this.canvasHeight(),
     );
   }
   protected fit(manual = true) {
@@ -455,7 +494,7 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
       Math.min(
         1,
         (this.dimensions.width - 48) / this.canvasWidth(),
-        (this.dimensions.height - 64) / this.canvasHeight,
+        (this.dimensions.height - 64) / this.canvasHeight(),
       ),
     );
     this.view.set(this.bound({ zoom, x: 24, y: 32 }));

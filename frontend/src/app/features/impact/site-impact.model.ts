@@ -109,7 +109,8 @@ export function impactDevices(topology: TopologyDevice[], changes: SiteChange[])
           parent: null,
           uplink: null,
           tier: 3,
-          col: devices.size,
+          // Placement is the layout's job; `col` is a legacy field it ignores.
+          col: 0,
           health: 'unknown',
           health_label: 'Not returned in topology',
           last_seen: null,

@@ -97,6 +97,37 @@ function clamp(value: number, low: number, high: number): number {
 function pairKey(a: string, b: string): string {
   return a < b ? `${a} ${b}` : `${b} ${a}`;
 }
+const round = (value: number) => Math.round(value * 100) / 100;
+/**
+ * SVG path data for a routed edge. Elbows get rounded corners, cut back by at
+ * most half of either adjacent segment, so the curve never reaches a segment
+ * endpoint and the clearances proven for the polyline still hold.
+ */
+export function edgePath(edge: LayoutEdge, radius = 9): string {
+  const points = edge.points;
+  if (points.length < 2) return '';
+  const at = (point: LayoutPoint) => `${round(point.x)} ${round(point.y)}`;
+  if (edge.shape === 'curve')
+    return `M ${at(points[0])} C ${at(points[1])} ${at(points[2])} ${at(points[3])}`;
+  let data = `M ${at(points[0])}`;
+  for (let index = 1; index < points.length - 1; index++) {
+    const previous = points[index - 1],
+      corner = points[index],
+      next = points[index + 1],
+      back = Math.hypot(corner.x - previous.x, corner.y - previous.y),
+      ahead = Math.hypot(next.x - corner.x, next.y - corner.y);
+    if (!back || !ahead) continue;
+    const cut = Math.min(radius, back / 2, ahead / 2);
+    data += ` L ${at({
+      x: corner.x + ((previous.x - corner.x) / back) * cut,
+      y: corner.y + ((previous.y - corner.y) / back) * cut,
+    })} Q ${at(corner)} ${at({
+      x: corner.x + ((next.x - corner.x) / ahead) * cut,
+      y: corner.y + ((next.y - corner.y) / ahead) * cut,
+    })}`;
+  }
+  return `${data} L ${at(points[points.length - 1])}`;
+}
 
 type Block = { kind: 'child'; id: string } | { kind: 'stack'; ids: string[] };
 interface ParentEdge {
