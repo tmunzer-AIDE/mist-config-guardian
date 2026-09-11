@@ -37,6 +37,8 @@ import {
   severityLabel,
   shortAudit,
   sleSeries,
+  axisFor,
+  baselineWindowLabel,
   statusLabel,
 } from './monitoring.model';
 import { MonitoringService } from './monitoring.service';
@@ -233,7 +235,7 @@ export class ImpactPage {
       ...metric,
       deltaInk: toneInk(metric.delta === 0 ? 'none' : metric.delta < 0 ? 'crit' : 'ok'),
       barInk: toneInk(metric.tone),
-      baselineLabel: `BASELINE ${Math.round(metric.baseline)}%`,
+      baselineLabel: `BASELINE ${Math.round(metric.baseline)}% · ${baselineWindowLabel(session)}`,
       latestLabel: `LATEST ${Math.round(metric.latest)}%`,
     }));
   });
@@ -594,28 +596,6 @@ function incidentLabel(
   }
   const closed = resolvedAt ? ` at ${formatTime(new Date(resolvedAt))}` : '';
   return `${eventType} at ${when} — resolved${closed}`;
-}
-
-/** Five axis slots, offset from the configuration instant, as the design shows. */
-function axisFor(bars: SleBar[], session: MonitoringSession): string[] {
-  const first = Date.parse(bars[0].at);
-  const last = Date.parse(bars[bars.length - 1].at);
-  const applied = session.config_applied_at ? Date.parse(session.config_applied_at) : first;
-  const live = session.status === 'monitoring' || session.status === 'awaiting_config';
-  return [
-    offsetLabel(first - applied),
-    offsetLabel((first + applied) / 2 - applied),
-    'CHANGE',
-    offsetLabel((applied + last) / 2 - applied),
-    live ? 'NOW' : offsetLabel(last - applied),
-  ];
-}
-
-function offsetLabel(deltaMs: number): string {
-  const minutes = Math.round(deltaMs / 60_000);
-  const sign = minutes < 0 ? '−' : '+';
-  const magnitude = Math.abs(minutes);
-  return magnitude < 60 ? `${sign}${magnitude}M` : `${sign}${Math.round(magnitude / 60)}H`;
 }
 
 function statePanel(session: MonitoringSession): StatePanel {

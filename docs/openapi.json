@@ -5338,6 +5338,15 @@
       "SleObservationResponse": {
         "description": "Safe numeric SLE observation.",
         "properties": {
+          "baseline_window": {
+            "default": "full-window",
+            "enum": [
+              "last-hour",
+              "full-window"
+            ],
+            "title": "Baseline Window",
+            "type": "string"
+          },
           "captured_at": {
             "format": "date-time",
             "title": "Captured At",
@@ -5365,6 +5374,23 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "trend": {
+            "additionalProperties": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Trend",
+            "type": "object"
           },
           "values": {
             "additionalProperties": {

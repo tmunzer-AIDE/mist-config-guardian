@@ -336,3 +336,35 @@ async def test_operational_polls_preserve_first_outage_and_record_recovery(monke
     assert comparison.recovered_at == recovered.captured_at
     assert session.impact_severity == ImpactSeverity.NONE
     assert session.peak_impact_severity == ImpactSeverity.CRITICAL
+
+
+async def test_baseline_capture_anchors_on_the_final_hour_and_keeps_the_day_trend(monkeypatch, httpx_mock):
+    """The stored baseline must be comparable to a post-change window, not a day."""
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from mist_config_guardian_backend.models.organization import MistCloudRegion, Organization  # noqa: PLC0415
+    from mist_config_guardian_backend.services import monitoring  # noqa: PLC0415
+
+    # A day at 50% that recovers to 90% in the hour before the change.
+    recovering = {"sle": {"samples": {"total": [100] * 24, "degraded": [50] * 23 + [10]}}}
+
+    def respond(request):
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"supported": ["coverage"], "enabled": ["coverage"]})
+        return httpx.Response(200, json=recovering)
+
+    httpx_mock.add_callback(respond, is_reusable=True)
+    monkeypatch.setattr(monitoring, "service_token", AsyncMock(return_value="read-token"))
+    organization = Organization.model_construct(id=ORGANIZATION_ID, cloud_region=MistCloudRegion.GLOBAL_01)
+
+    service = monitoring.MonitoringEventService(CredentialVault(Settings(environment="test", database_enabled=False)))
+    baseline = await service._capture(  # noqa: SLF001
+        organization, "Seattle-DC", DeviceType.AP, "5c:5b:35:1a:2b:a1", NOW
+    )
+
+    assert baseline.values["coverage"] == 90
+    assert baseline.baseline_window == "last-hour"
+    assert len(baseline.trend["coverage"]) == 24
+    assert baseline.window_start == NOW - timedelta(hours=24)

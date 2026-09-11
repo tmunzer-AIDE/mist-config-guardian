@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
 from types import TracebackType
@@ -63,7 +64,7 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
     ) -> None:
         await self._client.aclose()
 
-    async def capture(
+    async def capture(  # noqa: PLR0913 - scope, window and anchor are all caller-chosen
         self,
         *,
         site_id: str,
@@ -71,8 +72,16 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         start: datetime | None = None,
         end: datetime | None = None,
         device_mac: str | None = None,
+        anchor: timedelta | None = None,
     ) -> SleObservation:
-        """Capture relevant metrics for the selected site or device scope."""
+        """Capture relevant metrics for the selected site or device scope.
+
+        ``anchor`` narrows the reported ``values`` to the tail of the window
+        while the returned trend still spans all of it. A 24-hour baseline mean
+        is not comparable to a post-change window measured in minutes, so the
+        baseline anchors on its final hour; post-change polls pass no anchor and
+        keep averaging everything they measured since the change.
+        """
         end = end or utc_now()
         start = start or end - timedelta(hours=1)
         scope = device_type.value if device_mac else "site"
@@ -94,11 +103,24 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
             for metric, api_metric in metrics
         ]
         results = await asyncio.gather(*tasks)
-        values = {metric: value for metric, value, _error in results if value is not None}
-        errors = [error for _metric, _value, error in results if error is not None]
+        anchored = [
+            (metric, anchor_value(series, start, end, anchor), series, error) for metric, series, error in results
+        ]
+        values = {metric: value for metric, value, _series, _error in anchored if value is not None}
+        errors = [error for _metric, _value, _series, error in anchored if error is not None]
+        # Report the narrowed window only where the tail actually carried
+        # traffic. A metric whose final hour was quiet widened back to the whole
+        # window, and calling that a last-hour baseline would misdescribe it.
+        narrowed = anchor is not None and any(
+            mean_of_series(anchor_tail(series, start, end, anchor)) is not None
+            for _metric, _value, series, error in anchored
+            if error is None
+        )
         return SleObservation(
             values=values,
-            no_data=[metric for metric, value, error in results if value is None and error is None],
+            trend={metric: series for metric, _value, series, error in anchored if error is None and series},
+            baseline_window="last-hour" if narrowed else "full-window",
+            no_data=[metric for metric, value, _series, error in anchored if value is None and error is None],
             errors=errors,
             window_start=start,
             window_end=end,
@@ -148,23 +170,23 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         *,
         start: datetime,
         end: datetime,
-    ) -> tuple[str, float | None, str | None]:
+    ) -> tuple[str, list[float | None], str | None]:
         params = {"start": str(int(start.timestamp())), "end": str(int(end.timestamp()))}
         try:
             response = await self._client.get(path, params=params)
             response.raise_for_status()
-            value = extract_sle_value(response.json())
+            series = extract_sle_series(response.json())
         except SlePayloadError:
-            return metric, None, f"{metric}: invalid SLE response"
+            return metric, [], f"{metric}: invalid SLE response"
         except httpx.HTTPStatusError as exc:
-            return metric, None, f"{metric}: HTTP {exc.response.status_code} from the SLE endpoint ({path})"
+            return metric, [], f"{metric}: HTTP {exc.response.status_code} from the SLE endpoint ({path})"
         except (httpx.HTTPError, ValueError):
-            return metric, None, f"{metric}: unavailable"
-        return metric, value, None
+            return metric, [], f"{metric}: unavailable"
+        return metric, series, None
 
 
-def extract_sle_value(payload: object) -> float | None:
-    """Average bucket rates; None means a valid response with no sampled events.
+def extract_sle_series(payload: object) -> list[float | None]:
+    """Per-bucket success rates; ``None`` marks a bucket with no sampled events.
 
     Invalid shapes or counters raise ValueError so they cannot be mistaken for
     a quiet site. Paired null buckets and zero totals carry no sampled traffic.
@@ -180,17 +202,28 @@ def extract_sle_value(payload: object) -> float | None:
     if not isinstance(totals, list) or not isinstance(degraded, list) or len(totals) != len(degraded):
         msg = "Invalid SLE sample arrays"
         raise SlePayloadError(msg)
-    rates: list[float] = []
+    series: list[float | None] = []
     for total, failed in zip(totals, degraded, strict=True):
         if failed is None and (
             total is None or (isinstance(total, (int, float)) and not isinstance(total, bool) and total == 0)
         ):
+            series.append(None)
             continue
         if not _valid_sample(total, failed):
             msg = "Invalid SLE sample counters"
             raise SlePayloadError(msg)
-        if total > 0:
-            rates.append((total - failed) / total * 100)
+        series.append((total - failed) / total * 100 if total > 0 else None)
+    return series
+
+
+def extract_sle_value(payload: object) -> float | None:
+    """Average bucket rates; None means a valid response with no sampled events."""
+    return mean_of_series(extract_sle_series(payload))
+
+
+def mean_of_series(series: Sequence[float | None]) -> float | None:
+    """Mean of the sampled buckets, matching existing stored baselines."""
+    rates = [rate for rate in series if rate is not None]
     return None if not rates else round(sum(rates) / len(rates), 2)
 
 
@@ -204,3 +237,36 @@ def _valid_sample(total: object, failed: object) -> bool:
         and math.isfinite(failed)
         and 0 <= failed <= total
     )
+
+
+def anchor_value(
+    series: Sequence[float | None],
+    start: datetime,
+    end: datetime,
+    anchor: timedelta | None,
+) -> float | None:
+    """Mean of the buckets inside ``anchor`` of ``end``, else of the whole window.
+
+    Only an *unsampled* tail widens to the full window; a measured 0% is a total
+    outage and is reported as one. Testing the mean for None rather than for
+    truthiness is what keeps those two apart.
+    """
+    tail = anchor_tail(series, start, end, anchor)
+    value = mean_of_series(tail)
+    return value if value is not None else mean_of_series(series)
+
+
+def anchor_tail(
+    series: Sequence[float | None],
+    start: datetime,
+    end: datetime,
+    anchor: timedelta | None,
+) -> Sequence[float | None]:
+    """The trailing buckets covering ``anchor``, or the whole series."""
+    if anchor is None or not series:
+        return series
+    span = (end - start).total_seconds()
+    if span <= 0 or anchor.total_seconds() >= span:
+        return series
+    bucket = span / len(series)
+    return series[-max(1, math.ceil(anchor.total_seconds() / bucket)) :]
