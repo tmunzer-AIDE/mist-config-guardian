@@ -2,6 +2,7 @@
 
 import time
 from dataclasses import dataclass
+from ipaddress import IPv6Address, ip_address
 from typing import Literal, Protocol
 
 from beanie import PydanticObjectId
@@ -13,6 +14,7 @@ from mist_config_guardian_backend.integrations.ai_provider import (
     AiProviderError,
     OpenAiCompatibleProvider,
 )
+from mist_config_guardian_backend.integrations.smtp import SmtpCredentials
 from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.schemas.application_configuration import (
@@ -23,6 +25,8 @@ from mist_config_guardian_backend.schemas.application_configuration import (
     AiSettingsUpdate,
     ImpactAiSettingsResponse,
     ImpactAiSettingsUpdate,
+    SmtpSettingsResponse,
+    SmtpSettingsUpdate,
 )
 from mist_config_guardian_backend.security.credentials import (
     CredentialDecryptionError,
@@ -31,6 +35,30 @@ from mist_config_guardian_backend.security.credentials import (
 
 _IMPACT_AI_KEY_CONTEXT = "impact-ai-api-key"
 _AI_PROVIDER_KEY_CONTEXT = "ai-provider-key"
+_SMTP_PASSWORD_CONTEXT = "smtp-password"  # noqa: S105 - an encryption context label, not a secret
+
+
+def is_loopback_host(host: str) -> bool:
+    """Report whether ``host`` is a literal loopback address.
+
+    Literals only, and never resolved. ``localhost`` is a name: what it
+    points at can change between this check and the connection that trusts
+    it, so a name is never accepted as proof that traffic stays on the
+    machine.
+
+    An IPv4-mapped IPv6 literal such as ``::ffff:127.0.0.1`` is also refused
+    even though it embeds a loopback address: it is a second spelling of an
+    address the accepted-forms error message does not name, and stdlib
+    ``is_loopback`` reports it as loopback only by unwrapping that embedded
+    form, not because the literal itself is one of the two accepted forms.
+    """
+    try:
+        parsed = ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(parsed, IPv6Address) and parsed.ipv4_mapped is not None:
+        return False
+    return parsed.is_loopback
 
 
 class ApplicationConfigurationError(ValueError):
@@ -276,6 +304,103 @@ class ApplicationConfigurationService:
             )
             for model in models
         ]
+
+    # -- SMTP settings -------------------------------------------------------
+    async def get_smtp(self) -> SmtpSettingsResponse:
+        """Return stored SMTP settings without the password."""
+        return self._smtp_response(await self._get_or_create())
+
+    async def update_smtp(self, request: SmtpSettingsUpdate) -> SmtpSettingsResponse:
+        """Persist SMTP settings, refusing configurations that cannot be secured."""
+        if request.enabled:
+            self._validate_smtp(request)
+        configuration = await self._get_or_create()
+        password = request.password.get_secret_value() if request.password is not None else None
+        if password:
+            configuration.encrypted_smtp_password = self._vault.encrypt_for_context(
+                password,
+                context=_SMTP_PASSWORD_CONTEXT,
+            )
+            configuration.smtp_password_last_four = password[-4:].rjust(4, "*")
+        elif request.clear_password:
+            configuration.encrypted_smtp_password = None
+            configuration.smtp_password_last_four = None
+
+        configuration.smtp_enabled = request.enabled
+        configuration.smtp_host = request.host.strip()
+        configuration.smtp_port = request.port
+        configuration.smtp_security = request.security
+        configuration.smtp_username = request.username.strip()
+        configuration.smtp_from_address = request.from_address.strip()
+        configuration.smtp_from_name = request.from_name.strip()
+        configuration.touch()
+        await configuration.save()
+        return self._smtp_response(configuration)
+
+    def _validate_smtp(self, request: SmtpSettingsUpdate) -> None:
+        """Refuse an enabled configuration that cannot deliver safely."""
+        if not request.host.strip():
+            msg = "An SMTP host is required to enable email"
+            raise ApplicationConfigurationError(msg)
+        if not request.from_address.strip():
+            msg = "A from address is required to enable email"
+            raise ApplicationConfigurationError(msg)
+        if self._settings.public_base_url is None:
+            msg = (
+                "PUBLIC_BASE_URL must be set before enabling email: the application "
+                "cannot tell which of its origins invitation links should use"
+            )
+            raise ApplicationConfigurationError(msg)
+        if request.security == "none":
+            if request.username.strip():
+                msg = "An unencrypted connection cannot carry a username and password"
+                raise ApplicationConfigurationError(msg)
+            host = request.host.strip()
+            if self._settings.environment == "production" and not is_loopback_host(host):
+                msg = (
+                    "An unencrypted connection is only allowed in production to a literal "
+                    "loopback address such as 127.0.0.1 or ::1"
+                )
+                raise ApplicationConfigurationError(msg)
+
+    async def smtp_credentials(self) -> SmtpCredentials | None:
+        """Return decrypted SMTP credentials when email is enabled."""
+        configuration = await ApplicationConfiguration.find_one(ApplicationConfiguration.key == "global")
+        if configuration is None or not configuration.smtp_enabled:
+            return None
+        password = ""
+        if configuration.encrypted_smtp_password is not None:
+            password = self._vault.decrypt_for_context(
+                configuration.encrypted_smtp_password,
+                context=_SMTP_PASSWORD_CONTEXT,
+            )
+        return SmtpCredentials(
+            host=configuration.smtp_host,
+            port=configuration.smtp_port,
+            security=configuration.smtp_security,
+            username=configuration.smtp_username,
+            password=password,
+            from_address=configuration.smtp_from_address,
+            from_name=configuration.smtp_from_name,
+        )
+
+    @staticmethod
+    def _smtp_response(configuration: ApplicationConfiguration) -> SmtpSettingsResponse:
+        """Project stored settings into the administrator-visible shape."""
+        return SmtpSettingsResponse(
+            enabled=configuration.smtp_enabled,
+            host=configuration.smtp_host,
+            port=configuration.smtp_port,
+            security=configuration.smtp_security,
+            username=configuration.smtp_username,
+            password_set=configuration.encrypted_smtp_password is not None,
+            password_last_four=configuration.smtp_password_last_four,
+            from_address=configuration.smtp_from_address,
+            from_name=configuration.smtp_from_name,
+            last_test_at=configuration.smtp_last_test_at,
+            last_test_ok=configuration.smtp_last_test_ok,
+            last_test_detail=configuration.smtp_last_test_detail,
+        )
 
     # -- internals ---------------------------------------------------------
     def _draft_runtime(self, configuration: ApplicationConfiguration, draft: AiProviderDraft) -> AiRuntimeConfiguration:
