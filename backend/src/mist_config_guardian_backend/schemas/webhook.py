@@ -8,4 +8,5 @@ class WebhookAcceptedResponse(BaseModel):
 
     accepted: int
     duplicates: int
+    ignored: int
     queued: int

@@ -6274,6 +6274,10 @@
             "title": "Duplicates",
             "type": "integer"
           },
+          "ignored": {
+            "title": "Ignored",
+            "type": "integer"
+          },
           "queued": {
             "title": "Queued",
             "type": "integer"
@@ -6282,6 +6286,7 @@
         "required": [
           "accepted",
           "duplicates",
+          "ignored",
           "queued"
         ],
         "title": "WebhookAcceptedResponse",

@@ -85,5 +85,6 @@ async def receive_mist_webhook(
     return WebhookAcceptedResponse(
         accepted=len(result.receipt_ids),
         duplicates=result.duplicate_count,
+        ignored=result.ignored_count,
         queued=queued,
     )
