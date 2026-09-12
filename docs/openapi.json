@@ -96,17 +96,18 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceView"
             },
-            "maxItems": 14,
+            "maxItems": 18,
             "title": "Observations",
             "type": "array"
           },
           "prompt_version": {
-            "default": "impact-investigator.v4",
+            "default": "impact-investigator.v5",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
               "impact-investigator.v3",
-              "impact-investigator.v4"
+              "impact-investigator.v4",
+              "impact-investigator.v5"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -135,6 +136,15 @@
             },
             "maxItems": 3,
             "title": "Request Ids",
+            "type": "array"
+          },
+          "skills": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SkillReference"
+            },
+            "maxItems": 4,
+            "title": "Skills",
             "type": "array"
           },
           "source": {
@@ -1608,7 +1618,7 @@
               "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             },
-            "maxItems": 8,
+            "maxItems": 18,
             "minItems": 1,
             "title": "Checks",
             "type": "array"
@@ -2727,7 +2737,8 @@
               "wlan-client-sessions.v1",
               "switch-port-snapshot.v1",
               "neighbor-ap-inventory.v1",
-              "switch-port-events.v1"
+              "switch-port-events.v1",
+              "wlan-auth-events.v1"
             ],
             "title": "Check Id",
             "type": "string"
@@ -2885,6 +2896,18 @@
       "DomainFinding": {
         "additionalProperties": false,
         "properties": {
+          "affected_clients": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Affected Clients"
+          },
           "attribution": {
             "default": "undetermined",
             "enum": [
@@ -2990,6 +3013,14 @@
             ],
             "title": "Service",
             "type": "string"
+          },
+          "serving_ap_macs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Serving Ap Macs",
+            "type": "array"
           },
           "state": {
             "enum": [
@@ -3099,6 +3130,30 @@
       "EvidenceView": {
         "additionalProperties": false,
         "properties": {
+          "auth_failures": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Failures"
+          },
+          "auth_successes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Successes"
+          },
           "captured_at": {
             "anyOf": [
               {
@@ -4358,12 +4413,13 @@
             "type": "integer"
           },
           "prompt_version": {
-            "default": "impact-investigator.v4",
+            "default": "impact-investigator.v5",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
               "impact-investigator.v3",
-              "impact-investigator.v4"
+              "impact-investigator.v4",
+              "impact-investigator.v5"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -7763,6 +7819,27 @@
           "site_id"
         ],
         "title": "SiteTopology",
+        "type": "object"
+      },
+      "SkillReference": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content_hash"
+        ],
+        "title": "SkillReference",
         "type": "object"
       },
       "SleObservationResponse": {

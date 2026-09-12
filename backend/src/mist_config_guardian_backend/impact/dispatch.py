@@ -17,7 +17,11 @@ class DispatchRecord(Contract):
     generation: int = Field(ge=1)
     candidate_revision: int = Field(ge=1)
     check_id: Literal[
-        "wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1", "switch-port-events.v1"
+        "wlan-client-sessions.v1",
+        "switch-port-snapshot.v1",
+        "neighbor-ap-inventory.v1",
+        "switch-port-events.v1",
+        "wlan-auth-events.v1",
     ] = "wlan-client-sessions.v1"
     target_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
     site_id: UUID
@@ -36,7 +40,7 @@ class DispatchRecord(Contract):
 
     @model_validator(mode="after")
     def target_kind(self) -> "DispatchRecord":
-        if self.check_id == "wlan-client-sessions.v1":
+        if self.check_id in {"wlan-client-sessions.v1", "wlan-auth-events.v1"}:
             if self.wlan_id is None or self.device_mac is not None or self.port_id is not None:
                 msg = "WLAN dispatch requires only a WLAN identity"
                 raise ValueError(msg)

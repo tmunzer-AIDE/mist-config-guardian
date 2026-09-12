@@ -15,6 +15,7 @@ from pymongo.errors import PyMongoError
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
 from mist_config_guardian_backend.impact.contracts import (
+    AuthEvidence,
     CandidateReference,
     DispatchDenial,
     InvestigationEvidence,
@@ -28,7 +29,7 @@ from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, Dispatc
 from mist_config_guardian_backend.impact.domain_evaluation import compose_domains
 from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
-from mist_config_guardian_backend.integrations.mist_port_history import MistPortHistoryClient
+from mist_config_guardian_backend.integrations.mist_auth_evidence import MistImpactEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
@@ -196,14 +197,14 @@ class ImpactInvestigationService:
             token = await service_token(organization, self._vault)
             credential = organization.encrypted_service_token
             neighbor_context = None
-            if plan.port_targets:
+            if plan.port_targets or any(t.auth_changed for t in plan.targets):
                 try:
                     mist_org_id = UUID(str(getattr(organization, "mist_org_id", "")))
                     retention = getattr(organization, "monitoring_retention_days", None)
                     if type(retention) is not int or not 1 <= retention <= _MAX_RETENTION_DAYS:
                         raise ValueError  # noqa: TRY301 - fail closed on invalid organization policy
                     neighbor_context = (mist_org_id, retention)
-                    plan = plan.model_copy(update={"port_history": True})
+                    plan = plan.model_copy(update={"port_history": bool(plan.port_targets)})
                 except ValueError:
                     plan = plan.model_copy(
                         update={
@@ -216,7 +217,7 @@ class ImpactInvestigationService:
 
             async with (
                 asyncio.timeout(120),
-                MistPortHistoryClient(token=token, region=organization.cloud_region) as client,
+                MistImpactEvidenceClient(token=token, region=organization.cloud_region) as client,
             ):
                 collected: dict[str, InvestigationEvidence] = {}
 
@@ -324,7 +325,7 @@ class ImpactInvestigationService:
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistPortHistoryClient,
+        client: MistImpactEvidenceClient,
         credential: str,
         *,
         neighbor_context: tuple[UUID, int] | None = None,
@@ -333,6 +334,37 @@ class ImpactInvestigationService:
         if check not in capabilities(plan, max(check.window.end, plan.changed_at + timedelta(microseconds=1))):
             msg = "Collection requires the exact planned capability"
             raise ValueError(msg)
+        if check.check_id == "wlan-auth-events.v1":
+            if neighbor_context is None:
+                return AuthEvidence(
+                    target_handle=check.target_handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="error",
+                    reason="Validated organization identity is unavailable; no request was sent.",
+                )
+            target = next(t for t in plan.targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=target.handle,
+                site_id=target.site_id,
+                wlan_id=target.wlan_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            reading = await client.capture_auth(
+                plan=plan,
+                target=target,
+                mist_org_id=neighbor_context[0],
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+            if reading.state != "dispatch_denied":
+                await self._finish_dispatch(root, dispatch, reading)
+            return reading
         if check.check_id == "switch-port-events.v1":
             if neighbor_context is None:
                 msg_0 = "Port events require a validated organization"
@@ -420,7 +452,7 @@ class ImpactInvestigationService:
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistPortHistoryClient,
+        client: MistImpactEvidenceClient,
         credential: str,
         neighbor_context: tuple[UUID, int] | None,
         sources: list[InvestigationEvidence],

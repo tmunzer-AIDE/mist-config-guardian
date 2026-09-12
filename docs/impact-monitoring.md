@@ -488,3 +488,21 @@ complete maximal checkpoints, then stops on the next denied check. Smaller plans
 retain more of the hour. The agent sees at most twenty of the two hundred retained
 port events, with explicit omissions; the report's collection evidence keeps the
 full retained set. No producer claims a clean result from an omitted event tail.
+
+
+### WLAN authentication and domain guidance
+
+Authentication changes add one exact-WLAN event-history check. When a change also
+removes/disables the WLAN, the lifecycle session checks remain required. The
+largest combined plan is eighteen checks; the 56-call allowance is unchanged.
+The evaluator pairs client identities across the audit, keeps missing attempts
+unknown, and requires positive evidence for recovery. Serving AP identity does not
+mean AP failure. Scoped authentication success/failure event counts appear in the
+agent evidence view; counts are not rates or unobserved fleet totals.
+
+Four application-owned domain skills are loaded by the worker from a content-verified
+manifest. Their IDs/hashes appear in the report's agent section. Prompt v5 shares
+repeated windows by reference and includes at most four historical observations
+with an omission count; full published evidence is retained separately. Earlier
+prompt versions and reports remain readable. Skills and model output cannot expand
+the server-issued capability menu or alter deterministic ratings.

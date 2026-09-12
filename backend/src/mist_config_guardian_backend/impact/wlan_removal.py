@@ -25,6 +25,18 @@ from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVe
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
 
 _MAX_UNMAPPED = 128
+AUTH_FIELDS = frozenset(
+    {
+        "auth",
+        "auth_servers",
+        "auth_server_selection",
+        "auth_servers_nas_id",
+        "auth_servers_nas_ip",
+        "auth_servers_retries",
+        "auth_servers_timeout",
+        "dynamic_psk",
+    }
+)
 
 
 def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe classification
@@ -67,17 +79,22 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
             and prior.configuration.get("enabled") is not False
             and version.configuration.get("enabled") is False
         )
+        auth_changed = bool(AUTH_FIELDS.intersection(field.strip("/").split("/")[0] for field in fields))
         definition = impact_definition(logical.scope, logical.object_type) if logical else None
         if (
             logical is None
             or definition is None
             or definition.family is not ObjectFamily.WLAN
-            or not (version.is_deleted or disabled)
+            or not (version.is_deleted or disabled or auth_changed)
         ):
             unmapped.update(f"{object_id}:{field}" for field in fields)
             continue
         if not version.is_deleted:
-            unmapped.update(f"{object_id}:{field}" for field in fields if field.strip("/") != "enabled")
+            unmapped.update(
+                f"{object_id}:{field}"
+                for field in fields
+                if field.strip("/") != "enabled" and field.strip("/").split("/")[0] not in AUTH_FIELDS
+            )
         if logical.scope != "site":
             unmapped.add(f"{object_id}:consumer-assignment")
             gaps.add("Organization WLAN consumer resolution is not implemented; assume the change is effective.")
@@ -87,6 +104,12 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
         except ValueError as exc:
             gaps.add(str(exc))
             continue
+        target = target.model_copy(
+            update={
+                "auth_changed": auth_changed,
+                "change_kind": target.change_kind if version.is_deleted or disabled else "authentication",
+            }
+        )
         targets[target.handle] = target
     if len(targets) > MAX_WLAN_TARGETS:
         gaps.add("WLAN target budget reached; remaining WLANs were not checked.")
@@ -125,6 +148,8 @@ def _resolve_wlan_target(
     try:
         site_id = UUID(logical.site_mist_id or "")
         wlan_id = UUID(str(prior.configuration.get("id", "")))
+        if not version.is_deleted and UUID(str(version.configuration.get("id", ""))) != wlan_id:
+            raise ValueError  # noqa: TRY301 - reject a changed immutable WLAN identity
     except ValueError as exc:
         msg = f"{object_id}: the pre-change WLAN or site identity is missing."
         raise ValueError(msg) from exc
@@ -152,7 +177,7 @@ def authorize_check(plan: WlanRemovalPlan, *, check_id: str, target_handle: str)
     """Validate capability and opaque entity handle at the execution boundary."""
     if check_id == "wlan-client-sessions.v1":
         for target in plan.targets:
-            if target.handle == target_handle:
+            if target.handle == target_handle and target.change_kind != "authentication":
                 return target
     msg = "Check or target is not authorized by this investigation plan"
     raise ValueError(msg)
@@ -168,6 +193,8 @@ def evaluate_wlan_removal(
     baseline, followup = check_windows(plan, evidence_as_of)
     findings = []
     for target in plan.targets:
+        if target.change_kind == "authentication":
+            continue
         readings = []
         for window in (baseline, followup):
             candidates = [item for item in evidence if item.target_handle == target.handle and item.window == window]

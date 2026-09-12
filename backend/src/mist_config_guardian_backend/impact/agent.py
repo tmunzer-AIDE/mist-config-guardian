@@ -10,6 +10,7 @@ from beanie import PydanticObjectId
 from pydantic import AwareDatetime, Field, TypeAdapter
 
 from mist_config_guardian_backend.impact.contracts import (
+    AuthEvidence,
     Contract,
     InvestigationEvidence,
     ManagedNeighbor,
@@ -23,6 +24,7 @@ from mist_config_guardian_backend.impact.contracts import (
     WlanRemovalPlan,
 )
 from mist_config_guardian_backend.impact.limits import MAX_AGENT_PORT_EVENTS, MAX_CHECKPOINT_EVIDENCE
+from mist_config_guardian_backend.impact.skills import SkillReference
 from mist_config_guardian_backend.impact.wlan_removal import check_windows
 
 MAX_MODEL_CALLS = 21
@@ -31,7 +33,7 @@ MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
-PROMPT_VERSION = "impact-investigator.v4"
+PROMPT_VERSION = "impact-investigator.v5"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -40,7 +42,11 @@ ShortText = Annotated[str, Field(min_length=1, max_length=500)]
 class CheckCapability(Contract):
     ref: Handle
     check_id: Literal[
-        "wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1", "switch-port-events.v1"
+        "wlan-client-sessions.v1",
+        "switch-port-snapshot.v1",
+        "neighbor-ap-inventory.v1",
+        "switch-port-events.v1",
+        "wlan-auth-events.v1",
     ] = "wlan-client-sessions.v1"
     target_handle: Handle
     phase: Literal["baseline", "followup", "snapshot", "history"]
@@ -57,6 +63,7 @@ def capabilities(plan: WlanRemovalPlan, as_of: datetime) -> tuple[CheckCapabilit
                 window=window,
             )
             for target in plan.targets
+            if target.change_kind != "authentication"
             for phase, window in zip(("baseline", "followup"), check_windows(plan, as_of), strict=True)
         )
         + tuple(
@@ -90,6 +97,17 @@ def capabilities(plan: WlanRemovalPlan, as_of: datetime) -> tuple[CheckCapabilit
             for target in plan.port_targets
             if plan.port_history
         )
+        + tuple(
+            CheckCapability(
+                ref=sha256(f"{target.handle}:auth-history:{as_of.isoformat()}".encode()).hexdigest(),
+                check_id="wlan-auth-events.v1",
+                target_handle=target.handle,
+                phase="history",
+                window=Window(start=plan.changed_at - timedelta(hours=1), end=as_of),
+            )
+            for target in plan.targets
+            if target.auth_changed
+        )
     )
 
 
@@ -104,6 +122,8 @@ class EvidenceView(Contract):
     observed_disconnects: int | None = Field(default=None, ge=0)
     port: PortRow | None = None
     port_events: tuple[PortEventRow, ...] = Field(default=(), max_length=MAX_AGENT_PORT_EVENTS)
+    auth_successes: int | None = Field(default=None, ge=0)
+    auth_failures: int | None = Field(default=None, ge=0)
     omitted_events: int = Field(default=0, ge=0)
     managed_neighbor: ManagedNeighbor | None = None
     response_error: PortResponseError | None = None
@@ -114,6 +134,17 @@ def evidence_view(check: CheckCapability, reading: InvestigationEvidence, change
     if (reading.check_id, reading.target_handle, reading.window) != (check.check_id, check.target_handle, check.window):
         msg = "Evidence does not match the authorized check"
         raise ValueError(msg)
+    if isinstance(reading, AuthEvidence):
+        return EvidenceView(
+            ref=check.ref,
+            target_handle=check.target_handle,
+            window=check.window,
+            state=reading.state,
+            captured_at=reading.captured_at,
+            auth_successes=sum(r.outcome == "success" for r in reading.rows),
+            auth_failures=sum(r.outcome == "failure" for r in reading.rows),
+            gap=reading.reason,
+        )
     if isinstance(reading, PortHistoryEvidence):
         return EvidenceView(
             ref=check.ref,
@@ -183,7 +214,7 @@ class AgentProposal(Contract):
 
 class CollectAction(Contract):
     action: Literal["collect"]
-    checks: tuple[Handle, ...] = Field(min_length=1, max_length=8)
+    checks: tuple[Handle, ...] = Field(min_length=1, max_length=MAX_CHECKPOINT_EVIDENCE)
 
 
 class ReportAction(Contract):
@@ -220,9 +251,14 @@ class ModelDispatchDenial(StrEnum):
 
 class AgentCheckpoint(Contract):
     prompt_version: Literal[
-        "impact-investigator.v1", "impact-investigator.v2", "impact-investigator.v3", "impact-investigator.v4"
+        "impact-investigator.v1",
+        "impact-investigator.v2",
+        "impact-investigator.v3",
+        "impact-investigator.v4",
+        "impact-investigator.v5",
     ] = PROMPT_VERSION
     source: Literal["model_proposal"] = "model_proposal"
+    skills: tuple[SkillReference, ...] = Field(default=(), max_length=4)
     state: Literal[
         "complete",
         "unavailable",
@@ -247,7 +283,11 @@ class ModelRequestRecord(Contract):
     candidate_revision: int = Field(ge=1)
     reserved_at: AwareDatetime
     prompt_version: Literal[
-        "impact-investigator.v1", "impact-investigator.v2", "impact-investigator.v3", "impact-investigator.v4"
+        "impact-investigator.v1",
+        "impact-investigator.v2",
+        "impact-investigator.v3",
+        "impact-investigator.v4",
+        "impact-investigator.v5",
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)

@@ -928,6 +928,44 @@ of adding that read path.
   power, ambiguous events, model omissions and fourteen-check/56-call bounds have
   regressions. The live probe verified event vocabulary and shape, not outage attribution.
 
+## WLAN authentication and pinned domain skills (2026-09-13)
+
+- Add immutable site-WLAN authentication scope for the curated auth/auth-server/PSK
+  attribute families. Never send secret values or SSID text to collection or the
+  model. A changed WLAN identity or unavailable baseline remains unresolved. A
+  lifecycle change combined with authentication changes requires both evidence sets.
+- One WLAN-ID-filtered event history query spans baseline and follow-up. Validate
+  organization/site/WLAN, timestamps and normalized client identities; omit provider
+  prose. Missing identities and pagination are partial, not zero attempts. The live
+  client-event probe confirmed MAC, AP, organization, site and WLAN fields. Constants
+  confirm the selected success/failure types. Other authentication mechanisms remain
+  outside this narrow policy's claim, not inferred from generic association failure.
+- A paired client with successful prior authentication and subsequent failure
+  supports a provisional finding. Deduplicate before magnitude; an unpaired failure
+  or no attempts is insufficient for attribution. Positive later success establishes
+  recovery for that client. Serving APs identify client service, not infrastructure
+  failure. Keep these typed findings outside the WLAN lifecycle evaluator.
+- The worst combined menu now contains eighteen checks. The persisted and model
+  evidence caps derive from that maximum; one collect action can select the whole
+  bounded menu. A regression exercises all eighteen reads in both modes, including
+  model report completion and publication round-trip. The 56-call spending ceiling
+  remains unchanged (three full maximal checkpoints and two further reads).
+- Add four application-owned skill assets with fixed allowlisted filenames and
+  SHA-256 manifest validation. Select only relevant domains; record IDs/hashes even
+  for an unsuccessful model turn. A modified/missing skill stops model execution
+  while deterministic required collection continues. Skills grant no tools/entities.
+- Use prompt v5. Normalize repeated evidence windows into a referenced table and
+  omit nullable/default-only prompt fields without dropping measured zeroes. Retain
+  full typed evidence in revisions. Send at most four previous observations plus
+  bounded saved proposal memory, with an explicit historical omission count. This
+  avoids increasing the model byte budget as the check menu grows; historical
+  report data remains available independently of prompt compaction.
+
+- Validation: 1,234 backend tests passed, 20 skipped; 403 frontend tests passed.
+  Ruff, source types, generated OpenAPI and local source/diff review passed.
+  Eighteen-check publication, exact WLAN/client identity, zero/missing attempts,
+  paired recovery, skill tampering and bounded prompt-window references are tested.
+
 ## Next implementation queue
 
 1. Build on managed AP membership with port/PoE event history and independently

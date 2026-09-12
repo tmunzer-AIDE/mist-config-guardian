@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from mist_config_guardian_backend.impact.contracts import (
+    AuthEvidence,
     DomainFinding,
     InvestigationEvidence,
     PortEvidence,
@@ -13,6 +14,7 @@ from mist_config_guardian_backend.impact.contracts import (
     Window,
     WlanAssessment,
     WlanRemovalPlan,
+    WlanTarget,
 )
 
 _ORDER = {"none": 0, "info": 1, "warning": 2, "critical": 3}
@@ -30,6 +32,9 @@ def compose_domains(
         findings.extend(
             _port_finding(plan, target, rule, history, snapshot, as_of=base.evaluated_at) for rule in target.domains
         )
+    findings.extend(
+        _auth_finding(plan, target, evidence, base.evaluated_at) for target in plan.targets if target.auth_changed
+    )
     if not findings:
         return base
     impact = max([base.impact, *(f.impact for f in findings)], key=_ORDER.__getitem__)
@@ -140,4 +145,63 @@ def _port_finding(  # noqa: PLR0913 - target, evidence and assessment interval m
             if rule == "switch-poe.v1"
             else "Previously active port went down after the change; alternate paths and causes remain unresolved."
         ),
+    )
+
+
+def _auth_finding(
+    plan: WlanRemovalPlan, target: WlanTarget, evidence: Sequence[InvestigationEvidence], as_of: datetime
+) -> DomainFinding:
+    unknown = DomainFinding(
+        rule_id="wlan-authentication.v1",
+        target_handle=target.handle,
+        state="unknown",
+        impact="info",
+        current_impact="info",
+        confidence="low",
+        service="wlan_authentication",
+        explanation="Authentication attribution requires comparable client history; no attempts is not success.",
+    )
+    history = next((e for e in evidence if isinstance(e, AuthEvidence) and e.target_handle == target.handle), None)
+    if (
+        history is None
+        or history.state != "complete"
+        or history.window != Window(start=plan.changed_at - timedelta(hours=1), end=as_of)
+    ):
+        return unknown
+    if any(not history.window.start <= r.occurred_at <= as_of for r in history.rows):
+        return unknown
+    clients = {r.client_handle for r in history.rows}
+    affected = set()
+    failures = []
+    recovered = []
+    for client in clients:
+        rows = sorted((r for r in history.rows if r.client_handle == client), key=lambda r: r.occurred_at)
+        if any(len({r.outcome for r in rows if r.occurred_at == item.occurred_at}) > 1 for item in rows):
+            return unknown.model_copy(
+                update={"explanation": "Same-time contradictory authentication outcomes remain unresolved."}
+            )
+        before = [r for r in rows if r.occurred_at < plan.changed_at]
+        after = [r for r in rows if plan.changed_at <= r.occurred_at <= as_of]
+        failed = [r for r in after if r.outcome == "failure"]
+        if before and before[-1].outcome == "success" and failed:
+            affected.add(client)
+            failures.extend(failed)
+            if after[-1].outcome == "success":
+                recovered.append(after[-1].occurred_at)
+    if not affected:
+        return unknown
+    recovery = max(recovered) if len(recovered) == len(affected) else None
+    return unknown.model_copy(
+        update={
+            "state": "recovered" if recovery else "possible_disruption",
+            "impact": "warning",
+            "current_impact": "none" if recovery else "warning",
+            "confidence": "medium",
+            "attribution": "plausible",
+            "occurred_at": min(r.occurred_at for r in failures),
+            "recovered_at": recovery,
+            "affected_clients": len(affected),
+            "serving_ap_macs": tuple(sorted({r.ap_mac for r in failures if r.ap_mac})),
+            "explanation": "Clients that authenticated before the change failed afterward; causation is provisional.",
+        }
     )

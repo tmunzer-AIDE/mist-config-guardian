@@ -4,10 +4,10 @@ Owner: autonomous implementation following the 2026-09-13 instruction to finish 
 
 Completion means the bounded v1 runtime, report/UI, diagnostics, retention and acceptance tooling are implemented and verified. Production activation requires genuine operator adjudication; synthetic labels must never satisfy that gate. No release, deployment or live configuration mutation is part of this work.
 
-- [ ] Scoped operational history: exact switch port/link/PoE events and WLAN authentication events, normalized with explicit completeness and timing.
-- [ ] Four terminal domains and shared assessment composition: WLAN lifecycle, authentication, port availability and PoE. Unknown historical power or dependency remains unknown.
+- [x] Scoped operational history: exact switch port/link/PoE events and WLAN authentication events, normalized with explicit completeness and timing.
+- [x] Four terminal domains and shared assessment composition: WLAN lifecycle, authentication, port availability and PoE. Unknown historical power or dependency remains unknown.
 - [ ] Current managed AP physical-dependency verification, with explicit historical limitations and no arbitrary entity expansion.
-- [ ] Versioned application-owned domain skills, selected from the plan and unable to expand authority.
+- [x] Versioned application-owned domain skills, selected from the plan and unable to expand authority.
 - [ ] Common revision-pinned report with typed evidence tables/charts/timelines and shared impact/confidence bands.
 - [ ] Validated impacted-device records and topology overlay; serving APs are never classified as failed merely because their clients disconnected.
 - [ ] Investigation/log/history navigation and retention cleanup, including orphan artifacts and organization deletion.

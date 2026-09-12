@@ -42,7 +42,8 @@ class WlanTarget(Contract):
     logical_object_id: str
     before_version_id: str
     after_version_id: str
-    change_kind: Literal["removed", "disabled", "unknown"] = "unknown"
+    auth_changed: bool = False
+    change_kind: Literal["removed", "disabled", "authentication", "unknown"] = "unknown"
 
 
 class PortTarget(Contract):
@@ -278,6 +279,8 @@ class DomainFinding(Contract):
     attribution: Literal["plausible", "undetermined"] = "undetermined"
     device_mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{12}$")
     port_id: str | None = None
+    affected_clients: int | None = Field(default=None, ge=0)
+    serving_ap_macs: tuple[str, ...] = ()
     service: Literal["port_link", "port_power", "wlan_authentication"]
     occurred_at: AwareDatetime | None = None
     recovered_at: AwareDatetime | None = None
@@ -328,4 +331,37 @@ class PortHistoryEvidence(Contract):
         return self
 
 
-InvestigationEvidence = SessionEvidence | PortEvidence | NeighborEvidence | PortHistoryEvidence
+class AuthEventRow(Contract):
+    client_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ap_mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{12}$")
+    occurred_at: AwareDatetime
+    outcome: Literal["success", "failure"]
+
+
+class AuthEvidence(Contract):
+    check_id: Literal["wlan-auth-events.v1"] = "wlan-auth-events.v1"
+    target_handle: str
+    window: Window
+    captured_at: AwareDatetime
+    state: Literal["complete", "partial", "error", "dispatch_denied"]
+    rows: tuple[AuthEventRow, ...] = Field(default=(), max_length=MAX_PORT_EVENTS)
+    reason: str = Field(default="", max_length=500)
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def valid_state(self) -> "AuthEvidence":
+        if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
+            msg = "Dispatch denial requires its reason"
+            raise ValueError(msg)
+        if self.state in {"error", "dispatch_denied"} and self.rows:
+            msg = "Failed checks cannot contain accepted authentication events"
+            raise ValueError(msg)
+        if self.state == "dispatch_denied" and (self.http_status is not None or self.response_bytes is not None):
+            msg = "Unexecuted checks cannot contain transport metadata"
+            raise ValueError(msg)
+        return self
+
+
+InvestigationEvidence = SessionEvidence | PortEvidence | NeighborEvidence | PortHistoryEvidence | AuthEvidence
