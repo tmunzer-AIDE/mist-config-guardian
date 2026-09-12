@@ -39,7 +39,7 @@ async def collect_deployment(root: ImpactInvestigation, *, as_of: datetime) -> D
                 },
                 {"audit_id": 1, "created_at": 1, "deployment_normalized": 1, "deployment": 1},
             )
-            .sort([("created_at", 1), ("_id", 1)])
+            .sort([("created_at", -1), ("_id", -1)])
             .to_list(length=_MAX_EVENTS + 1)
         )
     except PyMongoError:
@@ -49,7 +49,9 @@ async def collect_deployment(root: ImpactInvestigation, *, as_of: datetime) -> D
             gaps=("Deployment receipt collection is unavailable.",),
         )
     if len(rows) > _MAX_EVENTS:
-        gaps.append("Deployment receipt limit reached; the observed device list may be incomplete.")
+        gaps.append(
+            "Deployment receipt limit reached; newest receipts retained and earlier deployment history may be missing."
+        )
     observations = []
     for row in rows[:_MAX_EVENTS]:
         observation = _observation(root, row, gaps, as_of)

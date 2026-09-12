@@ -239,12 +239,17 @@ The detailed shadow report now also includes **Configuration deployment evidence
 It lists observed device outcomes and event receipts, with separate occurrence and
 receipt times. An explicit audit ID is distinguished from a session-only candidate.
 Shared-session candidates, uncertain timing and conflicting simultaneous outcomes
-remain unknown. A successful configuration event does not prove device health;
+remain unknown. A candidate outcome that conflicts with the latest explicit outcome
+for the same site/device makes the device row unknown with ambiguous association,
+even when the candidate is older or untimed. Matching candidates do not confirm
+deployment. A successful configuration event does not prove device health;
 failed/reverted delivery is likewise separate from an observed outage.
 
 The expected device count is unknown, and coverage is limited to observed receipts.
 Empty evidence is not proof of complete deployment. Collection limits and older
-unnormalized receipts create visible gaps. New receipts are normalized during
+unnormalized receipts create visible gaps. At the 2,000-receipt cap, collection keeps
+the newest arrivals (receipt ID breaks ties) and reports missing earlier history;
+occurrence time still orders outcomes within the retained set. New receipts are normalized during
 authenticated ingestion in both modes; shadow checkpoints read only the normalized
 fields. Existing report revisions have `deployment: null` and display “not collected.”
 Each new revision preserves its own device list rather than rebuilding it at read

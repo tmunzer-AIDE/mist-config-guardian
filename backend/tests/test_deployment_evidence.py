@@ -146,7 +146,68 @@ async def test_simultaneous_conflicting_outcomes_stay_unknown(monkeypatch):
     collections(monkeypatch, [receipt(), receipt("AP_CONFIG_FAILED")])
     snapshot = await collect_deployment(root(), as_of=LATER)
     assert snapshot.devices[0].outcome == "unknown"
+    assert snapshot.devices[0].correlation == "ambiguous"
     assert len(snapshot.observations) == 2
+
+
+@pytest.mark.parametrize("candidate_at", [NOW, NOW + timedelta(seconds=60), None])
+async def test_conflicting_candidate_marks_explicit_device_ambiguous(monkeypatch, candidate_at):
+    configured_at = NOW + timedelta(seconds=30)
+    candidate = receipt(
+        "SW_CONFIG_REVERTED", audit_id=None, timestamp=candidate_at.timestamp() if candidate_at else None
+    )
+    collections(monkeypatch, [receipt("SW_CONFIGURED", at=configured_at), candidate])
+    snapshot = await collect_deployment(root(), as_of=LATER)
+    device = snapshot.devices[0]
+    assert device.outcome == "unknown"
+    assert device.correlation == "ambiguous"
+    assert device.last_event_at == configured_at  # Never promote the candidate's time.
+    assert str(candidate["_id"]) in device.receipt_ids
+    assert snapshot.state == "partial"
+    assert snapshot.observations[1].correlation == "session_candidate"
+
+
+async def test_matching_candidate_and_other_device_conflict_do_not_cancel_explicit_outcome(monkeypatch):
+    collections(
+        monkeypatch,
+        [receipt(), receipt(audit_id=None), receipt("AP_CONFIG_FAILED", audit_id=None, mac="ffffffffffff")],
+    )
+    snapshot = await collect_deployment(root(), as_of=LATER)
+    confirmed, candidate = snapshot.devices
+    assert confirmed.device_mac == MAC
+    assert confirmed.outcome == "configured"
+    assert confirmed.correlation == "audit_id"
+    assert candidate.outcome == "unknown"
+    assert candidate.correlation == "session_candidate"
+
+
+@pytest.mark.parametrize(("kind", "outcome"), [("SW_CONFIG_REVERTED", "reverted"), ("SW_CONFIG_FAILED", "failed")])
+async def test_receipt_overflow_retains_latest_arrival_and_reports_missing_history(monkeypatch, kind, outcome):
+    # Same receipt time exercises the stable ID tie-break at the cap. Event time
+    # still orders outcomes, independently of arrival order.
+    rows = [receipt("SW_CONFIGURED", at=NOW) for _ in range(2000)]
+    latest = receipt(kind, at=NOW + timedelta(seconds=60))
+    rows.append(latest)
+    _, receipts = collections(monkeypatch, rows)
+    cursor = receipts.find.return_value
+
+    def sort_rows(order):
+        data = list(rows)
+        for field, direction in reversed(order):
+            data.sort(key=lambda row: row[field], reverse=direction == -1)
+        cursor.to_list.return_value = data
+        return cursor
+
+    cursor.sort.side_effect = sort_rows
+    snapshot = await collect_deployment(root(), as_of=LATER)
+    cursor.sort.assert_called_once_with([("created_at", -1), ("_id", -1)])
+    assert len(snapshot.observations) == 2000
+    assert snapshot.observations[0].receipt_id == str(latest["_id"])
+    assert str(rows[0]["_id"]) not in snapshot.devices[0].receipt_ids
+    assert snapshot.devices[0].outcome == outcome
+    assert snapshot.devices[0].last_event_at == NOW + timedelta(seconds=60)
+    assert snapshot.state == "partial"
+    assert any("newest receipts retained" in gap for gap in snapshot.gaps)
 
 
 async def test_missing_anchor_does_not_claim_confirmed_deployment(monkeypatch):

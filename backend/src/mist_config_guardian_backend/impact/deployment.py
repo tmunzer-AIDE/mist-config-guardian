@@ -130,6 +130,19 @@ def deployment_devices(observations: list[DeploymentObservation]) -> tuple[Deplo
         ambiguous = any(event.correlation in {"outside_window", "time_unknown"} for event in events)
         latest_at = max((event.signal.occurred_at for event in explicit if event.signal.occurred_at), default=None)
         outcomes = {event.signal.outcome for event in explicit if event.signal.occurred_at == latest_at}
+        # A candidate cannot establish an outcome, but conflicting evidence must be
+        # visible on the device row. Its association cannot be settled by timing alone.
+        ambiguous = (
+            ambiguous
+            or len(outcomes) > 1
+            or (
+                len(outcomes) == 1
+                and any(
+                    event.correlation == "session_candidate" and event.signal.outcome not in outcomes
+                    for event in events
+                )
+            )
+        )
         # Unknown ordering or contradictory simultaneous outcomes must not choose a winner.
         outcome: DeploymentOutcome = next(iter(outcomes)) if len(outcomes) == 1 and not ambiguous else "unknown"
         devices.append(

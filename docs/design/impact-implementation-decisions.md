@@ -289,6 +289,29 @@ of adding that read path.
   Full dispatch journaling and lifecycle cleanup remain separate work. Local
   source review was used; CodeRabbit remains signed out.
 
+## Deployment review follow-up
+
+- A session candidate with a different outcome from the latest explicitly
+  associated event for the same site/MAC makes the device row `unknown` with
+  `ambiguous` association. Apply this conservatively even to older or untimed
+  candidates: occurrence order cannot resolve their audit association. Preserve
+  the explicit event timestamp and all receipt references without promoting the
+  candidate to confirmed deployment. Matching candidates and events for another
+  device do not cancel an explicit outcome. Simultaneous contradictory explicit
+  outcomes also mark association ambiguous.
+- Keep the newest 2,000 receipt arrivals, ordered by descending receipt time and
+  ID, with one extra row to detect truncation. The gap explicitly says earlier
+  history may be missing. Event occurrence time still determines outcomes within
+  the retained set; newest arrival does not necessarily mean newest event.
+  Session/candidate discovery caps remain separately bounded and gap-reporting.
+  This changes only local Mongo selection and the deployment projection, with
+  no additional Mist requests or changes to impact evaluation.
+- Validation: 1,008 backend tests passed, 20 skipped; six additional regression
+  cases cover candidate conflicts and overflow retaining late failure/revert
+  events, including receipt-time ties. Ruff lint, changed-file formatting and
+  source type checks passed. Local source/diff review completed; CodeRabbit
+  remains signed out. No frontend implementation or API schema changed.
+
 ## Next implementation queue
 
 1. Extend resolvers and checks for the remaining three rules without modifying
