@@ -1,5 +1,6 @@
 import { BaselineConfidence } from '../../core/change-group.model';
 import { Tone } from '../../core/tone';
+import { MetricEvidence } from './site-impact.model';
 
 export type MonitoringStatus = 'awaiting_config' | 'monitoring' | 'completed' | 'failed';
 export type ImpactSeverity = 'none' | 'info' | 'warning' | 'critical';
@@ -64,6 +65,13 @@ export interface MonitoringSession {
   monitoring_started_at: string | null;
   monitoring_ends_at: string | null;
   impact_severity: ImpactSeverity;
+  assessment?: {
+    severity: ImpactSeverity;
+    summary: string;
+    coverage: 'complete' | 'partial' | 'insufficient' | 'not_applicable';
+    metrics: MetricEvidence[];
+    collection_errors?: string[];
+  } | null;
   deterministic_summary: string | null;
   degraded_metrics: string[];
   ai_assessment: Record<string, unknown> | null;
@@ -232,6 +240,7 @@ export function primaryMetric(session: MonitoringSession): string | null {
   if (deltas.length > 0) {
     return deltas[0].key;
   }
+  if (session.assessment) return null;
   const observed = session.observations.find((item) => Object.keys(item.values).length > 0);
   const fallback = observed ?? session.baseline;
   return fallback ? (Object.keys(fallback.values).sort()[0] ?? null) : null;
@@ -349,6 +358,16 @@ function offsetLabel(deltaMs: number): string {
 
 /** Baseline-versus-latest rows, worst mover first. */
 export function metricDeltas(session: MonitoringSession): MetricDelta[] {
+  if (session.assessment) {
+    return session.assessment.metrics.flatMap((metric) =>
+      metric.selected !== false && metric.comparable && metric.delta !== null &&
+      metric.baseline !== null && metric.latest !== null ? [{
+        key: metric.name, label: metricLabel(metric.name), baseline: metric.baseline,
+        latest: metric.latest, delta: metric.delta, deltaLabel: deltaLabel(metric.delta),
+        tone: deltaTone(metric.delta),
+      }] : [],
+    ).sort((left, right) => left.delta - right.delta);
+  }
   const baseline = session.baseline;
   const latest = session.observations.at(-1) ?? null;
   if (!baseline || !latest || (baseline.scope ?? 'site') !== (latest.scope ?? 'site')) {

@@ -1,7 +1,9 @@
 """Monitoring polling keeps change-group projections current."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from beanie import PydanticObjectId
@@ -13,8 +15,10 @@ from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
     MonitoringSession,
     MonitoringStatus,
+    SleObservation,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services import monitoring
 from mist_config_guardian_backend.services.monitoring import MonitoringPollService
 
 ORGANIZATION_ID = PydanticObjectId()
@@ -74,6 +78,33 @@ class _NoAiConfiguration:
         return None
 
 
+@pytest.mark.parametrize("scope", ["site", "device"])
+async def test_poll_keeps_known_scope_identity_against_unidentified_legacy_baseline(monkeypatch, scope):
+    session = _session(MonitoringStatus.MONITORING, [])
+    session.baseline = SleObservation(scope=scope, values={"coverage": 99})
+    observation = SleObservation(scope=scope, scope_id="known-entity", values={"coverage": 0})
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.capture.return_value = observation
+    monkeypatch.setattr(monitoring.Organization, "get", AsyncMock(return_value=SimpleNamespace(cloud_region="test")))
+    monkeypatch.setattr(monitoring, "service_token", AsyncMock(return_value="test-token"))
+    monkeypatch.setattr(monitoring, "MistSleClient", lambda **_kwargs: client)
+    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    service = _service(_RecordingProjector())
+    for _ in range(2):
+        await service._poll_session(session, NOW)  # noqa: SLF001
+    assert session.baseline.scope_id is None
+    assert session.observations[-1].scope_id == "known-entity"
+    assert session.assessment.coverage == "insufficient"
+    metric = session.assessment.metrics[0]
+    assert (metric.baseline, metric.latest) == (99, 0)
+    assert metric.delta is None
+    assert not metric.comparable
+    assert session.warnings == [
+        "Baseline scope identity is unknown; SLE values are retained without comparable deltas."
+    ]
+
+
 class _FakeQuery:
     def __init__(self, items: list[MonitoringSession]) -> None:
         self._items = items
@@ -93,7 +124,7 @@ def _install_queries(
     monitoring: list[MonitoringSession],
 ) -> None:
     """Answer the two find() calls poll_active makes, in order."""
-    queries = [_FakeQuery(awaiting), _FakeQuery(awaiting), _FakeQuery(monitoring)]
+    queries = [_FakeQuery(awaiting), *[_FakeQuery([item]) for item in awaiting], _FakeQuery(monitoring)]
 
     def find(*_args: object, **_kwargs: object) -> _FakeQuery:
         return queries.pop(0)
@@ -146,6 +177,31 @@ async def test_a_session_with_no_audit_correlation_rebuilds_nothing(
     await _service(projector).poll_active()
 
     assert projector.rebuilt == []
+
+
+async def test_timeout_persists_each_sessions_metric_gaps_and_guards_configured_races(monkeypatch):
+    from mist_config_guardian_backend.models.monitoring import SleObservation  # noqa: PLC0415
+
+    abandoned = _session(MonitoringStatus.AWAITING_CONFIG, [])
+    abandoned.baseline = SleObservation(values={"coverage": 99})
+    target = _FakeQuery([abandoned])
+    queries = [_FakeQuery([abandoned]), target, _FakeQuery([])]
+    filters = []
+
+    def find(*args):
+        filters.append(args)
+        return queries.pop(0)
+
+    monkeypatch.setattr(MonitoringSession, "find", find)
+    await _service(_RecordingProjector()).poll_active()
+    assert filters[1] == ({"_id": abandoned.id, "status": MonitoringStatus.AWAITING_CONFIG},)
+    stored = target.updated["$set"]
+    assert stored["assessment"]["severity"] == stored["impact_severity"]
+    assert stored["assessment"]["summary"] == stored["deterministic_summary"]
+    assert stored["assessment"]["metrics"][0]["name"] == "coverage"
+    assert stored["assessment"]["metrics"][0]["latest"] is None
+    assert stored["assessment"]["coverage"] == "insufficient"
+    assert stored["next_poll_at"] is None
 
 
 @pytest.mark.parametrize("scope", ["site", "device"])

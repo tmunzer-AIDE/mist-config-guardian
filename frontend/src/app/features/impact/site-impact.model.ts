@@ -1,4 +1,23 @@
 export type Health = 'ok' | 'warning' | 'error' | 'critical' | 'unknown';
+export type EvidenceState = 'measured' | 'no_data' | 'pending' | 'missing' | 'error' | 'unsupported' | 'disabled';
+export interface MetricEvidence {
+  name: string;
+  baseline: number | null;
+  latest: number | null;
+  delta: number | null;
+  baseline_state?: EvidenceState;
+  latest_state?: EvidenceState;
+  baseline_error?: string | null;
+  latest_error?: string | null;
+  comparable?: boolean;
+  selected?: boolean;
+}
+export function evidenceValue(value: number | null, state?: EvidenceState): string {
+  if (value !== null && value !== undefined && (!state || state === 'measured')) return `${value}%`;
+  return ({ measured: 'Missing value', no_data: 'No sampled traffic', pending: 'Pending',
+    missing: 'Missing evidence', error: 'Collection failed', unsupported: 'Unsupported',
+    disabled: 'Disabled' })[state ?? 'missing'];
+}
 export interface ImpactSite {
   id: string;
   name: string;
@@ -50,7 +69,9 @@ export interface DeviceImpact {
   observation_count: number;
   headline: string;
   shared_window: boolean;
-  metrics: { name: string; baseline: number; latest: number; delta: number }[];
+  metrics: MetricEvidence[];
+  evidence_coverage?: 'complete' | 'partial' | 'insufficient' | 'not_applicable';
+  assessment_source?: 'stored' | 'legacy' | 'historical';
   collection_errors: string[];
 }
 export interface SiteChange {

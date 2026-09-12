@@ -52,6 +52,22 @@ function session(overrides: Partial<MonitoringSession> = {}): MonitoringSession 
   };
 }
 
+it('uses stored selected comparisons instead of recomputing unrelated raw SLEs', () => {
+  const value = session({
+    baseline: { captured_at: '', values: { 'ap-health': 99 }, errors: [] },
+    observations: [{ captured_at: '', values: { 'ap-health': 0 }, errors: [] }],
+    assessment: { severity: 'none', summary: 'Selected evidence stable', coverage: 'complete', metrics: [
+      { name: 'ap-health', baseline: 99, latest: 0, delta: -99, selected: false, comparable: true },
+      { name: 'successful-connect', baseline: 99, latest: 99, delta: 0, selected: true, comparable: true },
+    ] },
+  });
+  expect(metricDeltas(value).map((metric) => metric.key)).toEqual(['successful-connect']);
+  expect(primaryMetric(value)).toBe('successful-connect');
+  value.assessment!.metrics = [];
+  expect(metricDeltas(value)).toEqual([]);
+  expect(primaryMetric(value)).toBeNull();
+});
+
 /** A critical session with a baseline, two pre-change and two post-change samples. */
 const CRITICAL = session({
   id: 's1',

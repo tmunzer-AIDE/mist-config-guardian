@@ -286,6 +286,7 @@
             {{ label(impact.monitoring_state) }} · {{ impact.observation_count }} observations
           </p>
           <p>{{ impact.headline }}</p>
+          @if (impact.evidence_coverage) { <p>Evidence: {{ label(impact.evidence_coverage) }}</p> }
           <small>Progress measures elapsed time, not evidence quality.</small>
         </section>
         @if (impact.metrics.length) {
@@ -295,19 +296,23 @@
               <div class="metric">
                 <div>
                   <strong>{{ metricLabel(metric.name) }}</strong
-                  ><span [class.negative]="metric.delta < 0" [class.positive]="metric.delta > 0"
-                    >{{ metric.delta > 0 ? '+' : '' }}{{ metric.delta }} pp</span
                   >
+                  @if (metric.delta !== null) {
+                    <span [class.negative]="metric.delta < 0" [class.positive]="metric.delta > 0">{{ metric.delta > 0 ? '+' : '' }}{{ metric.delta }} pp</span>
+                  } @else { <span>No comparable delta</span> }
                 </div>
-                <div class="metric-track">
+                @if (metric.delta !== null) { <div class="metric-track">
                   <span class="baseline-bar" [style.width.%]="metric.baseline"></span
                   ><span
                     class="latest-bar"
                     [class.degraded]="metric.delta < 0"
                     [style.width.%]="metric.latest"
                   ></span>
-                </div>
-                <small>Baseline {{ metric.baseline }}% · latest {{ metric.latest }}%</small>
+                </div> }
+                <small>Baseline {{ evidenceValue(metric.baseline, metric.baseline_state) }} · latest {{ evidenceValue(metric.latest, metric.latest_state) }}</small>
+                @if (metric.selected === false) { <small>Context only · excluded from verdict</small> }
+                @if (metric.baseline_error) { <p>{{ metric.baseline_error }}</p> }
+                @if (metric.latest_error) { <p>{{ metric.latest_error }}</p> }
               </div>
             }
           </section>

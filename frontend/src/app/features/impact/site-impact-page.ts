@@ -21,6 +21,7 @@ import {
   changePhase,
   changeProgress,
   DeviceImpact,
+  evidenceValue,
   Health,
   ImpactSite,
   impactDevices,
@@ -38,6 +39,7 @@ import { metricLabel } from './monitoring.model';
   styleUrl: './site-impact-page.scss',
 })
 export class SiteImpactPage implements OnDestroy {
+  protected readonly evidenceValue = evidenceValue;
   private readonly api = inject(SiteImpactService);
   private readonly siteContext = inject(SiteContextService);
   private readonly orgs = inject(OrganizationContextService);

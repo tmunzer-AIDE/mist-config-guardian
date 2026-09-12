@@ -1367,6 +1367,16 @@
       },
       "DeviceImpact": {
         "properties": {
+          "assessment_source": {
+            "default": "legacy",
+            "enum": [
+              "stored",
+              "legacy",
+              "historical"
+            ],
+            "title": "Assessment Source",
+            "type": "string"
+          },
           "collection_errors": {
             "items": {
               "type": "string"
@@ -1427,6 +1437,17 @@
           },
           "device_name": {
             "title": "Device Name",
+            "type": "string"
+          },
+          "evidence_coverage": {
+            "default": "insufficient",
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Evidence Coverage",
             "type": "string"
           },
           "headline": {
@@ -2246,30 +2267,198 @@
         "title": "ImpactAiSettingsUpdate",
         "type": "object"
       },
+      "ImpactAssessment": {
+        "description": "Authoritative evaluated result; legacy scalar fields are projections only.",
+        "properties": {
+          "collection_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collection Errors",
+            "type": "array"
+          },
+          "coverage": {
+            "default": "insufficient",
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "degraded_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Metrics",
+            "type": "array"
+          },
+          "device_findings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Device Findings",
+            "type": "array"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "incident_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Types",
+            "type": "array"
+          },
+          "metric_deltas": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Metric Deltas",
+            "type": "object"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricEvidence"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/RelevancePlan"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ImpactSeverity"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "severity",
+          "summary",
+          "degraded_metrics",
+          "metric_deltas",
+          "incident_types"
+        ],
+        "title": "ImpactAssessment",
+        "type": "object"
+      },
       "ImpactMetric": {
+        "description": "Public per-metric evidence, including unavailable measurements.",
         "properties": {
           "baseline": {
-            "title": "Baseline",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
+          },
+          "baseline_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Error"
+          },
+          "baseline_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Baseline State",
+            "type": "string"
+          },
+          "comparable": {
+            "default": false,
+            "title": "Comparable",
+            "type": "boolean"
           },
           "delta": {
-            "title": "Delta",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
           },
           "latest": {
-            "title": "Latest",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "latest_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Error"
+          },
+          "latest_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Latest State",
+            "type": "string"
           },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "selected": {
+            "default": true,
+            "title": "Selected",
+            "type": "boolean"
           }
         },
         "required": [
-          "name",
-          "baseline",
-          "latest",
-          "delta"
+          "name"
         ],
         "title": "ImpactMetric",
         "type": "object"
@@ -2464,6 +2653,113 @@
           }
         },
         "title": "LogoutResponse",
+        "type": "object"
+      },
+      "MetricEvidence": {
+        "description": "A metric remains visible even when one or both values are unavailable.",
+        "properties": {
+          "baseline": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
+          },
+          "baseline_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Error"
+          },
+          "baseline_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Baseline State",
+            "type": "string"
+          },
+          "comparable": {
+            "default": false,
+            "title": "Comparable",
+            "type": "boolean"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "latest_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Error"
+          },
+          "latest_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Latest State",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "selected": {
+            "default": true,
+            "title": "Selected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "MetricEvidence",
         "type": "object"
       },
       "MfaChallengeResponse": {
@@ -2781,6 +3077,25 @@
               }
             ],
             "title": "Ai Assessment Error"
+          },
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assessment_source": {
+            "default": "legacy",
+            "enum": [
+              "stored",
+              "legacy"
+            ],
+            "title": "Assessment Source",
+            "type": "string"
           },
           "audit_ids": {
             "items": {
@@ -4443,11 +4758,59 @@
         "title": "RecoveryState",
         "type": "string"
       },
+      "RelevancePlan": {
+        "description": "Explicit evidence selection. An empty selected plan selects nothing.",
+        "properties": {
+          "finding_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Finding Kinds",
+            "type": "array"
+          },
+          "incident_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Types",
+            "type": "array"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "mode": {
+            "default": "selected",
+            "enum": [
+              "selected",
+              "legacy_all"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "RelevancePlan",
+        "type": "object"
+      },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/RestoreActionType"
+          },
+          "baseline_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Version Id"
           },
           "configuration": {
             "additionalProperties": true,
@@ -4594,6 +4957,11 @@
                 "type": "null"
               }
             ]
+          },
+          "use_prepared_credential": {
+            "default": false,
+            "title": "Use Prepared Credential",
+            "type": "boolean"
           }
         },
         "title": "RestoreExecuteRequest",
@@ -4650,6 +5018,17 @@
               }
             ]
           },
+          "baseline_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Snapshot Id"
+          },
           "compensation_available": {
             "default": false,
             "title": "Compensation Available",
@@ -4700,6 +5079,18 @@
             },
             "title": "Preflight Errors",
             "type": "array"
+          },
+          "prepared_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepared Until"
           },
           "requested_version_ids": {
             "items": {
@@ -5453,11 +5844,41 @@
             "title": "Errors",
             "type": "array"
           },
+          "metric_errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metric Errors",
+            "type": "object"
+          },
+          "metric_states": {
+            "additionalProperties": {
+              "enum": [
+                "measured",
+                "no_data",
+                "pending",
+                "missing",
+                "error",
+                "unsupported",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            "title": "Metric States",
+            "type": "object"
+          },
           "no_data": {
             "items": {
               "type": "string"
             },
             "title": "No Data",
+            "type": "array"
+          },
+          "requested_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requested Metrics",
             "type": "array"
           },
           "scope": {
@@ -5468,6 +5889,17 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
           },
           "trend": {
             "additionalProperties": {
@@ -11263,6 +11695,75 @@
           }
         ],
         "summary": "Execute Restore",
+        "tags": [
+          "Restores"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/restores/{operation_id}/prepare": {
+      "post": {
+        "description": "Back up live state and return a new plan for review; never queue writes.",
+        "operationId": "prepare_restore_api_v1_organizations__organization_id__restores__operation_id__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Prepare Restore",
         "tags": [
           "Restores"
         ]

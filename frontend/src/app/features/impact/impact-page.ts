@@ -1,4 +1,5 @@
 import { DeviceEvidence } from './device-evidence';
+import { evidenceValue } from './site-impact.model';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -71,6 +72,7 @@ interface StatePanel {
   styleUrl: './impact-page.scss',
 })
 export class ImpactPage {
+  protected readonly evidenceValue = evidenceValue;
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly organizations = inject(OrganizationContextService);
@@ -166,6 +168,9 @@ export class ImpactPage {
     if (!session || this.metrics().length === 0 || session.impact_severity !== 'none') {
       return null;
     }
+    if (session.assessment) {
+      return { tone: 'ok' as Tone, tag: 'NO IMPACT DETECTED', detail: session.assessment.summary };
+    }
     const trusted = hasTrustedBaseline(session);
     const confidence = baselineConfidence(session);
     return {
@@ -183,6 +188,7 @@ export class ImpactPage {
   protected readonly collectionErrors = computed(() => {
     const session = this.selected();
     if (!session) return [];
+    if (session.assessment?.collection_errors) return session.assessment.collection_errors;
     const latest = session.observations.at(-1);
     return [
       ...(session.baseline?.errors ?? []).map((error) => 'Baseline: ' + error),

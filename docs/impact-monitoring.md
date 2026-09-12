@@ -30,6 +30,28 @@ are not presented as confirmed raw-text changes.
 
 ## Timing
 
+Impact assessments now persist the verdict, evidence coverage, relevance plan and
+per-metric comparison together. API views read that result; older sessions use one
+explicit compatibility projection. Scalar severity/summary fields remain mirrors
+for existing indexes and clients. Current monitoring passes `legacy_all`, preserving
+the existing evidence selection until audit-specific rules are implemented.
+
+Metric rows include the union of planned and recorded metric identities, including
+failed or unsampled metrics. Each side records its evidence state and nullable
+value; missing values never render as zero or receive an invented delta. Known
+scope identities must match. Collection-wide discovery failures remain separate
+from metric failures. An explicitly empty relevance plan selects no evidence;
+selected plans independently filter SLEs, incidents and operational finding kinds.
+
+API compatibility: `ImpactMetric.baseline` and `latest` are now nullable, as is an
+unavailable delta. External clients must accept null and use evidence state instead
+of assuming every row contains floats. Regenerate clients from `docs/openapi.json`
+before adopting this contract; null must not be converted to zero.
+
+The site view uses `error` health for failed monitoring/deployment sessions unless
+their assessment is already critical, which remains critical. This lifecycle
+presentation keeps failures filterable without changing the stored impact verdict.
+
 A supported Mist `device-events` configuration trigger immediately starts an
 active monitoring session. Guardian requests device-scoped SLE summaries for the
 24 hours preceding the source event timestamp, retains every bucket of that
@@ -76,6 +98,9 @@ Observations now record whether their scope is a site or a device. Legacy baseli
 polling site SLE; new device baselines continue polling device SLE. Different
 scopes are never compared. HTTP failures, malformed responses and unexplained
 missing metrics prevent a clean verdict and appear explicitly in the Impact page.
+A legacy baseline with unknown scope identity cannot be compared to a newly
+identified observation. Preserve the known identity and both measurements, omit
+the delta, mark coverage insufficient and record a session warning.
 Valid responses with no sampled traffic are recorded in `no_data`, separately
 from `errors`. They contribute to collection coverage but receive no invented
 success rate or numeric delta. A quiet roaming or join metric therefore does not

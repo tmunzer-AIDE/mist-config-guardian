@@ -115,6 +115,31 @@ describe('site Impact workspace', () => {
     expect(fixture.nativeElement.querySelectorAll('.change-row')[1].getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('renders missing evidence separately from a measured zero', () => {
+    load();
+    chooseSite('site2');
+    flushSite([change({ impacts: [impact({ metrics: [
+      { name: 'coverage', baseline: 99, latest: 0, delta: -99,
+        baseline_state: 'measured', latest_state: 'measured' },
+      { name: 'capacity', baseline: 98, latest: null, delta: null,
+        baseline_state: 'measured', latest_state: 'error', latest_error: 'capacity: HTTP 404' },
+      { name: 'roaming', baseline: null, latest: null, delta: null,
+        baseline_state: 'no_data', latest_state: 'pending' },
+    ] })] })]);
+    chooseRow();
+    chooseNode();
+    const text = fixture.nativeElement.querySelector('.details').textContent;
+    expect(text).toContain('latest 0%');
+    expect(text).toContain('Collection failed');
+    expect(text).toContain('No sampled traffic');
+    expect(text).toContain('Pending');
+    expect(text).toContain('No comparable delta');
+    expect(text).toContain('capacity: HTTP 404');
+    expect(text).not.toContain('null%');
+    expect(fixture.nativeElement.querySelectorAll('.metric')).toHaveLength(3);
+    expect(fixture.nativeElement.querySelectorAll('.metric-track')).toHaveLength(1);
+  });
+
   it('remembers the selected site when leaving and reopening the page', () => {
     load();
     chooseSite('site2');
