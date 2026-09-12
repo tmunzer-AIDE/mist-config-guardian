@@ -23,6 +23,7 @@ import { RestoreStepPlan } from './restore-step-plan';
 import { RestoreStepTargets, SelectedPill, TargetSiteOption, TargetTypeOption } from './restore-step-targets';
 import {
   ApprovalRequest,
+  RestoreCredential,
   blocksExecution,
   isRestoreInFlight,
   isRestoreTerminal,
@@ -788,7 +789,7 @@ export class RestorePage {
 
   // ---- step 3 -------------------------------------------------------------
 
-  protected async execute(token: string): Promise<void> {
+  protected async execute(token: RestoreCredential): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
     const operation = this.activeOperation();
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
@@ -1026,7 +1027,7 @@ export class RestorePage {
     }
   }
 
-  protected async runCompensation(token: string): Promise<void> {
+  protected async runCompensation(token: RestoreCredential): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
     const operation = this.activeOperation();
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {

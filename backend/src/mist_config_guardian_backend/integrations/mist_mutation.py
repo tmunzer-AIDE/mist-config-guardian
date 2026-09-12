@@ -8,6 +8,7 @@ from typing import Self, cast
 import httpx
 
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
+from mist_config_guardian_backend.integrations.mist_session import SESSION_PREFIX, credential_headers, logout_session
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition
 
@@ -20,9 +21,10 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
     """Use a freshly verified administrator token for bounded writes."""
 
     def __init__(self, *, token: str, region: MistCloudRegion) -> None:
+        self._session = token.startswith(SESSION_PREFIX)
         self._client = httpx.AsyncClient(
             base_url=REGION_HOSTS[region],
-            headers={"Authorization": f"Token {token}"},
+            headers=credential_headers(token),
             timeout=30,
         )
 
@@ -35,6 +37,8 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        if self._session:
+            await logout_session(self._client)
         await self._client.aclose()
 
     async def create(

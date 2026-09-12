@@ -7,7 +7,9 @@ from typing import Any
 
 import httpx
 
+from mist_config_guardian_backend.integrations.mist_session import credential_headers, login_session, logout_session
 from mist_config_guardian_backend.models.organization import MistCloudRegion
+from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 
 REGION_HOSTS = {
     MistCloudRegion.GLOBAL_01: "https://api.mist.com",
@@ -57,6 +59,30 @@ class MistOrganizationAccess:
 
 class MistVerificationService:
     """Verify a service token without issuing configuration writes."""
+
+    async def login(
+        self,
+        credentials: MistLoginCredentials,
+        region: MistCloudRegion,
+        *,
+        retain_session: bool = False,
+    ) -> tuple[str, dict[str, Any]]:
+        payload = {"email": str(credentials.email), "password": credentials.password.get_secret_value()}
+        if credentials.two_factor is not None:
+            payload["two_factor"] = credentials.two_factor.get_secret_value()
+        async with httpx.AsyncClient(base_url=REGION_HOSTS[region], timeout=30) as client:
+            retained = False
+            try:
+                result = await login_session(client, payload)
+            except (httpx.HTTPError, ValueError) as exc:
+                msg = str(exc) if isinstance(exc, ValueError) else "Mist authentication is unavailable; try again"
+                raise MistVerificationError(msg) from exc
+            else:
+                retained = retain_session
+                return result
+            finally:
+                if not retained and client.cookies:
+                    await logout_session(client)
 
     async def verify_read_only_token(
         self,
@@ -116,12 +142,16 @@ class MistVerificationService:
         token: str,
         region: MistCloudRegion,
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(
-            base_url=REGION_HOSTS[region],
-            headers={"Authorization": f"Token {token}"},
-            timeout=30,
-        ) as client:
-            response = await client.get("/api/v1/self")
+        try:
+            async with httpx.AsyncClient(
+                base_url=REGION_HOSTS[region],
+                headers=credential_headers(token),
+                timeout=30,
+            ) as client:
+                response = await client.get("/api/v1/self")
+        except httpx.HTTPError as exc:
+            msg = "Mist identity verification is unavailable; try again"
+            raise MistVerificationError(msg) from exc
         try:
             identity = response.json()
         except ValueError as exc:
@@ -138,7 +168,7 @@ class MistVerificationService:
         if not isinstance(privileges, list):
             return None
         for privilege in privileges:
-            if isinstance(privilege, dict) and privilege.get("org_id") == org_id:
+            if isinstance(privilege, dict) and privilege.get("org_id") == org_id and privilege.get("scope") == "org":
                 return privilege
         return None
 

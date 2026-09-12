@@ -3,6 +3,13 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { API_ROOT } from './api';
+import { MistCloudRegion } from './organization.model';
+
+export interface MistLoginCredentials {
+  email: string;
+  password: string;
+  two_factor?: string;
+}
 
 export type UserRole = 'viewer' | 'operator' | 'administrator';
 export type ClockFormat = '24h' | '12h';
@@ -102,6 +109,18 @@ export class AuthService {
       this.http.post<LoginResult>(`${API_ROOT}/auth/login`, body, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       }),
+    );
+    if (!response.mfa_required) {
+      this.userState.set(response.user);
+      this.sessionState.update((value) => value + 1);
+      this.resolvedState.set(true);
+    }
+    return response;
+  }
+
+  async loginMist(credentials: MistLoginCredentials & { region: MistCloudRegion }): Promise<LoginResult> {
+    const response = await firstValueFrom(
+      this.http.post<LoginResult>(`${API_ROOT}/auth/login/mist`, credentials),
     );
     if (!response.mfa_required) {
       this.userState.set(response.user);

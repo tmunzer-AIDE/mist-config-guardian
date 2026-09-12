@@ -6,6 +6,7 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.database import DatabaseManager
+from mist_config_guardian_backend.integrations.mist import MistVerificationService
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import expire_pending_approvals
 from mist_config_guardian_backend.services.restore_authorization import (
@@ -42,7 +43,8 @@ async def _expire_restore_credentials() -> int:
     database = DatabaseManager(settings)
     await database.connect()
     try:
-        return await RestoreAuthorizationService.expire_stale_credentials()
+        authorization = RestoreAuthorizationService(settings, CredentialVault(settings), MistVerificationService())
+        return await authorization.expire_stale_credentials()
     finally:
         await database.close()
 

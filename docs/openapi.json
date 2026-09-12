@@ -2577,6 +2577,86 @@
         "title": "MistCloudRegion",
         "type": "string"
       },
+      "MistLoginCredentials": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "two_factor": {
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Factor"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "MistLoginCredentials",
+        "type": "object"
+      },
+      "MistLoginRequest": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "region": {
+            "$ref": "#/components/schemas/MistCloudRegion"
+          },
+          "two_factor": {
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Factor"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "region"
+        ],
+        "title": "MistLoginRequest",
+        "type": "object"
+      },
       "MonitoringChangeRef": {
         "properties": {
           "audit_id": {
@@ -4491,17 +4571,31 @@
         "description": "Fresh delegated Mist administrator credential.",
         "properties": {
           "administrator_token": {
-            "format": "password",
-            "maxLength": 2048,
-            "minLength": 1,
-            "title": "Administrator Token",
-            "type": "string",
-            "writeOnly": true
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Administrator Token"
+          },
+          "mist_login": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MistLoginCredentials"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
-        "required": [
-          "administrator_token"
-        ],
         "title": "RestoreExecuteRequest",
         "type": "object"
       },
@@ -7933,6 +8027,55 @@
           }
         },
         "summary": "Complete Mfa Login",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/api/v1/auth/login/mist": {
+      "post": {
+        "operationId": "mist_login_api_v1_auth_login_mist_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MistLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MfaChallengeResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LoginSuccessResponse"
+                    }
+                  ],
+                  "title": "Response Mist Login Api V1 Auth Login Mist Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mist Login",
         "tags": [
           "Authentication"
         ]

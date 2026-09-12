@@ -7,11 +7,13 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from mist_config_guardian_backend.api.dependencies import (
     get_current_user,
+    get_mist_verification_service,
     get_session_service,
     get_user_service,
 )
 from mist_config_guardian_backend.config import Settings, get_settings
-from mist_config_guardian_backend.models.user import User
+from mist_config_guardian_backend.integrations.mist import MistVerificationError, MistVerificationService
+from mist_config_guardian_backend.models.user import User, UserStatus
 from mist_config_guardian_backend.schemas.auth import (
     BootstrapAdminRequest,
     BootstrapStateResponse,
@@ -23,6 +25,7 @@ from mist_config_guardian_backend.schemas.auth import (
     PasskeyAuthenticationRequest,
     UserResponse,
 )
+from mist_config_guardian_backend.schemas.mist_login import MistLoginRequest
 from mist_config_guardian_backend.security.auth import create_access_token
 from mist_config_guardian_backend.security.webauthn import WebAuthnError
 from mist_config_guardian_backend.services.mfa import (
@@ -124,6 +127,50 @@ async def login(  # noqa: PLR0913, PLR0917 - one dependency per collaborating se
         return MfaChallengeResponse(
             challenge_token=await mfa.issue_login_challenge(user),
             methods=["totp", "recovery_code"],
+        )
+    return await _complete_sign_in(
+        user,
+        request=request,
+        response=response,
+        users=users,
+        sessions=sessions,
+        passkeys=passkeys,
+        settings=settings,
+        mfa_verified=False,
+    )
+
+
+@router.post("/login/mist")
+async def mist_login(  # noqa: PLR0913, PLR0917
+    payload: MistLoginRequest,
+    request: Request,
+    response: Response,
+    users: Annotated[UserService, Depends(get_user_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+    mfa: Annotated[MfaService, Depends(get_mfa_service)],
+    passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
+    mist: Annotated[MistVerificationService, Depends(get_mist_verification_service)],
+) -> MfaChallengeResponse | LoginSuccessResponse:
+    account, address = throttle.account(str(payload.email)), throttle.address(request)
+    await reserve_or_raise(throttle, account, address)
+    try:
+        _credential, identity = await mist.login(payload, payload.region)
+    except MistVerificationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    user = await User.find_one(
+        {"email": str(identity["email"]).lower(), "is_active": True, "status": UserStatus.ACTIVE}
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=401, detail="Mist sign-in requires an active application account with the same email"
+        )
+    await throttle.succeeded(account)
+    await throttle.release(address)
+    if user.totp is not None:
+        return MfaChallengeResponse(
+            challenge_token=await mfa.issue_login_challenge(user), methods=["totp", "recovery_code"]
         )
     return await _complete_sign_in(
         user,
