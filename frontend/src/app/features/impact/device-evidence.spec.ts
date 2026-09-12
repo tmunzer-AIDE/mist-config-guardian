@@ -69,6 +69,44 @@ describe('TelemetryCapture', () => {
 });
 
 describe('DeviceEvidence', () => {
+  it('summarizes repeated findings once without losing earlier-baseline evidence', () => {
+    const fixture = TestBed.createComponent(DeviceEvidence);
+    const finding = { kind: 'ssid', subject: 'BYOD-IOT', before: 'configured', after: 'removed',
+      severity: 'warning', detail: 'SSID removed with no observed clients.', affected_clients: 0 };
+    const comparisons = Array.from({ length: 5 }, (_, i) => ({
+      triggered_at: `2026-09-09T12:0${i}:00Z`, due_at: '2026-09-09T12:10:00Z',
+      baseline: state(), followup: state(), latest: state(),
+      findings: i < 4 ? [finding] : [], current_findings: i < 4 ? [finding] : [],
+    }));
+    fixture.componentRef.setInput('session', { device_comparisons: comparisons });
+    fixture.detectChanges();
+    const summary = fixture.nativeElement.querySelector('.findings-summary');
+    expect(summary.querySelectorAll('.finding').length).toBe(1);
+    expect(summary.textContent).toContain('Reported in 4 captures');
+    expect(fixture.nativeElement.querySelectorAll('.capture-history .evidence').length).toBe(1);
+    expect(fixture.nativeElement.querySelector('.capture-history').open).toBe(false);
+    const select = fixture.nativeElement.querySelector('select');
+    expect(select.options.length).toBe(5);
+    select.value = '4'; select.dispatchEvent(new Event('change')); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.capture-history .evidence').textContent).toContain('No disruption detected');
+    expect(summary.textContent).toContain('BYOD-IOT');
+  });
+
+  it('keeps different findings separate and exposes incomplete device data', () => {
+    const fixture = TestBed.createComponent(DeviceEvidence);
+    const finding = { kind: 'port', subject: 'ge-0/0/1', before: 'up', after: 'down',
+      severity: 'warning', detail: 'Port changed.', affected_clients: 0 };
+    fixture.componentRef.setInput('session', { device_comparisons: [{
+      triggered_at: '2026-09-09T12:00:00Z', due_at: '2026-09-09T12:05:00Z',
+      baseline: state({ errors: { radios: 'Unavailable' } }), followup: state(),
+      findings: [finding, { ...finding, severity: 'critical' }],
+    }] });
+    fixture.detectChanges();
+    const summary = fixture.nativeElement.querySelector('.findings-summary');
+    expect(summary.querySelectorAll('.finding').length).toBe(2);
+    expect(summary.textContent).toContain('Some device data could not be collected');
+  });
+
   it('mounts and formats both capture tables only while the source is expanded', () => {
     let formatted = 0;
     const clients = Array.from({ length: 5000 }, (_, id) => ({ id,
@@ -82,7 +120,7 @@ describe('DeviceEvidence', () => {
     expect(formatted).toBe(0);
     expect(fixture.nativeElement.querySelector('app-telemetry-capture')).toBeNull();
     expect(fixture.nativeElement.textContent).toContain('5000 records → 5000 records');
-    const detail = fixture.nativeElement.querySelector('details') as HTMLDetailsElement;
+    const detail = fixture.nativeElement.querySelector('.capture-history .evidence details') as HTMLDetailsElement;
     detail.open = true;
     detail.dispatchEvent(new Event('toggle'));
     fixture.detectChanges();

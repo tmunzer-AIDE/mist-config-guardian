@@ -102,6 +102,16 @@ describe('site Impact workspace', () => {
     fixture.detectChanges();
     flushSite(changes, changes.length, links);
   }
+  it('opens the requested site and change from a Changes link', () => {
+    fixture.componentRef.setInput('site', 'site2');
+    fixture.componentRef.setInput('change', 'c2');
+    fixture.detectChanges();
+    load();
+    expect(fixture.nativeElement.querySelector('select').value).toBe('site2');
+    expect(panel()).toBe('change');
+    expect(fixture.nativeElement.querySelectorAll('.change-row')[1].getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('mounts one contextual panel and follows all four selection states', () => {
     load();
     expect(panel()).toBe('site');

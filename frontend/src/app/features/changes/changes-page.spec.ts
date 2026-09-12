@@ -243,6 +243,40 @@ describe('ChangesPage', () => {
     });
   });
 
+  it('opens the selected change in site Impact without the legacy session parameter', async () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput('group', MONDAY_WARNING.id);
+    await load([MONDAY_WARNING]);
+    httpMock.expectOne(`${INDEX_URL}/${MONDAY_WARNING.id}`).flush(detail(MONDAY_WARNING));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector('.panel-actions .cg-btn--primary') as HTMLButtonElement;
+    expect(button.textContent).toContain('Open site impact');
+    button.click();
+    expect(navigate).toHaveBeenCalledWith(['/impact'], {
+      queryParams: { site: 'site-1', change: MONDAY_WARNING.id },
+    });
+  });
+
+  it('offers each affected site once, including changes without a monitoring session', async () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput('group', MONDAY_WARNING.id);
+    await load([MONDAY_WARNING]);
+    const group = detail({ ...MONDAY_WARNING, affected_site_ids: ['site-1', 'site-2', 'site-1'], monitoring_session_ids: [] });
+    httpMock.expectOne(`${INDEX_URL}/${MONDAY_WARNING.id}`).flush(group);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const buttons = fixture.nativeElement.querySelectorAll('.panel-actions .cg-btn--primary') as NodeListOf<HTMLButtonElement>;
+    expect(buttons.length).toBe(2);
+    expect(buttons[1].textContent).toContain('site-2');
+    buttons[1].click();
+    expect(navigate).toHaveBeenCalledWith(['/impact'], {
+      queryParams: { site: 'site-2', change: MONDAY_WARNING.id },
+    });
+  });
+
   it('compares a changed object under the slot names History reads', async () => {
     const router = TestBed.inject(Router);
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);

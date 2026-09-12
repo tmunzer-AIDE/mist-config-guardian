@@ -3,11 +3,6 @@
     <h1 class="cg-page-title">Configuration library</h1>
     <p>Find an object, open its versions, then compare or restore.</p>
   </div>
-  @if (library() && selectedObject(); as object) {
-    <button class="cg-btn return-selected" (click)="selectObject(object.id)">
-      Back to {{ object.name }}
-    </button>
-  }
   @if (!library()) {
     <button class="cg-btn" type="button" (click)="browseObjects()">← All objects</button>
   }

@@ -1,3 +1,4 @@
+import { signal } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
@@ -213,396 +214,129 @@ describe('monitoring.model', () => {
 
 describe('ImpactPage', () => {
   let fixture: ComponentFixture<ImpactPage>;
-  let monitoring: MonitoringService;
+  let http: HttpTestingController;
   let navigations: Navigation[];
-  let historical: boolean;
-  let role: boolean;
-
-  function text(): string {
-    return (fixture.nativeElement as HTMLElement).textContent ?? '';
-  }
-
-  function all(selector: string): HTMLElement[] {
-    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll(selector));
-  }
-
-  async function render(items: MonitoringSession[], selected?: string): Promise<void> {
-    monitoring.sessions.set(items);
-    monitoring.total.set(items.length);
-    if (selected) {
-      fixture.componentRef.setInput('session', selected);
-    }
+  const org = signal<{ id: string } | null>({ id: 'org-1' });
+  const historical = signal(false);
+  let role = true;
+  function text() { return fixture.nativeElement.textContent as string; }
+  function all(selector: string): HTMLElement[] { return Array.from(fixture.nativeElement.querySelectorAll(selector)); }
+  async function render(item: MonitoringSession) {
+    fixture.componentRef.setInput('session', item.id);
+    fixture.detectChanges();
+    http.expectOne('/api/v1/organizations/org-1/monitoring/' + item.id).flush(item);
     fixture.detectChanges();
     await fixture.whenStable();
-    fixture.detectChanges();
   }
-
   beforeEach(async () => {
-    navigations = [];
-    historical = false;
-    role = true;
-
+    org.set({ id: 'org-1' }); historical.set(false); role = true; navigations = [];
     await TestBed.configureTestingModule({
       imports: [ImpactPage],
-      providers: [
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: Router,
-          useValue: {
-            navigate: (commands: unknown[], extras?: Record<string, unknown>) => {
-              navigations.push({ commands, extras });
-              return Promise.resolve(true);
-            },
-          },
-        },
+      providers: [provideHttpClient(), provideHttpClientTesting(),
+        { provide: Router, useValue: { navigate: (commands: unknown[], extras?: Record<string, unknown>) => {
+          navigations.push({ commands, extras }); return Promise.resolve(true);
+        } } },
         { provide: ActivatedRoute, useValue: {} },
+        { provide: OrganizationContextService, useValue: { selected: org, revision: signal(0) } },
         { provide: AuthService, useValue: { can: () => role } },
-        { provide: TimeContextService, useValue: { isHistorical: () => historical } },
+        { provide: TimeContextService, useValue: { isHistorical: historical } },
       ],
     }).compileComponents();
-
-    fixture = TestBed.createComponent(ImpactPage);
-    monitoring = TestBed.inject(MonitoringService);
-    monitoring.reset();
+    fixture = TestBed.createComponent(ImpactPage); http = TestBed.inject(HttpTestingController);
   });
+  afterEach(() => { fixture.destroy(); http.verify(); });
 
-  it('labels zero-sample metrics without presenting them as collection failures', async () => {
-    await render([session({
-      status: 'completed', impact_severity: 'none', baseline_confidence: 'high',
-      baseline: { captured_at: '2026-09-09T10:00:00Z', values: { 'ap-health': 99, roaming: 99 }, errors: [] },
-      observations: [{ captured_at: '2026-09-09T11:00:00Z', values: { 'ap-health': 99 }, no_data: ['roaming'], errors: [] }],
-    })]);
-    const quiet = fixture.nativeElement.querySelector('[aria-label="SLE metrics without sampled traffic"]') as HTMLElement;
-    expect(quiet.textContent).toContain('Roaming');
-    expect(quiet.textContent).toContain('not treated as collection failures');
-    expect(fixture.nativeElement.querySelector('[aria-label="SLE collection problems"]')).toBeNull();
-    expect(fixture.nativeElement.textContent).toContain('NO IMPACT DETECTED');
-  });
-
-  it('shows SLE collection failures separately from the network verdict', async () => {
-    await render([session({
-      status: 'completed', impact_severity: 'info',
-      baseline: { captured_at: '2026-09-09T10:00:00Z', values: {}, errors: ['coverage: HTTP 404 from the SLE endpoint'] },
-      observations: [{ captured_at: '2026-09-09T11:00:00Z', values: {}, errors: ['coverage: HTTP 403 from the SLE endpoint'] }],
-    })]);
-    const problems = fixture.nativeElement.querySelector('[aria-label="SLE collection problems"]') as HTMLElement;
-    expect(problems.textContent).toContain('SLE collection is incomplete');
-    expect(problems.textContent).toContain('cannot establish that the network is healthy');
-    expect(problems.textContent).toContain('HTTP 403');
-    expect(problems.textContent).toContain('HTTP 404');
-    expect(fixture.nativeElement.textContent).not.toContain('NO IMPACT DETECTED');
-  });
-
-  it('forgets a session resolved for another organization when switching', async () => {
-    // The resolved session is keyed by identifier alone. Under the next
-    // organization the same identifier would keep rendering the previous
-    // organization's device, incidents and metrics.
-    const http = TestBed.inject(HttpTestingController);
-    const organizations = TestBed.inject(OrganizationContextService);
-    const loaded = organizations.load();
-    http.expectOne('/api/v1/organizations').flush({
-      items: [
-        { id: 'org-1', name: 'Northwind Retail' },
-        { id: 'org-2', name: 'Contoso' },
-      ],
-      total: 2,
-    });
-    await loaded;
-
-    fixture.componentRef.setInput('session', 's-old');
-    fixture.detectChanges();
-    await fixture.whenStable();
-    http
-      .expectOne((request) => request.url === '/api/v1/organizations/org-1/monitoring')
-      .flush({ items: [QUIET], total: 1 });
-    http
-      .expectOne('/api/v1/organizations/org-1/monitoring/s-old')
-      .flush(session({ id: 's-old', device_name: 'NW-AP-OLD' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(text()).toContain('NW-AP-OLD');
-
-    organizations.select('org-2');
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    // Gone before the new organization answers, and never read under it.
-    expect(text()).not.toContain('NW-AP-OLD');
-    http.expectNone('/api/v1/organizations/org-2/monitoring/s-old');
-    http
-      .expectOne((request) => request.url === '/api/v1/organizations/org-2/monitoring')
-      .flush({ items: [session({ id: 's-new', device_name: 'CT-AP-NEW' })], total: 1 });
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(text()).toContain('CT-AP-NEW');
-    expect(text()).not.toContain('NW-AP-OLD');
-    const dropped = navigations.some(
-      (entry) => (entry.extras?.['queryParams'] as { session?: string | null } | undefined)?.session === null,
-    );
-    expect(dropped).toBe(true);
-    http.verify();
-  });
-
-  it('lets a session named by the URL supersede an earlier row pick', async () => {
-    // A pick writes itself to the URL, so the parameter arriving as the pick
-    // is not news. A parameter arriving from elsewhere — a notification, a
-    // search result — is, and must win rather than be rewritten back.
-    await render([CRITICAL, QUIET]);
-    const page = fixture.componentInstance as unknown as { selectedId: () => string | null };
-
-    all('.row')[1].click();
-    fixture.detectChanges();
-    await fixture.whenStable();
-    expect(page.selectedId()).toBe('s2');
-    const picks = navigations.length;
-
-    fixture.componentRef.setInput('session', 's1');
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(page.selectedId()).toBe('s1');
-    // Nothing rewrote the URL back to the pick.
-    expect(navigations.length).toBe(picks);
-  });
-
-  it('groups shared audit IDs and keeps unrelated or uncorrelated device changes separate', async () => {
-    await render([CRITICAL, QUIET, {...BLANK, audit_ids:['other-audit']}, {...BLANK, id:'s4', audit_ids:[]}]);
-    expect(all('.change-event').length).toBe(3);
-    expect(all('.change-event')[0].querySelectorAll('.row').length).toBe(2);
-    expect(text()).toContain('Uncorrelated device change');
-  });
-
-  it('keyboard navigation skips devices inside a collapsed change group', async () => {
-    await render([CRITICAL, {...QUIET, audit_ids:['other-audit']}, BLANK]);
-    (all('.change-event')[1] as HTMLDetailsElement).open = false;
-    all('.row')[0].dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown',bubbles:true}));
-    fixture.detectChanges();
-    await fixture.whenStable();
-    expect((fixture.componentInstance as unknown as {selectedId:()=>string}).selectedId()).toBe('s3');
-  });
-
-  it('opens the audit selected for a shared monitoring window', async () => {
-    await render([{...CRITICAL,audit_ids:['a1','a2'],change_groups:[
-      {id:'g1',audit_id:'a1',title:'First change',occurred_at:null},
-      {id:'g2',audit_id:'a2',title:'Second change',occurred_at:null},
-    ]}]);
-    all('.row')[1].click();
-    fixture.detectChanges();
-    expect((fixture.componentInstance as unknown as {changeGroupId:()=>string}).changeGroupId()).toBe('g2');
-  });
-
-  it('lists every session and narrows the list from the status chips', async () => {
-    await render([CRITICAL, QUIET, BLANK]);
-
-    expect(text()).toContain('CONFIGURATION CHANGES · 1');
-    expect(all('.row').length).toBe(3);
-
-    const failed = all('.cg-chip').find((chip) => chip.textContent?.trim() === 'Failed');
-    expect(failed?.getAttribute('aria-pressed')).toBe('false');
-
-    failed?.click();
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(all('.row').length).toBe(1);
-    expect(all('.row')[0].textContent).toContain('SEA-AP-118');
-    expect(
-      all('.cg-chip').find((chip) => chip.textContent?.trim() === 'Failed')?.getAttribute('aria-pressed'),
-    ).toBe('true');
-  });
-
-  it('keeps the selected evidence on screen when a filter hides its row', async () => {
-    await render([CRITICAL, QUIET, BLANK], 's1');
+  it('loads only the requested session, without a changes list or arbitrary fallback', async () => {
+    TestBed.inject(MonitoringService).sessions.set([QUIET, BLANK]);
+    await render(CRITICAL);
     expect(text()).toContain('SEA-AP-101');
-
-    all('.cg-chip').find((chip) => chip.textContent?.trim() === 'Failed')?.click();
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    // The row is gone from the rail, but the detail pane still reads s1.
-    expect(all('.row').length).toBe(1);
-    expect(all('.row--on').length).toBe(0);
-    expect(all('.head-device')[0].textContent).toContain('SEA-AP-101');
+    expect(text()).not.toContain('SEA-AP-114');
+    expect(all('.rail, .row, .change-event').length).toBe(0);
+    http.expectNone('/api/v1/organizations/org-1/monitoring');
+    expect(navigations.length).toBe(0);
   });
-
-  it('narrows the list by the severity carried on the deep link', async () => {
-    fixture.componentRef.setInput('severity', 'critical');
-    await render([CRITICAL, QUIET, BLANK]);
-
-    expect(all('.row').length).toBe(1);
-    expect(all('.row')[0].textContent).toContain('SEA-AP-101');
+  it('does not fetch or pick a session without a session link', () => {
+    fixture.detectChanges();
+    expect(text()).toContain('Select a device in site impact');
+    http.expectNone((r) => r.url.includes('/monitoring'));
   });
-
-  it('draws grey pre-change and toned post-change bars around the change instant', async () => {
-    await render([CRITICAL], 's1');
-
-    expect(all('app-sle-chart').length).toBe(1);
-    const bars = all('.bar');
-    expect(bars.length).toBe(4);
-    expect(bars.filter((bar) => bar.classList.contains('bar--post')).length).toBe(2);
-    // The two pre-change bars keep the neutral fill.
-    expect(bars.filter((bar) => !bar.classList.contains('bar--post')).length).toBe(2);
-    expect(all('.plot')[0].getAttribute('data-tone')).toBe('crit');
-    expect(all('.mark-label')[0].textContent).toContain('CHANGE APPLIED');
-    // The chart is never the only reading: every sample is in the hidden table.
+  it('shows a load failure and retries the exact session', () => {
+    fixture.componentRef.setInput('session', 'missing'); fixture.detectChanges();
+    expect(text()).toContain('Loading device evidence');
+    http.expectOne('/api/v1/organizations/org-1/monitoring/missing').flush({}, { status: 404, statusText: 'Not found' });
+    fixture.detectChanges();
+    expect(text()).toContain('could not be loaded');
+    (all('button').find((b) => b.textContent?.trim() === 'Retry') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http.expectOne('/api/v1/organizations/org-1/monitoring/missing').flush(session({ id: 'missing' }));
+    fixture.detectChanges(); expect(text()).toContain('SEA-AP-101');
+  });
+  it('cancels an old read when another session link arrives', async () => {
+    fixture.componentRef.setInput('session', 'old'); fixture.detectChanges();
+    const old = http.expectOne('/api/v1/organizations/org-1/monitoring/old');
+    await render(QUIET);
+    expect(old.cancelled).toBe(true); expect(text()).toContain('SEA-AP-114');
+  });
+  it('clears the device immediately when switching organizations and drops the link', async () => {
+    await render(CRITICAL);
+    org.set({ id: 'org-2' }); fixture.detectChanges();
+    expect(text()).not.toContain('SEA-AP-101');
+    http.expectNone((r) => r.url.includes('/monitoring'));
+    expect(navigations.at(-1)?.extras).toMatchObject({ queryParams: { session: null } });
+  });
+  it('withholds current evidence and cancels its read in historical mode', () => {
+    fixture.componentRef.setInput('session', 's1'); fixture.detectChanges();
+    const pending = http.expectOne('/api/v1/organizations/org-1/monitoring/s1');
+    historical.set(true); fixture.detectChanges();
+    expect(pending.cancelled).toBe(true);
+    expect(text()).toContain('Monitoring evidence is live');
+    http.expectNone((r) => r.url.includes('/monitoring'));
+  });
+  it('returns to the selected device in site impact', async () => {
+    await render(CRITICAL);
+    all('.page-nav button')[0].click();
+    expect(navigations.at(-1)).toMatchObject({ commands: ['/impact'], extras: { queryParams: { site: 'Seattle-DC', device: '5c5b351a2ba1', change: 'cg1' } } });
+  });
+  it('keeps shared attribution explicit without selecting an arbitrary change', async () => {
+    await render({ ...CRITICAL, audit_ids: ['a1', 'a2'] });
+    expect(text()).toContain('One monitoring window covers 2 overlapping changes');
+    expect(all('.act-buttons').length).toBe(0);
+  });
+  it('shows metrics once, keeping the chart and AI commentary collapsed', async () => {
+    await render(CRITICAL);
+    expect(all('.metrics tbody tr').length).toBe(2);
+    expect(all('.metrics')[0].textContent).toContain('41%');
+    expect(all('.metrics')[0].textContent).toContain('13%');
+    const chartDetails = all('app-sle-chart')[0].closest('details')!;
+    expect(chartDetails.open).toBe(false);
+    expect((all('details.ai')[0] as HTMLDetailsElement).open).toBe(false);
+    expect(all('.bar').length).toBe(4);
     expect(all('.cg-visually-hidden tbody tr').length).toBe(4);
-    expect(text()).toContain('Capacity');
-    expect(text()).toContain('BASELINE 41%');
-    expect(text()).toContain('LATEST 13%');
   });
-
-  it('says a session produced no observations instead of drawing an empty chart', async () => {
-    await render([BLANK], 's3');
-
-    expect(all('app-sle-chart').length).toBe(0);
-    expect(all('.metrics').length).toBe(0);
+  it('separates absent metrics from operational findings', async () => {
+    await render(BLANK);
     expect(all('.state').length).toBe(1);
     expect(text()).toContain('Monitoring could not complete');
-    expect(text()).toContain('Monitoring aborted');
-    // The state panel carries the only summary; the header must not repeat it.
-    expect(all('.head-summary').length).toBe(0);
-    // Incidents are deterministic evidence and still render.
     expect(text()).toContain('AP_UNREACHABLE');
+    expect(all('.metrics').length).toBe(0);
   });
-
-  it('distinguishes no impact from insufficient evidence using baseline_confidence', async () => {
-    await render([QUIET], 's2');
-    expect(text()).toContain('NO IMPACT DETECTED');
-
-    const { baseline_confidence: _dropped, ...withoutConfidence } = QUIET;
-    await render([withoutConfidence], 's2');
-    expect(text()).toContain('INSUFFICIENT EVIDENCE');
+  it('distinguishes trusted quiet metrics from insufficient baseline evidence', async () => {
+    await render(QUIET); expect(text()).toContain('NO IMPACT DETECTED');
+    fixture.componentRef.setInput('session', 'thin'); fixture.detectChanges();
+    http.expectOne('/api/v1/organizations/org-1/monitoring/thin').flush({ ...QUIET, id: 'thin', baseline_confidence: 'none' });
+    fixture.detectChanges(); expect(text()).toContain('INSUFFICIENT EVIDENCE');
   });
-
-  it('renders the deterministic summary when ai_assessment is null', async () => {
-    await render([QUIET], 's2');
-
-    expect(text()).toContain('No monitored metric moved beyond the noise band');
-    expect(all('.ai').length).toBe(0);
-    expect(all('.ai-note').length).toBe(0);
-    // The deterministic panels are untouched by the missing assessment.
-    expect(all('.metrics').length).toBe(1);
-    expect(text()).toContain('Act on this session');
+  it('explains no traffic and collection errors separately', async () => {
+    await render(session({ baseline: { captured_at: '2026-09-09T10:00:00Z', values: {}, no_data: ['roaming'], errors: ['coverage: HTTP 403'] } }));
+    expect(all('[aria-label="SLE metrics without sampled traffic"]')[0].textContent).toContain('Roaming');
+    expect(all('[aria-label="SLE collection problems"]')[0].textContent).toContain('HTTP 403');
+    expect(text()).not.toContain('NO IMPACT DETECTED');
   });
-
-  it('shows a quiet note when the assessment failed, and keeps the evidence', async () => {
-    await render(
-      [session({ ...CRITICAL, ai_assessment: null, ai_assessment_error: 'provider timed out' })],
-      's1',
-    );
-
-    expect(all('.ai').length).toBe(0);
-    expect(all('.ai-note')[0].textContent).toContain('provider timed out');
-    expect(all('.metrics').length).toBe(1);
-  });
-
-  it('reflects the selection onto the URL and deep-links the change group and restore', async () => {
-    await render([CRITICAL, QUIET]);
-
-    const reflected = navigations.find((item) => item.commands.length === 0);
-    expect(reflected?.extras).toMatchObject({
-      queryParams: { session: 's1' },
-      queryParamsHandling: 'merge',
-      replaceUrl: true,
-    });
-
-    const buttons = all('.act-buttons button');
-    buttons[0].click();
-    buttons[1].click();
-
-    expect(navigations.at(-2)).toMatchObject({
-      commands: ['/changes'],
-      extras: { queryParams: { group: 'cg1' } },
-    });
-    expect(navigations.at(-1)).toMatchObject({
-      commands: ['/history/restore'],
-      extras: { queryParams: { changeGroup: 'cg1' } },
-    });
-  });
-
-  it('withholds a restore below the operator role', async () => {
-    role = false;
-    await render([CRITICAL], 's1');
-    expect(all('.act-buttons button').length).toBe(1);
-
-    role = true;
-    await render([CRITICAL], 's1');
-    expect(all('.act-buttons button').length).toBe(2);
-  });
-
-  it('resolves no session at a past instant, however the link arrives', async () => {
-    // With an organization selected and a session named in the URL, the
-    // resolver would fetch it by identifier — and that endpoint answers with
-    // the session as it stands now, under the historical banner.
-    const http = TestBed.inject(HttpTestingController);
-    const organizations = TestBed.inject(OrganizationContextService);
-    const loaded = organizations.load();
-    http.expectOne('/api/v1/organizations').flush({
-      items: [{ id: 'org-1', name: 'Northwind Retail' }],
-      total: 1,
-    });
-    await loaded;
-    historical = true;
-
-    fixture.componentRef.setInput('session', 's-linked');
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    http.expectNone('/api/v1/organizations/org-1/monitoring/s-linked');
-    http.expectNone((request) => request.url === '/api/v1/organizations/org-1/monitoring');
-    expect(text()).toContain('Monitoring evidence is live');
-    http.verify();
-  });
-
-  it('shows nothing at a past instant, because monitoring has no past', async () => {
-    // Every session, incident and sample here describes what monitoring knows
-    // now. There is no versioned record to reconstruct it from, so the page
-    // says so rather than presenting today's evidence under a past banner.
-    historical = true;
-    await render([CRITICAL, QUIET], 's1');
-
-    expect(all('.row').length).toBe(0);
-    expect(all('.act-buttons button').length).toBe(0);
-    expect(text()).toContain('Monitoring evidence is live');
-    expect(text()).not.toContain('SEA-AP-101');
-  });
-
-  it('disables both actions until the session is correlated to a change group', async () => {
-    const { change_group_id: _uncorrelated, ...pending } = CRITICAL;
-    await render([pending], 's1');
-
-    expect(text()).toContain('not correlated to a change group yet');
-    for (const button of all('.act-buttons button')) {
-      expect((button as HTMLButtonElement).disabled).toBe(true);
-    }
-  });
-
-  it('moves the selection with the arrow keys', async () => {
-    await render([CRITICAL, QUIET, BLANK]);
-    expect(all('.row--on')[0].textContent).toContain('SEA-AP-101');
-
-    all('.rail-list')[0].dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(all('.row--on')[0].textContent).toContain('SEA-AP-114');
-  });
-
-  it('invites the reader to widen the filter when nothing matches', async () => {
-    await render([]);
-
-    expect(all('.row').length).toBe(0);
-    expect(text()).toContain('No sessions match this filter');
-    expect(text()).toContain('No monitoring session selected');
+  it('offers configuration and restore actions only when available', async () => {
+    await render(CRITICAL);
+    all('.act-buttons button')[0].click(); all('.act-buttons button')[1].click();
+    expect(navigations.at(-2)).toMatchObject({ commands: ['/changes'], extras: { queryParams: { group: 'cg1' } } });
+    expect(navigations.at(-1)).toMatchObject({ commands: ['/history/restore'], extras: { queryParams: { changeGroup: 'cg1' } } });
+    role = false; fixture.detectChanges(); expect(all('.act-buttons button').length).toBe(1);
   });
 });

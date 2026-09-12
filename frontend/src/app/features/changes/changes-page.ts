@@ -194,7 +194,11 @@ export class ChangesPage {
         label: item.label,
         ink: toneInk(toneOf(item.severity)),
       })),
-      sessionId: detail.monitoring_session_ids[0] ?? null,
+      impactSites: [...new Set([
+        ...detail.affected_site_ids,
+        ...detail.affected_devices.map((device) => device.site_mist_id),
+        ...detail.changed_objects.map((object) => object.site_mist_id),
+      ].filter((site): site is string => !!site))],
     };
   });
 
@@ -313,8 +317,8 @@ export class ChangesPage {
     });
   }
 
-  protected async openImpact(sessionId: string): Promise<void> {
-    await this.router.navigate(['/impact'], { queryParams: { session: sessionId } });
+  protected async openImpact(siteId: string, changeId: string): Promise<void> {
+    await this.router.navigate(['/impact'], { queryParams: { site: siteId, change: changeId } });
   }
 
   protected async planRestore(id: string): Promise<void> {
