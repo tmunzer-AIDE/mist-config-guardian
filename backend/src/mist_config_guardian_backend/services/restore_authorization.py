@@ -1,9 +1,12 @@
 """Fresh Mist administrator authorization for restore execution."""
 
 from datetime import timedelta
+from typing import Any
 
 import httpx
+import structlog
 from beanie import PydanticObjectId
+from pymongo import ReturnDocument
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS, MistVerificationService
@@ -15,6 +18,8 @@ from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_planner import unavailable_secret_errors
 from mist_config_guardian_backend.services.throttling import get_throttle_service, reserve_or_raise
+
+logger = structlog.get_logger(__name__)
 
 
 class RestoreAuthorizationError(ValueError):
@@ -126,14 +131,15 @@ class RestoreAuthorizationService:
         if errors:
             raise RestoreAuthorizationError(errors[0])
 
-    @staticmethod
-    async def release(operation_id: PydanticObjectId, task_id: str) -> None:
-        """Return a plan to review when task delivery fails."""
-        await RestoreOperation.find_one(
-            RestoreOperation.id == operation_id,
-            RestoreOperation.status == RestoreStatus.QUEUED,
-            RestoreOperation.task_id == task_id,
-        ).update(
+    async def release(self, operation_id: PydanticObjectId, task_id: str) -> None:
+        """Release only this queued task and revoke its unused Mist session.
+
+        Atomically take the old credential while clearing it. A separate read
+        could log out a running task or discard a newly authorized credential.
+        The captured secret stays in memory only until logout is attempted.
+        """
+        operation = await RestoreOperation.get_pymongo_collection().find_one_and_update(
+            {"_id": operation_id, "status": RestoreStatus.QUEUED, "task_id": task_id},
             {
                 "$set": {
                     "status": RestoreStatus.PLANNED,
@@ -142,25 +148,56 @@ class RestoreAuthorizationService:
                     "task_id": None,
                     "updated_at": utc_now(),
                 }
-            }
+            },
+            return_document=ReturnDocument.BEFORE,
+            projection={"encrypted_delegated_credential": 1, "organization_id": 1},
         )
+        if operation is not None:
+            await self._logout_unused_credential(operation)
 
-    @staticmethod
-    async def expire_stale_credentials() -> int:
-        """Fail queued restores whose delegated credential expired."""
-        result = await RestoreOperation.find(
-            RestoreOperation.status == RestoreStatus.QUEUED,
-            {"delegated_credential_expires_at": {"$lte": utc_now()}},
-        ).update_many(
+    async def expire_stale_credentials(self) -> int:
+        """Fail expired queued restores and revoke each captured Mist session."""
+        now = utc_now()
+        count = 0
+        collection = RestoreOperation.get_pymongo_collection()
+        while operation := await collection.find_one_and_update(
+            {"status": RestoreStatus.QUEUED, "delegated_credential_expires_at": {"$lte": now}},
             {
                 "$set": {
                     "status": RestoreStatus.FAILED,
                     "encrypted_delegated_credential": None,
                     "delegated_credential_expires_at": None,
-                    "completed_at": utc_now(),
-                    "updated_at": utc_now(),
+                    "completed_at": now,
+                    "updated_at": now,
                 },
-                "$push": {"preflight_errors": ("Delegated Mist administrator credential expired before execution")},
-            }
-        )
-        return result.modified_count
+                "$push": {"preflight_errors": "Delegated Mist administrator credential expired before execution"},
+            },
+            return_document=ReturnDocument.BEFORE,
+            projection={"encrypted_delegated_credential": 1, "organization_id": 1},
+        ):
+            count += 1
+            await self._logout_unused_credential(operation)
+        return count
+
+    async def _logout_unused_credential(self, operation: dict[str, Any]) -> None:
+        """Best-effort logout must not prevent local expiry or queue recovery."""
+        encrypted = operation.get("encrypted_delegated_credential")
+        if not encrypted:
+            return
+        try:
+            credential = self._vault.decrypt_for_context(encrypted, context=f"restore:{operation['_id']}")
+            if not credential.startswith(SESSION_PREFIX):
+                return
+            organization = await Organization.get(operation["organization_id"])
+            if organization is None:
+                logger.warning("restore_session_logout_organization_missing", operation_id=str(operation["_id"]))
+                return
+            async with httpx.AsyncClient(
+                base_url=REGION_HOSTS[organization.cloud_region],
+                headers=credential_headers(credential),
+                timeout=10,
+            ) as client:
+                await logout_session(client)
+        except (ValueError, KeyError, TypeError):
+            # Do not log the exception: malformed credential data may be in it.
+            logger.warning("restore_session_logout_credential_invalid", operation_id=str(operation.get("_id")))
