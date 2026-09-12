@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.api.dependencies import get_current_user, require_organization
@@ -18,6 +19,7 @@ from mist_config_guardian_backend.models.monitoring import (
     MonitoringIncident,
     MonitoringSession,
     MonitoringStatus,
+    RelevancePlan,
     SleObservation,
 )
 from mist_config_guardian_backend.models.notification import NotificationSeverity
@@ -39,6 +41,7 @@ from mist_config_guardian_backend.models.webhook import (
     WebhookReceipt,
 )
 from mist_config_guardian_backend.services.change_groups import (
+    HIGH_CONFIDENCE_SAMPLES,
     MINUS_SIGN,
     ChangeGroupFilters,
     ChangeGroupProjector,
@@ -588,6 +591,41 @@ def test_recovery_state_and_confidence_are_derived_from_sessions() -> None:
     thin = _session(mac="f", baseline={"capacity": 41.0}, latest={"capacity": 40.0}, samples=2)
     assert resolve_baseline_confidence([thin]) is BaselineConfidence.MEDIUM
     assert resolve_baseline_confidence([down, _session(mac="g")]) is BaselineConfidence.LOW
+
+
+@pytest.mark.parametrize(
+    "followup",
+    [
+        {"errors": ["coverage: HTTP 500"]},
+        {"errors": ["metric discovery: HTTP 500"]},
+        {"no_data": ["coverage"]},
+        {"values": {"roaming": 99}},
+        {"values": {"coverage": 99}, "metric_errors": {"coverage": "HTTP 500"}},
+        {"values": {"coverage": 99}, "scope": "device", "scope_id": "other-ap"},
+    ],
+)
+def test_failed_or_incomparable_followups_cannot_raise_baseline_confidence(followup):
+    session = _session(mac="ap", baseline={"coverage": 99})
+    session.observations = [SleObservation(**followup) for _ in range(HIGH_CONFIDENCE_SAMPLES)]
+    assert resolve_baseline_confidence([session]) is BaselineConfidence.LOW
+
+
+def test_confidence_counts_comparable_samples_and_retains_measured_zero():
+    session = _session(mac="ap", baseline={"coverage": 99}, latest={"coverage": 0}, samples=1)
+    valid = session.observations[0]
+    failed = SleObservation(errors=["coverage: HTTP 500"])
+    session.observations = [failed] * HIGH_CONFIDENCE_SAMPLES + [valid]
+    assert resolve_baseline_confidence([session]) is BaselineConfidence.MEDIUM
+    session.observations = [valid] * HIGH_CONFIDENCE_SAMPLES
+    assert resolve_baseline_confidence([session]) is BaselineConfidence.HIGH
+    session.observations.append(failed)
+    assert resolve_baseline_confidence([session]) is BaselineConfidence.LOW
+
+
+def test_excluded_metrics_cannot_supply_baseline_confidence():
+    session = _session(mac="ap", baseline={"coverage": 99}, latest={"coverage": 99})
+    session.relevance_plan = RelevancePlan(metrics=["successful-connect"])
+    assert resolve_baseline_confidence([session]) is BaselineConfidence.LOW
 
 
 # ---------------------------------------------------------------- projection

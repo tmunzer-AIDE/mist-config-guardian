@@ -45,6 +45,7 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupSummaryResponse,
     ChangeMetricResponse,
 )
+from mist_config_guardian_backend.services.impact_evidence import evidence_coverage, evidence_rows
 from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, SITE_OBJECTS
 
 # The design prints impact deltas with a typographic minus, not a hyphen. The
@@ -59,7 +60,7 @@ TILE_BAND = -5.0
 WARNING_BAND = -10.0
 CRITICAL_BAND = -25.0
 
-# Polls a session needs before its baseline counts as strong evidence.
+# Usable comparisons required by the legacy baseline-confidence rubric.
 HIGH_CONFIDENCE_SAMPLES = 6
 
 _RANGE_WINDOWS: Mapping[str, timedelta] = {
@@ -810,7 +811,24 @@ def resolve_baseline_confidence(sessions: Sequence[MonitoringSession]) -> Baseli
         return BaselineConfidence.NONE
     if len(with_baseline) < len(sessions):
         return BaselineConfidence.LOW
-    if all(len(session.observations) >= HIGH_CONFIDENCE_SAMPLES for session in sessions):
+    usable = [
+        [
+            evidence_coverage(
+                evidence_rows(session.baseline, observation, session.relevance_plan),
+                session.baseline,
+                observation,
+                session.relevance_plan,
+            )
+            == "complete"
+            for observation in session.observations
+        ]
+        for session in sessions
+    ]
+    # Failed polls never earn confidence, and old successes cannot conceal a
+    # currently unavailable comparison. Reuse the evaluator's selection/scope rules.
+    if not all(samples and samples[-1] for samples in usable):
+        return BaselineConfidence.LOW
+    if all(sum(samples) >= HIGH_CONFIDENCE_SAMPLES for samples in usable):
         return BaselineConfidence.HIGH
     return BaselineConfidence.MEDIUM
 

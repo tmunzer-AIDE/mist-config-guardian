@@ -52,6 +52,13 @@ The site view uses `error` health for failed monitoring/deployment sessions unle
 their assessment is already critical, which remains critical. This lifecycle
 presentation keeps failures filterable without changing the stored impact verdict.
 
+The legacy Changes-view baseline-confidence band counts only observations with
+complete comparable evidence for the selected metrics. Failed, unsampled,
+incomparable or unselected observations do not increase the count; an unusable
+latest comparison keeps confidence low. This is a collection/comparison quality
+heuristic, not causal confidence. Audit-owned attribution and per-scope group
+movements remain part of the planned projector rewrite.
+
 A supported Mist `device-events` configuration trigger immediately starts an
 active monitoring session. Guardian requests device-scoped SLE summaries for the
 24 hours preceding the source event timestamp, retains every bucket of that
