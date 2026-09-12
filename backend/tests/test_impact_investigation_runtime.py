@@ -76,12 +76,13 @@ async def test_one_audit_checkpoint_issues_two_wlan_queries_and_publishes_one_re
     assert artifact.revision == 3
     assert artifact.assessment.impact == "none"
     writes = collection.update_one.await_args_list
-    assert len(writes) == 3
-    for dispatch in writes[:2]:
+    assert len(writes) == 5
+    for dispatch in [call for call in writes if "$inc" in call.args[1]]:
         assert dispatch.args[0]["generation"] == 3
         assert dispatch.args[0]["lease_until"] == {"$gt": LATER}
         assert dispatch.args[0]["calls_used"] == {"$lt": 56}
-        assert dispatch.args[1] == {"$inc": {"calls_used": 1}}
+        assert dispatch.args[1]["$inc"] == {"calls_used": 1}
+        assert dispatch.args[1]["$push"]["dispatches"]["state"] == "reserved"
     predicate, publication = writes[-1].args
     assert predicate["revision"] == 2
     assert publication["$set"]["report_id"] == artifact.id

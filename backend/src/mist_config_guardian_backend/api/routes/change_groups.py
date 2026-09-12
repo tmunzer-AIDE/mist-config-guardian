@@ -120,5 +120,5 @@ async def read_shadow_investigation(
     organization: Annotated[Organization, Depends(require_organization)],
     _viewer: Annotated[User, Depends(require_viewer)],
 ) -> ShadowInvestigationResponse | None:
-    """Read only the root's published shadow revision, scoped to the authorized organization."""
+    """Read the published revision and separately labelled live activity for the authorized organization."""
     return await shadow_investigation(_identifier(organization), change_group_id)

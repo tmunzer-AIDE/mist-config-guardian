@@ -75,6 +75,8 @@ class SessionEvidence(Contract):
     state: Literal["complete", "partial", "error", "pending", "budget_exhausted"]
     rows: tuple[SessionRow, ...] = Field(default=(), max_length=1000)
     reason: str = ""
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    response_bytes: int | None = Field(default=None, ge=0)
 
 
 class WlanFinding(Contract):

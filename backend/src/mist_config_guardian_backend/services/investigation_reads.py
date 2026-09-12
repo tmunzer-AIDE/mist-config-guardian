@@ -1,7 +1,8 @@
-"""Authorized, bounded shadow preview projection. Unpublished artifacts are never returned."""
+"""Authorized published preview plus live dispatch metadata; no unpublished evidence artifacts."""
 
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.investigation import (
@@ -46,6 +47,10 @@ async def shadow_investigation(
         calls_limit=root.calls_limit,
         assessment=artifact.assessment if artifact else None,
         deployment=artifact.deployment if artifact else None,
+        dispatch_log=DispatchLog(
+            records=tuple(root.dispatches),
+            unlogged_reservations=max(0, root.calls_used - len(root.dispatches)),
+        ),
         shadow_impact=project_published_impact(
             {**root.model_dump(), "_id": root.id},
             artifact.model_dump(include={"assessment", "plan"}) if artifact else None,

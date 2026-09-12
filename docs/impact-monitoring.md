@@ -257,6 +257,20 @@ time. Device identities in this table do not create operational checks or topolo
 impact markers. Events arriving after a terminal investigation stay in receipt
 storage and do not restart the hour.
 
+The preview also exposes **Live collection activity**, bounded to 56 attempts on
+the audit root. Budget reservation and journal insertion share one atomic write
+before each request. Completed checks record HTTP status, bytes consumed and parsed
+row counts; raw responses and credentials are not logged. An unfinished reservation
+means outcome unknown and does not prove that Mist received the request. Older
+reservations without journal entries are counted explicitly. A stale worker can
+complete only its own log entry; it still cannot publish a stale assessment.
+
+This live activity may include attempts outside the published report revision,
+including requests whose worker crashed before publication. Its candidate revision
+is not a publication reference. Assessment and deployment evidence remain pinned to
+the published artifact. Journal collection applies only to shadow investigations;
+legacy device monitoring and production notification behavior remain unchanged.
+
 Queries are read-only, limited to four WLAN targets, 56 requests per audit and one
 bounded page per check. Current organization status, credential identity, budget
 and worker lease are verified before each request. Each published revision pins

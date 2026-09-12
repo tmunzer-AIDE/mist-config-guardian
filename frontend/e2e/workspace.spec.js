@@ -535,6 +535,11 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
     targets: [{ handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222' }],
     checks: [{ check_id: 'wlan-client-sessions.v1', target_handle: 'wlan-handle', captured_at: now,
       window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' }],
+    dispatch_log: { source: 'live_investigation_root', unlogged_reservations: 1,
+      records: [{ id: 'attempt-1', generation: 2, candidate_revision: 2, check_id: 'wlan-client-sessions.v1',
+        target_handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222',
+        window: { start: now, end: now }, reserved_at: now, state: 'reserved', finished_at: null,
+        http_status: null, response_bytes: null, row_count: null }] },
   } }));
   await page.goto('/changes');
   await page.locator('.row--group').first().click();
@@ -552,6 +557,12 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await preview.getByText('Collection checks', { exact: false }).click();
   await expect(preview).toContainText('Mist returned HTTP 500.');
   await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });
+  await preview.getByText('Live collection activity', { exact: true }).click();
+  await expect(preview).toContainText('Outcome unknown');
+  await expect(preview).toContainText('1 earlier budget reservations have no journal entry');
+  await expect(preview).toContainText('may not have reached Mist');
+  await page.locator('app-dispatch-log table').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('dispatch-journal.png'), fullPage: true });
 });
 
 test('shared shadow projection stays distinct from production in Changes and Overview', async ({ page }, info) => {

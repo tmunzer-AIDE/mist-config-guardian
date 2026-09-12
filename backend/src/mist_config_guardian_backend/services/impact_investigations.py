@@ -2,11 +2,15 @@
 
 import logging
 from datetime import datetime, timedelta
+from functools import partial
+from uuid import uuid4
 
 from beanie import PydanticObjectId
+from beanie.odm.utils.encoder import Encoder
 from pymongo import ReturnDocument
 
-from mist_config_guardian_backend.impact.contracts import WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanRemovalPlan
+from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.wlan_removal import check_windows, compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWlanEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -167,33 +171,28 @@ class ImpactInvestigationService:
             token = await service_token(organization, self._vault)
             credential = organization.encrypted_service_token
 
-            async def reserve() -> bool:
-                fresh = await Organization.get(root.organization_id)
-                dispatch_at = utc_now()
-                if (
-                    fresh is None
-                    or fresh.status is not OrganizationStatus.VERIFIED
-                    or fresh.encrypted_service_token != credential
-                    or dispatch_at > root.expires_at + timedelta(minutes=2)
-                ):
-                    return False
-                result = await ImpactInvestigation.get_pymongo_collection().update_one(
-                    {**self._fence(root, dispatch_at), "calls_used": {"$lt": root.calls_limit}},
-                    {"$inc": {"calls_used": 1}},
-                )
-                return result.matched_count == 1
-
             async with MistWlanEvidenceClient(token=token, region=organization.cloud_region) as client:
                 for target in plan.targets:
                     for window in check_windows(plan, evidence_as_of):
-                        evidence.append(  # noqa: PERF401 - sequential fenced dispatches
-                            await client.capture(
-                                plan=plan,
-                                target_handle=target.handle,
-                                window=window,
-                                reserve_dispatch=reserve,
-                            )
+                        dispatch = DispatchRecord(
+                            id=uuid4(),
+                            generation=root.generation,
+                            candidate_revision=root.revision + 1,
+                            target_handle=target.handle,
+                            site_id=target.site_id,
+                            wlan_id=target.wlan_id,
+                            window=window,
+                            reserved_at=utc_now(),
                         )
+                        reading = await client.capture(
+                            plan=plan,
+                            target_handle=target.handle,
+                            window=window,
+                            reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+                        )
+                        if reading.state != "budget_exhausted":
+                            await self._finish_dispatch(root, dispatch, reading)
+                        evidence.append(reading)
         assessment = evaluate_wlan_removal(plan, evidence, evidence_as_of=evidence_as_of)
         if root.id is None:
             msg = "Persisted investigation has no identity"
@@ -232,3 +231,64 @@ class ImpactInvestigationService:
                 }
             },
         )
+
+    async def _reserve(self, root: ImpactInvestigation, credential: str, dispatch: DispatchRecord) -> bool:
+        fresh = await Organization.get(root.organization_id)
+        now = utc_now()
+        if (
+            fresh is None
+            or fresh.status is not OrganizationStatus.VERIFIED
+            or fresh.encrypted_service_token != credential
+            or now > root.expires_at + timedelta(minutes=2)
+        ):
+            return False
+        record = dispatch.model_copy(update={"reserved_at": now})
+        # Budget and journal reservation share one atomic root write. If it fails
+        # or its result is uncertain, capture does not issue the HTTP request.
+        result = await ImpactInvestigation.get_pymongo_collection().update_one(
+            {
+                **self._fence(root, now),
+                "calls_used": {"$lt": root.calls_limit},
+                f"dispatches.{MAX_DISPATCHES - 1}": {"$exists": False},
+            },
+            {"$inc": {"calls_used": 1}, "$push": {"dispatches": Encoder().encode(record)}},
+        )
+        return result.matched_count == 1
+
+    @staticmethod
+    async def _finish_dispatch(root: ImpactInvestigation, dispatch: DispatchRecord, reading: SessionEvidence) -> None:
+        # An old worker may finish only its own reserved record. This factual log
+        # update cannot publish evidence or alter the current worker's lease.
+        if (reading.check_id, reading.target_handle, reading.window) != (
+            dispatch.check_id,
+            dispatch.target_handle,
+            dispatch.window,
+        ):
+            msg = "Dispatch result identity does not match its reservation."
+            raise ValueError(msg)
+        completed = DispatchRecord.model_validate(
+            {
+                **dispatch.model_dump(),
+                "state": reading.state,
+                "finished_at": utc_now(),
+                "http_status": reading.http_status,
+                "response_bytes": reading.response_bytes,
+                "row_count": len(reading.rows),
+            }
+        )
+        fields = completed.model_dump(include={"state", "finished_at", "http_status", "response_bytes", "row_count"})
+        result = await ImpactInvestigation.get_pymongo_collection().update_one(
+            Encoder().encode(
+                {
+                    "_id": root.id,
+                    "organization_id": root.organization_id,
+                    "dispatches": {
+                        "$elemMatch": {"id": dispatch.id, "generation": dispatch.generation, "state": "reserved"}
+                    },
+                }
+            ),
+            {"$set": {f"dispatches.$.{key}": value for key, value in fields.items()}},
+        )
+        if result.matched_count != 1:
+            msg = "Dispatch result could not be recorded; checkpoint publication stopped."
+            raise RuntimeError(msg)

@@ -2494,6 +2494,157 @@
         "title": "DiffVersionRef",
         "type": "object"
       },
+      "DispatchLog": {
+        "additionalProperties": false,
+        "description": "Current root activity, explicitly separate from a published report revision.",
+        "properties": {
+          "records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DispatchRecord"
+            },
+            "maxItems": 56,
+            "title": "Records",
+            "type": "array"
+          },
+          "source": {
+            "const": "live_investigation_root",
+            "default": "live_investigation_root",
+            "title": "Source",
+            "type": "string"
+          },
+          "unlogged_reservations": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unlogged Reservations",
+            "type": "integer"
+          }
+        },
+        "title": "DispatchLog",
+        "type": "object"
+      },
+      "DispatchRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_revision": {
+            "minimum": 1.0,
+            "title": "Candidate Revision",
+            "type": "integer"
+          },
+          "check_id": {
+            "const": "wlan-client-sessions.v1",
+            "default": "wlan-client-sessions.v1",
+            "title": "Check Id",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "maximum": 599.0,
+                "minimum": 100.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "reserved_at": {
+            "format": "date-time",
+            "title": "Reserved At",
+            "type": "string"
+          },
+          "response_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Bytes"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
+            "type": "string"
+          },
+          "state": {
+            "default": "reserved",
+            "enum": [
+              "reserved",
+              "complete",
+              "partial",
+              "error"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          },
+          "wlan_id": {
+            "format": "uuid",
+            "title": "Wlan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "generation",
+          "candidate_revision",
+          "target_handle",
+          "site_id",
+          "wlan_id",
+          "window",
+          "reserved_at"
+        ],
+        "title": "DispatchRecord",
+        "type": "object"
+      },
       "EmailChangeConfirmRequest": {
         "description": "Confirmation of a pending email change.",
         "properties": {
@@ -6265,6 +6416,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DeploymentEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch_log": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DispatchLog"
               },
               {
                 "type": "null"
@@ -10351,7 +10512,7 @@
     },
     "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation": {
       "get": {
-        "description": "Read only the root's published shadow revision, scoped to the authorized organization.",
+        "description": "Read the published revision and separately labelled live activity for the authorized organization.",
         "operationId": "read_shadow_investigation_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_get",
         "parameters": [
           {

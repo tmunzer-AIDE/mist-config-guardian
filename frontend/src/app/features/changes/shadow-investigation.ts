@@ -8,6 +8,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { AuditImpactSummary, SHADOW_LABELS } from '../../core/audit-impact.model';
 import { DeploymentEvidence } from '../../core/deployment-evidence.model';
 import { DeploymentEvidenceComponent } from '../../shared/deployment-evidence';
+import { DispatchLog, DispatchLogComponent } from '../../shared/dispatch-log';
 
 interface ShadowAssessment {
   impact: 'info' | 'none' | 'warning';
@@ -38,6 +39,7 @@ export interface ShadowReport {
   assessment: ShadowAssessment | null;
   shadow_impact?: AuditImpactSummary | null;
   deployment?: DeploymentEvidence | null;
+  dispatch_log?: DispatchLog | null;
   targets: { handle: string; site_id: string; wlan_id: string }[];
   checks: {
     check_id: string;
@@ -52,7 +54,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [DeploymentEvidenceComponent],
+  imports: [DeploymentEvidenceComponent, DispatchLogComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -98,6 +100,7 @@ export interface ShadowReport {
             </table>
           </div>
         </details>
+        <app-dispatch-log [log]="report.dispatch_log" />
       </section>
     }
   `,

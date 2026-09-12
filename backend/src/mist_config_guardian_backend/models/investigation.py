@@ -9,6 +9,7 @@ from pymongo import IndexModel
 
 from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanAssessment, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
+from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.models.base import TimestampedModel
 
 
@@ -28,6 +29,7 @@ class ImpactInvestigation(TimestampedModel, Document):
     calls_limit: int = 56
     revision: int = 0  # Number of successfully published checkpoints.
     report_id: PydanticObjectId | None = None
+    dispatches: list[DispatchRecord] = Field(default_factory=list, max_length=MAX_DISPATCHES)
 
     class Settings:
         name = "impact_investigations"

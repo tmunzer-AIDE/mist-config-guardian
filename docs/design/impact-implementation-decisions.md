@@ -312,12 +312,67 @@ of adding that read path.
   source type checks passed. Local source/diff review completed; CodeRabbit
   remains signed out. No frontend implementation or API schema changed.
 
+## Dispatch journal decisions
+
+- Bring the durable dispatch journal forward before enabling another operational
+  rule. This completes the missing crash-observability boundary for the existing
+  WLAN consumer rather than introducing an unused logging service. The new rule
+  itself is not implemented in this milestone.
+- Correct the initial evidence assessment: current port statistics alone cannot
+  reconstruct a historical baseline, but device-event history can provide port
+  transitions. The user identified this source. A read-only Mist MCP constants
+  query confirmed `SW_PORT_UP`, `SW_PORT_DOWN`, `SW_POE_PORT_ENABLED`,
+  `SW_POE_PORT_DISABLED` and chassis/controller PoE alarms. The local OAS exposes
+  bounded device-event search with device MAC, event type, start/end and cursor
+  parameters. Use these alongside targeted current port state for the next rule;
+  do not infer pre-change state from an empty or truncated history. PoE enablement
+  events alone do not prove that a downstream device was receiving power.
+- Embed at most 56 journal records on the audit root. Reserve one budget unit and
+  append its record in the same fenced Mongo update. No extra await separates a
+  successful reservation from the collector's HTTP call. A denied, failed or
+  uncertain reservation does not dispatch. Legacy budget consumption without
+  records remains visible as `unlogged_reservations`; never fabricate old logs.
+- Each record names the fixed check, resolver handle, site/WLAN, evidence window,
+  random attempt identity, worker generation and candidate revision. A candidate
+  revision is not proof of publication. `reserved` means execution outcome unknown:
+  the process may have stopped before sending, during the request, or after a
+  response but before recording the result. Never relabel it successful or failed
+  merely because a lease expired.
+- After collection, update only that attempt's still-reserved record, matching
+  audit-root ID, organization, attempt ID and owning generation. A stale worker may
+  record the factual result of its own request but cannot dispatch again or publish
+  over the new worker. Completed records cannot be overwritten. Check, handle and
+  window must match the reservation. A completion-write failure stops checkpoint
+  publication; the next bounded retry retains the unresolved reservation and pays
+  for any new request. Cancellation likewise leaves an explicitly unknown outcome.
+- Store HTTP status, bytes consumed, parsed row count, terminal collection state
+  and result-recording time. No request headers, tokens, configuration, client
+  identifiers, raw responses, cursor URLs or provider/error prose are journal
+  fields. This is metadata for today's direct Mist HTTP checks, not a claim that
+  a model/MCP runtime or full raw-response archive exists. BSON round-trip tests
+  cover native writes and UUID encoding; live Mongo concurrency remains untested.
+- Expose the bounded journal through the existing authorized investigation preview.
+  The UI labels it **Live collection activity**, independently of the immutable
+  published assessment/deployment snapshot. It includes orphan attempts and can be
+  read before the first successful publication. Compact Changes/Overview reads
+  continue excluding journal records; no new Mist calls or Mongo read queries are
+  added. Two successful WLAN reads add two result-metadata Mongo updates. Root
+  retention cleanup, a future generalized capability catalogue and remaining rules
+  stay in the queue. Local source/diff review was used; CodeRabbit remains signed out.
+- Validation: 1,025 backend tests passed, 20 skipped; 391 frontend tests passed.
+  Ruff lint, source types, changed-file formatting and OpenAPI consistency passed.
+  Production build and the isolated Playwright investigation-preview regression
+  passed; the activity table was visually inspected. Seventeen new backend cases
+  cover reservation acknowledgement loss, result-write failure, cancellation,
+  stale-worker logging, finite journal size, response metadata, immutable completed
+  records, result identity, legacy gaps and excluded secret-bearing fields.
+
 ## Next implementation queue
 
 1. Extend resolvers and checks for the remaining three rules without modifying
    shared device plans. Resolve device scope from immutable configuration and
    authorized inventory; deployment candidates alone cannot issue checks.
-2. Add retention cleanup and durable dispatch journaling, then complete the common
+2. Add retention cleanup and extend the dispatch journal as new checks arrive, then complete the common
    report schema and topology attribution records. Keep serving-device evidence
    distinct from device failure.
 3. Add the bounded agent tool loop over the tested capability boundary. Extract

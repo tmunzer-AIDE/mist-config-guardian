@@ -67,25 +67,59 @@ class MistWlanEvidenceClient(AbstractAsyncContextManager["MistWlanEvidenceClient
             "end": str(int(window.end.timestamp())),
             "limit": str(_LIMIT),
         }
+        http_status = None
+        response_bytes = None
         try:
             async with asyncio.timeout(20), self._client.stream("GET", path, params=params) as response:
+                http_status = response.status_code
                 response.raise_for_status()
                 data = bytearray()
+                response_bytes = 0
                 async for chunk in response.aiter_bytes():
                     data.extend(chunk)
+                    response_bytes = len(data)
                     if len(data) > _MAX_BYTES:
-                        return self._result(target_handle, window, "partial", "Response byte limit reached.")
+                        return self._result(
+                            target_handle,
+                            window,
+                            "partial",
+                            "Response byte limit reached.",
+                            http_status=http_status,
+                            response_bytes=response_bytes,
+                        )
                 payload = json.loads(data)
-            return self._parse(payload, target_handle, window, str(target.site_id), str(target.wlan_id))
+            return self._parse(payload, target_handle, window, str(target.site_id), str(target.wlan_id)).model_copy(
+                update={"http_status": http_status, "response_bytes": response_bytes}
+            )
         except httpx.HTTPStatusError as exc:
-            return self._result(target_handle, window, "error", f"Mist returned HTTP {exc.response.status_code}.")
+            return self._result(
+                target_handle,
+                window,
+                "error",
+                f"Mist returned HTTP {exc.response.status_code}.",
+                http_status=http_status,
+                response_bytes=response_bytes,
+            )
         except (httpx.HTTPError, ValueError, TypeError, OverflowError, TimeoutError):
             return self._result(
-                target_handle, window, "error", "Historical session evidence was unavailable or invalid."
+                target_handle,
+                window,
+                "error",
+                "Historical session evidence was unavailable or invalid.",
+                http_status=http_status,
+                response_bytes=response_bytes,
             )
 
     @staticmethod
-    def _result(handle: str, window: Window, state: str, reason: str) -> SessionEvidence:
+    def _result(  # noqa: PLR0913 - explicit optional transport metadata, separate from normalized evidence
+        handle: str,
+        window: Window,
+        state: str,
+        reason: str,
+        *,
+        http_status: int | None = None,
+        response_bytes: int | None = None,
+    ) -> SessionEvidence:
         return SessionEvidence.model_validate(
             {
                 "target_handle": handle,
@@ -93,6 +127,8 @@ class MistWlanEvidenceClient(AbstractAsyncContextManager["MistWlanEvidenceClient
                 "captured_at": utc_now(),
                 "state": state,
                 "reason": reason,
+                "http_status": http_status,
+                "response_bytes": response_bytes,
             }
         )
 
