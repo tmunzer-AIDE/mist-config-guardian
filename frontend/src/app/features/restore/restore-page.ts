@@ -1,3 +1,4 @@
+import { SiteContextService } from '../../core/site-context.service';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -97,6 +98,7 @@ export class RestorePage {
   private readonly restores = inject(RestoreService);
   private readonly changeGroups = inject(ChangeGroupService);
   private readonly organizations = inject(OrganizationContextService);
+  private readonly siteContext = inject(SiteContextService);
   private readonly router = inject(Router);
   private readonly ui = inject(UiStateService);
   private readonly auth = inject(AuthService);
@@ -170,7 +172,9 @@ export class RestorePage {
   protected readonly pageSizes = TARGET_PAGE_SIZES;
 
   protected readonly scope = signal<TargetScope>('all');
-  protected readonly siteId = signal('');
+  protected readonly siteId = computed(() =>
+    this.siteContext.selectedFor(this.organizations.selected()?.id),
+  );
   protected readonly objectType = signal('');
   protected readonly query = signal('');
   protected readonly changeGroupTitle = signal<string | null>(null);
@@ -493,7 +497,6 @@ export class RestorePage {
   /** Everything read from, or set for, the previous organization. */
   private forgetOrganization(): void {
     this.scope.set('all');
-    this.siteId.set('');
     this.objectType.set('');
     this.query.set('');
     this.skip.set(0);
@@ -602,13 +605,11 @@ export class RestorePage {
   protected setScope(scope: TargetScope): void {
     this.scope.set(scope);
     this.firstPage();
-    if (scope !== 'site') {
-      this.siteId.set('');
-    }
+    if (scope === 'org') this.siteContext.select(this.organizations.selected()?.id, '');
   }
 
   protected setSite(siteId: string): void {
-    this.siteId.set(siteId);
+    this.siteContext.select(this.organizations.selected()?.id, siteId);
     this.firstPage();
   }
 
@@ -623,8 +624,8 @@ export class RestorePage {
   }
 
   protected clearFilters(): void {
+    this.siteContext.select(this.organizations.selected()?.id, '');
     this.scope.set('all');
-    this.siteId.set('');
     this.objectType.set('');
     this.query.set('');
     this.firstPage();

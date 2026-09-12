@@ -38,7 +38,7 @@
             }
           </div>
 
-          @if (scope() === 'site') {
+          @if (scope() === 'site' || (scope() === 'all' && siteId())) {
             <label class="site-picker">
               <span class="cg-visually-hidden">Site</span>
               <select
