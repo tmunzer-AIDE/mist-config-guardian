@@ -19,12 +19,11 @@ from mist_config_guardian_backend.impact.contracts import (
     WlanRemovalPlan,
     WlanTarget,
 )
+from mist_config_guardian_backend.impact.limits import MAX_AUDIT_VERSIONS, MAX_WLAN_TARGETS
 from mist_config_guardian_backend.impact.port_scope import compile_port_targets
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
 
-_MAX_VERSIONS = 64
-_MAX_TARGETS = 4
 _MAX_UNMAPPED = 128
 
 
@@ -50,9 +49,9 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
     if not after:
         gaps.add("No immutable configuration versions are available for this audit.")
     counts = Counter(str(item.logical_object_id) for item in after)
-    if len(after) > _MAX_VERSIONS:
+    if len(after) > MAX_AUDIT_VERSIONS:
         gaps.add("Configuration version limit reached; remaining changes are unmapped.")
-    for version in after[:_MAX_VERSIONS]:
+    for version in sorted(after, key=lambda v: (str(v.logical_object_id), v.version))[:MAX_AUDIT_VERSIONS]:
         if counts[str(version.logical_object_id)] > 1:
             gaps.add(f"{version.logical_object_id}: multiple versions require net-change resolution.")
             continue
@@ -89,7 +88,7 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
             gaps.add(str(exc))
             continue
         targets[target.handle] = target
-    if len(targets) > _MAX_TARGETS:
+    if len(targets) > MAX_WLAN_TARGETS:
         gaps.add("WLAN target budget reached; remaining WLANs were not checked.")
     if len(unmapped) > _MAX_UNMAPPED:
         gaps.add("Unmapped path display limit reached.")
@@ -105,7 +104,7 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
         change_context=compile_change_context(
             organization_id=organization_id, audit_id=audit_id, logicals=logicals, before=before, after=after
         ),
-        targets=tuple(targets[key] for key in sorted(targets)[:_MAX_TARGETS]),
+        targets=tuple(targets[key] for key in sorted(targets)[:MAX_WLAN_TARGETS]),
         unmapped=tuple(path[:512] for path in sorted(unmapped)[:_MAX_UNMAPPED]),
         gaps=tuple(sorted(gaps)),
     )

@@ -404,3 +404,20 @@ checks; `port` holds the separate snapshot. Dispatch `wlan_id` is nullable for p
 checks, which instead require `device_mac` and `port_id`. Existing WLAN records
 remain readable. Impact matching uses registry families; the legacy singular WLAN
 alias is handled centrally, outside rule predicates.
+
+
+Mixed WLAN/port revisions accept the complete ten-check set. Plan target limits,
+published evidence capacity and agent observation capacity share one derived bound;
+the 56-request audit budget is unchanged. All compilers examine the same sorted
+64-version prefix, and the port resolver reports its own truncation, removed-device
+and multiple-version gaps.
+
+Port collection checks and agent observations may include `response_error`:
+`scope_mismatch`, `invalid_timestamp` or `invalid_response`. These signify rejected
+provider evidence, not a transport outage. They retain `state=error`, accept no rows,
+and display fixed explanations. HTTP errors and transport timeouts remain separately
+worded failures. Historical records without a code retain their original meaning.
+
+The next neighbor resolver's private binding and inventory-verification boundary
+is decided in the implementation log. It is not enabled: the current unverified
+neighbor handle still grants no query or managed-device identity.

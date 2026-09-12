@@ -13,10 +13,12 @@ from mist_config_guardian_backend.impact.contracts import (
     Contract,
     InvestigationEvidence,
     PortEvidence,
+    PortResponseError,
     PortRow,
     Window,
     WlanRemovalPlan,
 )
+from mist_config_guardian_backend.impact.limits import MAX_CHECKPOINT_EVIDENCE
 from mist_config_guardian_backend.impact.wlan_removal import check_windows
 
 MAX_MODEL_CALLS = 21
@@ -70,6 +72,7 @@ class EvidenceView(Contract):
     sampled_clients: int | None = Field(default=None, ge=0)
     observed_disconnects: int | None = Field(default=None, ge=0)
     port: PortRow | None = None
+    response_error: PortResponseError | None = None
     gap: str = Field(max_length=500)
 
 
@@ -84,6 +87,7 @@ def evidence_view(check: CheckCapability, reading: InvestigationEvidence, change
             window=check.window,
             state=reading.state,
             port=reading.rows[0] if reading.rows else None,
+            response_error=reading.response_error,
             gap=reading.reason,
         )
     return EvidenceView(
@@ -175,7 +179,7 @@ class AgentCheckpoint(Contract):
     reason: str = Field(default="", max_length=500)
     proposal: AgentProposal | None = None
     memory: AgentMemory | None = None
-    observations: tuple[EvidenceView, ...] = Field(default=(), max_length=10)
+    observations: tuple[EvidenceView, ...] = Field(default=(), max_length=MAX_CHECKPOINT_EVIDENCE)
     # These local identities refer to durable model reservations, not model prose.
     request_ids: tuple[UUID, ...] = Field(default=(), max_length=MAX_CHECKPOINT_CALLS)
 

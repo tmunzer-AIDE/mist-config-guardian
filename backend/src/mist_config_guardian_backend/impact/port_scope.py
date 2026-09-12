@@ -7,13 +7,13 @@ from hashlib import sha256
 
 from mist_config_guardian_backend.impact.change_context import device_context_handle, immutable_device_identity
 from mist_config_guardian_backend.impact.contracts import PortTarget
+from mist_config_guardian_backend.impact.limits import MAX_AUDIT_VERSIONS, MAX_PORT_TARGETS
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
 
 _PORT = re.compile(r"^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$")
 _CONTAINERS = ("port_config", "port_config_overwrite")
 _MAX_KEYS = 256
-_MAX_TARGETS = 2
 
 
 def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and selector resolution
@@ -35,7 +35,11 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
     counts = Counter(str(v.logical_object_id) for v in after)
     targets: dict[tuple[str, str, str], PortTarget | None] = {}
     gaps: set[str] = set()
-    for version in sorted(after, key=lambda v: (str(v.logical_object_id), v.version))[:64]:
+    if len(after) > MAX_AUDIT_VERSIONS:
+        gaps.add(
+            "Port discovery configuration version limit reached; additional device relationships remain unresolved."
+        )
+    for version in sorted(after, key=lambda v: (str(v.logical_object_id), v.version))[:MAX_AUDIT_VERSIONS]:
         key = str(version.logical_object_id)
         logical = objects.get(key)
         definition = impact_definition(logical.scope, logical.object_type) if logical else None
@@ -44,10 +48,19 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
             or definition.family is not ObjectFamily.DEVICE
             or str(version.organization_id) != organization_id
             or version.audit_id != audit_id
-            or version.id is None
-            or counts[key] != 1
-            or version.is_deleted
         ):
+            continue
+        if counts[key] != 1:
+            gaps.add("Port discovery needs net-change resolution for a device changed multiple times in this audit.")
+            continue
+        if version.is_deleted:
+            gaps.add(
+                "Removed device port relationships require pre-change dependency evidence; "
+                "no current port query was inferred."
+            )
+            continue
+        if version.id is None:
+            gaps.add("Port discovery lacks an immutable configuration identity.")
             continue
         if not set(version.changed_fields).intersection(_CONTAINERS):
             continue
@@ -102,11 +115,11 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
                     after_version_id=str(version.id),
                 )
     resolved = tuple(t for key, t in sorted(targets.items()) if t is not None)
-    if len(resolved) > _MAX_TARGETS:
+    if len(resolved) > MAX_PORT_TARGETS:
         gaps.add("The two-port discovery budget was reached; additional changed ports were not queried.")
     if resolved:
         gaps.add(
             "Port snapshots provide context only; managed-neighbor identity, "
             "historical transitions and impact remain unresolved."
         )
-    return resolved[:_MAX_TARGETS], tuple(sorted(gaps))
+    return resolved[:MAX_PORT_TARGETS], tuple(sorted(gaps))

@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from mist_config_guardian_backend.impact.change_context import ChangeContext
+from mist_config_guardian_backend.impact.limits import MAX_PORT_TARGETS, MAX_WLAN_TARGETS
 
 
 class Contract(BaseModel):
@@ -57,8 +58,8 @@ class WlanRemovalPlan(Contract):
     organization_id: str
     audit_id: str
     changed_at: AwareDatetime
-    targets: tuple[WlanTarget, ...] = Field(default=(), max_length=4)
-    port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=2)
+    targets: tuple[WlanTarget, ...] = Field(default=(), max_length=MAX_WLAN_TARGETS)
+    port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=MAX_PORT_TARGETS)
     unmapped: tuple[str, ...] = ()
     gaps: tuple[str, ...] = ()
     # These cannot be overridden by a skill or model-proposed corroborating check.
@@ -146,6 +147,20 @@ class PortRow(Contract):
     neighbor_identity: Literal["unverified"] = "unverified"
 
 
+class PortResponseError(StrEnum):
+    SCOPE_MISMATCH = "scope_mismatch"
+    INVALID_TIMESTAMP = "invalid_timestamp"
+    INVALID_RESPONSE = "invalid_response"
+
+    @property
+    def explanation(self) -> str:
+        return {
+            self.SCOPE_MISMATCH: "Returned port does not match the resolved device, site and port; response rejected.",
+            self.INVALID_TIMESTAMP: "Port observation timestamp is invalid or in the future; response rejected.",
+            self.INVALID_RESPONSE: "Port response failed validation; no returned evidence was accepted.",
+        }[self]
+
+
 class PortEvidence(Contract):
     check_id: Literal["switch-port-snapshot.v1"] = "switch-port-snapshot.v1"
     target_handle: str
@@ -157,10 +172,14 @@ class PortEvidence(Contract):
     reason: str = Field(default="", max_length=500)
     http_status: int | None = Field(default=None, ge=100, le=599)
     response_bytes: int | None = Field(default=None, ge=0)
+    response_error: PortResponseError | None = None
     dispatch_denial: DispatchDenial | None = None
 
     @model_validator(mode="after")
     def denied_dispatch_has_no_result(self) -> "PortEvidence":
+        if self.response_error is not None and (self.state != "error" or self.rows):
+            msg = "A rejected response requires error state and no accepted rows"
+            raise ValueError(msg)
         if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
             msg = "Dispatch denial requires a reason and dispatch_denied state"
             raise ValueError(msg)

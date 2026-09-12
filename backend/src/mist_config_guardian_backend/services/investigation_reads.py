@@ -93,6 +93,7 @@ async def shadow_investigation(
                 reason=e.reason,
                 dispatch_denial=e.dispatch_denial,
                 port=e.rows[0] if isinstance(e, PortEvidence) and e.rows else None,
+                response_error=e.response_error if isinstance(e, PortEvidence) else None,
                 device_mac=next(
                     (t.device_mac for t in artifact.plan.port_targets if t.handle == e.target_handle), None
                 ),

@@ -2979,6 +2979,16 @@
             "title": "Ref",
             "type": "string"
           },
+          "response_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortResponseError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sampled_clients": {
             "anyOf": [
               {
@@ -5752,6 +5762,15 @@
         "title": "PointInTimeStateResponse",
         "type": "object"
       },
+      "PortResponseError": {
+        "enum": [
+          "scope_mismatch",
+          "invalid_timestamp",
+          "invalid_response"
+        ],
+        "title": "PortResponseError",
+        "type": "string"
+      },
       "PortRow": {
         "additionalProperties": false,
         "description": "Most recent reported port state, not a transition or a managed peer identity.",
@@ -7047,6 +7066,16 @@
           "reason": {
             "title": "Reason",
             "type": "string"
+          },
+          "response_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortResponseError"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "row_count": {
             "title": "Row Count",

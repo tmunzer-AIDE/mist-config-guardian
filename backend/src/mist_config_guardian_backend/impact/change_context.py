@@ -13,12 +13,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mist_config_guardian_backend.impact.limits import MAX_AUDIT_VERSIONS
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion, VersionEvent
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
 
 MAX_CONTEXT_OBJECTS = 8
 MAX_CONTEXT_FIELDS = 6
-MAX_CONTEXT_VERSIONS = 64
+MAX_CONTEXT_VERSIONS = MAX_AUDIT_VERSIONS
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 # Only fixed labels cross the model boundary. Dynamic keys can contain names,
 # credentials or instructions, even when their corresponding values are redacted.

@@ -12,6 +12,7 @@ import httpx
 from mist_config_guardian_backend.impact.contracts import (
     DispatchDenial,
     PortEvidence,
+    PortResponseError,
     PortRow,
     PortTarget,
     Window,
@@ -21,6 +22,14 @@ from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWla
 from mist_config_guardian_backend.models.base import utc_now
 
 _MAX_BYTES = 65_536
+
+
+class RejectedPortResponseError(ValueError):
+    """Only a fixed validation code may cross the collector boundary."""
+
+    def __init__(self, code: PortResponseError) -> None:
+        self.code = code
+        super().__init__(code.explanation)
 
 
 class MistPortEvidenceClient(MistWlanEvidenceClient):
@@ -85,16 +94,27 @@ class MistPortEvidenceClient(MistWlanEvidenceClient):
             return self.parse(payload, plan, target, window).model_copy(
                 update={"http_status": status, "response_bytes": size}
             )
-        except (httpx.HTTPError, ValueError, TypeError, OverflowError, TimeoutError):
-            return PortEvidence(
-                target_handle=target_handle,
-                window=window,
-                captured_at=utc_now(),
-                state="error",
-                reason="Port snapshot was unavailable or invalid.",
-                http_status=status,
-                response_bytes=size,
+        except httpx.HTTPStatusError:
+            reason = f"Mist returned HTTP {status}."
+            response_error = None
+        except (httpx.HTTPError, TimeoutError):
+            reason = "Port snapshot transport failed or timed out."
+            response_error = None
+        except (ValueError, TypeError, OverflowError) as exc:
+            response_error = (
+                exc.code if isinstance(exc, RejectedPortResponseError) else PortResponseError.INVALID_RESPONSE
             )
+            reason = response_error.explanation
+        return PortEvidence(
+            target_handle=target_handle,
+            window=window,
+            captured_at=utc_now(),
+            state="error",
+            reason=reason,
+            response_error=response_error,
+            http_status=status,
+            response_bytes=size,
+        )
 
     @staticmethod
     def parse(payload: object, plan: WlanRemovalPlan, target: PortTarget, window: Window) -> PortEvidence:
@@ -123,8 +143,7 @@ class MistPortEvidenceClient(MistWlanEvidenceClient):
             or row.get("port_id") != target.port_id
             or row.get("type") != "switch"
         ):
-            msg = "Returned port does not match the resolved device, site and port"
-            raise ValueError(msg)
+            raise RejectedPortResponseError(PortResponseError.SCOPE_MISMATCH)
         neighbor = row.get("neighbor_mac")
         # LLDP can be spoofed. A syntactically valid neighbor is still unverified,
         # not a managed AP, a powered-device identity or an executable target.
@@ -136,10 +155,14 @@ class MistPortEvidenceClient(MistWlanEvidenceClient):
                     f"observed-neighbor.v1:{plan.organization_id}:{plan.audit_id}:{target.handle}:{normalized}".encode()
                 ).hexdigest()
         stamp = row.get("timestamp")
-        observed = datetime.fromtimestamp(stamp, UTC) if type(stamp) in (int, float) else None
-        if observed is not None and observed > utc_now():
-            msg = "Port observation timestamp is in the future"
-            raise ValueError(msg)
+        try:
+            if stamp is not None and type(stamp) not in (int, float):
+                raise RejectedPortResponseError(PortResponseError.INVALID_TIMESTAMP)
+            observed = datetime.fromtimestamp(stamp, UTC) if stamp is not None else None
+        except (ValueError, OverflowError, OSError) as exc:
+            raise RejectedPortResponseError(PortResponseError.INVALID_TIMESTAMP) from exc
+        if observed is not None and (observed > utc_now() or stamp <= 0):
+            raise RejectedPortResponseError(PortResponseError.INVALID_TIMESTAMP)
         reading = PortRow(
             up=row.get("up"),
             poe_on=row.get("poe_on"),

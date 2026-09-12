@@ -717,6 +717,84 @@ of adding that read path.
   completed while CodeRabbit remains signed out. No live Mist discovery,
   model-quality evaluation or real Mongo concurrency test is claimed.
 
+## Mixed-check publication and neighbor identity boundary (2026-09-13)
+
+- Correct the blocking publication defect in `660b3bc`: the shared menu allowed
+  ten checks but `InvestigationRevision.evidence` still admitted only eight.
+  Mixed audits could spend their budget and repeatedly fail before publishing.
+  Centralize WLAN/port target bounds and derive the checkpoint evidence cap as
+  `2 * MAX_WLAN_TARGETS + MAX_PORT_TARGETS`. Use it for persisted evidence and
+  agent observations. Keep the per-audit budget unchanged; do not truncate evidence
+  after collection or reinterpret a publication failure as a completed assessment.
+- Add a maximum-size runtime regression in both shadow modes using four distinct
+  registry-backed WLAN objects and two concrete ports. Verify ten unique dispatch
+  records, ten persisted evidence items, JSON roundtrip, four WLAN findings, and
+  the root publication's report pointer, revision, lease and next checkpoint. In
+  agent mode collect eight then two checks and retain all ten observations in the
+  published report. Also prove an eleventh evidence item is rejected. These tests
+  validate serialization and mocked fenced writes, not real Mongo concurrency.
+- Make port-scope omissions independently visible: removed devices require earlier
+  dependency evidence; repeated device versions require net-change resolution;
+  absent immutable IDs remain unresolved. Give the port resolver its own audit
+  version-limit gap. WLAN, port and general context compilers now use the same
+  `(logical_object_id, version)` order and shared 64-version cap. No resolver relies
+  on another domain's gap to disclose truncation. This bounds compilation, not the
+  existing database fetch of all audit versions.
+- Add optional `response_error` codes for port response rejection:
+  `scope_mismatch`, `invalid_timestamp`, `invalid_response`. A rejected response
+  must have error state and no accepted rows. Preserve the code and fixed reason
+  in published checks and model evidence, distinct from HTTP/transport failures.
+  Never emit the returned foreign identity, response body or exception text. Legacy
+  records without a code remain readable; their original ambiguous error is not
+  retroactively reclassified. Existing UI reason text displays these diagnostics.
+
+- Validation: 1,169 backend tests passed, 20 skipped; 399 frontend tests passed.
+  Thirteen new cases cover maximum mixed publication in both modes, standalone
+  omission/order diagnostics, distinct response errors and their published preview.
+  Ruff, source types, changed-file formatting and OpenAPI consistency passed. Local
+  source/diff review completed using the code-review skill fallback; CodeRabbit
+  remains signed out. No UI source changed, so no new browser/build run was needed.
+  No live Mist, model-quality or real Mongo concurrency validation was performed.
+
+### Decision for the next neighbor resolver (not implemented in this repair)
+
+- Keep the current `neighbor_handle` as unverified display context. It is not an
+  inventory lookup API, cannot be decoded by the model, and must never be accepted
+  as a check reference or promoted in place to a managed-device capability.
+- Before discarding a newly returned neighbor MAC, the future collector will store
+  a normalized candidate binding in a separate server-only evidence artifact.
+  Bind it to organization, investigation, generation, candidate revision, source
+  dispatch/check, resolved switch/port target, source configuration version IDs,
+  capture time and optional observation time. Encrypt the raw candidate MAC with
+  the service vault; store no provider names or free-form prose. The root and
+  public report retain only a typed reference/digest, not that payload. No generic
+  model, viewer, request-context or diagnostic-log endpoint may return the binding.
+- Persist that artifact before completing the source dispatch. A failed or uncertain
+  insert leaves the dispatch outcome unknown and stops publication. Follow only
+  the exact source-linked artifact and verify all identity fields plus its digest;
+  an orphan, foreign, mismatched-source-generation or future-revision binding grants
+  no action. A valid published binding from an earlier checkpoint remains historical
+  context; fresh capabilities require a current verification stage.
+  Apply monitoring retention and orphan cleanup to the private artifacts as well.
+- An executor-controlled resolver, not model arguments, loads the binding. A
+  separately enumerated read-only inventory check may verify only that candidate
+  within the source organization/site. The inventory check must be in the same
+  bounded deterministic discovery stage used without an agent, with the existing
+  reservation, lease, credential and call-budget guards. The agent cannot supply
+  a MAC, substitute a site, or add inventory calls beyond that stage's required set.
+- Exact unique inventory identity and site/organization membership are prerequisites
+  for issuing a distinct downstream target and check reference. Missing inventory,
+  unassigned or re-homed devices, conflicting aliases and virtual-chassis ambiguity
+  remain gaps. An LLDP claim alone never proves managed AP identity or PoE dependency;
+  inventory membership alone does not establish a physical link or historical outage.
+  Preserve provenance and timing for those separate conclusions.
+- Existing published neighbor digests have no private binding. Do not backfill an
+  identity by guessing or reuse a later topology as historical fact. Record the
+  missing binding, or perform a fresh budgeted observation within the active audit
+  window. Required regressions before enabling this resolver: tenant/site mismatch,
+  source-link tampering, raw-MAC/prose leakage, alias ambiguity, replay across audits,
+  credential revocation, orphan artifacts and equal discovery cost with/without AI.
+
 ## Next implementation queue
 
 1. Extend concrete port discovery into verified managed-neighbor dependencies,
