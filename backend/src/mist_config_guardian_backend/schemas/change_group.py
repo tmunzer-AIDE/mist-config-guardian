@@ -1,6 +1,7 @@
 """Change-group read-model API schemas."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,6 +11,7 @@ from mist_config_guardian_backend.models.webhook import (
     ChangeSource,
     RecoveryState,
 )
+from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 
 
 class ChangedObjectResponse(BaseModel):
@@ -79,6 +81,8 @@ class ChangeGroupSummaryResponse(BaseModel):
     # recovery cannot be reported: the neutral values above then mean "not
     # shown", not "no impact".
     impact_known: bool = True
+    impact_source: Literal["legacy"] | None = "legacy"
+    shadow_impact: AuditImpactSummary | None = None
     is_mine: bool = False
 
 

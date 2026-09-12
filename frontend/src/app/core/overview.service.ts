@@ -6,6 +6,7 @@ import { orgPath } from './api';
 import { ScopedState } from './scoped-state';
 import { ChangeGroupSummary } from './change-group.model';
 import { TimeRange } from './time-context.service';
+import { ShadowFeedCounts } from './audit-impact.model';
 
 export type SafetyNetStatus = 'ok' | 'warn' | 'crit';
 
@@ -35,6 +36,7 @@ export interface FailedRestore {
 }
 
 export interface OverviewCounts {
+  impact_source?: 'legacy' | null;
   change_groups: number;
   impacting: number;
   mine: number;
@@ -56,6 +58,7 @@ export interface OrganizationOverview {
   latest_snapshot_objects: number | null;
   /** Built as of a past instant: the feed is historical and the live sections are empty. */
   historical?: boolean;
+  shadow_feed_counts?: ShadowFeedCounts | null;
 }
 
 /** What an Overview read describes: one organization, over one window, ending at one instant. */

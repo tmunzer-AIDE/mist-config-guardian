@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { orgPath } from '../../core/api';
 import { formatInstant } from '../../core/format';
 import { OrganizationContextService } from '../../core/organization-context.service';
+import { AuditImpactSummary, SHADOW_LABELS } from '../../core/audit-impact.model';
 
 interface ShadowAssessment {
   impact: 'info' | 'none' | 'warning';
@@ -33,6 +34,7 @@ export interface ShadowReport {
   calls_used: number;
   calls_limit: number;
   assessment: ShadowAssessment | null;
+  shadow_impact?: AuditImpactSummary | null;
   targets: { handle: string; site_id: string; wlan_id: string }[];
   checks: {
     check_id: string;
@@ -115,7 +117,10 @@ export class ShadowInvestigation {
   protected readonly message = signal('');
   protected readonly at = (value: string) => formatInstant(new Date(value));
   protected readonly impactLabel = computed(() => {
+    const projection = this.report()?.shadow_impact;
+    if (projection) return SHADOW_LABELS[projection.result];
     const band = this.report()?.assessment?.impact;
+    if (band === 'none' && this.report()?.assessment?.coverage !== 'complete') return 'Insufficient evidence';
     return band === 'info' ? 'Insufficient evidence' : band === 'none' ? 'No observed disconnect' : 'Possible disruption';
   });
 

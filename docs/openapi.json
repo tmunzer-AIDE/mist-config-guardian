@@ -641,6 +641,169 @@
         "title": "ApprovalStatus",
         "type": "string"
       },
+      "AuditImpactSummary": {
+        "description": "An audit's shadow result; never substitutes for production severity.",
+        "properties": {
+          "assessment_source": {
+            "const": "audit_investigation",
+            "default": "audit_investigation",
+            "title": "Assessment Source",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unmapped"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "gap_count": {
+            "default": 0,
+            "title": "Gap Count",
+            "type": "integer"
+          },
+          "impact": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "none",
+                  "warning"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impact"
+          },
+          "investigation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Id"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "title": "Mode",
+            "type": "string"
+          },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "result": {
+            "enum": [
+              "not_recorded",
+              "pending",
+              "unavailable",
+              "insufficient_evidence",
+              "no_observed_disconnect",
+              "possible_disruption"
+            ],
+            "title": "Result",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "unmapped_count": {
+            "default": 0,
+            "title": "Unmapped Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "AuditImpactSummary",
+        "type": "object"
+      },
       "BaselineConfidence": {
         "description": "Confidence in the pre-change baseline used for impact comparison.",
         "enum": [
@@ -881,6 +1044,19 @@
             "$ref": "#/components/schemas/ImpactSeverity",
             "default": "none"
           },
+          "impact_source": {
+            "anyOf": [
+              {
+                "const": "legacy",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy",
+            "title": "Impact Source"
+          },
           "is_mine": {
             "default": false,
             "title": "Is Mine",
@@ -934,6 +1110,16 @@
           "recovery_state": {
             "$ref": "#/components/schemas/RecoveryState",
             "default": "not_applicable"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source": {
             "$ref": "#/components/schemas/ChangeSource",
@@ -1041,6 +1227,19 @@
             "$ref": "#/components/schemas/ImpactSeverity",
             "default": "none"
           },
+          "impact_source": {
+            "anyOf": [
+              {
+                "const": "legacy",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy",
+            "title": "Impact Source"
+          },
           "is_mine": {
             "default": false,
             "title": "Is Mine",
@@ -1072,6 +1271,16 @@
           "recovery_state": {
             "$ref": "#/components/schemas/RecoveryState",
             "default": "not_applicable"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source": {
             "$ref": "#/components/schemas/ChangeSource",
@@ -3843,6 +4052,16 @@
             },
             "title": "Safety Net",
             "type": "array"
+          },
+          "shadow_feed_counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShadowFeedCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4106,6 +4325,19 @@
             "default": 0,
             "title": "Failed Restores",
             "type": "integer"
+          },
+          "impact_source": {
+            "anyOf": [
+              {
+                "const": "legacy",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy",
+            "title": "Impact Source"
           },
           "impacting": {
             "default": 0,
@@ -5684,6 +5916,60 @@
         "title": "ShadowCheckResponse",
         "type": "object"
       },
+      "ShadowFeedCounts": {
+        "description": "Mutually exclusive results for returned feed rows, not the whole time window.",
+        "properties": {
+          "insufficient_evidence": {
+            "default": 0,
+            "title": "Insufficient Evidence",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "title": "Mode",
+            "type": "string"
+          },
+          "no_observed_disconnect": {
+            "default": 0,
+            "title": "No Observed Disconnect",
+            "type": "integer"
+          },
+          "not_recorded": {
+            "default": 0,
+            "title": "Not Recorded",
+            "type": "integer"
+          },
+          "pending": {
+            "default": 0,
+            "title": "Pending",
+            "type": "integer"
+          },
+          "possible_disruption": {
+            "default": 0,
+            "title": "Possible Disruption",
+            "type": "integer"
+          },
+          "scope": {
+            "const": "returned_feed",
+            "default": "returned_feed",
+            "title": "Scope",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unavailable": {
+            "default": 0,
+            "title": "Unavailable",
+            "type": "integer"
+          }
+        },
+        "title": "ShadowFeedCounts",
+        "type": "object"
+      },
       "ShadowInvestigationResponse": {
         "description": "Diagnostic preview; never replaces the published production verdict.",
         "properties": {
@@ -5739,6 +6025,16 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "title": "Status",

@@ -77,6 +77,15 @@ described as implemented. The detailed contracts remain in the linked design doc
   Validation: 960 backend tests passed, 20 skipped; Ruff lint, changed-file format,
   source type and OpenAPI consistency checks passed. Local diff review completed;
   no frontend or API contract changed in this follow-up.
+- Shared audit projection: Changes list/detail, Overview feed and the existing
+  report preview use one compact published-assessment projector. Added explicit
+  provenance, feed-local shadow counts and compact UI presentation; production
+  filters, counts and notifications remain isolated. Validation: 980 backend
+  tests passed, 20 skipped; 387 frontend tests passed; production build and both
+  targeted Playwright tests passed. Changes and mobile Overview screenshots were
+  visually reviewed. Ruff lint, source types and OpenAPI consistency passed.
+  New API fields are additive; their semantics are documented in
+  `docs/impact-monitoring.md`. No live Mist requests or production promotion.
 
 ## Gates that require external evidence
 
@@ -160,7 +169,7 @@ described as implemented. The detailed contracts remain in the linked design doc
 ### Enumerated consumer migration audit
 
 Verified against source on 2026-09-12. Notifications currently read the **group**
-projection through `ChangeGroupProjector._notify_impact`, not the session mirror
+projection through `ChangeGroupProjector._announce`, not the session mirror
 directly; that group still derives its severity from device assessments (or legacy
 session mirrors). Moving a tile alone would therefore leave alerts inconsistent.
 
@@ -169,7 +178,7 @@ session mirrors). Moving a tile alone would therefore leave alerts inconsistent.
 | Changes: `ChangeGroupProjector.rebuild`, `serialize_group`, list severity filters in `services/change_groups.py` | Group severity, recovery and evidence rebuilt from sessions | Publish revision identity, source/mode, coverage and bands together; list filters must use that same published projection. |
 | Recovery: `resolve_recovery_state` in `services/change_groups.py` | Session incidents/peak/current severity and scoped movements | Preserve observed history separately from current audit attribution; do not borrow another audit's recovery. |
 | Overview: `BeanieOverviewReader.change_group_counts` in `services/overview.py` and recent change rows | Group severity/recovery and shared group serialization | Count the same assessment source and revision that Changes presents; unknown must remain distinct from benign. |
-| Notifications: `ChangeGroupProjector._notify_impact` → `NotificationService.notify_impact_detected` | Group critical severity and summary; group deduplication | Gate on an accepted published audit assessment, carry its provenance, and decide revision/recovery alert policy before enabling. |
+| Notifications: `ChangeGroupProjector._announce` → `NotificationService.notify_impact_detected` | Group critical severity and summary; group deduplication | Gate on an accepted published audit assessment, carry its provenance, and decide revision/recovery alert policy before enabling. |
 | Impact/device health: `services/site_impact.py` | Persisted session assessment, with legacy fallback | Keep observed device health separate from audit-attributed affected devices; never paint serving APs as failed. |
 | Monitoring list/detail: `api/routes/monitoring.py`, `schemas/monitoring.py` | Query filter on session mirror; serializer prefers assessment | Preserve the device-monitoring meaning or explicitly version its replacement; a read-time fallback alone does not fix database filters. |
 | Search: `services/search.py` | Group severity label | Use published group projection and its provenance. |
@@ -177,24 +186,58 @@ session mirrors). Moving a tile alone would therefore leave alerts inconsistent.
 | Shadow preview: `services/investigation_reads.py` | Exact published artifact pointer plus revision and organization | Retain strict publication/tenant scoping when extracting the shared report projection. |
 | Session writers: `services/impact_analysis.py`, `services/monitoring.py` | Authoritative assessment plus current/peak mirrors and timeline | Keep as device evidence during shadow; remove attribution consumers before retiring compatibility fields and broad polling. |
 
-The next projector slice should add explicit assessment provenance and a shared
-published-audit projection in shadow, with regressions covering lists, counts,
-unknown coverage and notification isolation. Production promotion is a separate
-acceptance-gated switch, not an implicit side effect of adding that read path.
+The shared shadow projection is now implemented as described below. Production
+promotion remains a separate acceptance-gated switch, not an implicit side effect
+of adding that read path.
+
+## Shared Changes/Overview projection decisions
+
+- Add `AuditImpactSummary` alongside the existing legacy assessment. It carries
+  explicit shadow mode/source, root status, exact report identity/revision, policy,
+  evidence timestamp, impact/confidence bands, coverage and gap/unmapped counts.
+  Legacy badge/filter/count sources are explicitly labelled in the API and UI.
+  This is the compact projection of the deterministic WLAN slice, not a promotion
+  or a claim that the final common report contract is complete.
+- Batch at most 500 distinct audit identities, using one root query and at most
+  one artifact query per page. Both queries require the current organization.
+  The artifact query matches the exact captured report ID, investigation ID and
+  revision; no lookup of a vaguely "latest" artifact, no raw session rows, and no
+  additional Mist calls. Root publication may advance between requests; each
+  response identifies the exact checkpoint it displays. Database read failures
+  expose `unavailable` instead of failing the production page or showing clean.
+- Use the same projector for Changes list/detail, Overview feed and the detailed
+  investigation preview. A missing root is `not_recorded`, an unpublished root is
+  pending, and missing/foreign artifacts or terminal roots without a report are
+  unavailable. Partial/unmapped evidence is never counted as no observed
+  disconnect. A possible disruption can coexist with partial coverage; an
+  incomplete runtime preserves the prior checkpoint's timestamp and coverage but
+  cannot present that checkpoint's clean result as completed investigation coverage.
+- Derive six mutually exclusive shadow counts from the exact returned Overview
+  feed projections. These are feed-local (maximum 50), not window totals, and no
+  second query can race their source rows. They include all returned rows before
+  the frontend's local impacting/mine filter. Existing production counts remain
+  legacy and the cheap counts-only endpoint does not read shadow collections.
+- Historical views withhold shadow projections and counts, even though evidence
+  revisions exist: selecting a historically published root still needs a durable
+  publication history, not merely an artifact creation timestamp. Default legacy
+  mode also avoids all new shadow batch reads. Restores, topology and notifications
+  do not consume this shadow field.
+- Keep the Changes table compact, with full timestamp/policy/gap detail in the
+  detail panel and Overview card. Render all text through Angular interpolation.
+  Browser checks use mocked APIs; they validate presentation, not Mist data access
+  or the human acceptance gate. CodeRabbit remains signed out; local source and
+  diff review checks the publication boundary and production isolation.
 
 ## Next implementation queue
 
-1. Prepare the shared published-audit projector and explicit provenance in shadow
-   for Changes/Overview, preserving production notification isolation and the
-   enumerated migration obligations above.
-2. Carry configured-event identities and deployment outcomes into the audit
+1. Carry configured-event identities and deployment outcomes into the audit
    evidence contract, preserving occurrence/receipt times and ambiguity. Extend
    resolvers for the remaining three rules without modifying shared device plans.
-3. Add retention cleanup and durable dispatch journaling, then complete the common
+2. Add retention cleanup and durable dispatch journaling, then complete the common
    report schema and topology attribution records. Keep serving-device evidence
    distinct from device failure.
-4. Add the bounded agent tool loop over the tested capability boundary. Extract
+3. Add the bounded agent tool loop over the tested capability boundary. Extract
    rule packs/skills from working checks; add OAS retrieval only for a demonstrated
    unmapped-path consumer. Build operator adjudication/replay before promotion.
-5. Promote all enumerated consumers, including notifications, to the same audit
+4. Promote all enumerated consumers, including notifications, to the same audit
    assessment revision and retire broad per-device collection after acceptance.

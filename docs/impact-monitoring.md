@@ -213,6 +213,28 @@ coverage gaps and normalized collection outcomes. It does not expose raw client
 identifiers. It is available only in the current view, and is a diagnostic preview
 rather than the final common report/chart contract or a topology impact overlay.
 
+In shadow mode, Changes rows, change details and the Overview feed also show a
+shared compact audit assessment: result, confidence, session-evidence coverage
+and report revision. Expanded summaries include the evidence timestamp, policy,
+gaps and unmapped-attribute counts. A stopped investigation cannot present an
+earlier clean checkpoint as a completed clean investigation.
+
+Overview's **Shadow review** counts describe only the returned feed (up to 50
+changes), including rows hidden by its local actor/impact filter. They partition
+that feed into possible disruption, no observed disconnect, insufficient evidence,
+awaiting evidence, unavailable assessment and no investigation recorded. They are
+not organization-wide outage counts. Production badges, filters, aggregate totals
+and notifications continue to use the legacy projection until acceptance.
+
+API additions: change summaries/details expose `impact_source` and nullable
+`shadow_impact`; Overview exposes nullable `shadow_feed_counts`, and its existing
+`counts` identifies `impact_source`. Historical impact sources are null. In legacy
+mode or historical views, the shadow fields are null and no shadow batch reads run.
+In shadow mode, a missing investigation is an explicit `not_recorded` result, not
+null or a clean verdict. An unreadable publication is `unavailable`. The detailed
+investigation response also includes the same compact `shadow_impact` contract.
+These are additive fields; existing severity fields retain their meaning.
+
 Queries are read-only, limited to four WLAN targets, 56 requests per audit and one
 bounded page per check. Current organization status, credential identity, budget
 and worker lease are verified before each request. Each published revision pins

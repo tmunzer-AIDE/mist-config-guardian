@@ -9,6 +9,7 @@ from mist_config_guardian_backend.schemas.investigation import (
     ShadowInvestigationResponse,
     ShadowTargetResponse,
 )
+from mist_config_guardian_backend.services.audit_impact_reads import project_published_impact
 
 
 async def shadow_investigation(
@@ -44,6 +45,10 @@ async def shadow_investigation(
         calls_used=root.calls_used,
         calls_limit=root.calls_limit,
         assessment=artifact.assessment if artifact else None,
+        shadow_impact=project_published_impact(
+            {**root.model_dump(), "_id": root.id},
+            artifact.model_dump(include={"assessment", "plan"}) if artifact else None,
+        ),
         targets=[
             ShadowTargetResponse(handle=t.handle, site_id=str(t.site_id), wlan_id=str(t.wlan_id))
             for t in artifact.plan.targets

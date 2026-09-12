@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
@@ -45,6 +46,7 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupSummaryResponse,
     ChangeMetricResponse,
 )
+from mist_config_guardian_backend.services.audit_impact_reads import AuditImpactReader, PublishedAuditImpactReader
 from mist_config_guardian_backend.services.impact_evidence import evidence_coverage, evidence_rows
 from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, SITE_OBJECTS
 
@@ -1125,8 +1127,9 @@ class ChangeGroupFilters:
 class ChangeGroupService:
     """Read model behind the change-group index and detail endpoints."""
 
-    def __init__(self, store: ChangeGroupStore | None = None) -> None:
+    def __init__(self, store: ChangeGroupStore | None = None, audit_impacts: AuditImpactReader | None = None) -> None:
         self._store = store if store is not None else BeanieChangeGroupStore()
+        self._audit_impacts = audit_impacts if audit_impacts is not None else PublishedAuditImpactReader()
 
     async def list_groups(
         self,
@@ -1175,7 +1178,7 @@ class ChangeGroupService:
         session_ids = [session_id for group in groups for session_id in group.monitoring_session_ids]
         sessions = await self._store.sessions_by_id(organization_id, session_ids)
         by_session = {session.id: session for session in sessions if session.id is not None}
-        return [
+        summaries = [
             _summarize(
                 group,
                 [by_session[key] for key in group.monitoring_session_ids if key in by_session],
@@ -1184,6 +1187,11 @@ class ChangeGroupService:
             )
             for group in groups
         ]
+        if get_settings().impact_engine_mode == "shadow":
+            impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id for group in groups])
+            for summary in summaries:
+                summary.shadow_impact = impacts.get(summary.audit_id)
+        return summaries
 
     async def get_group(
         self,
@@ -1230,6 +1238,9 @@ class ChangeGroupService:
             exclude_audit_id=group.audit_id,
         )
         summary = _summarize(group, sessions, names, viewer_email, historical=historical)
+        if not historical and get_settings().impact_engine_mode == "shadow":
+            impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id])
+            summary.shadow_impact = impacts.get(group.audit_id)
         return ChangeGroupDetailResponse(
             **summary.model_dump(by_alias=True),
             message=group.message,
@@ -1366,5 +1377,6 @@ def _summarize(
         # False says the outcome was withheld, so a client renders "not shown"
         # rather than reading the neutral defaults above as "no impact".
         impact_known=not historical,
+        impact_source=None if historical else "legacy",
         is_mine=actor_matches(group.actor, viewer_email),
     )

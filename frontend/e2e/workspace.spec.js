@@ -541,3 +541,43 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await expect(preview).toContainText('Mist returned HTTP 500.');
   await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });
 });
+
+test('shared shadow projection stays distinct from production in Changes and Overview', async ({ page }, info) => {
+  const projection = {
+    mode: 'shadow', assessment_source: 'audit_investigation', result: 'insufficient_evidence',
+    investigation_id: 'i1', report_id: 'r3', revision: 3, status: 'monitoring', stop_reason: '',
+    policy_version: 'wlan-removal.v1', evaluated_at: now, impact: 'info', confidence: 'low',
+    coverage: 'partial', gap_count: 1, unmapped_count: 2,
+  };
+  const row = { ...groups[0], impact_source: 'legacy', shadow_impact: projection };
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/change-groups')) {
+      await route.fulfill({ json: { items: [row], total: 1 } });
+    } else if (path.endsWith('/overview')) {
+      await route.fulfill({ json: {
+        generated_at: now, range_start: now, range_end: now,
+        counts: { change_groups: 70, impacting: 5, mine: 1, unrecovered: 1, pending_approvals: 0, failed_restores: 0, impact_source: 'legacy' },
+        change_groups: [row], safety_net: [], pending_approvals: [], failed_restores: [],
+        latest_snapshot_at: now, latest_snapshot_objects: 100,
+        shadow_feed_counts: { mode: 'shadow', scope: 'returned_feed', total: 1,
+          possible_disruption: 0, no_observed_disconnect: 0, insufficient_evidence: 1,
+          pending: 0, unavailable: 0, not_recorded: 0 },
+      } });
+    } else await route.fallback();
+  });
+  await page.goto('/changes');
+  const rowView = page.locator('.row--group').first();
+  await expect(rowView).toContainText(row.impact_label);
+  await expect(rowView).toContainText('Shadow · Insufficient evidence');
+  await expect(rowView).toContainText('Revision 3');
+  await page.screenshot({ path: info.outputPath('shadow-changes.png'), fullPage: true });
+  await page.goto('/overview');
+  await expect(page.getByRole('region', { name: 'Shadow assessment feed counts' })).toContainText('1 change in the loaded feed');
+  await expect(page.locator('.card').first()).toContainText('Shadow · Insufficient evidence');
+  await expect(page.locator('.card').first()).toContainText(row.impact_label);
+  await page.screenshot({ path: info.outputPath('shadow-overview.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('shadow-overview-mobile.png'), fullPage: true });
+});

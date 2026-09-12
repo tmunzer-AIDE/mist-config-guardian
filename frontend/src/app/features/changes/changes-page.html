@@ -2,6 +2,9 @@
   <header class="head">
     <h1 class="cg-page-title">Changes</h1>
     <p class="head-sub">{{ subtitle() }}</p>
+    @if (hasShadow()) {
+      <p class="head-sub">Shadow results cover WLAN session evidence. Impact badges, filters and alerts still use the legacy assessment.</p>
+    }
     <div class="head-filters" role="group" aria-label="Filters">
       @for (option of severities(); track option.value) {
         <button
@@ -80,6 +83,9 @@
                   @if (row.recovery) {
                     <div class="row-recovery">{{ row.recovery }}</div>
                   }
+                  @if (!time.isHistorical() && row.group.shadow_impact) {
+                    <app-audit-impact-summary [assessment]="row.group.shadow_impact" [compact]="true" />
+                  }
                 </td>
               </tr>
             }
@@ -106,6 +112,9 @@
             <button class="panel-close" type="button" (click)="close()">Close</button>
           </div>
           <p class="panel-byline">{{ detail.byline }}</p>
+          @if (!time.isHistorical()) {
+            <app-audit-impact-summary [assessment]="detail.shadowImpact" />
+          }
         </header>
 
         <div class="panel-body">
