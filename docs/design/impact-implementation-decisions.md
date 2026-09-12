@@ -409,16 +409,45 @@ of adding that read path.
   OpenAPI consistency passed. No production build or browser rerun was needed
   for the label/help-text changes; the frontend suite compiled the templates.
 
+## Agent-first sequencing correction
+
+- The user challenged why use cases still require manual definition. The goal is
+  an agent that investigates changes, not an exhaustive hand-maintained mapping
+  from every attribute to every possible outage. The deterministic foundation
+  was necessary, but completing all four initial rules must not gate the first
+  investigator runtime. This supersedes the earlier next-switch-rule sequencing.
+- Keep the WLAN rule as a tested reference and exclusion boundary. Treat the
+  remaining scenarios as regression cases and useful capability extensions,
+  rather than prerequisites or the complete universe of allowed hypotheses.
+  Build the first bounded shadow investigator over existing checks next.
+- Humans implement reusable evidence capabilities, trusted entity resolvers,
+  budgets, evidence/report validation and acceptance cases. The investigator
+  interprets a diff, proposes hypotheses, selects relevant authorized entities
+  and checks, examines counterevidence and updates a structured report. Skills
+  guide these tasks; they are not a mandatory rule for every changed attribute.
+- Keep execution enforcement: the agent cannot invent entity handles or check
+  IDs, bypass explicit rule exclusions, or turn a novel hypothesis into a
+  production verdict. Separate model-proposed attribution from validated
+  observations. Unmapped changes can receive an investigation hypothesis; if
+  available capabilities cannot test it, report the missing capability and
+  insufficient evidence. Do not imply that the initial WLAN-only capability
+  set can investigate arbitrary switch, gateway or routing changes.
+- Add capabilities incrementally from concrete investigator gaps, including
+  port/PoE event history and physical dependencies. Introduce pinned OAS lookup
+  when the running investigator needs attribute semantics. OAS descriptions
+  alone do not establish actual dependencies or causal impact. Retain shared
+  call budgets, audit-owned context and human-adjudicated promotion gates.
+
 ## Next implementation queue
 
-1. Extend resolvers and checks for the remaining three rules without modifying
-   shared device plans. Resolve device scope from immutable configuration and
-   authorized inventory; deployment candidates alone cannot issue checks.
-2. Add retention cleanup and extend the dispatch journal as new checks arrive, then complete the common
-   report schema and topology attribution records. Keep serving-device evidence
-   distinct from device failure.
-3. Add the bounded agent tool loop over the tested capability boundary. Extract
-   rule packs/skills from working checks; add OAS retrieval only for a demonstrated
-   unmapped-path consumer. Build operator adjudication/replay before promotion.
+1. Implement the bounded shadow investigator over existing authorized evidence
+   checks, with structured hypotheses, report validation, persisted checkpoint
+   context and model/tool activity accounting. Keep one investigator per audit.
+2. Expand reusable resolvers and collectors as needed, starting with targeted
+   port/PoE event history and physical dependencies. Add regression scenarios
+   and domain skills; avoid requiring a bespoke rule for every attribute.
+3. Complete the common report/topology integration and retention cleanup; add
+   bounded OAS retrieval for demonstrated knowledge gaps. Build operator
+   adjudication/replay before promotion.
 4. Promote all enumerated consumers, including notifications, to the same audit
    assessment revision and retire broad per-device collection after acceptance.
