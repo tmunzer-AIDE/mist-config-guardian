@@ -1,7 +1,11 @@
+import { ReportDeviceImpact, ImpactBand } from './impact-report.model';
 export type ShadowResult = 'not_recorded' | 'pending' | 'unavailable' |
   'insufficient_evidence' | 'no_observed_disconnect' | 'possible_disruption';
 
 export interface AuditImpactSummary {
+  current_impact?: ImpactBand | null;
+  peak_revision?: number | null;
+  impacted_devices?: ReportDeviceImpact[] | null;
   mode: 'shadow';
   assessment_source: 'audit_investigation';
   result: ShadowResult;

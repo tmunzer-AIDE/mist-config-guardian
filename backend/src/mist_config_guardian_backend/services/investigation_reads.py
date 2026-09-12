@@ -5,18 +5,20 @@ from beanie import PydanticObjectId
 from mist_config_guardian_backend.impact.agent import ModelActivity
 from mist_config_guardian_backend.impact.contracts import NeighborEvidence, PortEvidence, PortHistoryEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
+from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
     ImpactInvestigation,
-    InvestigationRevision,
 )
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.investigation import (
+    ReportHistory,
     ShadowCheckResponse,
     ShadowInvestigationResponse,
     ShadowTargetResponse,
 )
 from mist_config_guardian_backend.services.audit_impact_reads import project_published_impact
+from mist_config_guardian_backend.services.published_revision import published_revision
 
 
 async def read_investigation_root(query: dict[str, object]) -> ImpactInvestigation | None:
@@ -34,18 +36,8 @@ async def shadow_investigation(
     root = await read_investigation_root({"organization_id": organization_id, "audit_id": group.audit_id})
     if root is None:
         return None
-    artifact = (
-        await InvestigationRevision.find_one(
-            {
-                "_id": root.report_id,
-                "organization_id": organization_id,
-                "investigation_id": root.id,
-                "revision": root.revision,
-            }
-        )
-        if root.report_id
-        else None
-    )
+    publication = await published_revision(root)
+    artifact = publication or None
     return ShadowInvestigationResponse(
         id=str(root.id),
         audit_id=root.audit_id,
@@ -57,6 +49,7 @@ async def shadow_investigation(
         calls_used=root.calls_used,
         calls_limit=root.calls_limit,
         assessment=artifact.assessment if artifact else None,
+        report=artifact.report if artifact else None,
         deployment=artifact.deployment if artifact else None,
         agent=artifact.agent if artifact else None,
         model_activity=ModelActivity(
@@ -74,7 +67,7 @@ async def shadow_investigation(
         ),
         shadow_impact=project_published_impact(
             {**root.model_dump(), "_id": root.id},
-            artifact.model_dump(include={"assessment", "plan"}) if artifact else None,
+            artifact.model_dump(include={"assessment", "plan", "report"}) if artifact else None,
         ),
         targets=[
             ShadowTargetResponse(handle=t.handle, site_id=str(t.site_id), wlan_id=str(t.wlan_id))
@@ -105,4 +98,42 @@ async def shadow_investigation(
         ]
         if artifact
         else [],
+    )
+
+
+async def report_history(organization_id: PydanticObjectId, group_id: PydanticObjectId) -> ReportHistory | None:
+    """Follow only the immutable published-parent chain, never orphan revision numbers."""
+    group = await AuditChangeGroup.find_one({"_id": group_id, "organization_id": organization_id})
+    if group is None:
+        return None
+    root = await read_investigation_root({"organization_id": organization_id, "audit_id": group.audit_id})
+    if root is None:
+        return None
+    cursor = root
+    reports = []
+    gaps = []
+    for _ in range(MAX_PUBLISHED_CHECKPOINTS):
+        artifact = await published_revision(cursor)
+        if not artifact:
+            if cursor.revision:
+                gaps.append("A published revision is unavailable; history is incomplete.")
+            break
+        if artifact.report:
+            reports.append(artifact.report)
+        else:
+            gaps.append("A legacy revision has no structured report.")
+        if artifact.revision == 1:
+            break
+        if artifact.previous_report_id is None:
+            gaps.append("The earlier publication chain was not retained.")
+            break
+        cursor = cursor.model_copy(update={"report_id": artifact.previous_report_id, "revision": artifact.revision - 1})
+    else:
+        gaps.append("Publication history exceeded its supported bound.")
+    return ReportHistory(
+        investigation_id=str(root.id),
+        published_revision=root.revision,
+        complete=not gaps,
+        reports=tuple(reports),
+        gaps=tuple(gaps),
     )

@@ -15,12 +15,16 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupDetailResponse,
     ChangeGroupListResponse,
 )
-from mist_config_guardian_backend.schemas.investigation import ModelRequestDetails, ShadowInvestigationResponse
+from mist_config_guardian_backend.schemas.investigation import (
+    ModelRequestDetails,
+    ReportHistory,
+    ShadowInvestigationResponse,
+)
 from mist_config_guardian_backend.services.change_groups import (
     ChangeGroupFilters,
     ChangeGroupService,
 )
-from mist_config_guardian_backend.services.investigation_reads import shadow_investigation
+from mist_config_guardian_backend.services.investigation_reads import report_history, shadow_investigation
 from mist_config_guardian_backend.services.model_request_reads import model_request_details
 
 router = APIRouter(prefix="/organizations/{organization_id}/change-groups")
@@ -135,3 +139,12 @@ async def read_model_request(
 ) -> ModelRequestDetails | None:
     """Read one authorized journal entry's verified context/action artifacts."""
     return await model_request_details(_identifier(organization), change_group_id, request_id)
+
+
+@router.get("/{change_group_id}/investigation/history")
+async def read_report_history(
+    change_group_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ReportHistory | None:
+    return await report_history(_identifier(organization), change_group_id)

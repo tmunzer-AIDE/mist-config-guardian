@@ -5,6 +5,7 @@ from typing import Any, cast
 
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.integrations.mist_topology import device_from_stats, normalized_mac
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import (
@@ -25,6 +26,7 @@ from mist_config_guardian_backend.schemas.impact import (
     SiteChangeList,
     SiteTopology,
 )
+from mist_config_guardian_backend.services.audit_impact_reads import PublishedAuditImpactReader
 from mist_config_guardian_backend.services.change_groups import as_utc, build_title, object_type_label
 from mist_config_guardian_backend.services.impact_evidence import legacy_assessment
 
@@ -309,6 +311,15 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
     )
     complete = len(sessions) <= _MAX_SESSIONS
     sessions = sessions[:_MAX_SESSIONS]
+    shadow = (
+        await PublishedAuditImpactReader().summaries(org, audits, include_devices=True)
+        if not historical and get_settings().impact_engine_mode in {"shadow", "agent_shadow"}
+        else {}
+    )
+    # Audit reports may span sites; an overlay must stay in the requested site.
+    for summary in shadow.values():
+        if summary.impacted_devices is not None:
+            summary.impacted_devices = tuple(d for d in summary.impacted_devices if str(d.site_id) == site)
     changes = []
     for row in items:
         relevant = [
@@ -345,6 +356,7 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
                     row.get("message"),
                 ),
                 summary="" if historical else row.get("summary") or "",
+                shadow_impact=shadow.get(row.get("audit_id", "")),
                 impacts=[impact_from_session(session, end, historical=historical) for session in relevant],
             )
         )

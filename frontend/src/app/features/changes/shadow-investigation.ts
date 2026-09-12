@@ -2,6 +2,8 @@ import { HttpClient } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
+import { ImpactReport, ReportHistory } from '../../core/impact-report.model';
+import { ImpactReportComponent } from '../../shared/impact-report';
 import { orgPath } from '../../core/api';
 import { formatInstant } from '../../core/format';
 import { OrganizationContextService } from '../../core/organization-context.service';
@@ -43,6 +45,7 @@ export interface ShadowReport {
   calls_used: number;
   calls_limit: number;
   assessment: ShadowAssessment | null;
+  report?: ImpactReport | null;
   shadow_impact?: AuditImpactSummary | null;
   deployment?: DeploymentEvidence | null;
   dispatch_log?: DispatchLog | null;
@@ -69,7 +72,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
+  imports: [ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -81,6 +84,20 @@ export interface ShadowReport {
         <p>This preview is available for review before the new engine supplies published impact verdicts.</p>
         @if (report.stop_reason) { <p role="status">{{ report.stop_reason }}</p> }
         <p>Revision {{ report.revision }} · {{ report.status }} · {{ at(report.changed_at) }}–{{ at(report.expires_at) }}</p>
+        <app-impact-report [report]="selectedReport() ?? report.report ?? null" />
+        @if (report.report) {
+          <button class="cg-btn" type="button" (click)="loadHistory()" [disabled]="historyPending()">Review checkpoint history</button>
+          @if (history(); as history) {
+            <div aria-label="Published checkpoint history">
+              @for (item of history.reports; track item.revision) {
+                <button class="cg-btn" type="button" (click)="selectedReport.set(item)" [attr.aria-pressed]="selectedReport()?.revision === item.revision">Revision {{ item.revision }} · {{ at(item.evidence_as_of) }}</button>
+              }
+              @for (gap of history.gaps; track $index) { <p>{{ gap }}</p> }
+            </div>
+          }
+          @if (historyMessage()) { <p role="status">{{ historyMessage() }}</p> }
+        }
+        @if (report.report) { <h4>Current checkpoint details · revision {{ report.revision }}</h4> }
         @if (report.assessment; as assessment) {
           <p class="ratings"><strong>Impact: {{ impactLabel() }}</strong> · <strong>Confidence: {{ assessment.confidence }}</strong></p>
           <p>Session-evidence coverage: {{ assessment.coverage }}. Failed joins and unrecorded sessions are not covered.</p>
@@ -141,6 +158,10 @@ export class ShadowInvestigation {
   private readonly http = inject(HttpClient);
   protected readonly organizationId = computed(() => this.organizations.selected()?.id);
   private request = 0;
+  protected readonly history = signal<ReportHistory | null>(null);
+  protected readonly selectedReport = signal<ImpactReport | null>(null);
+  protected readonly historyPending = signal(false);
+  protected readonly historyMessage = signal('');
   protected readonly pending = signal(false);
   protected readonly report = signal<ShadowReport | null>(null);
   protected readonly message = signal('');
@@ -161,6 +182,7 @@ export class ShadowInvestigation {
       this.organizations.selected()?.id;
       this.request++;
       this.report.set(null);
+      this.history.set(null); this.selectedReport.set(null); this.historyPending.set(false); this.historyMessage.set('');
       this.message.set('');
       this.pending.set(false);
     });
@@ -170,10 +192,28 @@ export class ShadowInvestigation {
     return this.report()?.targets.find((item) => item.handle === handle)?.wlan_id ?? 'Unknown identity';
   }
 
+  protected async loadHistory(): Promise<void> {
+    const organization = this.organizationId();
+    if (!organization) return;
+    const request = this.request;
+    this.historyPending.set(true); this.historyMessage.set('');
+    try {
+      const history = await firstValueFrom(this.http.get<ReportHistory | null>(
+        orgPath(organization, `/change-groups/${this.groupId()}/investigation/history`),
+      ));
+      if (request !== this.request) return;
+      if (history?.published_revision !== this.report()?.revision) {
+        this.historyMessage.set('A newer checkpoint was published. Reload the investigation to review its history.');
+      } else { this.history.set(history); }
+    } catch { if (request === this.request) this.historyMessage.set('Checkpoint history is unavailable.'); }
+    finally { if (request === this.request) this.historyPending.set(false); }
+  }
+
   protected async load(): Promise<void> {
     const organization = this.organizations.selected()?.id;
     if (!organization) return;
     const request = ++this.request;
+    this.history.set(null); this.selectedReport.set(null); this.historyMessage.set('');
     this.pending.set(true);
     this.message.set('');
     this.report.set(null);

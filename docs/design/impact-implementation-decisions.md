@@ -966,6 +966,30 @@ of adding that read path.
   Eighteen-check publication, exact WLAN/client identity, zero/missing attempts,
   paired recovery, skill tampering and bounded prompt-window references are tested.
 
+## 2026-09-13 — Structured reports and publication history
+
+- Persist a fixed eight-section report on each immutable revision. Server-generated
+  tables, client-count bars, authentication-event histograms and port timelines use
+  only normalized evidence from that revision. Missing values remain null; clients
+  deduplicate before plotting. Provider prose, raw client identities, URLs and HTML
+  cannot be introduced as visualization data by the model.
+- Retain historical peak impact, original confidence and source revision separately
+  from current impact/confidence. Unknown current evidence cannot manufacture recovery.
+  Link revisions through the prior published root pointer; history follows this chain,
+  never all artifacts sharing an investigation ID. Legacy/missing chains remain gaps.
+- Use one exact publication reader for agent memory and operator reports, validating
+  tenant, audit, investigation, revision and pointer identity on the returned object.
+  Runtime shares that read with the model instead of racing a second lookup.
+- Expose revision-pinned service associations for topology: an affected switch port
+  or an AP serving affected clients. Neither establishes whole-device failure.
+  Site overlays filter by exact site and are an explicit shadow toggle; production
+  health, historical pages and notification decisions remain acceptance-gated.
+- Current reciprocal AP adjacency remains unverified. The pinned OAS device search
+  documents MAC filtering and LLDP port/management address, but not chassis MAC;
+  site statistics documents no MAC filter. Do not guess a device UUID or correlate
+  mutable names/IPs to assert a physical relationship. An independently validated,
+  bounded source of switch identity is required before the capability expands.
+
 ## Next implementation queue
 
 1. Build on managed AP membership with port/PoE event history and independently

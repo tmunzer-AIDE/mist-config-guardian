@@ -57,6 +57,11 @@ def setup_runtime(monkeypatch, *, fence_matches=True, enabled=True):
     monkeypatch.setattr(InvestigationRevision, "get_pymongo_collection", lambda *_: collection)
     inserted = []
 
+    async def find_revision(query):
+        return next((a for a in inserted if a.id == query["_id"]), None)
+
+    monkeypatch.setattr(InvestigationRevision, "find_one", find_revision)
+
     async def insert(artifact, **_kwargs):
         artifact.id = PydanticObjectId()
         inserted.append(artifact)

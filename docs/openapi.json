@@ -841,6 +841,23 @@
             ],
             "title": "Coverage"
           },
+          "current_impact": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "none",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Impact"
+          },
           "evaluated_at": {
             "anyOf": [
               {
@@ -875,6 +892,21 @@
             ],
             "title": "Impact"
           },
+          "impacted_devices": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/mist_config_guardian_backend__impact__report__DeviceImpact"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impacted Devices"
+          },
           "investigation_id": {
             "anyOf": [
               {
@@ -891,6 +923,17 @@
             "default": "shadow",
             "title": "Mode",
             "type": "string"
+          },
+          "peak_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Revision"
           },
           "policy_version": {
             "anyOf": [
@@ -2015,194 +2058,6 @@
         "title": "DeploymentSignal",
         "type": "object"
       },
-      "DeviceImpact": {
-        "properties": {
-          "assessment_source": {
-            "default": "legacy",
-            "enum": [
-              "stored",
-              "legacy",
-              "historical"
-            ],
-            "title": "Assessment Source",
-            "type": "string"
-          },
-          "collection_errors": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Collection Errors",
-            "type": "array"
-          },
-          "completed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completed At"
-          },
-          "config_state": {
-            "default": "unknown",
-            "enum": [
-              "pending",
-              "applied",
-              "rolled_back",
-              "unknown"
-            ],
-            "title": "Config State",
-            "type": "string"
-          },
-          "configured_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Configured At"
-          },
-          "detected_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Detected At"
-          },
-          "device_id": {
-            "title": "Device Id",
-            "type": "string"
-          },
-          "device_name": {
-            "title": "Device Name",
-            "type": "string"
-          },
-          "evidence_coverage": {
-            "default": "insufficient",
-            "enum": [
-              "complete",
-              "partial",
-              "insufficient",
-              "not_applicable"
-            ],
-            "title": "Evidence Coverage",
-            "type": "string"
-          },
-          "headline": {
-            "default": "Waiting for comparable evidence",
-            "title": "Headline",
-            "type": "string"
-          },
-          "metrics": {
-            "items": {
-              "$ref": "#/components/schemas/ImpactMetric"
-            },
-            "title": "Metrics",
-            "type": "array"
-          },
-          "monitoring_ends_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Monitoring Ends At"
-          },
-          "monitoring_started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Monitoring Started At"
-          },
-          "monitoring_state": {
-            "default": "unknown",
-            "enum": [
-              "not_started",
-              "monitoring",
-              "completed",
-              "stalled",
-              "aborted",
-              "unknown"
-            ],
-            "title": "Monitoring State",
-            "type": "string"
-          },
-          "observation_count": {
-            "default": 0,
-            "title": "Observation Count",
-            "type": "integer"
-          },
-          "progress": {
-            "default": 0,
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Progress",
-            "type": "integer"
-          },
-          "session_id": {
-            "title": "Session Id",
-            "type": "string"
-          },
-          "severity": {
-            "default": "unknown",
-            "enum": [
-              "ok",
-              "warning",
-              "error",
-              "critical",
-              "unknown"
-            ],
-            "title": "Severity",
-            "type": "string"
-          },
-          "shared_window": {
-            "default": false,
-            "title": "Shared Window",
-            "type": "boolean"
-          },
-          "snapshot_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Snapshot At"
-          }
-        },
-        "required": [
-          "device_id",
-          "device_name",
-          "session_id"
-        ],
-        "title": "DeviceImpact",
-        "type": "object"
-      },
       "DeviceStateComparison": {
         "description": "One trigger's initial state and independently scheduled follow-up.",
         "properties": {
@@ -3127,6 +2982,111 @@
         "title": "EmailChangeResponse",
         "type": "object"
       },
+      "EvidenceDataset": {
+        "additionalProperties": false,
+        "description": "Rows are normalized server values; missing values remain null, never zero.",
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 2,
+            "title": "Columns",
+            "type": "array"
+          },
+          "explanation": {
+            "maxLength": 500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^evidence-[0-9]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "table",
+              "bar",
+              "histogram",
+              "timeline"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "omitted_rows": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "maxItems": 200,
+            "title": "Rows",
+            "type": "array"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "title": "Title",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        },
+        "required": [
+          "id",
+          "check_id",
+          "target_handle",
+          "window",
+          "captured_at",
+          "state",
+          "title",
+          "kind",
+          "columns",
+          "rows",
+          "explanation"
+        ],
+        "title": "EvidenceDataset",
+        "type": "object"
+      },
       "EvidenceView": {
         "additionalProperties": false,
         "properties": {
@@ -3673,6 +3633,161 @@
           "name"
         ],
         "title": "ImpactMetric",
+        "type": "object"
+      },
+      "ImpactReport": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "enum": [
+              "plausible",
+              "undetermined"
+            ],
+            "title": "Attribution",
+            "type": "string"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "unmapped"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "current_impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current Impact",
+            "type": "string"
+          },
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDataset"
+            },
+            "maxItems": 18,
+            "title": "Datasets",
+            "type": "array"
+          },
+          "device_coverage": {
+            "const": "observed_only",
+            "default": "observed_only",
+            "title": "Device Coverage",
+            "type": "string"
+          },
+          "evidence_as_of": {
+            "format": "date-time",
+            "title": "Evidence As Of",
+            "type": "string"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "history_complete": {
+            "title": "History Complete",
+            "type": "boolean"
+          },
+          "impacted_devices": {
+            "items": {
+              "$ref": "#/components/schemas/mist_config_guardian_backend__impact__report__DeviceImpact"
+            },
+            "maxItems": 200,
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "investigation_id": {
+            "title": "Investigation Id",
+            "type": "string"
+          },
+          "omitted_device_impacts": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted Device Impacts",
+            "type": "integer"
+          },
+          "peak_confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Peak Confidence",
+            "type": "string"
+          },
+          "peak_impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak Impact",
+            "type": "string"
+          },
+          "peak_revision": {
+            "minimum": 1.0,
+            "title": "Peak Revision",
+            "type": "integer"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sections": {
+            "$ref": "#/components/schemas/ReportSections"
+          }
+        },
+        "required": [
+          "investigation_id",
+          "audit_id",
+          "revision",
+          "generated_at",
+          "evidence_as_of",
+          "peak_impact",
+          "peak_revision",
+          "peak_confidence",
+          "history_complete",
+          "current_impact",
+          "confidence",
+          "coverage",
+          "attribution",
+          "sections",
+          "datasets",
+          "impacted_devices",
+          "gaps"
+        ],
+        "title": "ImpactReport",
         "type": "object"
       },
       "ImpactSeverity": {
@@ -6469,6 +6584,112 @@
         "title": "ReportAction",
         "type": "object"
       },
+      "ReportHistory": {
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "investigation_id": {
+            "title": "Investigation Id",
+            "type": "string"
+          },
+          "published_revision": {
+            "title": "Published Revision",
+            "type": "integer"
+          },
+          "reports": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ImpactReport"
+            },
+            "maxItems": 10,
+            "title": "Reports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "investigation_id",
+          "published_revision",
+          "complete"
+        ],
+        "title": "ReportHistory",
+        "type": "object"
+      },
+      "ReportSection": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "maxLength": 500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "available",
+              "partial",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "explanation"
+        ],
+        "title": "ReportSection",
+        "type": "object"
+      },
+      "ReportSections": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "findings": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "gaps_and_next_checks": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "timeline": {
+            "$ref": "#/components/schemas/ReportSection"
+          }
+        },
+        "required": [
+          "summary",
+          "change",
+          "scope",
+          "findings",
+          "evidence",
+          "timeline",
+          "context",
+          "gaps_and_next_checks"
+        ],
+        "title": "ReportSections",
+        "type": "object"
+      },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
         "properties": {
@@ -7575,6 +7796,16 @@
               }
             ]
           },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "title": "Revision",
             "type": "integer"
@@ -7688,7 +7919,7 @@
           },
           "impacts": {
             "items": {
-              "$ref": "#/components/schemas/DeviceImpact"
+              "$ref": "#/components/schemas/mist_config_guardian_backend__schemas__impact__DeviceImpact"
             },
             "title": "Impacts",
             "type": "array"
@@ -7697,6 +7928,16 @@
             "format": "date-time",
             "title": "Occurred At",
             "type": "string"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "summary": {
             "default": "",
@@ -9291,6 +9532,295 @@
           "explanation"
         ],
         "title": "WlanFinding",
+        "type": "object"
+      },
+      "mist_config_guardian_backend__impact__report__DeviceImpact": {
+        "additionalProperties": false,
+        "description": "A service association, not a claim that the entire device is down.",
+        "properties": {
+          "attribution": {
+            "const": "plausible",
+            "default": "plausible",
+            "title": "Attribution",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "current_impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current Impact",
+            "type": "string"
+          },
+          "device_failure": {
+            "const": "not_established",
+            "default": "not_established",
+            "title": "Device Failure",
+            "type": "string"
+          },
+          "device_mac": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Device Mac",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "role": {
+            "enum": [
+              "affected_switch_port",
+              "serving_affected_clients"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "service": {
+            "enum": [
+              "port_link",
+              "port_power",
+              "wlan_sessions",
+              "wlan_authentication"
+            ],
+            "title": "Service",
+            "type": "string"
+          },
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_mac",
+          "site_id",
+          "role",
+          "service",
+          "target_handle",
+          "impact",
+          "current_impact",
+          "confidence"
+        ],
+        "title": "DeviceImpact",
+        "type": "object"
+      },
+      "mist_config_guardian_backend__schemas__impact__DeviceImpact": {
+        "properties": {
+          "assessment_source": {
+            "default": "legacy",
+            "enum": [
+              "stored",
+              "legacy",
+              "historical"
+            ],
+            "title": "Assessment Source",
+            "type": "string"
+          },
+          "collection_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collection Errors",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "config_state": {
+            "default": "unknown",
+            "enum": [
+              "pending",
+              "applied",
+              "rolled_back",
+              "unknown"
+            ],
+            "title": "Config State",
+            "type": "string"
+          },
+          "configured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured At"
+          },
+          "detected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected At"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "evidence_coverage": {
+            "default": "insufficient",
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Evidence Coverage",
+            "type": "string"
+          },
+          "headline": {
+            "default": "Waiting for comparable evidence",
+            "title": "Headline",
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactMetric"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "monitoring_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Ends At"
+          },
+          "monitoring_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Started At"
+          },
+          "monitoring_state": {
+            "default": "unknown",
+            "enum": [
+              "not_started",
+              "monitoring",
+              "completed",
+              "stalled",
+              "aborted",
+              "unknown"
+            ],
+            "title": "Monitoring State",
+            "type": "string"
+          },
+          "observation_count": {
+            "default": 0,
+            "title": "Observation Count",
+            "type": "integer"
+          },
+          "progress": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "severity": {
+            "default": "unknown",
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "critical",
+              "unknown"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "shared_window": {
+            "default": false,
+            "title": "Shared Window",
+            "type": "boolean"
+          },
+          "snapshot_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot At"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_name",
+          "session_id"
+        ],
+        "title": "DeviceImpact",
         "type": "object"
       }
     },
@@ -11733,6 +12263,72 @@
           }
         ],
         "summary": "Read Shadow Investigation",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/history": {
+      "get": {
+        "operationId": "read_report_history_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReportHistory"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Report History Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation History Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Report History",
         "tags": [
           "Change Groups"
         ]

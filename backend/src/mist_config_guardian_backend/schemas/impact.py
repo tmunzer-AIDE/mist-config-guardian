@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.models.monitoring import EvidenceCoverage, MetricEvidence
+from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 
 Health = Literal["ok", "warning", "error", "critical", "unknown"]
 
@@ -90,6 +91,7 @@ class SiteChange(BaseModel):
     change_type: str = "Configuration change"
     title: str
     summary: str = ""
+    shadow_impact: AuditImpactSummary | None = None
     impacts: list[DeviceImpact] = Field(default_factory=list)
 
 

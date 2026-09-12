@@ -1,3 +1,4 @@
+import { AuditImpactSummary } from '../../core/audit-impact.model';
 export type Health = 'ok' | 'warning' | 'error' | 'critical' | 'unknown';
 export type EvidenceState = 'measured' | 'no_data' | 'pending' | 'missing' | 'error' | 'unsupported' | 'disabled';
 export interface MetricEvidence {
@@ -75,6 +76,7 @@ export interface DeviceImpact {
   collection_errors: string[];
 }
 export interface SiteChange {
+  shadow_impact?: AuditImpactSummary | null;
   id: string;
   audit_id: string | null;
   change_group_id: string | null;

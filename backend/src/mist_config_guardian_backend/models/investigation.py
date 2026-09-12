@@ -18,6 +18,7 @@ from mist_config_guardian_backend.impact.contracts import InvestigationEvidence,
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_CALLS, MAX_CHECKPOINT_EVIDENCE
+from mist_config_guardian_backend.impact.report import ImpactReport
 from mist_config_guardian_backend.models.base import TimestampedModel
 
 # Also excludes payloads embedded by the initial agent release. No bulk migration
@@ -83,11 +84,13 @@ class InvestigationRevision(Document):
     investigation_id: PydanticObjectId
     revision: int
     generated_at: datetime
+    previous_report_id: PydanticObjectId | None = None
     plan: WlanRemovalPlan
     assessment: WlanAssessment
     evidence: list[InvestigationEvidence] = Field(default_factory=list, max_length=MAX_CHECKPOINT_EVIDENCE)
     deployment: DeploymentEvidence | None = None
     agent: AgentCheckpoint | None = None
+    report: ImpactReport | None = None  # Legacy revisions remain readable without fabricated history.
 
     class Settings:
         name = "investigation_revisions"

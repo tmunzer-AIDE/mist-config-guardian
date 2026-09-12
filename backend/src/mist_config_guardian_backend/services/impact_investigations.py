@@ -28,6 +28,7 @@ from mist_config_guardian_backend.impact.contracts import (
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.domain_evaluation import compose_domains
 from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
+from mist_config_guardian_backend.impact.report import build_report
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_auth_evidence import MistImpactEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -43,6 +44,7 @@ from mist_config_guardian_backend.services.change_groups import BeanieChangeGrou
 from mist_config_guardian_backend.services.deployment_evidence import collect_deployment
 from mist_config_guardian_backend.services.impact_agent import ImpactAgent
 from mist_config_guardian_backend.services.neighbor_bindings import NeighborBindingStore
+from mist_config_guardian_backend.services.published_revision import published_revision
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 logger = logging.getLogger(__name__)
@@ -180,6 +182,7 @@ class ImpactInvestigationService:
         if root.revision >= MAX_PUBLISHED_CHECKPOINTS:
             await self._stop(root, "Published checkpoint limit reached; evidence is incomplete.")
             return
+        previous = await published_revision(root)
         plan = await self._plan(root)
         organization = await Organization.get(root.organization_id)
         evidence_as_of = min(now, root.expires_at)
@@ -269,6 +272,7 @@ class ImpactInvestigationService:
                         collect,
                         service_credential=credential,
                         deployment=deployment,
+                        previous=previous,
                     )
                 # Model failure or omission cannot cancel a rule's required evidence.
                 for check in capabilities(plan, evidence_as_of):
@@ -287,11 +291,22 @@ class ImpactInvestigationService:
             investigation_id=root.id,
             revision=root.revision + 1,
             generated_at=utc_now(),
+            previous_report_id=root.report_id,
             plan=plan,
             assessment=assessment,
             evidence=evidence,
             deployment=deployment,
             agent=agent,
+        )
+        artifact.report = build_report(
+            investigation_id=str(root.id),
+            revision=artifact.revision,
+            generated_at=artifact.generated_at,
+            plan=plan,
+            assessment=assessment,
+            evidence=evidence,
+            previous=previous.report if previous else None,
+            history_available=previous is not False and (root.revision == 0 or bool(previous and previous.report)),
         )
         await artifact.insert()
         finished = now >= root.expires_at or any(

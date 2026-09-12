@@ -11,6 +11,7 @@ from mist_config_guardian_backend.impact.agent import evidence_view
 from mist_config_guardian_backend.impact.port_scope import compile_port_targets
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal
 from mist_config_guardian_backend.integrations.mist_port_evidence import MistPortEvidenceClient
+from mist_config_guardian_backend.models.investigation import InvestigationRevision
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 from mist_config_guardian_backend.services import investigation_reads
 from test_impact_change_context import use_data
@@ -119,7 +120,7 @@ async def test_rejected_port_response_publishes_visible_diagnostic(monkeypatch, 
     artifact = artifacts[0]
     root.report_id, root.revision = artifact.id, artifact.revision
     monkeypatch.setattr(investigation_reads, "read_investigation_root", AsyncMock(return_value=root))
-    monkeypatch.setattr(investigation_reads.InvestigationRevision, "find_one", AsyncMock(return_value=artifact))
+    monkeypatch.setattr(InvestigationRevision, "find_one", AsyncMock(return_value=artifact))
     monkeypatch.setattr(
         investigation_reads.AuditChangeGroup,
         "find_one",

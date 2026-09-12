@@ -28,12 +28,14 @@ import {
   SiteChange,
   SiteTopology,
 } from './site-impact.model';
+import { AuditImpactSummaryComponent } from '../../shared/audit-impact-summary';
+import { ShadowInvestigation } from '../changes/shadow-investigation';
 import { TopologyCanvas } from './topology-canvas';
 import { metricLabel } from './monitoring.model';
 
 @Component({
   selector: 'app-site-impact-page',
-  imports: [TopologyCanvas, RouterLink],
+  imports: [TopologyCanvas, RouterLink, AuditImpactSummaryComponent, ShadowInvestigation],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './site-impact-page.html',
   styleUrl: './site-impact-page.scss',
@@ -67,6 +69,7 @@ export class SiteImpactPage implements OnDestroy {
   protected readonly search = signal('');
   protected readonly railOpen = signal(false);
   protected readonly selectedChangeId = signal<string | null>(null);
+  protected readonly auditOverlay = signal(false);
   protected readonly selectedDeviceId = signal<string | null>(null);
   private readonly refresh = signal(0);
   private readonly sitesRefresh = signal(0);
@@ -123,12 +126,14 @@ export class SiteImpactPage implements OnDestroy {
     ),
   );
   protected readonly nodeHealth = computed(() =>
-    Object.fromEntries(
+    this.auditOverlay() ? {} : Object.fromEntries(
       (this.selectedChange()?.impacts ?? []).map((i) => [i.device_id, i.severity]),
     ),
   );
   protected readonly impacted = computed(
-    () => this.selectedChange()?.impacts.map((i) => i.device_id) ?? [],
+    () => this.auditOverlay()
+      ? [...new Set((this.selectedChange()?.shadow_impact?.impacted_devices ?? []).map(d => d.device_mac))]
+      : this.selectedChange()?.impacts.map((i) => i.device_id) ?? [],
   );
   protected readonly decorations = computed(() => {
     const result: Record<string, string> = {};
@@ -321,9 +326,11 @@ export class SiteImpactPage implements OnDestroy {
   }
   protected clear() {
     this.selectedChangeId.set(null);
+    this.auditOverlay.set(false);
     this.selectedDeviceId.set(null);
   }
   protected chooseChange(id: string, keepDevice = false) {
+    this.auditOverlay.set(false);
     this.selectedChangeId.set(this.selectedChangeId() === id && !keepDevice ? null : id);
     if (!keepDevice) this.selectedDeviceId.set(null);
     this.railOpen.set(false);

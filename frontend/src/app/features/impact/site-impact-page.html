@@ -183,10 +183,15 @@
         />
       }
     </div>
+    @if (selectedChange()?.shadow_impact?.impacted_devices) {
+      <div class="notice"><button class="text-button" type="button" (click)="auditOverlay.set(!auditOverlay())" [attr.aria-pressed]="auditOverlay()">
+        {{ auditOverlay() ? 'Hide' : 'Show' }} shadow service associations
+      </button><p>Highlights identify observed service associations. Colors remain live connectivity; serving APs are not classified as failed.</p></div>
+    }
     <footer class="topology-foot">
       <span
         >{{
-          selectedChange()
+          auditOverlay() ? 'Shadow service associations · Colors: connectivity · ' : selectedChange()
             ? 'Affected devices: change impact · Others: connectivity · '
             : 'Colors: connectivity · '
         }}{{ topology()?.source === 'mist' ? 'Mist statistics' : 'Stored inventory' }}
@@ -211,6 +216,12 @@
             : 'site'
     "
   >
+    @if (selectedChange(); as change) {
+      <app-audit-impact-summary [assessment]="change.shadow_impact" />
+      @if (change.change_group_id && !time.isHistorical()) {
+        <app-shadow-investigation [groupId]="change.change_group_id" />
+      }
+    }
     @if (selectedDevice(); as device) {
       <header class="detail-head">
         <div class="detail-actions">
@@ -452,7 +463,7 @@
           <p>No device configuration reports are linked to this change yet. Impact is unknown.</p>
         }
       </section>
-      @if (change.change_group_id) {
+      @if (change.change_group_id && !time.isHistorical()) {
         <section class="detail-section">
           <a
             class="cg-btn"

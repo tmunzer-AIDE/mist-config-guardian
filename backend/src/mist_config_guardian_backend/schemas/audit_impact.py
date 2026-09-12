@@ -3,7 +3,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from mist_config_guardian_backend.impact.report import DeviceImpact
 
 ShadowResult = Literal[
     "not_recorded", "pending", "unavailable", "insufficient_evidence", "no_observed_disconnect", "possible_disruption"
@@ -24,6 +26,9 @@ class AuditImpactSummary(BaseModel):
     policy_version: str | None = None
     evaluated_at: datetime | None = None
     impact: Literal["info", "none", "warning", "critical"] | None = None
+    current_impact: Literal["info", "none", "warning", "critical"] | None = None
+    peak_revision: int | None = None
+    impacted_devices: tuple[DeviceImpact, ...] | None = Field(default=None, max_length=200)
     confidence: Literal["low", "medium"] | None = None
     coverage: Literal["complete", "partial", "unmapped"] | None = None
     gap_count: int = 0

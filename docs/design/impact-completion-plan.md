@@ -8,8 +8,8 @@ Completion means the bounded v1 runtime, report/UI, diagnostics, retention and a
 - [x] Four terminal domains and shared assessment composition: WLAN lifecycle, authentication, port availability and PoE. Unknown historical power or dependency remains unknown.
 - [ ] Current managed AP physical-dependency verification, with explicit historical limitations and no arbitrary entity expansion.
 - [x] Versioned application-owned domain skills, selected from the plan and unable to expand authority.
-- [ ] Common revision-pinned report with typed evidence tables/charts/timelines and shared impact/confidence bands.
-- [ ] Validated impacted-device records and topology overlay; serving APs are never classified as failed merely because their clients disconnected.
+- [x] Common revision-pinned report with typed evidence tables/charts/timelines and shared impact/confidence bands.
+- [x] Validated impacted-device records and topology overlay; serving APs are never classified as failed merely because their clients disconnected.
 - [ ] Investigation/log/history navigation and retention cleanup, including orphan artifacts and organization deletion.
 - [ ] Bounded pinned OAS lookup library after operational gaps are demonstrated; an external MCP adapter remains conditional on an external consumer.
 - [ ] Operator adjudication/replay workflow, precision/recall counts and a fail-closed promotion gate. Real labels remain an operator task.

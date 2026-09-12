@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from beanie import PydanticObjectId
 from pymongo.errors import PyMongoError
 
+from mist_config_guardian_backend.impact.report import DeviceImpact
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 
@@ -16,7 +17,7 @@ _MAX_AUDITS = 500
 
 class AuditImpactReader(Protocol):
     async def summaries(
-        self, organization_id: PydanticObjectId, audit_ids: Sequence[str]
+        self, organization_id: PydanticObjectId, audit_ids: Sequence[str], *, include_devices: bool = False
     ) -> dict[str, AuditImpactSummary]: ...
 
 
@@ -24,7 +25,7 @@ class PublishedAuditImpactReader:
     """Two bounded reads per page; root pointers are captured before artifact lookup."""
 
     async def summaries(
-        self, organization_id: PydanticObjectId, audit_ids: Sequence[str]
+        self, organization_id: PydanticObjectId, audit_ids: Sequence[str], *, include_devices: bool = False
     ) -> dict[str, AuditImpactSummary]:
         identities = sorted(set(audit_ids))
         if len(identities) > _MAX_AUDITS:
@@ -33,13 +34,15 @@ class PublishedAuditImpactReader:
         if not identities:
             return {}
         try:
-            return await self._read(organization_id, identities)
+            return await self._read(organization_id, identities, include_devices=include_devices)
         except PyMongoError:
             # A failing shadow read cannot break production pages or look benign.
             logger.warning("Published shadow assessment read unavailable for organization %s", organization_id)
             return {key: AuditImpactSummary(result="unavailable") for key in identities}
 
-    async def _read(self, organization_id: PydanticObjectId, audit_ids: list[str]) -> dict[str, AuditImpactSummary]:
+    async def _read(
+        self, organization_id: PydanticObjectId, audit_ids: list[str], *, include_devices: bool = False
+    ) -> dict[str, AuditImpactSummary]:
         roots = (
             await ImpactInvestigation.get_pymongo_collection()
             .find(
@@ -68,6 +71,14 @@ class PublishedAuditImpactReader:
                     "assessment.coverage": 1,
                     "assessment.gaps": 1,
                     "plan.unmapped": 1,
+                    "report.investigation_id": 1,
+                    "report.audit_id": 1,
+                    "report.revision": 1,
+                    "report.peak_impact": 1,
+                    "report.current_impact": 1,
+                    "report.peak_confidence": 1,
+                    "report.peak_revision": 1,
+                    **({"report.impacted_devices": 1} if include_devices else {}),
                 },
             )
             .to_list(length=_MAX_AUDITS)
@@ -105,6 +116,18 @@ def project_published_impact(root: dict[str, Any], artifact: dict[str, Any] | No
         summary.coverage = assessment["coverage"]
         summary.gap_count = len(assessment["gaps"])
         summary.unmapped_count = len(artifact["plan"]["unmapped"])
+        report = artifact.get("report")
+        if report and (report.get("investigation_id"), report.get("audit_id"), report.get("revision")) == (
+            str(root["_id"]),
+            root["audit_id"],
+            root["revision"],
+        ):
+            summary.impact = report["peak_impact"]
+            summary.current_impact = report["current_impact"]
+            summary.confidence = report["peak_confidence"]
+            summary.peak_revision = report["peak_revision"]
+            if "impacted_devices" in report:
+                summary.impacted_devices = tuple(DeviceImpact.model_validate(d) for d in report["impacted_devices"])
         summary.result = "insufficient_evidence"
         if summary.impact in {"warning", "critical"}:
             summary.result = "possible_disruption"

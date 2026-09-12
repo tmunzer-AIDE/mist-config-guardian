@@ -19,6 +19,7 @@ from mist_config_guardian_backend.impact.contracts import (
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.impact.limits import MAX_PORT_EVENTS
+from mist_config_guardian_backend.impact.report import ImpactReport
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 
 
@@ -67,6 +68,7 @@ class ShadowInvestigationResponse(BaseModel):
     calls_used: int
     calls_limit: int
     assessment: WlanAssessment | None = None
+    report: ImpactReport | None = None
     shadow_impact: AuditImpactSummary | None = None
     deployment: DeploymentEvidence | None = None
     dispatch_log: DispatchLog | None = None
@@ -74,3 +76,11 @@ class ShadowInvestigationResponse(BaseModel):
     model_activity: ModelActivity | None = None
     targets: list[ShadowTargetResponse] = Field(default_factory=list)
     checks: list[ShadowCheckResponse] = Field(default_factory=list)
+
+
+class ReportHistory(BaseModel):
+    investigation_id: str
+    published_revision: int
+    complete: bool
+    reports: tuple[ImpactReport, ...] = Field(default=(), max_length=10)
+    gaps: tuple[str, ...] = ()

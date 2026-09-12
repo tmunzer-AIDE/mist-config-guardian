@@ -10,8 +10,9 @@ import { formatInstant } from '../core/format';
       <div class="shadow" aria-label="Shadow audit assessment">
         <strong>Shadow · {{ labels[value.result] }}</strong>
         @if (value.impact) { <span>Impact: {{ value.impact === 'info' ? 'Insufficient evidence' : value.impact }}</span> }
+        @if (value.current_impact) { <span>Current: {{ value.current_impact === 'info' ? 'Unknown' : value.current_impact }} · Peak revision {{ value.peak_revision }}</span> }
         @if (value.confidence || value.coverage) {
-          <span>Confidence: {{ value.confidence ?? 'unknown' }} · Session coverage: {{ value.coverage ?? 'unknown' }}</span>
+          <span>Confidence: {{ value.confidence ?? 'unknown' }} · Evidence coverage: {{ value.coverage ?? 'unknown' }}</span>
         }
         @if (value.report_id) {
           <span>Revision {{ value.revision }} @if (!compact()) { · {{ value.policy_version }} }</span>
