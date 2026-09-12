@@ -101,8 +101,11 @@
             "type": "array"
           },
           "prompt_version": {
-            "const": "impact-investigator.v1",
-            "default": "impact-investigator.v1",
+            "default": "impact-investigator.v2",
+            "enum": [
+              "impact-investigator.v1",
+              "impact-investigator.v2"
+            ],
             "title": "Prompt Version",
             "type": "string"
           },
@@ -4067,8 +4070,11 @@
             "type": "integer"
           },
           "prompt_version": {
-            "const": "impact-investigator.v1",
-            "default": "impact-investigator.v1",
+            "default": "impact-investigator.v2",
+            "enum": [
+              "impact-investigator.v1",
+              "impact-investigator.v2"
+            ],
             "title": "Prompt Version",
             "type": "string"
           },

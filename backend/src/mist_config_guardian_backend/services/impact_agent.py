@@ -32,6 +32,7 @@ from mist_config_guardian_backend.impact.agent import (
     capabilities,
     evidence_view,
 )
+from mist_config_guardian_backend.impact.change_context import device_context_handle
 from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
@@ -63,6 +64,14 @@ exclusions apply to all attribution. Describe missing capabilities as open quest
 Historical observations are context, not fresh evidence. Never request secret values.
 Deployment candidates are context only: they establish neither impact nor permission
 to query a device. The current catalogue cannot inspect individual devices.
+configuration_context describes recorded attribute changes, not confirmed effective
+runtime changes. Values and unrecognized keys are withheld. Assume changes effective
+when inheritance or merge semantics are unknown. A device_handle identifies only a
+changed-device candidate from immutable configuration; matching deployment context
+handles link these two observations, not causation or a dependency. Template consumers
+and physical/service relationships are unresolved. Context handles are never check
+refs or hypothesis targets. When no capabilities exist, report with no hypotheses and
+list the missing evidence in open_questions; do not describe the change as healthy.
 """
 
 Collector = Callable[[CheckCapability], Awaitable[SessionEvidence]]
@@ -85,7 +94,7 @@ class ImpactAgent:
         deployment: DeploymentEvidence | None = None,
     ) -> AgentCheckpoint:
         # Do not start provisional conversations or spend on unresolved correlation.
-        if not plan.targets or not root.anchor_known:
+        if not (plan.targets or (plan.change_context and plan.change_context.changes)) or not root.anchor_known:
             return AgentCheckpoint(state="unavailable", reason="No authorized correlated change scope is available.")
         try:
             runtime = await self._configuration.ai_runtime()
@@ -116,6 +125,9 @@ class ImpactAgent:
                     "as_of": as_of.isoformat(),
                     "remaining_checkpoint_model_calls": MAX_CHECKPOINT_CALLS - len(request_ids),
                     "changes": [{"target_handle": t.handle, "change_kind": t.change_kind} for t in plan.targets],
+                    "configuration_context": plan.change_context.model_dump(mode="json")
+                    if plan.change_context
+                    else None,
                     "unmapped_change_count": len(plan.unmapped),
                     "coverage_gaps": [gap[:500] for gap in plan.gaps[:8]],
                     "exclusions": plan.exclusions,
@@ -242,9 +254,9 @@ class ImpactAgent:
             "gap_count": len(deployment.gaps),
             "candidates": [
                 {
-                    "context_handle": sha256(
-                        f"{root.organization_id}:{root.audit_id}:{d.site_id}:{d.device_mac}".encode()
-                    ).hexdigest(),
+                    "context_handle": device_context_handle(
+                        str(root.organization_id), root.audit_id, d.site_id, d.device_mac
+                    ),
                     "device_type": d.device_type,
                     "outcome": d.outcome,
                     "correlation": d.correlation,

@@ -175,7 +175,7 @@ class ImpactInvestigationService:
         # Delayed audit delivery cannot turn a historical change into a fresh hour.
         expired = now > root.expires_at + timedelta(minutes=2)
         if (
-            plan.targets
+            (plan.targets or (plan.change_context and plan.change_context.changes))
             and organization is not None
             and organization.status is OrganizationStatus.VERIFIED
             and not expired

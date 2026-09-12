@@ -585,11 +585,69 @@ of adding that read path.
   remains signed out. No live model-quality or Mongo concurrency validation was
   performed. Production promotion and broader capabilities remain deferred.
 
+## General change context and local device candidates (2026-09-12)
+
+- Start broader investigation with the immutable versions already read for the
+  audit, rather than adding another Mist inventory scan. Compile a separate typed
+  `ChangeContext` and pin it alongside the WLAN plan on the report revision. The
+  existing request artifact retains the exact context supplied to each model call.
+  This is the first increment of discovery, not a physical dependency resolver.
+- Supply registered object type, scope, recorded operation, baseline comparability,
+  top-level changed-attribute labels and before/after key presence. Use the stored
+  `changed_fields` contract, which records top-level changes. Withhold all values,
+  including numbers/booleans, nested keys, device names and SSIDs. Expose only a
+  fixed presentation vocabulary for keys; mask unknown dynamic keys and secret
+  attributes. This vocabulary provides no severity mapping or check authorization.
+  Nested change semantics and safe value-level interpretation remain future work.
+- Reject foreign audit/organization versions and missing immutable identities.
+  Multiple versions of the same object stay unresolved rather than choosing a net
+  change. Missing or cross-incarnation baselines remain explicit. All context uses
+  `assume_effective`: this projection does not resolve inheritance or merge rules.
+  Version number one alone cannot establish creation; require the stored created
+  event. Limit the supplied set to eight objects and six attributes per object,
+  inspecting at most 64 sorted versions; record omitted/unresolved object counts
+  and omitted attribute counts. Existing version-fetch calls are unchanged and
+  still read the audit's versions before this in-memory cap.
+- Resolve direct changed-device candidates only from validated MAC, site UUID and
+  device type in immutable configuration. Comparable pre/post identities must
+  agree. Do not repair missing identity using today's mutable logical object.
+  Pseudonymize device/site identities per audit. Reuse the same device-handle
+  derivation as deployment receipts so matching observations can be associated.
+  Neither observation proves impact, expected fleet coverage, template consumption,
+  physical adjacency or a route/service dependency. No live discovery was added.
+- Permit one audit-owned agent to inspect this general context in `agent_shadow`
+  even when there is no WLAN check. With an empty capability set it can return a
+  summary and open questions; the existing validator rejects all hypothesis targets
+  and collect references outside the executable menu, including context handles.
+  Deterministic assessment remains `unmapped`/`info` for unsupported changes.
+  Uncorrelated audits still start no conversation. Existing call/byte budgets,
+  credential checks, memory validation and publication fences remain in force.
+- Keep the capability generator and deterministic sweep unchanged. Context adds
+  zero Mist calls and no model-only operational checks. A 200-device configuration
+  audit remains one investigation with a bounded context, not 200 conversations.
+  Broader audits can now spend model calls under the existing per-audit cap; spend
+  neutrality refers specifically to Mist collection, not zero additional AI cost.
+- Bump new model requests/checkpoints to `impact-investigator.v2`; retain v1 in
+  the read contract for historical records and memory. The existing preview and
+  on-demand context viewer need no UI schema changes beyond accepting that version.
+- Fix an integration mismatch discovered while checking the registry: snapshot
+  capture persists WLAN type `wlans`, while the terminal rule matched only `wlan`.
+  Accept both, preserve the sparse rule's exclusions, and test the production
+  registry spelling through the complete checkpoint and required evidence sweep.
+- Validation: 1,118 backend tests passed, 20 skipped; 398 frontend tests passed.
+  Twenty-five new regressions cover immutable identities, secret/dynamic-key
+  masking, ownership, baseline ambiguity, limits, candidate/deployment association,
+  unauthorized model handles, no provisional agent, 200 distinct device candidates,
+  shared WLAN collection and production registry compatibility. Ruff, source types,
+  changed-file formatting and OpenAPI consistency passed. Local source/diff review
+  completed; CodeRabbit remains signed out. No live model-quality, Mist discovery
+  or Mongo concurrency validation was performed.
+
 ## Next implementation queue
 
-1. Expand the running shadow investigator beyond its WLAN-only capability set:
-   provide redacted general change context and trusted discovery/resolver handles.
-   Keep one investigator per audit; do not add a manual rule for every attribute.
+1. Extend the general change context and local candidate foundation into operational
+   discovery: resolve trusted physical dependencies and build the shared capability
+   plan. Keep one investigator per audit; do not add a manual rule for every attribute.
 2. Expand reusable resolvers and collectors as needed, starting with targeted
    port/PoE event history and physical dependencies. Add regression scenarios
    and domain skills; avoid requiring a bespoke rule for every attribute.

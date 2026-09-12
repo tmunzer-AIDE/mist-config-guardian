@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 from uuid import UUID
 
+from mist_config_guardian_backend.impact.change_context import compile_change_context
 from mist_config_guardian_backend.impact.contracts import (
     SessionEvidence,
     Window,
@@ -65,7 +66,7 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
             and prior.configuration.get("enabled") is not False
             and version.configuration.get("enabled") is False
         )
-        if logical is None or logical.object_type != "wlan" or not (version.is_deleted or disabled):
+        if logical is None or logical.object_type not in {"wlan", "wlans"} or not (version.is_deleted or disabled):
             unmapped.update(f"{object_id}:{field}" for field in fields)
             continue
         if not version.is_deleted:
@@ -88,6 +89,9 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
         organization_id=organization_id,
         audit_id=audit_id,
         changed_at=changed_at,
+        change_context=compile_change_context(
+            organization_id=organization_id, audit_id=audit_id, logicals=logicals, before=before, after=after
+        ),
         targets=tuple(targets[key] for key in sorted(targets)[:_MAX_TARGETS]),
         unmapped=tuple(path[:512] for path in sorted(unmapped)[:_MAX_UNMAPPED]),
         gaps=tuple(sorted(gaps)),

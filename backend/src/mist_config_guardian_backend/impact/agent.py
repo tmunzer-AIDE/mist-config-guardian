@@ -18,7 +18,7 @@ MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
-PROMPT_VERSION = "impact-investigator.v1"
+PROMPT_VERSION = "impact-investigator.v2"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -132,7 +132,7 @@ class ModelDispatchDenial(StrEnum):
 
 
 class AgentCheckpoint(Contract):
-    prompt_version: Literal["impact-investigator.v1"] = PROMPT_VERSION
+    prompt_version: Literal["impact-investigator.v1", "impact-investigator.v2"] = PROMPT_VERSION
     source: Literal["model_proposal"] = "model_proposal"
     state: Literal[
         "complete",
@@ -157,7 +157,7 @@ class ModelRequestRecord(Contract):
     generation: int = Field(ge=1)
     candidate_revision: int = Field(ge=1)
     reserved_at: AwareDatetime
-    prompt_version: Literal["impact-investigator.v1"] = PROMPT_VERSION
+    prompt_version: Literal["impact-investigator.v1", "impact-investigator.v2"] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)
     input_bytes: int = Field(ge=1, le=MAX_INPUT_BYTES)

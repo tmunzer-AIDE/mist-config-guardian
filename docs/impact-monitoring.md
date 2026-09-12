@@ -310,12 +310,29 @@ remain available. Both shadow modes suppress the former device-level AI narrator
 production impact, notifications and counts remain based on the existing assessment
 path until adjudicated acceptance and consumer promotion.
 
-The agent currently receives immutable WLAN removal/disable semantics and can
-select the existing historical client-session checks. It does not yet have general
-Mist MCP access, inventory discovery, port events, OAS retrieval or arbitrary
-configuration investigation. Deployment candidates are bounded context, not query
-permissions or proof of impact. Rules' required checks still run if the agent omits
-them or cannot produce a valid report.
+The agent receives immutable WLAN removal/disable semantics plus bounded general
+change context from audit configuration versions: object type, scope, recorded
+operation and top-level attribute presence changes. Values and dynamic keys are
+withheld. Direct changed-device candidates come from validated immutable MAC/site/type
+and can be associated with matching deployment receipt handles. They are context,
+not query permissions or proof of impact; template consumers and physical/service
+dependencies remain unresolved. The projection always assumes changes effective
+when merge or inheritance semantics are unknown.
+
+The operational catalogue still contains only historical WLAN client-session checks.
+For other changes the agent can describe missing evidence through a summary and open
+questions, while deterministic impact remains unmapped. It does not yet have general
+Mist MCP access, live inventory discovery, port events, OAS retrieval or arbitrary
+configuration investigation. Rules' required checks still run if the agent omits
+them or cannot produce a valid report. The rule accepts production snapshot type
+`wlans` as well as the earlier `wlan` spelling.
+
+General context includes at most eight objects and six top-level attributes per
+object, with explicit omission counts. Unknown or conflicting immutable versions
+remain gaps. One 200-device audit still owns one agent and its existing model-call
+budget. New requests use prompt version `impact-investigator.v2`; historical v1
+records remain readable. This extends reasoning context without adding Mist reads;
+unsupported audits can now spend bounded AI calls in `agent_shadow`.
 
 Each checkpoint allows three model requests; each audit allows 21 requests and
 504,000 reserved input-content bytes. Each request admits at most 24,000 input

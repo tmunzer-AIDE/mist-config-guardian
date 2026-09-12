@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from mist_config_guardian_backend.impact.change_context import ChangeContext
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -39,6 +41,7 @@ class WlanTarget(Contract):
 class WlanRemovalPlan(Contract):
     schema_version: Literal[1] = 1
     rule_id: Literal["wlan-removal.v1"] = "wlan-removal.v1"
+    change_context: ChangeContext | None = None
     organization_id: str
     audit_id: str
     changed_at: AwareDatetime
