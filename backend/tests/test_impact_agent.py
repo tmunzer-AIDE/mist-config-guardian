@@ -16,6 +16,7 @@ from pymongo.errors import ConnectionFailure
 from mist_config_guardian_backend.impact.agent import MAX_INPUT_BYTES_TOTAL, MAX_MODEL_CALLS, ModelRequestRecord
 from mist_config_guardian_backend.services import impact_agent as agent_module
 from mist_config_guardian_backend.services import impact_investigations as runtime
+from mist_config_guardian_backend.services import investigation_reads
 from mist_config_guardian_backend.services.application_configuration import AiRuntimeConfiguration
 from test_impact_dispatch_journal import empty_response, journal_runtime
 from test_wlan_investigation import LATER, ORG
@@ -25,7 +26,14 @@ AI_URL = "https://ai.example.test/v1/chat/completions"
 
 def agent_runtime(monkeypatch):
     service, root, collection, artifacts, stored = journal_runtime(monkeypatch)
-    stored.update(model_requests=[], model_calls_used=0, model_input_bytes_reserved=0)
+    stored.update(model_requests=[], model_calls_used=0, model_input_bytes_reserved=0, model_artifacts=[])
+    monkeypatch.setattr(agent_module.ModelRequestArtifact, "get_pymongo_collection", lambda *_: collection)
+
+    async def insert(artifact, **_kwargs):
+        stored["model_artifacts"].append(artifact)
+        return artifact
+
+    monkeypatch.setattr(agent_module.ModelRequestArtifact, "insert", insert)
     configuration = AiRuntimeConfiguration(
         "https://ai.example.test/v1", "test-model", "test-provider-key", 1500, automatic_summaries=False
     )
@@ -128,7 +136,11 @@ async def test_agent_selects_checks_receives_results_and_publishes_one_audit_pro
     def respond(request):
         assert stored["model_requests"][-1]["state"] == "reserved"
         assert stored["model_calls_used"] == len(stored["model_requests"])
-        assert "test-provider-key" not in stored["model_requests"][-1]["input_json"]
+        assert "test-provider-key" not in next(
+            a.content_json
+            for a in stored["model_artifacts"]
+            if a.id == stored["model_requests"][-1]["input_artifact_id"]
+        )
         context = read_context(request)
         assert context["changes"][0]["change_kind"] == "removed"
         return investigating_response(request)
@@ -150,8 +162,11 @@ async def test_agent_selects_checks_receives_results_and_publishes_one_audit_pro
         assert record.request_tokens == 100
         assert record.model == "test-model"
         assert record.finished_at is not None
-        assert "client_mac" not in record.input_json
-        assert "site_id" not in record.input_json
+        context = next(a.content_json for a in stored["model_artifacts"] if a.id == record.input_artifact_id)
+        assert "client_mac" not in context
+        assert "site_id" not in context
+        assert "input_json" not in raw
+        assert "action" not in raw
 
 
 @pytest.mark.parametrize("bad", ["foreign_ref", "extra_url", "write_tool", "severity", "unobserved_ref", "oversize"])
@@ -183,7 +198,7 @@ async def test_invalid_model_actions_cannot_dispatch_and_required_checks_still_r
     assert artifacts[0].agent.state == "invalid_response"
     assert artifacts[0].agent.proposal is None
     assert artifacts[0].assessment.impact == "none"  # Required evidence, never the model's rating.
-    assert stored["model_requests"][0]["action"] is None
+    assert stored["model_requests"][0]["action_artifact_id"] is None
     assert len([r for r in httpx_mock.get_requests() if r.method == "GET"]) == 2
     assert all(r.url.host != "attacker.invalid" for r in httpx_mock.get_requests())
 
@@ -295,6 +310,7 @@ async def test_lost_lease_can_finish_own_model_record_but_not_dispatch_or_publis
     assert stored["model_requests"][0]["state"] == "complete"
     assert [r.method for r in httpx_mock.get_requests()] == ["POST"]
     assert artifacts[0].agent.state == "unavailable"
+    assert artifacts[0].evidence[0].state == "dispatch_denied"
     assert collection.update_one.await_args.args[0]["generation"] == root.generation
 
 
@@ -440,7 +456,7 @@ async def test_preview_separates_published_agent_proposal_from_live_model_activi
     root.model_calls_used = stored["model_calls_used"]
     root.model_input_bytes_reserved = stored["model_input_bytes_reserved"]
     root.model_requests = [ModelRequestRecord.model_validate(row) for row in stored["model_requests"]]
-    monkeypatch.setattr(runtime.ImpactInvestigation, "find_one", AsyncMock(return_value=root))
+    monkeypatch.setattr(investigation_reads, "read_investigation_root", AsyncMock(return_value=root))
     monkeypatch.setattr(runtime.InvestigationRevision, "find_one", AsyncMock(return_value=artifact))
     result = await shadow_investigation(ORG, PydanticObjectId())
     assert result.agent == artifact.agent

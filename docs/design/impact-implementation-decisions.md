@@ -534,6 +534,57 @@ of adding that read path.
   The rendered activity view was inspected. No live provider quality calibration
   or live Mongo concurrency test was performed; these are not adjudicated labels.
 
+## Model request artifacts and on-demand inspection (2026-09-12)
+
+- Keep the audit root bounded to request metadata, budgets, content digests and
+  artifact references. Move both normalized input context and validated actions
+  to separate `impact_model_request_artifacts` documents. The service inserts
+  artifacts without updating them; no raw provider responses or credentials are
+  added. The existing prompt/context fingerprint remains distinct from the new
+  digest of the stored input body.
+- Insert input before the final fenced budget/journal reservation, leaving no
+  additional artifact write between that reservation and provider dispatch.
+  Failed or uncertain input insertion prevents reservation and dispatch. A
+  rejected reservation can leave an orphan input artifact. Insert a validated
+  action before conditionally completing its exact reserved journal entry;
+  failed insertion leaves the request unfinished and prevents selected checks
+  and report publication. Unreferenced artifacts cannot be fetched through the
+  request endpoint. Retention and orphan cleanup remain queued.
+- Exclude legacy embedded input/action fields from worker lease-claim and preview
+  root reads. Existing compact Changes/Overview reads already exclude the journal.
+  This avoids transferring historical payloads on those reads without deleting
+  history or running a bulk migration; old stored roots are not physically shrunk.
+- Load context/action only when an operator requests one journal entry. The new
+  viewer-protected, organization-scoped request endpoint first resolves the audit
+  group and selects just that request from its root. Follow only journal-linked
+  artifact IDs and verify organization, investigation, request, generation,
+  candidate revision, kind and content digest before returning a body. Missing,
+  foreign, altered or unreadable data stays unavailable. Legacy embedded bodies
+  are returned only on explicit lookup and labeled as lacking an independently
+  recorded content digest. Changing organizations clears the UI and discards
+  pending responses from the previous selection; output remains escaped text.
+- API compatibility: `model_activity.records` no longer embeds `input_json` or
+  `action`; it contains their nullable artifact references/digests instead. Clients
+  inspecting this preview API must use the new per-request endpoint for bodies.
+  The first-party UI and exported OpenAPI schema change together.
+- The reviewed `dispatch_denied` branch is live: `SessionEvidence.state` explicitly
+  includes it and requires a matching `DispatchDenial`. Keep that guard and pin
+  the state in the lost-lease agent regression rather than deleting it.
+- Preserve agent spend neutrality when adding discovery: resolve a shared, bounded
+  capability menu and use that identical set for model selections and the required
+  deterministic sweep, with one collection cache. New discovery dependencies must
+  enter this shared plan and its budget; do not add model-only operational calls.
+  One agent remains owned by one audit, regardless of its deployment fleet size.
+- Validation: 1,093 backend tests passed, 20 skipped; 398 frontend tests passed.
+  Sixteen new backend cases cover artifact identity/digests, unavailable and legacy
+  reads, orphan access, failed/uncertain writes and legacy read projections. Four
+  UI cases cover lazy loading, organization changes, legacy labels and mismatched
+  request identities. Ruff, source types, changed-file formatting, OpenAPI
+  consistency, production build and the isolated browser preview passed; the
+  rendered view was inspected. Local source/diff review completed; CodeRabbit
+  remains signed out. No live model-quality or Mongo concurrency validation was
+  performed. Production promotion and broader capabilities remain deferred.
+
 ## Next implementation queue
 
 1. Expand the running shadow investigator beyond its WLAN-only capability set:

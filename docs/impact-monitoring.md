@@ -328,5 +328,20 @@ The preview adds `agent` (published revision) and `model_activity` (live root).
 Hypotheses, their cited evidence, limitations and open questions use one schema.
 The model supplies neither production severity nor confidence. Saved context retains
 its source revision; previous observations are distinguished from current evidence.
-Live model activity includes bounded input context, validated actions and usage,
-with unfinished attempts explicitly unknown. This is not a raw transcript archive.
+Live model activity contains request metadata, usage, digests and artifact references,
+with unfinished attempts explicitly unknown. Normalized input context and validated
+actions are stored in separate request artifacts and fetched only after clicking
+“Load request context and action.” This is not a raw transcript archive.
+
+Preview API compatibility: `model_activity.records` no longer embeds `input_json`
+or `action`. Use the viewer-protected endpoint
+`GET /organizations/{organization_id}/change-groups/{change_group_id}/investigation/model-requests/{request_id}`
+for one request's bodies. It follows the audit journal's exact artifact references
+and verifies their scope, request identity and content digests. Missing or unverifiable
+bodies stay unavailable. Older embedded payloads remain readable on demand with an
+explicit legacy label; they have no independently recorded content digest. Worker
+and preview reads exclude those old embedded bodies without deleting stored history.
+
+Agent-selected checks and the deterministic required sweep share the same bounded
+capability set and collection cache. Agent participation adds no Mist calls; future
+discovery must preserve that property by extending the shared plan.

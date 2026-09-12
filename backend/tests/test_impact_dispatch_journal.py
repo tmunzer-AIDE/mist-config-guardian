@@ -219,7 +219,7 @@ async def test_live_journal_and_legacy_gaps_do_not_require_a_published_report(mo
         "find_one",
         AsyncMock(return_value=SimpleNamespace(audit_id=root.audit_id)),
     )
-    monkeypatch.setattr(investigation_reads.ImpactInvestigation, "find_one", AsyncMock(return_value=root))
+    monkeypatch.setattr(investigation_reads, "read_investigation_root", AsyncMock(return_value=root))
     response = await investigation_reads.shadow_investigation(ORG, PydanticObjectId())
     assert response.assessment is None
     assert response.dispatch_log.source == "live_investigation_root"
@@ -338,7 +338,7 @@ async def test_denials_explain_the_blocker_without_dispatch_or_budget_use(monkey
     # The API preserves the discriminant independently of the human-readable message.
     artifact = artifacts[0]
     root.report_id, root.revision = artifact.id, artifact.revision
-    monkeypatch.setattr(runtime.ImpactInvestigation, "find_one", AsyncMock(return_value=root))
+    monkeypatch.setattr(investigation_reads, "read_investigation_root", AsyncMock(return_value=root))
     monkeypatch.setattr(runtime.InvestigationRevision, "find_one", AsyncMock(return_value=artifact))
     response = await investigation_reads.shadow_investigation(ORG, PydanticObjectId())
     assert response.checks[0].dispatch_denial is expected

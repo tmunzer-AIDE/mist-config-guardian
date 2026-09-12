@@ -11,6 +11,7 @@ from mist_config_guardian_backend.models.investigation import ImpactInvestigatio
 from mist_config_guardian_backend.models.organization import MistCloudRegion, OrganizationStatus
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services import impact_investigations as runtime
+from mist_config_guardian_backend.services import investigation_reads
 from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
 from test_wlan_investigation import LATER, NOW, ORG, inputs
 
@@ -170,7 +171,7 @@ async def test_preview_reads_only_the_published_revision_and_hides_client_identi
     root_lookup = AsyncMock(return_value=root)
     artifact_lookup = AsyncMock(return_value=artifact)
     monkeypatch.setattr(runtime.AuditChangeGroup, "find_one", group_lookup)
-    monkeypatch.setattr(ImpactInvestigation, "find_one", root_lookup)
+    monkeypatch.setattr(investigation_reads, "read_investigation_root", root_lookup)
     monkeypatch.setattr(InvestigationRevision, "find_one", artifact_lookup)
     result = await shadow_investigation(ORG, group_id)
     group_lookup.assert_awaited_once_with({"_id": group_id, "organization_id": ORG})
@@ -194,7 +195,7 @@ async def test_foreign_group_does_not_expose_an_investigation(monkeypatch):
 
     monkeypatch.setattr(runtime.AuditChangeGroup, "find_one", AsyncMock(return_value=None))
     lookup = AsyncMock()
-    monkeypatch.setattr(ImpactInvestigation, "find_one", lookup)
+    monkeypatch.setattr(investigation_reads, "read_investigation_root", lookup)
     assert await shadow_investigation(ORG, PydanticObjectId()) is None
     lookup.assert_not_awaited()
 

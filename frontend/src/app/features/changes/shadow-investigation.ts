@@ -107,7 +107,8 @@ export interface ShadowReport {
           </div>
         </details>
         <app-dispatch-log [log]="report.dispatch_log" />
-        <app-agent-investigation [checkpoint]="report.agent" [activity]="report.model_activity" />
+        <app-agent-investigation [checkpoint]="report.agent" [activity]="report.model_activity"
+          [organizationId]="organizationId()" [groupId]="groupId()" />
       </section>
     }
   `,
@@ -126,6 +127,7 @@ export class ShadowInvestigation {
   readonly groupId = input.required<string>();
   private readonly organizations = inject(OrganizationContextService);
   private readonly http = inject(HttpClient);
+  protected readonly organizationId = computed(() => this.organizations.selected()?.id);
   private request = 0;
   protected readonly pending = signal(false);
   protected readonly report = signal<ShadowReport | null>(null);

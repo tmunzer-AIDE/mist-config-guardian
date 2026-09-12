@@ -519,6 +519,12 @@ test('exact-time popover follows its trigger when the toolbar wraps', async ({ p
 });
 
 test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async ({ page }, info) => {
+  let modelDetailRequests = 0;
+  await page.route('**/investigation/model-requests/*', (route) => {
+    modelDetailRequests++;
+    return route.fulfill({ json: { request_id: 'model-attempt-1', input_state: 'available',
+      input_json: '{"unmapped_change_count":0}', action_state: 'not_recorded', action: null } });
+  });
   await page.route('**/change-groups/*/investigation', (route) => route.fulfill({ json: {
     mode: 'shadow', id: 'i1', audit_id: 'audit0', status: 'monitoring', revision: 1,
     changed_at: now, expires_at: now, calls_used: 2, calls_limit: 56,
@@ -545,7 +551,7 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
       input_bytes_reserved: 1200, input_bytes_limit: 504000,
       records: [{ id: 'model-attempt-1', candidate_revision: 2, model: 'test-model', state: 'reserved',
         reserved_at: now, finished_at: null, request_tokens: null, response_tokens: null,
-        input_hash: 'bounded-context-hash', input_json: '{"unmapped_change_count":0}', action: null }] },
+        input_hash: 'bounded-context-hash' }] },
     dispatch_log: { source: 'live_investigation_root', unlogged_reservations: 1,
       records: [{ id: 'attempt-1', generation: 2, candidate_revision: 2, check_id: 'wlan-client-sessions.v1',
         target_handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222',
@@ -581,6 +587,11 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await page.getByText('Live model activity', { exact: false }).click();
   await page.getByText('test-model · Outcome unknown', { exact: false }).click();
   await expect(page.locator('app-agent-investigation')).toContainText('input Unknown');
+  expect(modelDetailRequests).toBe(0);
+  await page.getByRole('button', { name: 'Load request context and action' }).click();
+  await page.getByText('Bounded input context · available', { exact: true }).click();
+  await expect(page.locator('app-model-request-details')).toContainText('"unmapped_change_count":0');
+  expect(modelDetailRequests).toBe(1);
   await page.screenshot({ path: info.outputPath('agent-investigation.png'), fullPage: true });
 
 });

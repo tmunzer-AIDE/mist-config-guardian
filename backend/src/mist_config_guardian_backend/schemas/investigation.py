@@ -2,10 +2,11 @@
 
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from mist_config_guardian_backend.impact.agent import AgentCheckpoint, ModelActivity
+from mist_config_guardian_backend.impact.agent import AgentCheckpoint, CollectAction, ModelActivity, ReportAction
 from mist_config_guardian_backend.impact.contracts import DispatchDenial, Window, WlanAssessment
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
@@ -21,6 +22,14 @@ class ShadowCheckResponse(BaseModel):
     row_count: int
     reason: str
     dispatch_denial: DispatchDenial | None = None
+
+
+class ModelRequestDetails(BaseModel):
+    request_id: UUID
+    input_state: Literal["available", "legacy", "unavailable"] = "unavailable"
+    input_json: str | None = Field(default=None, max_length=24_000)
+    action_state: Literal["available", "legacy", "unavailable", "not_recorded"] = "unavailable"
+    action: CollectAction | ReportAction | None = None
 
 
 class ShadowTargetResponse(BaseModel):

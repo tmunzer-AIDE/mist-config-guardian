@@ -1,3 +1,5 @@
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { AgentCheckpoint, AgentInvestigationComponent, ModelActivity } from './agent-investigation';
 
@@ -15,12 +17,12 @@ const activity: ModelActivity = {
   source: 'live_investigation_root', calls_used: 2, calls_limit: 21, input_bytes_reserved: 1000, input_bytes_limit: 504000,
   records: [{ id: 'request-2', candidate_revision: 3, model: 'test-model', state: 'reserved',
     reserved_at: '2026-09-12T10:10:00Z', finished_at: null, request_tokens: null, response_tokens: null,
-    input_hash: 'hash', input_json: '<img src=x onerror=alert(1)>', action: null }],
+    input_hash: 'hash' }],
 };
 
 describe('Agent investigation', () => {
   it('labels proposals, limitations and historical memory without promoting attribution', async () => {
-    await TestBed.configureTestingModule({ imports: [AgentInvestigationComponent] }).compileComponents();
+    await TestBed.configureTestingModule({ imports: [AgentInvestigationComponent], providers: [provideHttpClient(), provideHttpClientTesting()] }).compileComponents();
     const fixture = TestBed.createComponent(AgentInvestigationComponent);
     fixture.componentRef.setInput('checkpoint', checkpoint);
     fixture.detectChanges();
@@ -35,14 +37,14 @@ describe('Agent investigation', () => {
   });
 
   it('shows live unfinished model requests even without a published proposal', async () => {
-    await TestBed.configureTestingModule({ imports: [AgentInvestigationComponent] }).compileComponents();
+    await TestBed.configureTestingModule({ imports: [AgentInvestigationComponent], providers: [provideHttpClient(), provideHttpClientTesting()] }).compileComponents();
     const fixture = TestBed.createComponent(AgentInvestigationComponent);
     fixture.componentRef.setInput('activity', activity);
     fixture.detectChanges();
     const text = fixture.nativeElement.textContent;
     expect(text).toContain('Outcome unknown');
     expect(text).toContain('input Unknown');
-    expect(text).toContain('No validated action recorded');
+    expect(text).toContain('Load request context and action');
     expect(text).toContain('outside this published revision');
     expect(text).not.toContain('Proposal ready');
     expect(fixture.nativeElement.querySelector('img')).toBeNull();

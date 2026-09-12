@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,12 +15,13 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupDetailResponse,
     ChangeGroupListResponse,
 )
-from mist_config_guardian_backend.schemas.investigation import ShadowInvestigationResponse
+from mist_config_guardian_backend.schemas.investigation import ModelRequestDetails, ShadowInvestigationResponse
 from mist_config_guardian_backend.services.change_groups import (
     ChangeGroupFilters,
     ChangeGroupService,
 )
 from mist_config_guardian_backend.services.investigation_reads import shadow_investigation
+from mist_config_guardian_backend.services.model_request_reads import model_request_details
 
 router = APIRouter(prefix="/organizations/{organization_id}/change-groups")
 
@@ -122,3 +124,14 @@ async def read_shadow_investigation(
 ) -> ShadowInvestigationResponse | None:
     """Read the published revision and separately labelled live activity for the authorized organization."""
     return await shadow_investigation(_identifier(organization), change_group_id)
+
+
+@router.get("/{change_group_id}/investigation/model-requests/{request_id}")
+async def read_model_request(
+    change_group_id: PydanticObjectId,
+    request_id: UUID,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ModelRequestDetails | None:
+    """Read one authorized journal entry's verified context/action artifacts."""
+    return await model_request_details(_identifier(organization), change_group_id, request_id)

@@ -6,6 +6,7 @@ from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID
 
+from beanie import PydanticObjectId
 from pydantic import AwareDatetime, Field, TypeAdapter
 
 from mist_config_guardian_backend.impact.contracts import Contract, SessionEvidence, Window, WlanRemovalPlan
@@ -161,13 +162,14 @@ class ModelRequestRecord(Contract):
     model: str = Field(max_length=255)
     input_bytes: int = Field(ge=1, le=MAX_INPUT_BYTES)
     output_token_limit: int = Field(ge=1, le=MAX_OUTPUT_TOKENS)
-    # Validated/redacted context, not raw configuration or a provider transcript.
-    input_json: str = Field(max_length=MAX_INPUT_BYTES)
+    input_artifact_id: PydanticObjectId | None = None
+    input_context_hash: Handle | None = None
     state: Literal["reserved", "complete", "invalid_response", "provider_error"] = "reserved"
     finished_at: AwareDatetime | None = None
     request_tokens: int | None = Field(default=None, ge=0)
     response_tokens: int | None = Field(default=None, ge=0)
-    action: CollectAction | ReportAction | None = None
+    action_artifact_id: PydanticObjectId | None = None
+    action_hash: Handle | None = None
 
 
 class ModelActivity(Contract):

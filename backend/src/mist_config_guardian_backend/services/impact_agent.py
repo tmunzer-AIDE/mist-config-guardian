@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import Literal
 from uuid import UUID, uuid4
 
+from beanie import PydanticObjectId
 from beanie.odm.utils.encoder import Encoder
 from pymongo.errors import PyMongoError
 
@@ -35,7 +36,11 @@ from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanR
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
+from mist_config_guardian_backend.models.investigation import (
+    ImpactInvestigation,
+    InvestigationRevision,
+    ModelRequestArtifact,
+)
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.application_configuration import (
@@ -135,9 +140,14 @@ class ImpactAgent:
                     input_hash=sha256((system + data).encode()).hexdigest(),
                     model=runtime.model,
                     input_bytes=size,
-                    input_json=data,
+                    input_artifact_id=PydanticObjectId(),
+                    input_context_hash=sha256(data.encode()).hexdigest(),
                     output_token_limit=min(runtime.max_response_tokens, MAX_OUTPUT_TOKENS),
                 )
+                # Persist normalized input before the final fenced dispatch reservation.
+                # Failed/uncertain inserts cannot dispatch; rejected reservations may
+                # leave an unreferenced artifact, never a growing root payload.
+                await self._artifact(root, record, "input", data, record.input_artifact_id)
                 denial = await self._reserve(root, runtime, record, service_credential)
                 if denial is not None:
                     return AgentCheckpoint(
@@ -353,7 +363,7 @@ class ImpactAgent:
             },
             {
                 "$inc": {"model_calls_used": 1, "model_input_bytes_reserved": record.input_bytes},
-                "$push": {"model_requests": Encoder().encode(record)},
+                "$push": {"model_requests": Encoder().encode(record.model_copy(update={"reserved_at": now}))},
                 # Persist the initial policy bounds for older roots on first use.
                 # Later releases must not silently enlarge an existing audit's budget.
                 "$set": {
@@ -374,18 +384,35 @@ class ImpactAgent:
         request_tokens: int | None = None,
         response_tokens: int | None = None,
     ) -> None:
+        action_artifact_id = None
+        action_hash = None
+        if action is not None:
+            encoded_action = action.model_dump_json()
+            action_hash = sha256(encoded_action.encode()).hexdigest()
+            action_artifact_id = PydanticObjectId()
+            await ImpactAgent._artifact(root, record, "action", encoded_action, action_artifact_id)
         finished = ModelRequestRecord.model_validate(
             {
                 **record.model_dump(),
                 "state": state,
                 "finished_at": utc_now(),
-                "action": action,
+                "action_artifact_id": action_artifact_id,
+                "action_hash": action_hash,
                 "request_tokens": request_tokens,
                 "response_tokens": response_tokens,
             }
         )
         fields = Encoder().encode(
-            finished.model_dump(include={"state", "finished_at", "action", "request_tokens", "response_tokens"})
+            finished.model_dump(
+                include={
+                    "state",
+                    "finished_at",
+                    "action_artifact_id",
+                    "action_hash",
+                    "request_tokens",
+                    "response_tokens",
+                }
+            )
         )
         result = await ImpactInvestigation.get_pymongo_collection().update_one(
             Encoder().encode(
@@ -402,3 +429,27 @@ class ImpactAgent:
         if result.matched_count != 1:
             msg = "Model result could not be journalled; publication stopped"
             raise RuntimeError(msg)
+
+    @staticmethod
+    async def _artifact(
+        root: ImpactInvestigation,
+        record: ModelRequestRecord,
+        kind: Literal["input", "action"],
+        content: str,
+        identifier: PydanticObjectId | None,
+    ) -> None:
+        if root.id is None or identifier is None:
+            msg = "Persisted model request identity is required"
+            raise ValueError(msg)
+        await ModelRequestArtifact(
+            id=identifier,
+            organization_id=root.organization_id,
+            investigation_id=root.id,
+            request_id=record.id,
+            generation=record.generation,
+            candidate_revision=record.candidate_revision,
+            kind=kind,
+            content_hash=sha256(content.encode()).hexdigest(),
+            content_json=content,
+            created_at=utc_now(),
+        ).insert()

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import ClassVar, Literal
+from uuid import UUID
 
 from beanie import Document, PydanticObjectId
 from pydantic import Field
@@ -17,6 +18,30 @@ from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanA
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.models.base import TimestampedModel
+
+# Also excludes payloads embedded by the initial agent release. No bulk migration
+# or loss of historical request context is needed to keep hot reads small.
+ROOT_METADATA_PROJECTION = {"model_requests.input_json": 0, "model_requests.action": 0}
+
+
+class ModelRequestArtifact(Document):
+    """Insert-only normalized model input/action, separate from the root journal."""
+
+    organization_id: PydanticObjectId
+    investigation_id: PydanticObjectId
+    request_id: UUID
+    generation: int
+    candidate_revision: int
+    kind: Literal["input", "action"]
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    content_json: str = Field(max_length=24_000)
+    created_at: datetime
+
+    class Settings:
+        name = "impact_model_request_artifacts"
+        indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("organization_id", 1), ("investigation_id", 1), ("request_id", 1)]),
+        ]
 
 
 class ImpactInvestigation(TimestampedModel, Document):

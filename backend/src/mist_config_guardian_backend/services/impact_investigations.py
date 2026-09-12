@@ -18,7 +18,11 @@ from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, Dispatc
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWlanEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
+from mist_config_guardian_backend.models.investigation import (
+    ROOT_METADATA_PROJECTION,
+    ImpactInvestigation,
+    InvestigationRevision,
+)
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.security.credentials import CredentialVault
@@ -84,6 +88,7 @@ class ImpactInvestigationService:
                 {"$set": {"lease_until": now + _LEASE}, "$inc": {"generation": 1}},
                 sort=[("next_poll_at", 1)],
                 return_document=ReturnDocument.AFTER,
+                projection=ROOT_METADATA_PROJECTION,
             )
             if document is None:
                 break

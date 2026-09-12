@@ -4,7 +4,11 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.impact.agent import ModelActivity
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
-from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
+from mist_config_guardian_backend.models.investigation import (
+    ROOT_METADATA_PROJECTION,
+    ImpactInvestigation,
+    InvestigationRevision,
+)
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.investigation import (
     ShadowCheckResponse,
@@ -14,6 +18,11 @@ from mist_config_guardian_backend.schemas.investigation import (
 from mist_config_guardian_backend.services.audit_impact_reads import project_published_impact
 
 
+async def read_investigation_root(query: dict[str, object]) -> ImpactInvestigation | None:
+    document = await ImpactInvestigation.get_pymongo_collection().find_one(query, projection=ROOT_METADATA_PROJECTION)
+    return ImpactInvestigation.model_validate(document) if document is not None else None
+
+
 async def shadow_investigation(
     organization_id: PydanticObjectId,
     group_id: PydanticObjectId,
@@ -21,7 +30,7 @@ async def shadow_investigation(
     group = await AuditChangeGroup.find_one({"_id": group_id, "organization_id": organization_id})
     if group is None:
         return None
-    root = await ImpactInvestigation.find_one({"organization_id": organization_id, "audit_id": group.audit_id})
+    root = await read_investigation_root({"organization_id": organization_id, "audit_id": group.audit_id})
     if root is None:
         return None
     artifact = (

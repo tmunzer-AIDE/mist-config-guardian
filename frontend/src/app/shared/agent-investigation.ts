@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ModelRequestDetailsComponent } from './model-request-details';
 
 interface Proposal {
   summary: string;
@@ -23,11 +24,12 @@ export interface ModelActivity {
   input_bytes_limit: number;
   records: { id: string; candidate_revision: number; model: string; state: string; reserved_at: string;
     finished_at: string | null; request_tokens: number | null; response_tokens: number | null;
-    input_hash: string; input_json: string; action: unknown }[];
+    input_hash: string }[];
 }
 
 @Component({
   selector: 'app-agent-investigation',
+  imports: [ModelRequestDetailsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (checkpoint(); as agent) {
@@ -77,8 +79,7 @@ export interface ModelActivity {
             <p>Request {{ request.id }} · reserved {{ request.reserved_at }} · result {{ request.finished_at ?? 'Not recorded' }}</p>
             <p>Tokens: input {{ request.request_tokens ?? 'Unknown' }} · output {{ request.response_tokens ?? 'Unknown' }}</p>
             <p>Input fingerprint: {{ request.input_hash }}</p>
-            <details><summary>Bounded input context</summary><pre>{{ request.input_json }}</pre></details>
-            <details><summary>Validated model action</summary><pre>{{ request.action ? json(request.action) : 'No validated action recorded' }}</pre></details>
+            <app-model-request-details [organizationId]="organizationId()" [groupId]="groupId()" [requestId]="request.id" />
           </details>
         }
       </details>
@@ -94,7 +95,8 @@ export interface ModelActivity {
   `,
 })
 export class AgentInvestigationComponent {
+  readonly organizationId = input<string>();
+  readonly groupId = input<string>();
   readonly checkpoint = input<AgentCheckpoint | null>();
   readonly activity = input<ModelActivity | null>();
-  protected readonly json = (value: unknown) => JSON.stringify(value, null, 2);
 }

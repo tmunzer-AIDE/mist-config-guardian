@@ -3909,8 +3909,7 @@
         "title": "ModelDispatchDenial",
         "type": "string"
       },
-      "ModelRequestRecord": {
-        "additionalProperties": false,
+      "ModelRequestDetails": {
         "properties": {
           "action": {
             "anyOf": [
@@ -3925,6 +3924,76 @@
               }
             ],
             "title": "Action"
+          },
+          "action_state": {
+            "default": "unavailable",
+            "enum": [
+              "available",
+              "legacy",
+              "unavailable",
+              "not_recorded"
+            ],
+            "title": "Action State",
+            "type": "string"
+          },
+          "input_json": {
+            "anyOf": [
+              {
+                "maxLength": 24000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Json"
+          },
+          "input_state": {
+            "default": "unavailable",
+            "enum": [
+              "available",
+              "legacy",
+              "unavailable"
+            ],
+            "title": "Input State",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "ModelRequestDetails",
+        "type": "object"
+      },
+      "ModelRequestRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "action_artifact_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PydanticObjectId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Hash"
           },
           "candidate_revision": {
             "minimum": 1.0,
@@ -3953,20 +4022,37 @@
             "title": "Id",
             "type": "string"
           },
+          "input_artifact_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PydanticObjectId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "input_bytes": {
             "maximum": 24000.0,
             "minimum": 1.0,
             "title": "Input Bytes",
             "type": "integer"
           },
+          "input_context_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Context Hash"
+          },
           "input_hash": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Input Hash",
-            "type": "string"
-          },
-          "input_json": {
-            "maxLength": 24000,
-            "title": "Input Json",
             "type": "string"
           },
           "model": {
@@ -4035,8 +4121,7 @@
           "input_hash",
           "model",
           "input_bytes",
-          "output_token_limit",
-          "input_json"
+          "output_token_limit"
         ],
         "title": "ModelRequestRecord",
         "type": "object"
@@ -11095,6 +11180,83 @@
           }
         ],
         "summary": "Read Shadow Investigation",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/model-requests/{request_id}": {
+      "get": {
+        "description": "Read one authorized journal entry's verified context/action artifacts.",
+        "operationId": "read_model_request_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_model_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ModelRequestDetails"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Model Request Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Model Requests  Request Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Model Request",
         "tags": [
           "Change Groups"
         ]
