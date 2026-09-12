@@ -1,9 +1,13 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
+import { toSignal } from '@angular/core/rxjs-interop';
+import { interval, map } from 'rxjs';
+
 import { formatInstant } from '../../core/format';
 import { Tone } from '../../core/tone';
 import {
   ApprovalRequest,
+  hasValidPreparedCredential,
   RestoreCredential,
   approvalRuleLabel,
   approvalStatusLabel,
@@ -64,7 +68,8 @@ export class RestoreStepAuthorize {
   readonly blockedByApproval = input(false);
   /** Reverses an applied restore rather than authorizing a new one. */
   readonly compensation = input(false);
-  protected readonly prepared = computed(() => !!this.operation().baseline_snapshot_id && !this.compensation());
+  private readonly now = toSignal(interval(1000).pipe(map(() => Date.now())), { initialValue: Date.now() });
+  protected readonly prepared = computed(() => hasValidPreparedCredential(this.operation(), this.now()) && !this.compensation());
   protected readonly needsPreparation = computed(() => !this.prepared() && !this.compensation());
 
   readonly authorized = output<RestoreCredential>();
@@ -183,6 +188,9 @@ export class RestoreStepAuthorize {
 
   /** Hand the token to the caller and forget it in the same turn. */
   protected submit(): void {
+    if (!this.compensation() && this.prepared() && !hasValidPreparedCredential(this.operation())) {
+      return;
+    }
     if (!this.canSubmit()) {
       return;
     }

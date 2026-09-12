@@ -42,7 +42,7 @@ class RestoreExecuteRequest(BaseModel):
     @model_validator(mode="after")
     def exactly_one_credential(self) -> Self:
         if sum((self.administrator_token is not None, self.mist_login is not None, self.use_prepared_credential)) != 1:
-            msg = "Supply either an administrator token or Mist login"
+            msg = "Supply exactly one of administrator_token, mist_login, or use_prepared_credential=true"
             raise ValueError(msg)
         if self.administrator_token and self.administrator_token.get_secret_value().startswith("mist-session:"):
             msg = "Supply an API token, not an encoded session"

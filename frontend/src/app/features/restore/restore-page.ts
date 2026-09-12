@@ -25,6 +25,7 @@ import {
   ApprovalRequest,
   RestoreCredential,
   blocksExecution,
+  hasValidPreparedCredential,
   isRestoreInFlight,
   isRestoreTerminal,
   RestoreMode,
@@ -795,14 +796,15 @@ export class RestorePage {
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
       return;
     }
-    if (this.blockedByPreflight() || (operation.baseline_snapshot_id && this.blockedByApproval())) {
+    const prepared = hasValidPreparedCredential(operation);
+    if ((!prepared && token === '') || this.blockedByPreflight() || (prepared && this.blockedByApproval())) {
       return;
     }
     const generation = this.selection.signal;
     this.busy.set(true);
     const queued = await this.ui.track(
-      operation.baseline_snapshot_id ? 'Executing the reviewed restore' : 'Capturing a fresh pre-restore backup',
-      () => operation.baseline_snapshot_id
+      prepared ? 'Executing the reviewed restore' : 'Capturing a fresh pre-restore backup',
+      () => prepared
         ? this.restores.executePrepared(organizationId, operation.id)
         : this.restores.prepare(organizationId, operation.id, token),
       generation,

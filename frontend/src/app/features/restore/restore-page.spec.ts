@@ -627,7 +627,7 @@ describe('RestorePage', () => {
     await tick();
     const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`);
     expect(request.request.body).toEqual({ administrator_token: 'a-fresh-administrator-token' });
-    request.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', status: 'planned' }));
+    request.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(), status: 'planned' }));
     await settle();
 
     // The credential left in the request body and nowhere else: not in the
@@ -644,7 +644,7 @@ describe('RestorePage', () => {
     await tick();
     const execution = httpMock.expectOne(`${OPERATIONS_URL}/op-2/execute`);
     expect(execution.request.body).toEqual({ use_prepared_credential: true });
-    execution.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', status: 'queued' }));
+    execution.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(), status: 'queued' }));
     await settle();
     // Both the draft and the freshly prepared plan get their own URLs.
     expect(navigations).toEqual([
@@ -654,9 +654,38 @@ describe('RestorePage', () => {
     expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
   });
 
+  it('returns to fresh backup preparation when the review session expires while open', async () => {
+    const now = Date.now();
+    await plan({ baseline_snapshot_id: 'backup-1', prepared_until: new Date(now + 60_000).toISOString() });
+    button('Continue to authorize')!.click();
+    await settle();
+    expect(button('Execute reviewed plan')).toBeTruthy();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001);
+    try {
+      vi.advanceTimersByTime(1000);
+      await settle();
+      expect(button('Execute reviewed plan')).toBeUndefined();
+      expect(text()).toContain('Capture a fresh backup before final review');
+      const token = element().querySelector<HTMLInputElement>('.token-input')!;
+      token.value = 'a-fresh-administrator-token';
+      token.dispatchEvent(new Event('input'));
+      await settle();
+      button('Capture backup and review new plan')!.click();
+      await tick();
+      httpMock.expectNone(`${OPERATIONS_URL}/op-1/execute`);
+      const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`);
+      expect(request.request.body).toEqual({ administrator_token: 'a-fresh-administrator-token' });
+      request.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-2', prepared_until: new Date(now + 120_000).toISOString() }));
+      await settle();
+      expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('shows the approval state and withholds execution until it is granted', async () => {
     await plan({
-      baseline_snapshot_id: 'backup-1',
+      baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(),
       approval: {
         id: 'ap-1',
         restore_operation_id: 'op-1',

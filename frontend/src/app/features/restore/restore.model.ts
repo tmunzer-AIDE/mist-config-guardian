@@ -343,3 +343,9 @@ export function approvalStatusTone(status: ApprovalStatus): Tone {
 export function blocksExecution(approval: ApprovalRequest | null | undefined): boolean {
   return approval != null && approval.status !== 'approved';
 }
+
+/** Missing or invalid expiry timestamps require a new backup. */
+export function hasValidPreparedCredential(operation: RestoreOperation, now = Date.now()): boolean {
+  return !!operation.baseline_snapshot_id && !!operation.prepared_until &&
+    Date.parse(operation.prepared_until) > now;
+}
