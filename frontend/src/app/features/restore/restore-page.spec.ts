@@ -4,6 +4,8 @@ import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 
+import { EMPTY } from 'rxjs';
+import { MistMfaService } from '../../core/mist-mfa.service';
 import { AuthService, UserRole } from '../../core/auth.service';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { TimeContextService } from '../../core/time-context.service';
@@ -143,6 +145,7 @@ describe('RestorePage', () => {
         {
           provide: Router,
           useValue: {
+            events: EMPTY,
             navigate: (commands: unknown[], extras?: Record<string, unknown>) => {
               navigations.push({ commands, extras });
               return Promise.resolve(true);
@@ -711,18 +714,29 @@ describe('RestorePage', () => {
     radio.click();
     await settle();
     expect(element.querySelector('app-restore-step-authorize select')).toBeNull();
-    for (const [id, value] of [['mist-email', 'admin@example.com'], ['mist-password', ' password '], ['mist-code', '123456']]) {
+    for (const [id, value] of [['mist-email', 'admin@example.com'], ['mist-password', ' password ']]) {
       const input = element.querySelector<HTMLInputElement>(`#${id}`)!;
       input.value = value;
       input.dispatchEvent(new Event('input'));
     }
     await settle();
+    expect(element.querySelector<HTMLInputElement>('#mist-email')!.value).toBe('admin@example.com');
+    expect(element.querySelector<HTMLFormElement>('#mist-restore-login')!.checkValidity()).toBe(true);
     button('Authorize and execute')!.click();
     await settle();
     const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/execute`);
-    expect(request.request.body).toEqual({ mist_login: { email: 'admin@example.com', password: ' password ', two_factor: '123456' } });
+    expect(request.request.body).toEqual({ mist_login: { email: 'admin@example.com', password: ' password ' } });
     expect(element.querySelector<HTMLInputElement>('#mist-password')!.value).toBe('');
-    request.flush({ detail: 'Mist rejected the login' }, { status: 422, statusText: 'Unprocessable Content' });
+    expect(element.querySelector('#mist-code')).toBeNull();
+    expect(element.querySelector('#mist-password')?.closest('form')?.id).toBe('mist-restore-login');
+    expect(element.querySelector('#mist-email')?.getAttribute('name')).toBe('username');
+    request.flush({ detail: { code: 'mist_mfa_required' } }, { status: 409, statusText: 'Conflict' });
+    await settle();
+    TestBed.inject(MistMfaService).prompt()!.complete('123456');
+    await settle();
+    const retry = httpMock.expectOne(`${OPERATIONS_URL}/op-1/execute`);
+    expect(retry.request.body).toEqual({ mist_login: { email: 'admin@example.com', password: ' password ', two_factor: '123456' } });
+    retry.flush({ detail: 'Mist rejected the login' }, { status: 422, statusText: 'Unprocessable Content' });
     await settle();
   });
 

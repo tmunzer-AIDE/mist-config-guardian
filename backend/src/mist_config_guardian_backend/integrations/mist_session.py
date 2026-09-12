@@ -7,6 +7,11 @@ from typing import Any
 
 import httpx
 
+
+class MistMfaChallengeError(ValueError):
+    """Mist accepted the password but requires a second factor."""
+
+
 SESSION_PREFIX = "mist-session:"
 
 
@@ -29,6 +34,9 @@ def session_credential(client: httpx.AsyncClient) -> str:
 
 async def logout_session(client: httpx.AsyncClient) -> None:
     # Best effort: cleanup must not replace an authentication or restore failure.
+    if client.cookies:
+        with suppress(ValueError):
+            client.headers.update(credential_headers(session_credential(client)))
     with suppress(httpx.HTTPError):
         await client.post("/api/v1/logout")
 
@@ -38,12 +46,12 @@ async def login_session(client: httpx.AsyncClient, payload: dict[str, str]) -> t
     if response.status_code != HTTPStatus.OK:
         msg = "Mist rejected the login or multi-factor code"
         raise ValueError(msg)
-    credential = session_credential(client)
-    client.headers.update(credential_headers(credential))
     if response.content:
         login = response.json()
         if isinstance(login, dict):
             require_completed_mfa(login)
+    credential = session_credential(client)
+    client.headers.update(credential_headers(credential))
     response = await client.get("/api/v1/self")
     if response.status_code != HTTPStatus.OK:
         msg = "Mist rejected the login"
@@ -61,5 +69,5 @@ async def login_session(client: httpx.AsyncClient, payload: dict[str, str]) -> t
 
 def require_completed_mfa(identity: dict[str, Any]) -> None:
     if identity.get("two_factor_required") and identity.get("two_factor_passed") is not True:
-        msg = "Enter a valid Mist multi-factor code with your login"
-        raise ValueError(msg)
+        msg = "Enter a valid Mist multi-factor code"
+        raise MistMfaChallengeError(msg)

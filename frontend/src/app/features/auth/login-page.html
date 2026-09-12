@@ -33,7 +33,7 @@
     } @else {
       @switch (mode()) {
         @case ('login') {
-          <form [formGroup]="loginForm" (ngSubmit)="login()">
+          <form id="login-form" autocomplete="on" [formGroup]="loginForm" (ngSubmit)="login()">
             @if (mistMode()) {
               <p class="intro">Use your Mist account password. An active application account with the same email is required. SSO-only accounts should use local sign-in.</p>
               <label class="field">
@@ -44,20 +44,18 @@
                   }
                 </select>
               </label>
-              <label class="field">
-                <span class="cg-label">MIST MFA CODE (IF ENABLED)</span>
-                <input class="cg-input" [formControl]="mistCode" autocomplete="one-time-code" />
-              </label>
             }
             <label class="field">
               <span class="cg-label">EMAIL</span>
-              <input class="cg-input" type="email" formControlName="email" autocomplete="username" required />
+              <input class="cg-input" id="login-email" name="username" type="email" formControlName="email" autocomplete="username" required />
             </label>
             <label class="field">
               <span class="cg-label">PASSWORD</span>
               <input
                 class="cg-input"
                 type="password"
+                id="login-password"
+                name="password"
                 formControlName="password"
                 autocomplete="current-password"
                 required

@@ -10,7 +10,11 @@ from pydantic import ValidationError
 
 from mist_config_guardian_backend.api.routes.auth import mist_login
 from mist_config_guardian_backend.config import Settings
-from mist_config_guardian_backend.integrations.mist import MistVerificationError, MistVerificationService
+from mist_config_guardian_backend.integrations.mist import (
+    MistMfaRequiredError,
+    MistVerificationError,
+    MistVerificationService,
+)
 from mist_config_guardian_backend.integrations.mist_mutation import MistMutationClient
 from mist_config_guardian_backend.integrations.mist_session import credential_headers
 from mist_config_guardian_backend.models.organization import MistCloudRegion
@@ -171,6 +175,13 @@ async def test_mist_signin_keeps_local_mfa_and_never_autoprovisions(monkeypatch,
     with pytest.raises(HTTPException) as exc:
         await mist_login(**args)
     assert exc.value.status_code == 401
+    lookup.reset_mock()
+    mist.login.side_effect = MistMfaRequiredError("Enter a valid Mist multi-factor code")
+    with pytest.raises(HTTPException) as challenge:
+        await mist_login(**args)
+    assert challenge.value.status_code == 409
+    assert challenge.value.detail["code"] == "mist_mfa_required"
+    lookup.assert_not_called()
 
 
 async def test_pending_login_response_cannot_become_a_full_session(httpx_mock):
@@ -229,3 +240,10 @@ async def test_restore_authorization_uses_saved_region_and_encrypts_only_session
     saved = query.update.call_args.args[0]["$set"]
     assert saved["encrypted_delegated_credential"] == "encrypted-session"
     assert saved["credential_actor"] == EMAIL
+
+
+async def test_mfa_challenge_is_detected_before_session_cookies(httpx_mock):
+    httpx_mock.add_response(url=BASE + "/api/v1/login", json={"two_factor_required": True})
+    with pytest.raises(MistMfaRequiredError):
+        await MistVerificationService().login(credentials(), MistCloudRegion.EMEA_01)
+    assert len(httpx_mock.get_requests()) == 1

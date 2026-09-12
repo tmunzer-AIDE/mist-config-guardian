@@ -10,6 +10,7 @@ import {
 import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 
+import { MistMfaPrompt } from './shell/mist-mfa-prompt';
 import { AuthService } from './core/auth.service';
 import { formatDuration, formatInstant } from './core/format';
 import { NotificationService } from './core/notification.service';
@@ -30,7 +31,7 @@ const TIME_BAR_ROUTES = ['/', '/changes', '/history', '/impact'];
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, AppSidebar, AppHeader, AppTimeBar, NotificationDrawer, StepUpPrompt],
+  imports: [RouterOutlet, AppSidebar, AppHeader, AppTimeBar, NotificationDrawer, StepUpPrompt, MistMfaPrompt],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './app.html',
   styleUrl: './app.scss',

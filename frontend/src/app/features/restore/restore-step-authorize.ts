@@ -35,7 +35,7 @@ const METHODS: CredentialMethod[] = [
   {
     key: 'password',
     label: 'Mist login and password',
-    sub: 'Optional multi-factor code',
+    sub: 'Multi-factor verification when required',
     available: true,
   },
 ];
@@ -84,7 +84,6 @@ export class RestoreStepAuthorize {
   protected readonly token = signal('');
   protected readonly email = signal('');
   protected readonly password = signal('');
-  protected readonly code = signal('');
 
   protected readonly actions = computed(() => orderedActions(this.operation()));
   protected readonly count = computed(() => this.actions().length);
@@ -168,7 +167,7 @@ export class RestoreStepAuthorize {
     }
   }
 
-  protected setLoginField(field: 'email' | 'password' | 'code', event: Event): void {
+  protected setLoginField(field: 'email' | 'password', event: Event): void {
     this[field].set((event.target as HTMLInputElement).value);
   }
 
@@ -186,8 +185,7 @@ export class RestoreStepAuthorize {
       return;
     }
     const credential: RestoreCredential = this.method() === 'token' ? this.token().trim() : {
-      mist_login: { email: this.email().trim(), password: this.password(),
-        ...(this.code().trim() ? { two_factor: this.code().trim() } : {}) },
+      mist_login: { email: this.email().trim(), password: this.password() },
     };
     this.clearCredentials();
     this.authorized.emit(credential);
@@ -197,7 +195,6 @@ export class RestoreStepAuthorize {
     this.token.set('');
     this.email.set('');
     this.password.set('');
-    this.code.set('');
     this.revealed.set(false);
   }
 
