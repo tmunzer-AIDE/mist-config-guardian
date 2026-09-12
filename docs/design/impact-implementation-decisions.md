@@ -86,6 +86,14 @@ described as implemented. The detailed contracts remain in the linked design doc
   visually reviewed. Ruff lint, source types and OpenAPI consistency passed.
   New API fields are additive; their semantics are documented in
   `docs/impact-monitoring.md`. No live Mist requests or production promotion.
+- Deployment receipt evidence: authenticated ingestion normalizes allowlisted
+  configuration events, and shadow revisions preserve bounded event/device
+  snapshots with explicit correlation and separate occurrence/receipt times.
+  The report preview shows deployment outcomes separately from impact findings.
+  Validation: 1002 backend tests passed, 20 skipped; 389 frontend tests passed;
+  production build and the extended Playwright report test passed. The table was
+  visually inspected. Ruff lint, source types and OpenAPI consistency passed.
+  The 200-device regression still publishes one report with two WLAN HTTP reads.
 
 ## Gates that require external evidence
 
@@ -228,11 +236,64 @@ of adding that read path.
   or the human acceptance gate. CodeRabbit remains signed out; local source and
   diff review checks the publication boundary and production isolation.
 
+## Deployment receipt evidence decisions
+
+- Normalize configuration changed/configured/failed/reverted events from the
+  existing allowlist at authenticated receipt ingestion, before background device
+  monitoring. Store only event kind, device type, validated site UUID/MAC,
+  occurrence time, outcome and typed gap messages. No names, SSIDs, secrets or
+  provider prose enters this contract. Normalization applies in both runtime modes
+  and makes no external calls; deployment snapshot collection is shadow-only.
+- Use existing durable receipts rather than add another event collection. Preserve
+  the encrypted source and existing deduplication behavior. New receipts distinguish
+  a normalized non-deployment event from an older unnormalized receipt. Older
+  receipts are not silently backfilled: a report that encounters them records a
+  gap. Add an organization/audit/receipt-time index for bounded audit reads.
+- Explicit audit ID plus a known event time within the audit's checkpoint window
+  establishes reported deployment association. Missing/invalid timestamps, an
+  approximate audit anchor and out-of-window events remain ambiguous. Event time
+  is never replaced with receipt time, and future-dated success is not presented
+  as already applied. This association does not validate inventory membership or
+  establish outage attribution; future operational checks must still resolve an
+  authorized entity handle.
+- For events without audit IDs, only receipt IDs actually linked from sessions
+  naming this audit are candidates. Even a currently single-audit session is not
+  sufficient proof of association. A shared session may supply candidates to
+  several investigations; each shows unknown deployment outcome for those
+  candidates. An explicit different audit ID excludes the event. Session-only
+  correlation never becomes confirmed merely because it is the sole candidate.
+- Keep one device entry per site/MAC before computing any device count. For
+  explicitly associated events, occurrence time orders outcomes, so a delayed
+  failure cannot overwrite a later configured event. Conflicting outcomes at the
+  same occurrence time or uncertain ordering yield unknown. Preserve individual
+  receipt references and both timestamps; duplicate deliveries do not multiply
+  the device count. An observed failed or reverted deployment is not an outage.
+- Bound each checkpoint to 500 sessions with 32 receipt references each, 4,000
+  candidate receipt IDs, 2,000 event observations and 500 device entries. Read one
+  extra item to detect each source cap and expose gaps; do not load encrypted
+  payloads or raw session telemetry. Database failure yields unavailable deployment
+  evidence without changing the WLAN assessment. Expected device count remains
+  unknown; coverage is always `observed_receipts_only`, including an empty set.
+- Store deployment evidence inside the same immutable artifact published under
+  the existing root fence. The preview reads that artifact, not a recomputed live
+  device list. Later checkpoints preserve prior snapshots. The initial 60-second
+  wait, audit expiry, SLE plan and query budget are unchanged; 200 configured
+  devices never trigger 200 checks. Later arrivals are included at the next
+  scheduled checkpoint if one remains. Receipts arriving after terminal completion
+  remain stored but do not reopen the report or extend monitoring.
+- Add a nullable `deployment` field to the detailed investigation response.
+  Null means this revision did not collect deployment evidence. The bounded
+  device/event tables show candidate association, unknown expectations and timing;
+  they do not populate impacted-device topology records or alter production
+  severity, notifications, Changes/Overview counts or the WLAN rule's inputs.
+  Full dispatch journaling and lifecycle cleanup remain separate work. Local
+  source review was used; CodeRabbit remains signed out.
+
 ## Next implementation queue
 
-1. Carry configured-event identities and deployment outcomes into the audit
-   evidence contract, preserving occurrence/receipt times and ambiguity. Extend
-   resolvers for the remaining three rules without modifying shared device plans.
+1. Extend resolvers and checks for the remaining three rules without modifying
+   shared device plans. Resolve device scope from immutable configuration and
+   authorized inventory; deployment candidates alone cannot issue checks.
 2. Add retention cleanup and durable dispatch journaling, then complete the common
    report schema and topology attribution records. Keep serving-device evidence
    distinct from device failure.

@@ -8,6 +8,7 @@ from beanie import Document, PydanticObjectId
 from pydantic import BaseModel, Field
 from pymongo import IndexModel
 
+from mist_config_guardian_backend.impact.deployment import DeploymentSignal
 from mist_config_guardian_backend.models.base import TimestampedModel
 from mist_config_guardian_backend.models.monitoring import ImpactSeverity
 
@@ -38,6 +39,8 @@ class WebhookReceipt(TimestampedModel, Document):
     processing_attempts: int = Field(default=0, ge=0)
     processing_error: str | None = None
     processed_at: datetime | None = None
+    deployment_normalized: bool = False
+    deployment: DeploymentSignal | None = None
 
     class Settings:
         name = "webhook_receipts"
@@ -55,6 +58,7 @@ class WebhookReceipt(TimestampedModel, Document):
             IndexModel([("organization_id", 1), ("created_at", -1)]),
             IndexModel([("organization_id", 1), ("status", 1)]),
             IndexModel([("organization_id", 1), ("audit_id", 1)]),
+            IndexModel([("organization_id", 1), ("audit_id", 1), ("created_at", 1)]),
         ]
 
 

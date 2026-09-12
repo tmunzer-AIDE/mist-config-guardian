@@ -15,6 +15,7 @@ from mist_config_guardian_backend.models.organization import Organization, Organ
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.change_groups import BeanieChangeGroupStore
+from mist_config_guardian_backend.services.deployment_evidence import collect_deployment
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,7 @@ class ImpactInvestigationService:
             plan=plan,
             assessment=assessment,
             evidence=evidence,
+            deployment=await collect_deployment(root, as_of=now),
         )
         await artifact.insert()
         finished = now >= root.expires_at or any(item.state == "budget_exhausted" for item in evidence)

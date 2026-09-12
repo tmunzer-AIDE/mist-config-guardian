@@ -45,6 +45,7 @@ async def shadow_investigation(
         calls_used=root.calls_used,
         calls_limit=root.calls_limit,
         assessment=artifact.assessment if artifact else None,
+        deployment=artifact.deployment if artifact else None,
         shadow_impact=project_published_impact(
             {**root.model_dump(), "_id": root.id},
             artifact.model_dump(include={"assessment", "plan"}) if artifact else None,

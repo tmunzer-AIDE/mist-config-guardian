@@ -235,6 +235,23 @@ null or a clean verdict. An unreadable publication is `unavailable`. The detaile
 investigation response also includes the same compact `shadow_impact` contract.
 These are additive fields; existing severity fields retain their meaning.
 
+The detailed shadow report now also includes **Configuration deployment evidence**.
+It lists observed device outcomes and event receipts, with separate occurrence and
+receipt times. An explicit audit ID is distinguished from a session-only candidate.
+Shared-session candidates, uncertain timing and conflicting simultaneous outcomes
+remain unknown. A successful configuration event does not prove device health;
+failed/reverted delivery is likewise separate from an observed outage.
+
+The expected device count is unknown, and coverage is limited to observed receipts.
+Empty evidence is not proof of complete deployment. Collection limits and older
+unnormalized receipts create visible gaps. New receipts are normalized during
+authenticated ingestion in both modes; shadow checkpoints read only the normalized
+fields. Existing report revisions have `deployment: null` and display “not collected.”
+Each new revision preserves its own device list rather than rebuilding it at read
+time. Device identities in this table do not create operational checks or topology
+impact markers. Events arriving after a terminal investigation stay in receipt
+storage and do not restart the hour.
+
 Queries are read-only, limited to four WLAN targets, 56 requests per audit and one
 bounded page per check. Current organization status, credential identity, budget
 and worker lease are verified before each request. Each published revision pins

@@ -1574,6 +1574,260 @@
         "title": "ConfigurationDiff",
         "type": "object"
       },
+      "DeploymentDevice": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation": {
+            "enum": [
+              "audit_id",
+              "session_candidate",
+              "ambiguous"
+            ],
+            "title": "Correlation",
+            "type": "string"
+          },
+          "device_mac": {
+            "title": "Device Mac",
+            "type": "string"
+          },
+          "device_type": {
+            "enum": [
+              "ap",
+              "switch",
+              "gateway"
+            ],
+            "title": "Device Type",
+            "type": "string"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "outcome": {
+            "enum": [
+              "pending",
+              "configured",
+              "failed",
+              "reverted",
+              "unknown"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "receipt_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Receipt Ids",
+            "type": "array"
+          },
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_mac",
+          "site_id",
+          "device_type",
+          "outcome",
+          "correlation"
+        ],
+        "title": "DeploymentDevice",
+        "type": "object"
+      },
+      "DeploymentEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "format": "date-time",
+            "title": "Collected At",
+            "type": "string"
+          },
+          "coverage": {
+            "const": "observed_receipts_only",
+            "default": "observed_receipts_only",
+            "title": "Coverage",
+            "type": "string"
+          },
+          "devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentDevice"
+            },
+            "maxItems": 500,
+            "title": "Devices",
+            "type": "array"
+          },
+          "expected_device_count": {
+            "title": "Expected Device Count",
+            "type": "null"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "observations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentObservation"
+            },
+            "maxItems": 2000,
+            "title": "Observations",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "available",
+              "partial",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collected_at",
+          "state"
+        ],
+        "title": "DeploymentEvidence",
+        "type": "object"
+      },
+      "DeploymentObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation": {
+            "enum": [
+              "audit_id",
+              "session_candidate",
+              "outside_window",
+              "time_unknown"
+            ],
+            "title": "Correlation",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "signal": {
+            "$ref": "#/components/schemas/DeploymentSignal"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "received_at",
+          "correlation",
+          "signal"
+        ],
+        "title": "DeploymentObservation",
+        "type": "object"
+      },
+      "DeploymentSignal": {
+        "additionalProperties": false,
+        "properties": {
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "device_type": {
+            "enum": [
+              "ap",
+              "switch",
+              "gateway"
+            ],
+            "title": "Device Type",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome": {
+            "enum": [
+              "pending",
+              "configured",
+              "failed",
+              "reverted",
+              "unknown"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "site_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Id"
+          }
+        },
+        "required": [
+          "event_type",
+          "outcome",
+          "device_type"
+        ],
+        "title": "DeploymentSignal",
+        "type": "object"
+      },
       "DeviceImpact": {
         "properties": {
           "assessment_source": {
@@ -6006,6 +6260,16 @@
             },
             "title": "Checks",
             "type": "array"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "expires_at": {
             "format": "date-time",

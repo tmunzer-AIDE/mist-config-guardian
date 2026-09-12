@@ -526,6 +526,12 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
       gaps: ['Historical session collection failed; usage remains unknown.'],
       findings: [{ target_handle: 'wlan-handle', state: 'unknown', baseline_clients: null,
         disconnected_clients: null, serving_ap_macs: [], explanation: 'Complete historical evidence is unavailable.' }] },
+    deployment: { schema_version: 1, collected_at: now, state: 'partial', coverage: 'observed_receipts_only', expected_device_count: null,
+      gaps: ['Session association is not proof of audit deployment.'],
+      devices: [{ device_mac: '001122aabbcc', site_id: 'site1', device_type: 'ap', outcome: 'unknown', correlation: 'session_candidate', last_event_at: null, receipt_ids: ['receipt-1'] }],
+      observations: [{ receipt_id: 'receipt-1', received_at: now, correlation: 'session_candidate',
+        signal: { event_type: 'AP_CONFIGURED', outcome: 'configured', device_mac: '001122aabbcc', site_id: 'site1', occurred_at: now, gaps: [] } }],
+    },
     targets: [{ handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222' }],
     checks: [{ check_id: 'wlan-client-sessions.v1', target_handle: 'wlan-handle', captured_at: now,
       window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' }],
@@ -537,6 +543,12 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await expect(preview).toContainText('Impact: Insufficient evidence');
   await expect(preview).toContainText('Confidence: low');
   await expect(preview).toContainText('A serving AP entry does not mean that the AP failed.');
+  await expect(preview).toContainText('Expected device count: unknown');
+  await expect(preview).toContainText('Session candidate only');
+  await expect(preview).toContainText('They do not identify impacted devices');
+  await preview.getByText('Deployment event receipts', { exact: false }).click();
+  await expect(preview).toContainText('AP_CONFIGURED');
+  await page.screenshot({ path: info.outputPath('deployment-evidence.png'), fullPage: true });
   await preview.getByText('Collection checks', { exact: false }).click();
   await expect(preview).toContainText('Mist returned HTTP 500.');
   await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });

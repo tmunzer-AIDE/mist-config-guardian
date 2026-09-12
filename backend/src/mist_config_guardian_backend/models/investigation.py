@@ -8,6 +8,7 @@ from pydantic import Field
 from pymongo import IndexModel
 
 from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanAssessment, WlanRemovalPlan
+from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.models.base import TimestampedModel
 
 
@@ -46,6 +47,7 @@ class InvestigationRevision(Document):
     plan: WlanRemovalPlan
     assessment: WlanAssessment
     evidence: list[SessionEvidence] = Field(default_factory=list, max_length=8)
+    deployment: DeploymentEvidence | None = None
 
     class Settings:
         name = "investigation_revisions"

@@ -41,6 +41,7 @@ def setup_runtime(monkeypatch, *, fence_matches=True, enabled=True):
         encrypted_service_token="encrypted-test-token",
     )
     monkeypatch.setattr(runtime, "utc_now", lambda: LATER)
+    monkeypatch.setattr(runtime, "collect_deployment", AsyncMock(return_value=None))
     monkeypatch.setattr(runtime.Organization, "get", AsyncMock(return_value=organization))
     monkeypatch.setattr(
         runtime.AuditChangeGroup, "find_one", AsyncMock(return_value=SimpleNamespace(audit_id=root.audit_id))

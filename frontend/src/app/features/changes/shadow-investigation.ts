@@ -6,6 +6,8 @@ import { orgPath } from '../../core/api';
 import { formatInstant } from '../../core/format';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { AuditImpactSummary, SHADOW_LABELS } from '../../core/audit-impact.model';
+import { DeploymentEvidence } from '../../core/deployment-evidence.model';
+import { DeploymentEvidenceComponent } from '../../shared/deployment-evidence';
 
 interface ShadowAssessment {
   impact: 'info' | 'none' | 'warning';
@@ -35,6 +37,7 @@ export interface ShadowReport {
   calls_limit: number;
   assessment: ShadowAssessment | null;
   shadow_impact?: AuditImpactSummary | null;
+  deployment?: DeploymentEvidence | null;
   targets: { handle: string; site_id: string; wlan_id: string }[];
   checks: {
     check_id: string;
@@ -49,6 +52,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
+  imports: [DeploymentEvidenceComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -80,6 +84,7 @@ export interface ShadowReport {
             <ul>@for (gap of assessment.gaps; track $index) { <li>{{ gap }}</li> }</ul>
           }
         } @else { <p>{{ report.status === "incomplete" ? "No assessment could be completed." : "Waiting for the initial evidence checkpoint." }}</p> }
+        <app-deployment-evidence [evidence]="report.deployment" />
         <details>
           <summary>Collection checks · {{ report.calls_used }}/{{ report.calls_limit }} requests used</summary>
           <div class="checks">
