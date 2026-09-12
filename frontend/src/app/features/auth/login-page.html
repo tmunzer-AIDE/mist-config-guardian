@@ -34,6 +34,21 @@
       @switch (mode()) {
         @case ('login') {
           <form [formGroup]="loginForm" (ngSubmit)="login()">
+            @if (mistMode()) {
+              <p class="intro">Use your Mist account password. An active application account with the same email is required. SSO-only accounts should use local sign-in.</p>
+              <label class="field">
+                <span class="cg-label">MIST CLOUD REGION</span>
+                <select class="cg-input" [formControl]="mistRegion" [attr.disabled]="busy() ? '' : null">
+                  @for (region of regions; track region) {
+                    <option [value]="region">{{ regionLabel(region) }}</option>
+                  }
+                </select>
+              </label>
+              <label class="field">
+                <span class="cg-label">MIST MFA CODE (IF ENABLED)</span>
+                <input class="cg-input" [formControl]="mistCode" autocomplete="one-time-code" />
+              </label>
+            }
             <label class="field">
               <span class="cg-label">EMAIL</span>
               <input class="cg-input" type="email" formControlName="email" autocomplete="username" required />
@@ -49,7 +64,7 @@
               />
             </label>
             <button class="cg-btn cg-btn--primary cg-btn--lg submit" type="submit" [disabled]="busy()">
-              {{ busy() ? 'Signing in…' : 'Sign in' }}
+              {{ busy() ? 'Signing in…' : mistMode() ? 'Sign in with Mist' : 'Sign in' }}
             </button>
           </form>
 
@@ -57,14 +72,14 @@
             <button class="cg-btn cg-btn--lg alt-btn" type="button" disabled title="Passkey sign-in is not enabled yet">
               Use a passkey
             </button>
-            <button class="cg-btn cg-btn--lg alt-btn" type="button" disabled title="Mist account sign-in is planned">
-              Sign in with Mist
+            <button class="cg-btn cg-btn--lg alt-btn" type="button" [disabled]="busy()" (click)="toggleMist()">
+              {{ mistMode() ? 'Use local account' : 'Sign in with Mist' }}
             </button>
             <p class="alt-note">
               @if (!passkeySupported()) {
                 This browser does not support passkeys.
               } @else {
-                Passkey and Mist account sign-in are planned.
+                Passkey sign-in is planned.
               }
             </p>
           </div>

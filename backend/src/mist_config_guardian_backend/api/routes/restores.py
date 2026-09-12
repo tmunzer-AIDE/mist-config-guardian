@@ -21,6 +21,7 @@ from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreStatus
 from mist_config_guardian_backend.models.user import User
 from mist_config_guardian_backend.schemas.approval import ApprovalResponse
+from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 from mist_config_guardian_backend.schemas.restore import (
     RestoreExecuteRequest,
     RestoreOperationListResponse,
@@ -213,7 +214,7 @@ async def execute_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         operation,
         authorization,
         approvals,
-        request.administrator_token.get_secret_value(),
+        request.credential(),
     )
 
 
@@ -281,7 +282,7 @@ async def execute_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency 
         plan,
         authorization,
         approvals,
-        request.administrator_token.get_secret_value(),
+        request.credential(),
     )
 
 
@@ -344,7 +345,7 @@ async def _authorize_and_queue(
     operation: RestoreOperation,
     authorization: RestoreAuthorizationService,
     approvals: ApprovalService,
-    credential: str,
+    credential: str | MistLoginCredentials,
 ) -> RestoreOperationResponse:
     """Reserve the plan with a delegated credential and hand it to the worker."""
     if operation.id is None:

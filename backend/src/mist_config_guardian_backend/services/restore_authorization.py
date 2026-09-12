@@ -2,15 +2,19 @@
 
 from datetime import timedelta
 
+import httpx
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
-from mist_config_guardian_backend.integrations.mist import MistVerificationService
+from mist_config_guardian_backend.integrations.mist import REGION_HOSTS, MistVerificationService
+from mist_config_guardian_backend.integrations.mist_session import SESSION_PREFIX, credential_headers, logout_session
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreStatus
+from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_planner import unavailable_secret_errors
+from mist_config_guardian_backend.services.throttling import get_throttle_service, reserve_or_raise
 
 
 class RestoreAuthorizationError(ValueError):
@@ -34,7 +38,7 @@ class RestoreAuthorizationService:
         self,
         organization_id: PydanticObjectId,
         operation_id: PydanticObjectId,
-        credential: str,
+        credential: str | MistLoginCredentials,
         task_id: str,
     ) -> RestoreOperation:
         """Verify a write identity and atomically reserve the plan."""
@@ -58,39 +62,57 @@ class RestoreAuthorizationService:
 
         self._validate_action_secrets(operation)
 
-        access = await self._mist.verify_write_token(
-            token=credential,
-            org_id=organization.mist_org_id,
-            region=organization.cloud_region,
-        )
-        expires_at = utc_now() + timedelta(minutes=self._settings.delegated_credential_ttl_minutes)
-        encrypted = self._vault.encrypt_for_context(
-            credential,
-            context=f"restore:{operation.id}",
-        )
-        result = await RestoreOperation.find_one(
-            RestoreOperation.id == operation.id,
-            RestoreOperation.status == RestoreStatus.PLANNED,
-        ).update(
-            {
-                "$set": {
-                    "status": RestoreStatus.QUEUED,
-                    "credential_actor": access.actor,
-                    "encrypted_delegated_credential": encrypted,
-                    "delegated_credential_expires_at": expires_at,
-                    "task_id": task_id,
-                    "updated_at": utc_now(),
+        if isinstance(credential, MistLoginCredentials):
+            throttle = get_throttle_service(self._settings)
+            account = throttle.account(str(credential.email))
+            await reserve_or_raise(throttle, account)
+            credential, _identity = await self._mist.login(credential, organization.cloud_region, retain_session=True)
+            await throttle.succeeded(account)
+
+        retained = False
+        try:
+            access = await self._mist.verify_write_token(
+                token=credential,
+                org_id=organization.mist_org_id,
+                region=organization.cloud_region,
+            )
+            expires_at = utc_now() + timedelta(minutes=self._settings.delegated_credential_ttl_minutes)
+            encrypted = self._vault.encrypt_for_context(
+                credential,
+                context=f"restore:{operation.id}",
+            )
+            result = await RestoreOperation.find_one(
+                RestoreOperation.id == operation.id,
+                RestoreOperation.status == RestoreStatus.PLANNED,
+            ).update(
+                {
+                    "$set": {
+                        "status": RestoreStatus.QUEUED,
+                        "credential_actor": access.actor,
+                        "encrypted_delegated_credential": encrypted,
+                        "delegated_credential_expires_at": expires_at,
+                        "task_id": task_id,
+                        "updated_at": utc_now(),
+                    }
                 }
-            }
-        )
-        if result is None or result.modified_count != 1:
-            msg = "Restore operation was authorized by another request"
-            raise RestoreAuthorizationError(msg)
-        refreshed = await RestoreOperation.get(operation.id)
-        if refreshed is None:
-            msg = "Authorized restore operation could not be reloaded"
-            raise RestoreAuthorizationError(msg)
-        return refreshed
+            )
+            if result is None or result.modified_count != 1:
+                msg = "Restore operation was authorized by another request"
+                raise RestoreAuthorizationError(msg)
+            refreshed = await RestoreOperation.get(operation.id)
+            if refreshed is None:
+                msg = "Authorized restore operation could not be reloaded"
+                raise RestoreAuthorizationError(msg)
+            retained = True
+            return refreshed
+        finally:
+            if not retained and credential.startswith(SESSION_PREFIX):
+                async with httpx.AsyncClient(
+                    base_url=REGION_HOSTS[organization.cloud_region],
+                    headers=credential_headers(credential),
+                    timeout=10,
+                ) as client:
+                    await logout_session(client)
 
     def _validate_action_secrets(self, operation: RestoreOperation) -> None:
         """Refuse a plan whose secrets Mist never returned.

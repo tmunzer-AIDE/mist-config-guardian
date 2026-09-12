@@ -697,7 +697,8 @@ describe('RestorePage', () => {
     expect(text()).toContain('APPROVED');
   });
 
-  it('renders the Mist login method as planned and never enables it', async () => {
+  it('submits Mist login without a region and clears the credential fields', async () => {
+    const element = fixture.nativeElement as HTMLElement;
     await plan();
     button('Continue to authorize')!.click();
     await settle();
@@ -705,8 +706,24 @@ describe('RestorePage', () => {
     const methods = all('.method');
     expect(methods.length).toBe(2);
     expect(methods[1].textContent).toContain('Mist login and password');
-    expect(methods[1].querySelector<HTMLInputElement>('input')!.disabled).toBe(true);
-    expect(methods[1].textContent).toContain('PLANNED');
+    const radio = methods[1].querySelector<HTMLInputElement>('input')!;
+    expect(radio.disabled).toBe(false);
+    radio.click();
+    await settle();
+    expect(element.querySelector('app-restore-step-authorize select')).toBeNull();
+    for (const [id, value] of [['mist-email', 'admin@example.com'], ['mist-password', ' password '], ['mist-code', '123456']]) {
+      const input = element.querySelector<HTMLInputElement>(`#${id}`)!;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+    }
+    await settle();
+    button('Authorize and execute')!.click();
+    await settle();
+    const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/execute`);
+    expect(request.request.body).toEqual({ mist_login: { email: 'admin@example.com', password: ' password ', two_factor: '123456' } });
+    expect(element.querySelector<HTMLInputElement>('#mist-password')!.value).toBe('');
+    request.flush({ detail: 'Mist rejected the login' }, { status: 422, statusText: 'Unprocessable Content' });
+    await settle();
   });
 
   // ---- step 4: polling ----------------------------------------------------

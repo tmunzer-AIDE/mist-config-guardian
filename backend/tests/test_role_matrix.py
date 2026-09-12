@@ -37,6 +37,7 @@ PUBLIC = {
     ("POST", "/api/v1/auth/bootstrap"),
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/login/mfa"),
+    ("POST", "/api/v1/auth/login/mist"),
     ("POST", "/api/v1/auth/logout"),
     ("POST", "/api/v1/auth/passkey/options"),
     ("POST", "/api/v1/auth/passkey/verify"),

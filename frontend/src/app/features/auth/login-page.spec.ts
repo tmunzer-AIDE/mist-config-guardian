@@ -54,6 +54,30 @@ describe('LoginPage bootstrap gate', () => {
     return fixture.nativeElement as HTMLElement;
   }
 
+  it('sends Mist credentials and the selected region, then clears secrets on failure', async () => {
+    const element = await render(false);
+    const mist = Array.from(element.querySelectorAll('button')).find(button => button.textContent?.includes('Sign in with Mist'))!;
+    mist.click();
+    await drain();
+    const email = element.querySelector<HTMLInputElement>('[formcontrolname="email"]')!;
+    const password = element.querySelector<HTMLInputElement>('[formcontrolname="password"]')!;
+    const region = element.querySelector<HTMLSelectElement>('select')!;
+    email.value = 'admin@example.com';
+    email.dispatchEvent(new Event('input'));
+    password.value = ' mist password ';
+    password.dispatchEvent(new Event('input'));
+    region.value = 'emea_01';
+    region.dispatchEvent(new Event('change'));
+    element.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+    await drain();
+    const request = http.expectOne('/api/v1/auth/login/mist');
+    expect(request.request.body).toEqual({ email: 'admin@example.com', password: ' mist password ', region: 'emea_01' });
+    expect(password.value).toBe('');
+    request.flush({ detail: 'Mist rejected the login' }, { status: 401, statusText: 'Unauthorized' });
+    await drain();
+    expect(element.textContent).toContain('Mist rejected the login');
+  });
+
   it('offers only the setup form while no administrator exists', async () => {
     const element = await render(true);
     const text = (element.textContent ?? '').replace(/\s+/g, ' ');

@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { orgPath } from '../../core/api';
 import {
   ApprovalRequest,
+  RestoreCredential,
   RestoreMode,
   RestoreOperation,
   RestoreOperationPage,
@@ -44,12 +45,11 @@ export class RestoreService {
   execute(
     organizationId: string,
     operationId: string,
-    administratorToken: string,
+    administratorToken: RestoreCredential,
   ): Promise<RestoreOperation> {
     return firstValueFrom(
-      this.http.post<RestoreOperation>(orgPath(organizationId, `/restores/${operationId}/execute`), {
-        administrator_token: administratorToken,
-      }),
+      this.http.post<RestoreOperation>(orgPath(organizationId, `/restores/${operationId}/execute`),
+        typeof administratorToken === 'string' ? { administrator_token: administratorToken } : administratorToken),
     );
   }
 
@@ -123,12 +123,12 @@ export class RestoreService {
   executeCompensation(
     organizationId: string,
     operationId: string,
-    administratorToken: string,
+    administratorToken: RestoreCredential,
   ): Promise<RestoreOperation> {
     return firstValueFrom(
       this.http.post<RestoreOperation>(
         orgPath(organizationId, `/restores/${operationId}/compensation/execute`),
-        { administrator_token: administratorToken },
+        typeof administratorToken === 'string' ? { administrator_token: administratorToken } : administratorToken,
       ),
     );
   }

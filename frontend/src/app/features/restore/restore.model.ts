@@ -1,3 +1,7 @@
+import { MistLoginCredentials } from '../../core/auth.service';
+
+export type RestoreCredential = string | { mist_login: MistLoginCredentials };
+
 import { Tone } from '../../core/tone';
 
 export type RestoreMode = 'exact' | 'non_destructive';

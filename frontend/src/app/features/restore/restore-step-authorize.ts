@@ -4,6 +4,7 @@ import { formatInstant } from '../../core/format';
 import { Tone } from '../../core/tone';
 import {
   ApprovalRequest,
+  RestoreCredential,
   approvalRuleLabel,
   approvalStatusLabel,
   approvalStatusTone,
@@ -35,7 +36,7 @@ const METHODS: CredentialMethod[] = [
     key: 'password',
     label: 'Mist login and password',
     sub: 'Optional multi-factor code',
-    available: false,
+    available: true,
   },
 ];
 
@@ -64,7 +65,7 @@ export class RestoreStepAuthorize {
   /** Reverses an applied restore rather than authorizing a new one. */
   readonly compensation = input(false);
 
-  readonly authorized = output<string>();
+  readonly authorized = output<RestoreCredential>();
   readonly cancelled = output<void>();
   readonly modePicked = output<RestoreMode>();
   readonly approvalRequested = output<void>();
@@ -81,6 +82,9 @@ export class RestoreStepAuthorize {
    * nothing else in the application ever reads it.
    */
   protected readonly token = signal('');
+  protected readonly email = signal('');
+  protected readonly password = signal('');
+  protected readonly code = signal('');
 
   protected readonly actions = computed(() => orderedActions(this.operation()));
   protected readonly count = computed(() => this.actions().length);
@@ -124,11 +128,12 @@ export class RestoreStepAuthorize {
 
   protected readonly canSubmit = computed(
     () =>
-      this.tokenValid() &&
+      (this.method() === 'token'
+        ? this.tokenValid()
+        : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.email().trim()) && this.password().length > 0) &&
       this.canAuthorize() &&
       !this.busy() &&
       !this.blockedByApproval() &&
-      this.method() === 'token' &&
       this.count() > 0,
   );
 
@@ -158,8 +163,13 @@ export class RestoreStepAuthorize {
 
   protected setMethod(key: 'token' | 'password'): void {
     if (METHODS.find((method) => method.key === key)?.available) {
+      this.clearCredentials();
       this.method.set(key);
     }
+  }
+
+  protected setLoginField(field: 'email' | 'password' | 'code', event: Event): void {
+    this[field].set((event.target as HTMLInputElement).value);
   }
 
   protected setToken(event: Event): void {
@@ -175,15 +185,24 @@ export class RestoreStepAuthorize {
     if (!this.canSubmit()) {
       return;
     }
-    const credential = this.token().trim();
-    this.token.set('');
-    this.revealed.set(false);
+    const credential: RestoreCredential = this.method() === 'token' ? this.token().trim() : {
+      mist_login: { email: this.email().trim(), password: this.password(),
+        ...(this.code().trim() ? { two_factor: this.code().trim() } : {}) },
+    };
+    this.clearCredentials();
     this.authorized.emit(credential);
   }
 
-  protected cancel(): void {
+  private clearCredentials(): void {
     this.token.set('');
+    this.email.set('');
+    this.password.set('');
+    this.code.set('');
     this.revealed.set(false);
+  }
+
+  protected cancel(): void {
+    this.clearCredentials();
     this.cancelled.emit();
   }
 }

@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 
+import { MistCloudRegion, MIST_REGIONS, regionLabel } from '../../core/organization.model';
 import { AuthService } from '../../core/auth.service';
 import { SystemHealthService } from '../../core/system-health.service';
 
@@ -40,6 +41,12 @@ export class LoginPage {
   protected readonly error = signal('');
   protected readonly notice = signal('');
   protected readonly passkeySupported = signal(typeof PublicKeyCredential !== 'undefined');
+
+  protected readonly mistMode = signal(false);
+  protected readonly regions = MIST_REGIONS;
+  protected readonly regionLabel = regionLabel;
+  protected readonly mistRegion = new FormControl<MistCloudRegion>('global_01', { nonNullable: true });
+  protected readonly mistCode = new FormControl('', { nonNullable: true });
 
   private readonly challengeToken = signal('');
 
@@ -103,14 +110,31 @@ export class LoginPage {
     this.error.set('');
   }
 
+  protected toggleMist(): void {
+    this.mistMode.update((value) => !value);
+    this.loginForm.controls.password.reset();
+    this.mistCode.reset();
+    this.error.set('');
+  }
+
   protected async login(): Promise<void> {
     if (this.loginForm.invalid || this.busy()) {
       this.loginForm.markAllAsTouched();
       return;
     }
     const { email, password } = this.loginForm.getRawValue();
+    this.loginForm.controls.password.reset();
+    const mistCode = this.mistCode.value.trim();
+    this.mistCode.reset();
     await this.attempt(async () => {
-      const result = await this.auth.login(email, password);
+      const result = this.mistMode()
+        ? await this.auth.loginMist({
+            email,
+            password,
+            region: this.mistRegion.value,
+            ...(mistCode ? { two_factor: mistCode } : {}),
+          })
+        : await this.auth.login(email, password);
       if (result.mfa_required) {
         this.challengeToken.set(result.challenge_token);
         this.mode.set('mfa');

@@ -97,7 +97,7 @@
           name="credential-method"
           [value]="option.key"
           [checked]="method() === option.key"
-          [disabled]="!option.available"
+          [disabled]="!option.available || busy()"
           (change)="setMethod(option.key)"
         />
         <span class="method-head">
@@ -141,14 +141,16 @@
       and its write scope is verified before the first action.
     </p>
   } @else {
-    <div class="planned">
-      <p class="planned-title">Mist login and password</p>
-      <p class="planned-body">
-        Not available yet. Exchanging an administrator login for a short-lived Mist session awaits a
-        Mist API support discovery step; until it lands, authorize with a fresh administrator API
-        token.
-      </p>
-    </div>
+    <p class="token-note">Uses this organization's Mist cloud region automatically. Your password and MFA code are used to create a temporary session and are never stored. SSO-only accounts can use an administrator API token.</p>
+    <label class="cg-label section-label" for="mist-email">MIST EMAIL</label>
+    <input id="mist-email" class="cg-input" type="email" autocomplete="username"
+      [value]="email()" [disabled]="!canAuthorize() || busy()" (input)="setLoginField('email', $event)" />
+    <label class="cg-label section-label" for="mist-password">MIST PASSWORD</label>
+    <input id="mist-password" class="cg-input" type="password" autocomplete="current-password"
+      [value]="password()" [disabled]="!canAuthorize() || busy()" (input)="setLoginField('password', $event)" />
+    <label class="cg-label section-label" for="mist-code">MIST MFA CODE (IF ENABLED)</label>
+    <input id="mist-code" class="cg-input" autocomplete="one-time-code"
+      [value]="code()" [disabled]="!canAuthorize() || busy()" (input)="setLoginField('code', $event)" />
   }
 
   <div class="actions">

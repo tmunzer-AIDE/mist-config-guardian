@@ -1,9 +1,10 @@
 """Restore planning, targeting, verification, and execution schemas."""
 
 from datetime import datetime
+from typing import Self
 
 from beanie import PydanticObjectId
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
@@ -14,6 +15,7 @@ from mist_config_guardian_backend.models.restore import (
     RestoreStatus,
 )
 from mist_config_guardian_backend.schemas.approval import ApprovalResponse
+from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreVerificationResult,
     VerificationStatus,
@@ -33,7 +35,26 @@ class RestorePlanRequest(BaseModel):
 class RestoreExecuteRequest(BaseModel):
     """Fresh delegated Mist administrator credential."""
 
-    administrator_token: SecretStr = Field(min_length=1, max_length=2048)
+    administrator_token: SecretStr | None = Field(default=None, min_length=1, max_length=2048)
+    mist_login: MistLoginCredentials | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_credential(self) -> Self:
+        if (self.administrator_token is None) == (self.mist_login is None):
+            msg = "Supply either an administrator token or Mist login"
+            raise ValueError(msg)
+        if self.administrator_token and self.administrator_token.get_secret_value().startswith("mist-session:"):
+            msg = "Supply an API token, not an encoded session"
+            raise ValueError(msg)
+        return self
+
+    def credential(self) -> str | MistLoginCredentials:
+        if self.administrator_token is not None:
+            return self.administrator_token.get_secret_value()
+        if self.mist_login is None:
+            msg = "Mist login is missing"
+            raise ValueError(msg)
+        return self.mist_login
 
 
 class RestoreActionResponse(BaseModel):

@@ -7,6 +7,23 @@ The application stores only a read-only Mist service token for unattended
 backup and monitoring. Every Mist write requires a freshly authenticated
 administrator's delegated Mist super-user credential.
 
+Sign in with Mist using your email, password, cloud region, and an authenticator
+code if Mist MFA is enabled. The deployment must already have an active local
+account with the same email; its application role and enrolled application MFA
+still apply. Mist sign-in does not create accounts or grant application roles.
+
+Restore and compensation authorization accept either an administrator API token
+or Mist email/password with an optional MFA code. They automatically use the
+target organization's saved cloud region and verify organization-level write
+access before queuing. Passwords and MFA codes are never persisted. Only the
+resulting session cookies and CSRF token are encrypted for the operation, subject
+to the existing delegated credential expiry and cleanup. The worker attempts to
+log out of Mist when execution ends. SSO-only Mist accounts should use an API
+token for restores and a local account to sign in to this application.
+
+The integration uses Mist's [HTTP login/session API](https://www.juniper.net/documentation/us/en/software/mist/api/http/getting-started/how-to-get-started),
+not HTTP Basic authentication. No Mist API token is created by signing in.
+
 ## Repository layout
 
 ```text
