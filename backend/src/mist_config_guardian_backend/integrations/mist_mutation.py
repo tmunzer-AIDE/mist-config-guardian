@@ -41,6 +41,10 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
             await logout_session(self._client)
         await self._client.aclose()
 
+    async def close_transport(self) -> None:
+        """Close the HTTP transport while a caller retains ownership of the session."""
+        await self._client.aclose()
+
     async def create(
         self,
         definition: ObjectDefinition,

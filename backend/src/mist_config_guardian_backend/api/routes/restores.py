@@ -3,10 +3,12 @@
 from typing import Annotated
 from uuid import uuid4
 
+import httpx
 from beanie import PydanticObjectId
 from celery.exceptions import CeleryError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from kombu.exceptions import OperationalError
+from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.api.dependencies import (
     get_credential_vault,
@@ -17,6 +19,7 @@ from mist_config_guardian_backend.api.dependencies import (
 )
 from mist_config_guardian_backend.api.routes.approvals import get_approval_service
 from mist_config_guardian_backend.integrations.mist import MistMfaRequiredError, MistVerificationError
+from mist_config_guardian_backend.integrations.mist_mutation import MistMutationError
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreStatus
 from mist_config_guardian_backend.models.user import User
@@ -207,6 +210,8 @@ async def execute_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
 ) -> RestoreOperationResponse:
     """Verify a fresh Mist administrator and queue the reviewed plan."""
     operation = await _load(plans, organization_id, operation_id)
+    if request.use_prepared_credential and operation.requested_by != _administrator.id:
+        raise HTTPException(status_code=403, detail="Only the administrator who prepared this plan can use its session")
     await _assert_plan_current(store, operation)
     await _assert_approved(organization, operation, approvals)
     return await _authorize_and_queue(
@@ -216,6 +221,42 @@ async def execute_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         approvals,
         request.credential(),
     )
+
+
+@router.post("/{operation_id}/prepare", status_code=status.HTTP_201_CREATED)
+async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
+    organization_id: PydanticObjectId,
+    operation_id: PydanticObjectId,
+    request: RestoreExecuteRequest,
+    organization: Annotated[Organization, Depends(require_organization)],
+    plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
+    authorization: Annotated[RestoreAuthorizationService, Depends(get_restore_authorization_service)],
+    approvals: Annotated[ApprovalService, Depends(get_approval_service)],
+    store: Annotated[RestoreStateStore, Depends(get_plan_state_store)],
+    administrator: Annotated[User, Depends(require_administrator)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
+) -> RestoreOperationResponse:
+    """Back up live state and return a new plan for review; never queue writes."""
+    operation = await _load(plans, organization_id, operation_id)
+    credential = request.credential()
+    if credential is None or administrator.id is None:
+        raise HTTPException(status_code=422, detail="Fresh administrator credentials are required to prepare a backup")
+    state = await store.load(organization_id, operation_id)
+    if state is not None and state.compensates_operation_id is not None:
+        raise HTTPException(status_code=409, detail="Compensation must use its original safety backup")
+    try:
+        plan = await authorization.prepare(organization, operation, administrator.id, credential, store)
+    except MistMfaRequiredError as exc:
+        raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
+    except (RestoreAuthorizationError, RestorePlanningError, MistVerificationError, MistMutationError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DuplicateKeyError as exc:
+        raise HTTPException(
+            status_code=409, detail="Another backup changed history; please prepare the plan again"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="Mist is unavailable; no restore was queued") from exc
+    return await _operation_response(plan, approvals)
 
 
 @router.post("/{operation_id}/compensation", status_code=status.HTTP_201_CREATED)
@@ -345,7 +386,7 @@ async def _authorize_and_queue(
     operation: RestoreOperation,
     authorization: RestoreAuthorizationService,
     approvals: ApprovalService,
-    credential: str | MistLoginCredentials,
+    credential: str | MistLoginCredentials | None,
 ) -> RestoreOperationResponse:
     """Reserve the plan with a delegated credential and hand it to the worker."""
     if operation.id is None:
@@ -362,9 +403,7 @@ async def _authorize_and_queue(
             task_id,
         )
     except MistMfaRequiredError as exc:
-        raise HTTPException(
-            status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}
-        ) from exc
+        raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
     except (RestoreAuthorizationError, MistVerificationError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if reserved.id is None:

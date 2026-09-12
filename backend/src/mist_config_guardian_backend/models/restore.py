@@ -53,6 +53,7 @@ class RestoreAction(BaseModel):
 
     logical_object_id: PydanticObjectId
     source_version_id: PydanticObjectId
+    baseline_version_id: PydanticObjectId | None = None
     order: int = Field(ge=0)
     action: RestoreActionType
     scope: Literal["org", "site"]
@@ -113,6 +114,7 @@ class RestoreOperation(TimestampedModel, Document):
     # add actions nobody chose. Rebuilding the plan needs the inputs, not the
     # output. Empty on operations planned before this was recorded.
     requested_version_ids: list[PydanticObjectId] = Field(default_factory=list)
+    baseline_snapshot_id: PydanticObjectId | None = None
     target_at: datetime
     status: RestoreStatus = RestoreStatus.PLANNED
     actions: list[RestoreAction] = Field(default_factory=list)

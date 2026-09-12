@@ -37,10 +37,11 @@ class RestoreExecuteRequest(BaseModel):
 
     administrator_token: SecretStr | None = Field(default=None, min_length=1, max_length=2048)
     mist_login: MistLoginCredentials | None = None
+    use_prepared_credential: bool = False
 
     @model_validator(mode="after")
     def exactly_one_credential(self) -> Self:
-        if (self.administrator_token is None) == (self.mist_login is None):
+        if sum((self.administrator_token is not None, self.mist_login is not None, self.use_prepared_credential)) != 1:
             msg = "Supply either an administrator token or Mist login"
             raise ValueError(msg)
         if self.administrator_token and self.administrator_token.get_secret_value().startswith("mist-session:"):
@@ -48,7 +49,9 @@ class RestoreExecuteRequest(BaseModel):
             raise ValueError(msg)
         return self
 
-    def credential(self) -> str | MistLoginCredentials:
+    def credential(self) -> str | MistLoginCredentials | None:
+        if self.use_prepared_credential:
+            return None
         if self.administrator_token is not None:
             return self.administrator_token.get_secret_value()
         if self.mist_login is None:
@@ -62,6 +65,7 @@ class RestoreActionResponse(BaseModel):
 
     logical_object_id: str
     source_version_id: str
+    baseline_version_id: str | None = None
     order: int
     action: RestoreActionType
     scope: str
@@ -81,6 +85,7 @@ class RestoreActionResponse(BaseModel):
         return cls(
             logical_object_id=str(action.logical_object_id),
             source_version_id=str(action.source_version_id),
+            baseline_version_id=None if action.baseline_version_id is None else str(action.baseline_version_id),
             order=action.order,
             action=action.action,
             scope=action.scope,
@@ -105,6 +110,8 @@ class RestoreOperationResponse(BaseModel):
     # The versions the requester chose; empty on operations planned before it
     # was recorded, which a client must treat as not rebuildable.
     requested_version_ids: list[str] = Field(default_factory=list)
+    baseline_snapshot_id: str | None = None
+    prepared_until: datetime | None = None
     target_at: datetime
     status: RestoreStatus
     actions: list[RestoreActionResponse]
@@ -141,6 +148,10 @@ class RestoreOperationResponse(BaseModel):
             mode=operation.mode,
             include_dependencies=operation.include_dependencies,
             requested_version_ids=[str(version_id) for version_id in operation.requested_version_ids],
+            baseline_snapshot_id=None
+            if operation.baseline_snapshot_id is None
+            else str(operation.baseline_snapshot_id),
+            prepared_until=operation.delegated_credential_expires_at if operation.baseline_snapshot_id else None,
             target_at=operation.target_at,
             status=operation.status,
             actions=[RestoreActionResponse.from_model(action) for action in operation.actions],

@@ -795,14 +795,16 @@ export class RestorePage {
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
       return;
     }
-    if (this.blockedByPreflight() || this.blockedByApproval()) {
+    if (this.blockedByPreflight() || (operation.baseline_snapshot_id && this.blockedByApproval())) {
       return;
     }
     const generation = this.selection.signal;
     this.busy.set(true);
     const queued = await this.ui.track(
-      'Authorizing the restore',
-      () => this.restores.execute(organizationId, operation.id, token),
+      operation.baseline_snapshot_id ? 'Executing the reviewed restore' : 'Capturing a fresh pre-restore backup',
+      () => operation.baseline_snapshot_id
+        ? this.restores.executePrepared(organizationId, operation.id)
+        : this.restores.prepare(organizationId, operation.id, token),
       generation,
     );
     if (this.stale(generation)) {
@@ -814,6 +816,12 @@ export class RestorePage {
     }
     const current = this.clearOperation();
     this.activeOperation.set(queued);
+    if (queued.status === 'planned') {
+      this.seedSelection(queued);
+      this.currentStep.set('plan');
+      this.canonicalize(organizationId, queued.id, true);
+      return;
+    }
     this.currentStep.set('execute');
     if (isRestoreInFlight(queued.status)) {
       this.startPolling();

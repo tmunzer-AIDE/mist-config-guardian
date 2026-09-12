@@ -64,6 +64,8 @@ export class RestoreStepAuthorize {
   readonly blockedByApproval = input(false);
   /** Reverses an applied restore rather than authorizing a new one. */
   readonly compensation = input(false);
+  protected readonly prepared = computed(() => !!this.operation().baseline_snapshot_id && !this.compensation());
+  protected readonly needsPreparation = computed(() => !this.prepared() && !this.compensation());
 
   readonly authorized = output<RestoreCredential>();
   readonly cancelled = output<void>();
@@ -94,7 +96,7 @@ export class RestoreStepAuthorize {
   protected readonly title = computed(() =>
     this.compensation()
       ? `Authorize ${this.count()} compensating actions`
-      : `Authorize ${this.count()} write actions`,
+      : this.needsPreparation() ? 'Capture a fresh backup before final review' : `Authorize ${this.count()} write actions`,
   );
 
   protected readonly modes = computed(() =>
@@ -127,12 +129,12 @@ export class RestoreStepAuthorize {
 
   protected readonly canSubmit = computed(
     () =>
-      (this.method() === 'token'
+      (this.prepared() || (this.method() === 'token'
         ? this.tokenValid()
-        : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.email().trim()) && this.password().length > 0) &&
+        : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.email().trim()) && this.password().length > 0)) &&
       this.canAuthorize() &&
       !this.busy() &&
-      !this.blockedByApproval() &&
+      (this.needsPreparation() || !this.blockedByApproval()) &&
       this.count() > 0,
   );
 
@@ -182,6 +184,10 @@ export class RestoreStepAuthorize {
   /** Hand the token to the caller and forget it in the same turn. */
   protected submit(): void {
     if (!this.canSubmit()) {
+      return;
+    }
+    if (this.prepared()) {
+      this.authorized.emit('');
       return;
     }
     const credential: RestoreCredential = this.method() === 'token' ? this.token().trim() : {

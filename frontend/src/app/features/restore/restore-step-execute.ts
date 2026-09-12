@@ -76,7 +76,7 @@ export class RestoreStepExecute {
     const action = failedAction(operation);
     return {
       label: action ? `${action.action.toUpperCase()} ${action.object_name}` : 'the restore run',
-      error: action?.error ?? 'The worker recorded no error message for this run.',
+      error: action?.error || operation.preflight_errors.join('; ') || 'The worker recorded no error message for this run.',
       applied: this.applied(),
     };
   });

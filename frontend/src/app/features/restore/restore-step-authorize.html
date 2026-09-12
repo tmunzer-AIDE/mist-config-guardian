@@ -1,10 +1,12 @@
 <section class="cg-card panel">
   <h2 class="title">{{ title() }}</h2>
-  <p class="lead">
-    The organization's stored service token is read-only by design, so a restore needs a separate
-    write credential. Whichever you use is encrypted at rest, used for this operation only, and
-    discarded when it finishes.
-  </p>
+  @if (needsPreparation()) {
+    <p class="lead">Use administrator credentials to back up the current objects. You will review a new plan before any configuration is changed in Mist.</p>
+  } @else if (prepared()) {
+    <p class="lead">The fresh backup is saved. Execute the reviewed plan using the same temporary administrator session. If the session expires, start again to capture a fresh backup.</p>
+  } @else {
+    <p class="lead">Authorize the compensating plan with a fresh administrator credential.</p>
+  }
 
   @if (deleteCount() > 0) {
     <p class="destructive" role="note">
@@ -84,6 +86,8 @@
   }
 
   <p class="cg-label section-label">CREDENTIAL METHOD</p>
+  <form id="mist-restore-login" autocomplete="on" (submit)="$event.preventDefault(); submit()">
+  @if (!prepared()) {
   <div class="methods" role="radiogroup" aria-label="Credential method">
     @for (option of methods; track option.key) {
       <label
@@ -111,7 +115,7 @@
     }
   </div>
 
-  <form id="mist-restore-login" autocomplete="on" (submit)="$event.preventDefault(); submit()">
+
   @if (method() === 'token') {
     <p class="cg-label section-label" id="token-label">ADMINISTRATOR API TOKEN</p>
     <div class="token">
@@ -152,13 +156,14 @@
 
   }
 
+  }
   <div class="actions">
     <button
       class="cg-btn cg-btn--danger cg-btn--lg"
       type="submit"
       [disabled]="!canSubmit()"
     >
-      {{ compensation() ? 'Authorize and run compensation' : 'Authorize and execute ' + count() + ' write actions' }}
+      {{ compensation() ? 'Authorize and run compensation' : needsPreparation() ? 'Capture backup and review new plan' : 'Execute reviewed plan' }}
     </button>
     <button class="cg-btn cg-btn--lg" type="button" (click)="cancel()">Cancel</button>
     @if (!approval() && !compensation()) {

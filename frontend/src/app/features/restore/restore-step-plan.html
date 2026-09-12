@@ -47,6 +47,9 @@
             <td class="cell cell-object" role="cell">
               <span class="object-name">{{ row.name }}</span>
               <span class="object-detail">{{ row.detail }}</span>
+              @if (row.comparisonUrl) {
+                <a class="cg-btn cg-btn--link" [href]="row.comparisonUrl" target="_blank" rel="noopener">Compare backup with target</a>
+              }
               @if (row.error) {
                 <span class="object-error">{{ row.error }}</span>
               }

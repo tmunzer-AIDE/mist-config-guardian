@@ -8,7 +8,7 @@ outside the model would be erased by the executor's own progress writes.
 """
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
@@ -39,6 +39,7 @@ from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     find_unavailable_secrets,
     format_secret_path,
+    protect_configuration,
     reveal_configuration,
 )
 
@@ -365,6 +366,10 @@ class RestorePlanner:
         store: RestoreStateStore | None = None,
         policy: ApprovalPolicy | None = None,
         vault: CredentialVault | None = None,
+        baseline_reader: Callable[
+            [dict[PydanticObjectId, LogicalObject]], Awaitable[dict[PydanticObjectId, ObjectVersion]]
+        ]
+        | None = None,
     ) -> None:
         self._store = store or get_restore_state_store()
         self._policy = policy
@@ -372,6 +377,8 @@ class RestorePlanner:
         # replayed at all, so planning needs the vault the snapshot was
         # written with.
         self._vault = vault or CredentialVault(get_settings())
+        self._baseline_reader = baseline_reader
+        self._baselines: dict[PydanticObjectId, ObjectVersion] = {}
 
     async def create_plan(
         self,
@@ -418,6 +425,8 @@ class RestorePlanner:
                 )
             )
 
+        if self._baseline_reader is not None:
+            self._baselines = await self._baseline_reader(logical_objects)
         actions = await self._build_actions(
             organization_id,
             selected,
@@ -557,8 +566,18 @@ class RestorePlanner:
         actions: list[RestoreAction] = []
         for logical_id, target in selected.items():
             logical = logical_objects[logical_id]
-            latest = await self._latest_version(logical_id)
+            latest = self._baselines.get(logical_id) or await self._latest_version(logical_id)
             if latest is None or target.id is None:
+                continue
+            definition = get_definition(logical.scope, logical.object_type)
+            if (
+                logical_id in self._baselines
+                and not logical.is_deleted
+                and not target.is_deleted
+                and logical_id not in force_delete
+                and definition is not None
+                and target.configuration_hash == latest.configuration_hash
+            ):
                 continue
             action_type = self._action_type(
                 logical,
@@ -579,6 +598,7 @@ class RestorePlanner:
                 RestoreAction(
                     logical_object_id=logical_id,
                     source_version_id=target.id,
+                    baseline_version_id=latest.id if logical_id in self._baselines else None,
                     order=0,
                     action=action_type,
                     scope=logical.scope,
@@ -586,7 +606,13 @@ class RestorePlanner:
                     object_name=logical.name,
                     current_mist_id=logical.current_mist_id,
                     site_mist_id=logical.site_mist_id,
-                    protected_configuration=target.configuration,
+                    protected_configuration=protect_configuration(
+                        target.configuration,
+                        self._vault,
+                        sensitive_fields=definition.sensitive_fields,
+                    )
+                    if definition is not None
+                    else target.configuration,
                     expected_current_hash=(None if logical.is_deleted else latest.configuration_hash),
                     depends_on=dependencies,
                 )

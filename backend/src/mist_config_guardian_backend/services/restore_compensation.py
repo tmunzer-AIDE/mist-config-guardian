@@ -56,6 +56,8 @@ from mist_config_guardian_backend.snapshots.secrets import (
 )
 
 logger = logging.getLogger(__name__)
+_DEBUG_MAX_FIELDS = 20
+_DEBUG_MAX_FIELD_LENGTH = 64
 
 
 class RestoreCompensationError(ValueError):
@@ -89,7 +91,11 @@ async def capture_safety_snapshot(
             org_id=organization.mist_org_id,
             site_id=action.site_mist_id,
         )
-        _validate_live_state(action, current, relaxed=relaxed)
+        try:
+            _validate_live_state(action, current, relaxed=relaxed)
+        except MistMutationError:
+            await _log_preflight_diagnostics(operation, action, current, vault)
+            raise
 
         stored = await latest_version(action.logical_object_id)
         entries.append(
@@ -122,6 +128,110 @@ async def capture_safety_snapshot(
 
 
 _MISSING = object()
+
+
+def _switch_management_differences(before: object, after: object) -> list[str]:
+    """Describe only fixed schema paths and value categories, never values."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return []
+    fields = (
+        "config_revert_timer",
+        "root_password",
+        "local_accounts",
+        "protect_re",
+        "tacacs",
+        "radius",
+        "dhcp_option_fqdn",
+    )
+
+    def category(value: object) -> str:
+        if value is _MISSING:
+            return "missing"
+        if value is None:
+            return "null"
+        if isinstance(value, str):
+            if not value:
+                return "empty-string"
+            return "masked-string" if set(value) == {"*"} else "nonempty-string"
+        return type(value).__name__
+
+    differences = []
+    for key in fields:
+        old = before.get(key, _MISSING)
+        new = after.get(key, _MISSING)
+        if old != new:
+            differences.append(f"switch_mgmt.{key}:stored={category(old)},live={category(new)}")
+    if any(
+        before.get(key, _MISSING) != after.get(key, _MISSING) for key in (before.keys() | after.keys()) - set(fields)
+    ):
+        differences.append("switch_mgmt.<other-field>:different")
+    return differences
+
+
+async def _log_preflight_diagnostics(
+    operation: RestoreOperation,
+    action: RestoreAction,
+    current: dict[str, object] | None,
+    vault: CredentialVault,
+) -> None:
+    """Log bounded, value-free evidence without replacing the original failure."""
+    try:
+        definition = get_definition(action.scope, action.object_type)
+        ignored = frozenset() if definition is None else definition.ignored_fields
+        baseline = await ObjectVersion.find_one(
+            ObjectVersion.logical_object_id == action.logical_object_id,
+            ObjectVersion.configuration_hash == action.expected_current_hash,
+        )
+        stored = None if baseline is None else reveal_configuration(baseline.configuration, vault)
+        before = None if stored is None else canonicalize(stored, ignored_fields=ignored)
+        after = None if current is None else canonicalize(current, ignored_fields=ignored)
+        changed = []
+        if isinstance(before, dict) and isinstance(after, dict):
+            changed = sorted(
+                key
+                for key in before.keys() | after.keys()
+                if key not in before or key not in after or before[key] != after[key]
+            )
+        # Only schema-shaped top-level keys; never descend into user-named maps
+        # or emit configuration values, credentials, or secret fingerprints.
+        fields = [
+            key if key.isidentifier() and len(key) <= _DEBUG_MAX_FIELD_LENGTH else "<custom-field>"
+            for key in changed[:_DEBUG_MAX_FIELDS]
+        ]
+        logger.warning(
+            "restore_preflight_debug operation=%s action=%s baseline_found=%s "
+            "baseline_hash_matches=%s live_hash_matches=%s live_exists=%s "
+            "changed_field_count=%s changed_fields=%s switch_mgmt_differences=%s",
+            operation.id,
+            action.order,
+            baseline is not None,
+            stored is not None
+            and configuration_hash_matches(
+                action.expected_current_hash,
+                stored,
+                ignored_fields=ignored,
+            ),
+            current is not None
+            and configuration_hash_matches(
+                action.expected_current_hash,
+                current,
+                ignored_fields=ignored,
+            ),
+            current is not None,
+            len(changed),
+            fields,
+            _switch_management_differences(
+                before.get("switch_mgmt") if isinstance(before, dict) else None,
+                after.get("switch_mgmt") if isinstance(after, dict) else None,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostics must not replace the safety failure.
+        logger.warning(
+            "restore_preflight_debug operation=%s action=%s diagnostics_unavailable=%s",
+            operation.id,
+            action.order,
+            type(exc).__name__,
+        )
 
 
 def _at_path(value: object, path: SecretPath) -> object:
