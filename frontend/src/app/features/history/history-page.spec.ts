@@ -185,10 +185,15 @@ describe('HistoryPage', () => {
     fixture.detectChanges();
   }
   function showVersions(fixture: ComponentFixture<HistoryPage>): void {
+    const page = fixture.componentInstance as unknown as { library(): boolean };
+    if (!page.library()) return;
     const name = comparisonName(fixture);
     const object = [...fixture.nativeElement.querySelectorAll('.object-link')]
       .find((button: any) => button.textContent.trim() === name) as HTMLButtonElement | undefined;
-    object?.click();
+    if (!object) {
+      throw new Error(`Expected an object link for "${name}" in the Configuration library`);
+    }
+    object.click();
     fixture.detectChanges();
   }
   function libraryFilter(fixture: ComponentFixture<HistoryPage>): HTMLInputElement {
