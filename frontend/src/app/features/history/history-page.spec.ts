@@ -185,8 +185,10 @@ describe('HistoryPage', () => {
     fixture.detectChanges();
   }
   function showVersions(fixture: ComponentFixture<HistoryPage>): void {
-    const back = fixture.nativeElement.querySelector('.return-selected') as HTMLButtonElement | null;
-    back?.click();
+    const name = comparisonName(fixture);
+    const object = [...fixture.nativeElement.querySelectorAll('.object-link')]
+      .find((button: any) => button.textContent.trim() === name) as HTMLButtonElement | undefined;
+    object?.click();
     fixture.detectChanges();
   }
   function libraryFilter(fixture: ComponentFixture<HistoryPage>): HTMLInputElement {

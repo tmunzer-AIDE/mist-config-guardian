@@ -4,6 +4,8 @@
 
 The primary `/impact` route presents one site's configuration events next to its observed device topology. `/impact/sessions?session=…` retains the detailed collection evidence. Existing `/impact?session=…` links redirect there.
 
+The Changes detail panel opens `/impact?site=…&change=…` with the affected site and change selected. Multi-site changes offer a separate action for each site; monitoring does not need to have started for the site workspace to be available.
+
 ## Interaction
 
 - Select a site, then a change to see its affected devices, monitoring progress, and deployment evidence. One audit appears once per site, even when it changes many devices.
@@ -59,3 +61,11 @@ References: [Juniper SLE summary-trend API](https://www.juniper.net/documentatio
 - `make check`: backend formatting, lint, types, tests, deterministic OpenAPI check; frontend tests and production build.
 - `cd frontend && npm run test:browser`: Playwright regression suite with API fixtures, Chrome and a local Angular server. No production service or Mist org is contacted. To use Playwright's bundled browser, install it with `npx playwright install chromium` and set `PLAYWRIGHT_CHANNEL=chromium`.
 - Browser artifacts are written to ignored `frontend/test-results/`; scenarios cover four selection states, pan/zoom, responsive overlay, mobile rail, exact UTC and keyboard time selection, bounded object/change tables and immediate change details.
+
+## Focused device evidence
+
+`/impact/sessions?session=…` now opens a single-device evidence page. It reads only the requested session; missing or deleted links never select an unrelated device. Return navigation carries the site and device back to the topology workspace. Live evidence remains unavailable in historical mode.
+
+The configuration-change rail is removed. The page separates device-state findings from network metrics. Identical findings across configuration triggers are shown once, with the number of supporting captures; differences in severity, state, detail or affected-client count remain separate. A quiet later baseline cannot erase a finding still reported against an earlier baseline. Individual trigger captures remain selectable inside a collapsed history section. Pending follow-ups, recovery and collection errors stay explicit.
+
+Metric history, monitoring metadata, the full event timeline and optional AI commentary are collapsed by default. Network metrics use a single baseline/latest table. No samples or a missing baseline means no network-metric comparison, not an absence of operational findings. The page refreshes its selected session every 30 seconds, cancels obsolete reads and reports refresh failures without silently changing the selected device.

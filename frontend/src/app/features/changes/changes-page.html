@@ -139,9 +139,9 @@
               }
             </ul>
             <div class="panel-actions">
-              @if (detail.sessionId; as sessionId) {
-                <button class="cg-btn cg-btn--primary" type="button" (click)="openImpact(sessionId)">
-                  Open impact session
+              @for (siteId of detail.impactSites; track siteId) {
+                <button class="cg-btn cg-btn--primary" type="button" (click)="openImpact(siteId, detail.id)">
+                  Open site impact@if (detail.impactSites.length > 1) { · {{ siteId }} }
                 </button>
               }
               @if (canRestore()) {

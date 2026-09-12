@@ -425,3 +425,47 @@ test('gateway and switch neighbor edges expose observed ports without inventing 
   await expect(neighbors).toContainText('do not establish current link health');
   await page.screenshot({ path: info.outputPath('switch-neighbors.png') });
 });
+
+test('device evidence shows one session and one finding with capture history on demand', async ({ page }, info) => {
+  const finding = {
+    kind: 'ssid', subject: 'BYOD-IOT', before: 'configured', after: 'removed or disabled',
+    severity: 'warning', detail: 'SSID removed or disabled; no clients were observed at the initial capture.', affected_clients: 0,
+  };
+  const evidence = {
+    ...sessions[0], id: 'evidence1', device_name: 'Meeting room AP', device_mac: 'aabbccddee04', device_type: 'ap',
+    status: 'completed', impact_severity: 'warning', peak_impact_severity: 'warning',
+    completed_at: '2026-09-09T13:30:00Z', audit_ids: ['a1', 'a2', 'a3', 'a4', 'a5'],
+    baseline: { captured_at: now, values: {}, errors: [], no_data: ['roaming', 'ap-health'] },
+    observations: [],
+    device_comparisons: Array.from({ length: 5 }, (_, i) => ({
+      ...sessions[0].device_comparisons[0],
+      triggered_at: `2026-09-09T12:0${i}:00Z`, recovered_at: null,
+      findings: i < 4 ? [finding] : [], current_findings: i < 4 ? [finding] : [],
+    })),
+    ai_assessment: { explanation: 'The SSID configuration changed. Confirm that its removal was intended.' },
+  };
+  const reads = [];
+  page.on('request', (request) => { if (request.url().includes('/monitoring')) reads.push(new URL(request.url()).pathname); });
+  await page.route('**/monitoring/evidence1', (route) => route.fulfill({ json: evidence }));
+  await page.goto('/impact/sessions?session=evidence1');
+  await expect(page.getByRole('heading', { name: 'Meeting room AP', exact: true })).toBeVisible();
+  await expect(page.locator('.rail')).toHaveCount(0);
+  await expect(page.locator('.findings-summary .finding')).toHaveCount(1);
+  await expect(page.locator('.findings-summary')).toContainText('Reported in 4 captures');
+  await expect(page.locator('.capture-history')).not.toHaveAttribute('open');
+  await expect(page.getByText('No network-metric comparison available', { exact: true })).toBeVisible();
+  await expect(page.getByText('One monitoring window covers', { exact: false })).toBeVisible();
+  expect(reads.every((path) => path.endsWith('/monitoring/evidence1'))).toBe(true);
+  await page.screenshot({ path: info.outputPath('evidence-desktop.png'), fullPage: true });
+  await page.locator('.capture-history > summary').click();
+  await page.getByLabel('Configuration trigger').selectOption('4');
+  await expect(page.locator('.capture-history')).toContainText('No disruption detected');
+  await expect(page.locator('.findings-summary .finding')).toHaveCount(1);
+  await page.locator('.capture-history > summary').click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('heading', { name: 'Meeting room AP', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('evidence-mobile.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Back to site impact', exact: false }).click();
+  await expect(page).toHaveURL(/\/impact\?site=site1&device=aabbccddee04/);
+});

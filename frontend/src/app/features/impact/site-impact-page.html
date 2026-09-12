@@ -22,7 +22,7 @@
         [disabled]="!sites().length"
       >
         @for (site of sites(); track site.id) {
-          <option [value]="site.id">{{ site.name }}</option>
+          <option [value]="site.id" [selected]="site.id === siteId()">{{ site.name }}</option>
         } @empty {
           <option>No stored sites</option>
         }
