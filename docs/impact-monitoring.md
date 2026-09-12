@@ -56,8 +56,9 @@ The legacy Changes-view baseline-confidence band counts only observations with
 complete comparable evidence for the selected metrics. Failed, unsampled,
 incomparable or unselected observations do not increase the count; an unusable
 latest comparison keeps confidence low. This is a collection/comparison quality
-heuristic, not causal confidence. Audit-owned attribution and per-scope group
-movements remain part of the planned projector rewrite.
+heuristic, not causal confidence. Group metric tiles retain the actual worst
+comparison and unique affected-scope counts, keeping site and device scopes
+separate. They do not average healthy and degraded devices.
 
 A supported Mist `device-events` configuration trigger immediately starts an
 active monitoring session. Guardian requests device-scoped SLE summaries for the
@@ -184,3 +185,41 @@ and documentation checks do not establish live endpoint compatibility.
 The committed OpenAPI document is generated with `make openapi` and validated by
 `make check`. Its version comes from the backend package, independent of the
 working directory, local `.env` files and `APP_VERSION` overrides.
+
+
+## Audit-owned WLAN shadow preview
+
+`IMPACT_ENGINE_MODE=shadow` enables the first deterministic audit investigation.
+Set the same value on the API and worker processes and restart them; the default
+is `legacy`. This does not enable an AI investigator or change the published
+impact/notification verdict. It suppresses the old per-device AI narrator while
+legacy deterministic monitoring continues for comparison.
+
+New audit receipts create one investigation per organization/audit. Initial
+collection waits 60 seconds. The existing worker tick services subsequent
+checkpoints around +10 through +60 minutes from the audit timestamp. A retry or
+late configured event does not create another investigation or reset its budget.
+
+The first rule recognizes site WLAN deletion or disablement from immutable
+configuration versions and scopes historical client-session queries by site and
+WLAN UUID. Unsupported attributes, organization WLAN consumer assignment,
+missing history, changed incarnations and exhausted limits remain visible gaps.
+Historical disconnects are possible disruption, not proof of AP failure or
+causation. AP health and aggregate site SLEs cannot enter this rule's verdict.
+
+In **Changes**, open a change and choose **Review shadow evidence**. The on-demand
+preview shows impact/confidence bands, scoped findings, serving AP identities,
+coverage gaps and normalized collection outcomes. It does not expose raw client
+identifiers. It is available only in the current view, and is a diagnostic preview
+rather than the final common report/chart contract or a topology impact overlay.
+
+Queries are read-only, limited to four WLAN targets, 56 requests per audit and one
+bounded page per check. Current organization status, credential identity, budget
+and worker lease are verified before each request. Each published revision pins
+its normalized evidence; repeated checkpoints retain separate immutable artifacts.
+The preview follows only the published root pointer, never a losing worker's
+unpublished artifact. Full MCP journaling, retention cleanup, historical report
+navigation, the AI tool loop and production migration remain future work.
+
+Implementation decisions and rollout gates are recorded in
+[impact-implementation-decisions.md](design/impact-implementation-decisions.md).

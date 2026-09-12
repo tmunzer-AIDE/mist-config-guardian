@@ -517,3 +517,27 @@ test('exact-time popover follows its trigger when the toolbar wraps', async ({ p
     await expect(trigger).toBeFocused();
   }
 });
+
+test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async ({ page }, info) => {
+  await page.route('**/change-groups/*/investigation', (route) => route.fulfill({ json: {
+    mode: 'shadow', id: 'i1', audit_id: 'audit0', status: 'monitoring', revision: 1,
+    changed_at: now, expires_at: now, calls_used: 2, calls_limit: 56,
+    assessment: { impact: 'info', confidence: 'low', coverage: 'partial',
+      gaps: ['Historical session collection failed; usage remains unknown.'],
+      findings: [{ target_handle: 'wlan-handle', state: 'unknown', baseline_clients: null,
+        disconnected_clients: null, serving_ap_macs: [], explanation: 'Complete historical evidence is unavailable.' }] },
+    targets: [{ handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222' }],
+    checks: [{ check_id: 'wlan-client-sessions.v1', target_handle: 'wlan-handle', captured_at: now,
+      window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' }],
+  } }));
+  await page.goto('/changes');
+  await page.locator('.row--group').first().click();
+  await page.getByRole('button', { name: 'Review shadow evidence' }).click();
+  const preview = page.getByRole('region', { name: 'Shadow investigation evidence' });
+  await expect(preview).toContainText('Impact: Insufficient evidence');
+  await expect(preview).toContainText('Confidence: low');
+  await expect(preview).toContainText('A serving AP entry does not mean that the AP failed.');
+  await preview.getByText('Collection checks', { exact: false }).click();
+  await expect(preview).toContainText('Mist returned HTTP 500.');
+  await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });
+});

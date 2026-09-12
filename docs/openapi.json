@@ -5641,6 +5641,158 @@
         "title": "SessionRevocationResponse",
         "type": "object"
       },
+      "ShadowCheckResponse": {
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        },
+        "required": [
+          "check_id",
+          "target_handle",
+          "window",
+          "captured_at",
+          "state",
+          "row_count",
+          "reason"
+        ],
+        "title": "ShadowCheckResponse",
+        "type": "object"
+      },
+      "ShadowInvestigationResponse": {
+        "description": "Diagnostic preview; never replaces the published production verdict.",
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WlanAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "calls_limit": {
+            "title": "Calls Limit",
+            "type": "integer"
+          },
+          "calls_used": {
+            "title": "Calls Used",
+            "type": "integer"
+          },
+          "changed_at": {
+            "format": "date-time",
+            "title": "Changed At",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ShadowCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "title": "Mode",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ShadowTargetResponse"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "audit_id",
+          "status",
+          "revision",
+          "changed_at",
+          "expires_at",
+          "calls_used",
+          "calls_limit"
+        ],
+        "title": "ShadowInvestigationResponse",
+        "type": "object"
+      },
+      "ShadowTargetResponse": {
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "site_id": {
+            "title": "Site Id",
+            "type": "string"
+          },
+          "wlan_id": {
+            "title": "Wlan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "site_id",
+          "wlan_id"
+        ],
+        "title": "ShadowTargetResponse",
+        "type": "object"
+      },
       "SiteChange": {
         "properties": {
           "actor": {
@@ -7081,6 +7233,182 @@
           "secret"
         ],
         "title": "WebhookSecretResponse",
+        "type": "object"
+      },
+      "Window": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "Window",
+        "type": "object"
+      },
+      "WlanAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "unmapped"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/WlanFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "impact": {
+            "enum": [
+              "info",
+              "none",
+              "warning"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "policy_version": {
+            "const": "wlan-removal.v1",
+            "default": "wlan-removal.v1",
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "audit_id",
+          "evaluated_at",
+          "impact",
+          "confidence",
+          "coverage",
+          "findings",
+          "gaps"
+        ],
+        "title": "WlanAssessment",
+        "type": "object"
+      },
+      "WlanFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_clients": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Clients"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "disconnected_clients": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disconnected Clients"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "info",
+              "none",
+              "warning"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "serving_ap_macs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Serving Ap Macs",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "no_observed_impact",
+              "possible_disruption"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_handle",
+          "state",
+          "impact",
+          "confidence",
+          "explanation"
+        ],
+        "title": "WlanFinding",
         "type": "object"
       }
     },
@@ -9456,6 +9784,73 @@
           }
         ],
         "summary": "Read Change Group",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation": {
+      "get": {
+        "description": "Read only the root's published shadow revision, scoped to the authorized organization.",
+        "operationId": "read_shadow_investigation_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ShadowInvestigationResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Shadow Investigation Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Shadow Investigation",
         "tags": [
           "Change Groups"
         ]

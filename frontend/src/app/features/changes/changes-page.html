@@ -138,6 +138,9 @@
                 </li>
               }
             </ul>
+            @if (!time.isHistorical()) {
+              <app-shadow-investigation [groupId]="detail.id" />
+            }
             <div class="panel-actions">
               @for (siteId of detail.impactSites; track siteId) {
                 <button class="cg-btn cg-btn--primary" type="button" (click)="openImpact(siteId, detail.id)">

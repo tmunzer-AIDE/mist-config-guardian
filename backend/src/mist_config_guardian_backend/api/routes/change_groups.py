@@ -14,10 +14,12 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupDetailResponse,
     ChangeGroupListResponse,
 )
+from mist_config_guardian_backend.schemas.investigation import ShadowInvestigationResponse
 from mist_config_guardian_backend.services.change_groups import (
     ChangeGroupFilters,
     ChangeGroupService,
 )
+from mist_config_guardian_backend.services.investigation_reads import shadow_investigation
 
 router = APIRouter(prefix="/organizations/{organization_id}/change-groups")
 
@@ -110,3 +112,13 @@ async def read_change_group(
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Change group not found")
     return detail
+
+
+@router.get("/{change_group_id}/investigation")
+async def read_shadow_investigation(
+    change_group_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ShadowInvestigationResponse | None:
+    """Read only the root's published shadow revision, scoped to the authorized organization."""
+    return await shadow_investigation(_identifier(organization), change_group_id)

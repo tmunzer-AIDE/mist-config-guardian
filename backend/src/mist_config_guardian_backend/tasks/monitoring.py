@@ -8,6 +8,7 @@ from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
 )
+from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
 from mist_config_guardian_backend.services.monitoring import MonitoringPollService
 from mist_config_guardian_backend.worker import celery_app
 
@@ -24,9 +25,12 @@ async def _poll_active_monitoring() -> int:
     await database.connect()
     try:
         vault = CredentialVault(settings)
-        return await MonitoringPollService(
+        polled = await MonitoringPollService(
             vault,
             ApplicationConfigurationService(vault),
         ).poll_active()
+        if settings.impact_engine_mode == "shadow":
+            await ImpactInvestigationService(vault).poll_due()
+        return polled
     finally:
         await database.close()

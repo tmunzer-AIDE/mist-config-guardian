@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from pymongo.errors import DuplicateKeyError
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.integrations.impact_ai import (
     AiImpactError,
     OpenAiCompatibleImpactProvider,
@@ -608,6 +609,8 @@ class MonitoringPollService:
         assessment: ImpactAssessment,
         configuration: ImpactAiRuntimeConfiguration,
     ) -> None:
+        if get_settings().impact_engine_mode != "legacy":
+            return
         async with OpenAiCompatibleImpactProvider(
             base_url=configuration.base_url,
             model=configuration.model,

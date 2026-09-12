@@ -9,6 +9,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { TimeContextService } from '../../core/time-context.service';
 import { Tone, toneInk, toneOf } from '../../core/tone';
 import { UiStateService } from '../../core/ui-state.service';
+import { ShadowInvestigation } from './shadow-investigation';
 
 /** The table asks for one large page; the design has no paging control. */
 const PAGE_SIZE = 100;
@@ -46,7 +47,7 @@ interface ChangeDay {
 
 @Component({
   selector: 'app-changes-page',
-  imports: [],
+  imports: [ShadowInvestigation],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './changes-page.html',
   styleUrl: './changes-page.scss',

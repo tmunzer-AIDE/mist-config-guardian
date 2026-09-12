@@ -13,6 +13,7 @@ from mist_config_guardian_backend.models.challenge import (
     ThrottleBucket,
     WebAuthnChallenge,
 )
+from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.notification import Notification
 from mist_config_guardian_backend.models.organization import Organization
@@ -51,6 +52,8 @@ def document_models() -> list[type[Document]]:
         RestoreOperationStateRecord,
         RestoreApproval,
         MonitoringSession,
+        ImpactInvestigation,
+        InvestigationRevision,
         Notification,
     ]
 
