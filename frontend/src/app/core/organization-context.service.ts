@@ -1,6 +1,8 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
+import { SiteContextService } from './site-context.service';
+
 import { Organization } from './organization.model';
 import { OrganizationService } from './organization.service';
 
@@ -15,6 +17,7 @@ const SELECTED_KEY = 'mist-config-guardian.organization';
 @Injectable({ providedIn: 'root' })
 export class OrganizationContextService {
   private readonly organizations = inject(OrganizationService);
+  private readonly sites = inject(SiteContextService);
 
   private readonly items = signal<Organization[]>([]);
   private readonly selectedIdState = signal<string | null>(readStoredId());
@@ -85,6 +88,7 @@ export class OrganizationContextService {
     // A list read for the forgotten session must not land afterwards and offer
     // the previous user's organizations to the next one.
     this.generation += 1;
+    this.sites.reset();
     this.items.set([]);
     this.loadedState.set(false);
     this.selectedIdState.set(null);

@@ -1,3 +1,4 @@
+import { SiteContextService } from '../../core/site-context.service';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
@@ -91,14 +92,16 @@ describe('site Impact workspace', () => {
     vi.unstubAllGlobals();
   });
   function load(links?: TopologyLink[]) {
-    http
-      .expectOne((r) => r.url.endsWith('/sites'))
-      .flush({
-        items: [
-          { id: 'site1', name: 'Paris' },
-          { id: 'site2', name: 'London' },
-        ],
-      });
+    // A changed route input cancels the initial site-list request.
+    const requests = http.match((r) => r.url.endsWith('/sites'));
+    const active = requests.filter((request) => !request.cancelled);
+    expect(active).toHaveLength(1);
+    active[0].flush({
+      items: [
+        { id: 'site1', name: 'Paris' },
+        { id: 'site2', name: 'London' },
+      ],
+    });
     fixture.detectChanges();
     flushSite(changes, changes.length, links);
   }
@@ -110,6 +113,42 @@ describe('site Impact workspace', () => {
     expect(fixture.nativeElement.querySelector('select').value).toBe('site2');
     expect(panel()).toBe('change');
     expect(fixture.nativeElement.querySelectorAll('.change-row')[1].getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('remembers the selected site when leaving and reopening the page', () => {
+    load();
+    chooseSite('site2');
+    flushSite();
+    fixture.destroy();
+    fixture = TestBed.createComponent(SiteImpactPage);
+    fixture.detectChanges();
+    load();
+    expect(fixture.nativeElement.querySelector('select').value).toBe('site2');
+  });
+
+  it('uses the site selected on another page', () => {
+    TestBed.inject(SiteContextService).select('org1', 'site2');
+    load();
+    expect(fixture.nativeElement.querySelector('select').value).toBe('site2');
+  });
+
+  it('preserves a manual selection over the original link on time changes', () => {
+    fixture.componentRef.setInput('site', 'site1');
+    fixture.detectChanges();
+    load();
+    chooseSite('site2');
+    flushSite();
+    time.setAsOf(new Date('2026-09-09T11:00:00Z'));
+    fixture.detectChanges();
+    load();
+    expect(fixture.nativeElement.querySelector('select').value).toBe('site2');
+  });
+
+  it('falls back when a remembered site is unavailable', () => {
+    TestBed.inject(SiteContextService).select('org1', 'removed-site');
+    load();
+    expect(fixture.nativeElement.querySelector('select').value).toBe('site1');
+    expect(TestBed.inject(SiteContextService).selectedFor('org1')).toBe('site1');
   });
 
   it('mounts one contextual panel and follows all four selection states', () => {

@@ -1,3 +1,4 @@
+import { SiteContextService } from '../../core/site-context.service';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -109,6 +110,7 @@ export class HistoryPage {
   private readonly route = inject(ActivatedRoute);
   private readonly ui = inject(UiStateService);
   private readonly organizations = inject(OrganizationContextService);
+  private readonly siteContext = inject(SiteContextService);
   private readonly auth = inject(AuthService);
   private readonly history = inject(HistoryService);
   private readonly diffs = inject(DiffService);
@@ -132,7 +134,9 @@ export class HistoryPage {
   );
   protected readonly facets = signal<ObjectFacets>({ types: [], sites: [] });
   protected readonly typeFilter = signal('');
-  protected readonly siteFilter = signal('');
+  protected readonly siteFilter = computed(() =>
+    this.siteContext.selectedFor(this.organizations.selected()?.id),
+  );
   protected readonly scopeFilter = signal<'' | 'org' | 'site'>('');
   private facetRequest = 0;
   protected readonly catalogue = computed(() =>
@@ -152,7 +156,7 @@ export class HistoryPage {
   protected setFilter(kind: 'type' | 'site' | 'scope', event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
     if (kind === 'type') this.typeFilter.set(value);
-    if (kind === 'site') this.siteFilter.set(value);
+    if (kind === 'site') this.siteContext.select(this.organizations.selected()?.id, value);
     if (kind === 'scope') this.scopeFilter.set(value as '' | 'org' | 'site');
   }
 
@@ -545,7 +549,6 @@ export class HistoryPage {
           // were read from; under another they are identifiers of nothing, and
           // reads for them can only fail. They go before the new list is asked for.
           this.resetSelection();
-          this.siteFilter.set('');
           this.library.set(true);
         }
         this.loadedOrganization = organizationId;

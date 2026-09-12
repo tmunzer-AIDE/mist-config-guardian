@@ -8,6 +8,7 @@ import { EMPTY } from 'rxjs';
 import { MistMfaService } from '../../core/mist-mfa.service';
 import { AuthService, UserRole } from '../../core/auth.service';
 import { OrganizationContextService } from '../../core/organization-context.service';
+import { SiteContextService } from '../../core/site-context.service';
 import { TimeContextService } from '../../core/time-context.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { RestorePage } from './restore-page';
@@ -355,6 +356,15 @@ describe('RestorePage', () => {
     select!.dispatchEvent(new Event('change'));
     const scoped = await nextTargets(targetList([SEA_VOICE], 1));
     expect(scoped.request.params.get('site_id')).toBe('site-1');
+  });
+
+  it('shows and applies a site selected on another page', async () => {
+    await boot();
+    const sites = TestBed.inject(SiteContextService);
+    sites.select(ORGANIZATION_ID, 'site-1');
+    const request = await nextTargets(targetList([SEA_VOICE], 1));
+    expect(request.request.params.get('site_id')).toBe('site-1');
+    expect(element().querySelector<HTMLSelectElement>('.site-select')?.value).toBe('site-1');
   });
 
   it('keeps the selected pills when a filter hides the row they came from', async () => {

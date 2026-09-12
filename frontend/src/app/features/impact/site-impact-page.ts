@@ -1,3 +1,4 @@
+import { SiteContextService } from '../../core/site-context.service';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -38,6 +39,7 @@ import { metricLabel } from './monitoring.model';
 })
 export class SiteImpactPage implements OnDestroy {
   private readonly api = inject(SiteImpactService);
+  private readonly siteContext = inject(SiteContextService);
   private readonly orgs = inject(OrganizationContextService);
   protected readonly time = inject(TimeContextService);
   private readonly router = inject(Router);
@@ -68,6 +70,7 @@ export class SiteImpactPage implements OnDestroy {
   private readonly sitesRefresh = signal(0);
   private loadedScope = '';
   private linkedScope = '';
+  private appliedSiteLink = '';
   private moreRequest?: Subscription;
   private generation = 0;
   private refreshTimer: ReturnType<typeof setInterval>;
@@ -190,6 +193,7 @@ export class SiteImpactPage implements OnDestroy {
     });
     effect((onCleanup) => {
       this.sitesRefresh();
+      const linkedSite = this.site();
       const org = this.orgs.selected()?.id;
       const asOf = this.time.asOf()?.toISOString() ?? null;
       this.generation++;
@@ -207,12 +211,19 @@ export class SiteImpactPage implements OnDestroy {
       const sub = this.api.sites(org, asOf).subscribe({
         next: (response) => {
           this.sites.set(response.items);
-          const requested = untracked(() => this.site());
-          this.siteId.set(
-            response.items.some((s) => s.id === requested)
+          untracked(() => {
+            const linkKey = JSON.stringify([org, linkedSite]);
+            const requested = linkedSite && this.appliedSiteLink !== linkKey
+              ? linkedSite
+              : this.siteContext.selectedFor(org);
+            this.appliedSiteLink = linkKey;
+            const selected = response.items.some((s) => s.id === requested)
               ? requested
-              : (response.items[0]?.id ?? ''),
-          );
+              : (response.items[0]?.id ?? '');
+            this.siteId.set(selected);
+            // An empty historical snapshot should not erase the remembered site.
+            if (selected) this.siteContext.select(org, selected);
+          });
           if (!response.items.length) this.busy.set(false);
         },
         error: () => {
@@ -299,6 +310,7 @@ export class SiteImpactPage implements OnDestroy {
     else this.refresh.update((n) => n + 1);
   }
   protected selectSite(id: string) {
+    this.siteContext.select(this.orgs.selected()?.id, id);
     this.clear();
     this.siteId.set(id);
     this.topology.set(null);
