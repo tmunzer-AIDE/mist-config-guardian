@@ -71,6 +71,46 @@ describe('global time selection', () => {
       .dispatchEvent(new Event('submit', { cancelable: true }));
     expect(time.asOf()?.toISOString()).toBe('2026-01-01T04:05:06.000Z');
   });
+  it('keeps the track stable when a historical response shifts the server window', () => {
+    key('Home');
+    const timeline = TestBed.inject(TimelineService);
+    timeline.bounds.set({ start: new Date('2025-12-31T00:00:00Z'), end: start });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[role=slider]').getAttribute('aria-valuenow')).toBe(
+      '0',
+    );
+    key('End');
+    expect(time.asOf()).toEqual(end);
+  });
+  it('uses fresh bounds when returning live from the shell banner', () => {
+    key('Home');
+    const timeline = TestBed.inject(TimelineService);
+    const refreshedEnd = new Date('2026-01-03T00:00:00Z');
+    timeline.bounds.set({ start: end, end: refreshedEnd });
+    time.returnToNow();
+    fixture.detectChanges();
+    key('End');
+    expect(time.asOf()).toEqual(refreshedEnd);
+  });
+  it('rejects a cleared date instead of silently using the current time', () => {
+    const input = fixture.nativeElement.querySelector('input');
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    fixture.nativeElement
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { cancelable: true }));
+    fixture.detectChanges();
+    expect(time.asOf()).toBeNull();
+    expect(fixture.nativeElement.querySelector('[role=alert]')).not.toBeNull();
+  });
+  it('selects events through the menu when markers overlap', () => {
+    const menu = fixture.nativeElement.querySelector('select');
+    menu.value = '2026-01-01T12:00:00Z';
+    menu.dispatchEvent(new Event('change'));
+    expect(time.asOf()?.toISOString()).toBe('2026-01-01T12:00:00.000Z');
+    expect(menu.value).toBe('');
+  });
   it('rejects future dates without leaving live mode', () => {
     const input = fixture.nativeElement.querySelector('input');
     input.value = '2999-01-01T04:05';

@@ -1,34 +1,69 @@
-<div class="time-mode">
-  <button
-    class="live-button"
-    type="button"
-    [class.active]="!time.isHistorical()"
-    [attr.aria-pressed]="!time.isHistorical()"
-    (click)="live()"
-  >
-    <span></span>Live
-  </button>
-  <details class="exact-time" #picker>
-    <summary [class.historical]="time.isHistorical()">
-      {{ time.isHistorical() ? asOfLabel() : 'View at…' }}<span aria-hidden="true">⌄</span>
-    </summary>
-    <form (submit)="apply($event, picker)">
-      <label for="view-at-time">View configuration at (UTC)</label
-      ><input
-        id="view-at-time"
-        type="datetime-local"
-        step="1"
-        required
-        [value]="exactValue()"
-        (input)="draft.set($any($event.target).value)"
-      />
-      @if (dateError()) {
-        <p class="date-error" role="alert">{{ dateError() }}</p>
-      }
-      <p>Inspection stays available. Configuration writes are disabled in a historical view.</p>
-      <button class="cg-btn cg-btn--primary" type="submit">Apply time</button>
-    </form>
-  </details>
+<div class="time-toolbar">
+  <div class="time-heading">
+    <strong>Time explorer</strong
+    ><span>{{
+      preview()
+        ? 'Preview · release to view'
+        : time.isHistorical()
+          ? 'Historical view · read only'
+          : 'Viewing current configuration'
+    }}</span>
+  </div>
+  <div class="time-mode">
+    <button
+      class="live-button"
+      type="button"
+      [class.active]="!time.isHistorical()"
+      [attr.aria-pressed]="!time.isHistorical()"
+      (click)="live()"
+    >
+      <span></span>Live
+    </button>
+    <details class="exact-time" #picker (toggle)="openPicker(picker)">
+      <summary [class.historical]="time.isHistorical()">
+        {{ time.isHistorical() ? asOfLabel() : 'Choose date & time'
+        }}<span aria-hidden="true">⌄</span>
+      </summary>
+      <form
+        (keydown.escape)="closePicker(picker); $event.stopPropagation()"
+        (submit)="apply($event, picker)"
+      >
+        <label for="view-at-time">View configuration at (UTC)</label
+        ><input
+          id="view-at-time"
+          type="datetime-local"
+          step="1"
+          required
+          [value]="exactValue()"
+          (input)="draft.set($any($event.target).value); dateError.set('')"
+          aria-describedby="time-help"
+          [attr.aria-invalid]="dateError() ? true : null"
+        />
+        @if (dateError()) {
+          <p class="date-error" role="alert">{{ dateError() }}</p>
+        }
+        <p id="time-help">
+          Inspection stays available. Configuration writes are disabled in a historical view.
+        </p>
+        <div class="picker-actions">
+          <button class="cg-btn" type="button" (click)="closePicker(picker)">Cancel</button
+          ><button class="cg-btn cg-btn--primary" type="submit">View configuration</button>
+        </div>
+      </form>
+    </details>
+  </div>
+  <div class="range-control" role="group" aria-label="Time range">
+    @for (range of ranges; track range) {
+      <button
+        type="button"
+        [class.active]="time.range() === range"
+        [attr.aria-pressed]="time.range() === range"
+        (click)="setRange(range)"
+      >
+        {{ range === '24h' ? '24 hours' : range === '7d' ? '7 days' : '30 days' }}
+      </button>
+    }
+  </div>
 </div>
 <div class="activity">
   <div class="track">
@@ -41,10 +76,15 @@
       aria-valuemax="100"
       [attr.aria-valuenow]="cursor()"
       [attr.aria-valuetext]="asOfLabel()"
-      (click)="scrub($event)"
+      (pointerdown)="startDrag($event)"
+      (pointermove)="moveDrag($event)"
+      (pointerup)="endDrag($event)"
+      (pointercancel)="cancelDrag()"
+      (lostpointercapture)="cancelDrag()"
       (keydown)="onTrackKey($event)"
     >
       <span class="track-line"></span>
+      <span class="track-fill" [style.width.%]="cursor()"></span>
     </div>
     @for (tick of ticks(); track $index) {
       <button
@@ -61,18 +101,27 @@
   </div>
   <div class="track-labels">
     <span>{{ startLabel() }}</span
-    ><span>Change activity</span><span>{{ endLabel() }}</span>
+    ><span
+      >{{
+        preview() || time.isHistorical() ? asOfLabel() : 'Drag to explore · select a change below'
+      }}
+      · UTC</span
+    ><span>{{ endLabel() }}</span>
   </div>
 </div>
-<div class="range-control" role="group" aria-label="Time range">
-  @for (range of ranges; track range) {
-    <button
-      type="button"
-      [class.active]="time.range() === range"
-      [attr.aria-pressed]="time.range() === range"
-      (click)="time.setRange(range)"
-    >
-      {{ range.toUpperCase() }}
-    </button>
-  }
+<div class="timeline-footer">
+  <select
+    aria-label="Jump to a change"
+    (change)="jumpToChange($event)"
+    [disabled]="!ticks().length"
+  >
+    <option value="">
+      {{
+        ticks().length ? 'Jump to a change (' + ticks().length + ')' : 'No changes in this window'
+      }}
+    </option>
+    @for (tick of ticks(); track $index) {
+      <option [value]="tick.at">{{ tick.at }} · {{ tick.label }}</option>
+    }</select
+  ><span>Arrow keys to adjust · Esc to return live</span>
 </div>
