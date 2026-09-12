@@ -2,6 +2,7 @@
 
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.impact.agent import ModelActivity
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
@@ -47,6 +48,16 @@ async def shadow_investigation(
         calls_limit=root.calls_limit,
         assessment=artifact.assessment if artifact else None,
         deployment=artifact.deployment if artifact else None,
+        agent=artifact.agent if artifact else None,
+        model_activity=ModelActivity(
+            calls_used=root.model_calls_used,
+            calls_limit=root.model_calls_limit,
+            input_bytes_reserved=root.model_input_bytes_reserved,
+            input_bytes_limit=root.model_input_bytes_limit,
+            records=tuple(root.model_requests),
+        )
+        if root.model_requests or (artifact and artifact.agent is not None)
+        else None,
         dispatch_log=DispatchLog(
             records=tuple(root.dispatches),
             unlogged_reservations=max(0, root.calls_used - len(root.dispatches)),

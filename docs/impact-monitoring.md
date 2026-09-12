@@ -301,3 +301,32 @@ The activity table's byte count is consumed response content, not the response's
 advertised size. HTTP errors may have a status but no size because collection
 stopped before reading their body. Unknown sizes and unfinished attempts must not
 be interpreted as measured zero.
+
+### Bounded agent preview
+
+`IMPACT_ENGINE_MODE=agent_shadow` opts into the initial investigator using the
+application's enabled AI provider. Default `legacy` and deterministic `shadow`
+remain available. Both shadow modes suppress the former device-level AI narrator;
+production impact, notifications and counts remain based on the existing assessment
+path until adjudicated acceptance and consumer promotion.
+
+The agent currently receives immutable WLAN removal/disable semantics and can
+select the existing historical client-session checks. It does not yet have general
+Mist MCP access, inventory discovery, port events, OAS retrieval or arbitrary
+configuration investigation. Deployment candidates are bounded context, not query
+permissions or proof of impact. Rules' required checks still run if the agent omits
+them or cannot produce a valid report.
+
+Each checkpoint allows three model requests; each audit allows 21 requests and
+504,000 reserved input-content bytes. Each request admits at most 24,000 input
+bytes, requests at most 1,500 output tokens and validates bounded JSON actions.
+Actual token usage remains nullable. Existing lower persisted limits are honored.
+Model responses cannot select arbitrary URLs, entities, windows or evidence refs.
+Mist calls retain their separate 56-request audit budget and existing journal.
+
+The preview adds `agent` (published revision) and `model_activity` (live root).
+Hypotheses, their cited evidence, limitations and open questions use one schema.
+The model supplies neither production severity nor confidence. Saved context retains
+its source revision; previous observations are distinguished from current evidence.
+Live model activity includes bounded input context, validated actions and usage,
+with unfinished attempts explicitly unknown. This is not a raw transcript archive.

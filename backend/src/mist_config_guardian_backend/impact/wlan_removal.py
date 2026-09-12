@@ -120,6 +120,7 @@ def _resolve_wlan_target(
         logical_object_id=object_id,
         before_version_id=str(prior.id),
         after_version_id=str(version.id),
+        change_kind="removed" if version.is_deleted else "disabled",
     )
 
 

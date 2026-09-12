@@ -9,6 +9,7 @@ import { AuditImpactSummary, SHADOW_LABELS } from '../../core/audit-impact.model
 import { DeploymentEvidence } from '../../core/deployment-evidence.model';
 import { DeploymentEvidenceComponent } from '../../shared/deployment-evidence';
 import { DispatchLog, DispatchLogComponent } from '../../shared/dispatch-log';
+import { AgentCheckpoint, AgentInvestigationComponent, ModelActivity } from '../../shared/agent-investigation';
 
 interface ShadowAssessment {
   impact: 'info' | 'none' | 'warning';
@@ -40,6 +41,8 @@ export interface ShadowReport {
   shadow_impact?: AuditImpactSummary | null;
   deployment?: DeploymentEvidence | null;
   dispatch_log?: DispatchLog | null;
+  agent?: AgentCheckpoint | null;
+  model_activity?: ModelActivity | null;
   targets: { handle: string; site_id: string; wlan_id: string }[];
   checks: {
     check_id: string;
@@ -56,7 +59,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [DeploymentEvidenceComponent, DispatchLogComponent],
+  imports: [DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -104,6 +107,7 @@ export interface ShadowReport {
           </div>
         </details>
         <app-dispatch-log [log]="report.dispatch_log" />
+        <app-agent-investigation [checkpoint]="report.agent" [activity]="report.model_activity" />
       </section>
     }
   `,

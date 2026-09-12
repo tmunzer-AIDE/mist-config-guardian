@@ -438,11 +438,107 @@ of adding that read path.
   alone do not establish actual dependencies or causal impact. Retain shared
   call budgets, audit-owned context and human-adjudicated promotion gates.
 
+## First bounded investigator runtime
+
+- Implement `agent_shadow` as the third, mutually exclusive engine mode. `legacy`
+  remains the default; `shadow` remains deterministic. Both shadow modes suppress
+  the old device narrator and use the existing audit-root scheduler. No environment
+  was enabled, provider credential changed, live provider called, deployment made
+  or production verdict promoted in this milestone.
+- The agent uses the configured OpenAI-compatible provider through the existing
+  application adapter. Implement a provider-neutral JSON action/result loop with
+  `collect` and `report` actions, rather than requiring provider-native function
+  calling support. The application validates and executes actions. This follows
+  the application-execution boundary described in the official
+  [function calling guide](https://developers.openai.com/api/docs/guides/function-calling).
+  No SDK dependency or desktop Mist MCP credential borrowing is introduced.
+- The current catalogue contains only the existing WLAN session check. Capability
+  references derive from audit-bound target handles and fixed baseline/follow-up
+  windows. Model-selected paths, URLs, new identities and unlisted checks cannot
+  execute. Validate the entire action before any selected check; validate returned
+  evidence identity before supplying it to the model. Deduplicate repeated checks
+  within a checkpoint, including deterministic fallback. A cache hit still consumes
+  the model call which requested it. Do not reuse old follow-up evidence as fresh.
+- Supply removal/disable semantics from immutable configuration, opaque target
+  handles, explicit exclusions, bounded coverage gaps and an unmapped-change count.
+  Do not send raw configuration, secret values, SSID/device names, client MACs or
+  arbitrary tool prose. The first runtime does not yet interpret arbitrary unmapped
+  configuration diffs. That requires broader resolvers, redacted change context and
+  operational capabilities; this limitation remains visible rather than implied
+  to have been solved by adding a model.
+- Collect the deployment snapshot once before the model and persist that exact
+  snapshot with the revision. Supply at most 20 pseudonymous deployment candidate
+  entries, their association/outcome/timing and an explicit omitted count. Expected
+  fleet size remains unknown. Those context handles are not executable capabilities
+  or impacted-device records; the model cannot cite them as WLAN check evidence.
+- Keep required WLAN evidence outside model discretion. The model may choose
+  check order and batch requests; omitted checks still run through the same cache
+  and journal after a normal model stop/failure. Invalid output, unavailable provider
+  or exhausted model budget cannot cancel those requirements. A collection denial
+  stops further evidence dispatch. Database uncertainty, result-journal failure,
+  cancellation or the 120-second collection-phase deadline stops publication;
+  existing lease/expiry handling and durable reservations expose unfinished work.
+- Bound each checkpoint to three model requests, each with at most 24,000 UTF-8
+  input-content bytes and 1,500 requested output tokens (or a lower configured
+  output limit). Stream at most 65,536 response-envelope bytes and accept at most
+  16,000 completion-content bytes. Provider I/O timeout is 20 seconds and each
+  model call has a 25-second wall deadline, within the 120-second collection phase
+  and existing three-minute lease. The general provider adapter now also bounds
+  completion envelopes to 1 MiB for its other consumers.
+- Reserve at most 21 model calls and 504,000 input-content bytes per audit; the
+  maximum requested output allocation is 31,500 tokens. Persist initial policy
+  limits on the root and honor lower existing limits. Counters and one model request
+  record are written atomically under the audit fence before provider dispatch.
+  `$ifNull` permits older roots without counters to start at zero without a budget
+  reset. Failed and uncertain writes never dispatch. Missing provider token usage
+  remains unknown; reported invalid/negative/bool counts are ignored. Byte admission
+  is not a claim of exact billed input tokens or calibrated cost.
+- Record request identity, candidate revision, generation, configured model,
+  prompt version, bounded normalized input context, fingerprint and requested output
+  bound. Complete only the exact still-reserved attempt, preserving token usage and
+  validated action. A stale worker can complete its own factual log but cannot issue
+  another guarded call or publish. Unknown raw/invalid model responses and provider
+  exception prose are not retained. Provider/organization/credential/window denials
+  are distinct; a rejected atomic lease/budget guard is explicitly unresolved.
+  Read the fresh provider configuration and verified organization/service credential
+  before every model request. No restore-administrator credential is used.
+- Resume only the root's exact published artifact identity (organization, report,
+  investigation and revision), with matching audit IDs. Carry bounded structured
+  memory with its source revision, plus previous observed samples, separately from
+  newly collected evidence. Missing/foreign/unreadable context prevents model work,
+  while deterministic evidence can still proceed. Never append an unbounded chat
+  transcript or promote a historical model summary into current facts. The shared
+  lease/publication fence remains the single investigation ownership mechanism.
+- Publish model output as `model_proposal`: summary, scoped hypotheses, supporting
+  and counterevidence references, limitations and open questions. Validate referenced
+  checks against current supplied observations and matching target handles. No
+  model-written ratings, arbitrary chart series or failed-device identity fields
+  exist in this contract. Schema/reference validity is not factual adjudication;
+  the UI explicitly labels explanations as hypotheses. Deterministic assessment
+  bands and all production decisions remain independent of this proposal.
+- The existing authorized preview exposes the revision-pinned proposal and a
+  separately labeled live model journal, including unfinished attempts. Raw
+  configuration/provider transcripts and credentials are excluded. Compact
+  Changes/Overview projections do not load the journal. This audit-owned model
+  activity is not yet mirrored into the separate global AI-request audit list.
+  Local source/diff review completed; CodeRabbit remains signed out.
+
+- Validation: 1,077 backend tests passed, 20 skipped; 394 frontend tests passed.
+  Thirty-five investigator regressions cover real action/result ordering, bounded
+  loops, cached checks, invalid/foreign references, provider failures, credential
+  changes, context ownership/resumption, legacy gating, budget reservation and
+  unfinished model calls. Four provider cases cover response-size bounds and
+  invalid usage values. UI tests preserve hypothesis labeling, unknown usage,
+  source revisions and escaped output. Ruff, source types, changed-file formatting,
+  OpenAPI consistency, production build and the isolated browser preview passed.
+  The rendered activity view was inspected. No live provider quality calibration
+  or live Mongo concurrency test was performed; these are not adjudicated labels.
+
 ## Next implementation queue
 
-1. Implement the bounded shadow investigator over existing authorized evidence
-   checks, with structured hypotheses, report validation, persisted checkpoint
-   context and model/tool activity accounting. Keep one investigator per audit.
+1. Expand the running shadow investigator beyond its WLAN-only capability set:
+   provide redacted general change context and trusted discovery/resolver handles.
+   Keep one investigator per audit; do not add a manual rule for every attribute.
 2. Expand reusable resolvers and collectors as needed, starting with targeted
    port/PoE event history and physical dependencies. Add regression scenarios
    and domain skills; avoid requiring a bespoke rule for every attribute.

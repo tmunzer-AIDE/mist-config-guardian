@@ -92,7 +92,7 @@ class WebhookProcessingService:
         # how many times either was delivered.
         await self.project(receipt, payload, session=session)
 
-        if receipt.topic == "audits" and receipt.audit_id and get_settings().impact_engine_mode == "shadow":
+        if receipt.topic == "audits" and receipt.audit_id and get_settings().impact_engine_mode != "legacy":
             await ImpactInvestigationService(self._vault).ensure(
                 receipt.organization_id,
                 receipt.audit_id,

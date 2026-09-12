@@ -68,6 +68,151 @@
         "title": "AffectedDeviceResponse",
         "type": "object"
       },
+      "AgentCheckpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "dispatch_denial": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelDispatchDenial"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentMemory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceView"
+            },
+            "maxItems": 8,
+            "title": "Observations",
+            "type": "array"
+          },
+          "prompt_version": {
+            "const": "impact-investigator.v1",
+            "default": "impact-investigator.v1",
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Request Ids",
+            "type": "array"
+          },
+          "source": {
+            "const": "model_proposal",
+            "default": "model_proposal",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "complete",
+              "unavailable",
+              "invalid_response",
+              "budget_exhausted",
+              "context_unavailable",
+              "provider_error",
+              "dispatch_denied"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "AgentCheckpoint",
+        "type": "object"
+      },
+      "AgentMemory": {
+        "additionalProperties": false,
+        "properties": {
+          "proposal": {
+            "$ref": "#/components/schemas/AgentProposal"
+          },
+          "source_revision": {
+            "minimum": 1.0,
+            "title": "Source Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_revision",
+          "proposal"
+        ],
+        "title": "AgentMemory",
+        "type": "object"
+      },
+      "AgentProposal": {
+        "additionalProperties": false,
+        "properties": {
+          "hypotheses": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Hypothesis"
+            },
+            "maxItems": 4,
+            "title": "Hypotheses",
+            "type": "array"
+          },
+          "open_questions": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Open Questions",
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "AgentProposal",
+        "type": "object"
+      },
       "AiAssistCard": {
         "description": "One model-produced card shown beside the deterministic diff.\n\n``kind`` separates stated intent from flagged risks; ``field`` references a\ndiff entry path when the model cited one.",
         "properties": {
@@ -1444,6 +1589,32 @@
         "title": "ChangedObjectResponse",
         "type": "object"
       },
+      "CollectAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "collect",
+            "title": "Action",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "action",
+          "checks"
+        ],
+        "title": "CollectAction",
+        "type": "object"
+      },
       "ComponentHealthResponse": {
         "description": "Health of one runtime component.",
         "properties": {
@@ -2736,6 +2907,54 @@
         "title": "EmailChangeResponse",
         "type": "object"
       },
+      "EvidenceView": {
+        "additionalProperties": false,
+        "properties": {
+          "gap": {
+            "maxLength": 500,
+            "title": "Gap",
+            "type": "string"
+          },
+          "observed_disconnects": {
+            "minimum": 0.0,
+            "title": "Observed Disconnects",
+            "type": "integer"
+          },
+          "ref": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Ref",
+            "type": "string"
+          },
+          "sampled_clients": {
+            "minimum": 0.0,
+            "title": "Sampled Clients",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        },
+        "required": [
+          "ref",
+          "target_handle",
+          "window",
+          "state",
+          "sampled_clients",
+          "observed_disconnects",
+          "gap"
+        ],
+        "title": "EvidenceView",
+        "type": "object"
+      },
       "FailedRestoreResponse": {
         "description": "One restore that stopped part way and may need compensation.",
         "properties": {
@@ -2807,6 +3026,59 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "Hypothesis": {
+        "additionalProperties": false,
+        "properties": {
+          "counterevidence_checks": {
+            "default": [],
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Counterevidence Checks",
+            "type": "array"
+          },
+          "limitations": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "statement": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Statement",
+            "type": "string"
+          },
+          "supporting_checks": {
+            "default": [],
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Supporting Checks",
+            "type": "array"
+          },
+          "target_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_handle",
+          "statement"
+        ],
+        "title": "Hypothesis",
         "type": "object"
       },
       "ImpactAiSettingsResponse": {
@@ -3578,6 +3850,195 @@
           "region"
         ],
         "title": "MistLoginRequest",
+        "type": "object"
+      },
+      "ModelActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "calls_limit": {
+            "default": 21,
+            "title": "Calls Limit",
+            "type": "integer"
+          },
+          "calls_used": {
+            "minimum": 0.0,
+            "title": "Calls Used",
+            "type": "integer"
+          },
+          "input_bytes_limit": {
+            "default": 504000,
+            "title": "Input Bytes Limit",
+            "type": "integer"
+          },
+          "input_bytes_reserved": {
+            "minimum": 0.0,
+            "title": "Input Bytes Reserved",
+            "type": "integer"
+          },
+          "records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ModelRequestRecord"
+            },
+            "maxItems": 21,
+            "title": "Records",
+            "type": "array"
+          },
+          "source": {
+            "const": "live_investigation_root",
+            "default": "live_investigation_root",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calls_used",
+          "input_bytes_reserved"
+        ],
+        "title": "ModelActivity",
+        "type": "object"
+      },
+      "ModelDispatchDenial": {
+        "enum": [
+          "provider_changed",
+          "organization_unavailable",
+          "credential_changed",
+          "window_expired",
+          "reservation_rejected"
+        ],
+        "title": "ModelDispatchDenial",
+        "type": "string"
+      },
+      "ModelRequestRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CollectAction"
+              },
+              {
+                "$ref": "#/components/schemas/ReportAction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "candidate_revision": {
+            "minimum": 1.0,
+            "title": "Candidate Revision",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_bytes": {
+            "maximum": 24000.0,
+            "minimum": 1.0,
+            "title": "Input Bytes",
+            "type": "integer"
+          },
+          "input_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "input_json": {
+            "maxLength": 24000,
+            "title": "Input Json",
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 255,
+            "title": "Model",
+            "type": "string"
+          },
+          "output_token_limit": {
+            "maximum": 1500.0,
+            "minimum": 1.0,
+            "title": "Output Token Limit",
+            "type": "integer"
+          },
+          "prompt_version": {
+            "const": "impact-investigator.v1",
+            "default": "impact-investigator.v1",
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "request_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Tokens"
+          },
+          "reserved_at": {
+            "format": "date-time",
+            "title": "Reserved At",
+            "type": "string"
+          },
+          "response_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Tokens"
+          },
+          "state": {
+            "default": "reserved",
+            "enum": [
+              "reserved",
+              "complete",
+              "invalid_response",
+              "provider_error"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "generation",
+          "candidate_revision",
+          "reserved_at",
+          "input_hash",
+          "model",
+          "input_bytes",
+          "output_token_limit",
+          "input_json"
+        ],
+        "title": "ModelRequestRecord",
         "type": "object"
       },
       "MonitoringChangeRef": {
@@ -5445,6 +5906,25 @@
         "title": "RelevancePlan",
         "type": "object"
       },
+      "ReportAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "report",
+            "title": "Action",
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/AgentProposal"
+          }
+        },
+        "required": [
+          "action",
+          "report"
+        ],
+        "title": "ReportAction",
+        "type": "object"
+      },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
         "properties": {
@@ -6401,6 +6881,16 @@
       "ShadowInvestigationResponse": {
         "description": "Diagnostic preview; never replaces the published production verdict.",
         "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentCheckpoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "assessment": {
             "anyOf": [
               {
@@ -6469,6 +6959,16 @@
             "default": "shadow",
             "title": "Mode",
             "type": "string"
+          },
+          "model_activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "revision": {
             "title": "Revision",

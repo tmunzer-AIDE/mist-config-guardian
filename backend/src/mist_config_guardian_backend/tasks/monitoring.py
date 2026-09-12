@@ -29,7 +29,7 @@ async def _poll_active_monitoring() -> int:
             vault,
             ApplicationConfigurationService(vault),
         ).poll_active()
-        if settings.impact_engine_mode == "shadow":
+        if settings.impact_engine_mode != "legacy":
             await ImpactInvestigationService(vault).poll_due()
         return polled
     finally:

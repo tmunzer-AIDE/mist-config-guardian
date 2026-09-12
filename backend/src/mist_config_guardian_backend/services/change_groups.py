@@ -1187,7 +1187,7 @@ class ChangeGroupService:
             )
             for group in groups
         ]
-        if get_settings().impact_engine_mode == "shadow":
+        if get_settings().impact_engine_mode != "legacy":
             impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id for group in groups])
             for summary in summaries:
                 summary.shadow_impact = impacts.get(summary.audit_id)
@@ -1238,7 +1238,7 @@ class ChangeGroupService:
             exclude_audit_id=group.audit_id,
         )
         summary = _summarize(group, sessions, names, viewer_email, historical=historical)
-        if not historical and get_settings().impact_engine_mode == "shadow":
+        if not historical and get_settings().impact_engine_mode != "legacy":
             impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id])
             summary.shadow_impact = impacts.get(group.audit_id)
         return ChangeGroupDetailResponse(

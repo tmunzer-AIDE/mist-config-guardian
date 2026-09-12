@@ -7,6 +7,12 @@ from beanie import Document, PydanticObjectId
 from pydantic import Field
 from pymongo import IndexModel
 
+from mist_config_guardian_backend.impact.agent import (
+    MAX_INPUT_BYTES_TOTAL,
+    MAX_MODEL_CALLS,
+    AgentCheckpoint,
+    ModelRequestRecord,
+)
 from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanAssessment, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
@@ -30,6 +36,11 @@ class ImpactInvestigation(TimestampedModel, Document):
     revision: int = 0  # Number of successfully published checkpoints.
     report_id: PydanticObjectId | None = None
     dispatches: list[DispatchRecord] = Field(default_factory=list, max_length=MAX_DISPATCHES)
+    model_calls_used: int = 0
+    model_calls_limit: int = MAX_MODEL_CALLS
+    model_input_bytes_reserved: int = 0
+    model_input_bytes_limit: int = MAX_INPUT_BYTES_TOTAL
+    model_requests: list[ModelRequestRecord] = Field(default_factory=list, max_length=MAX_MODEL_CALLS)
 
     class Settings:
         name = "impact_investigations"
@@ -50,6 +61,7 @@ class InvestigationRevision(Document):
     assessment: WlanAssessment
     evidence: list[SessionEvidence] = Field(default_factory=list, max_length=8)
     deployment: DeploymentEvidence | None = None
+    agent: AgentCheckpoint | None = None
 
     class Settings:
         name = "investigation_revisions"

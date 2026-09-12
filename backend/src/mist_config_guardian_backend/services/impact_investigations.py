@@ -1,5 +1,6 @@
 """Bounded deterministic shadow investigations driven by the existing worker tick."""
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from functools import partial
@@ -10,9 +11,11 @@ from beanie.odm.utils.encoder import Encoder
 from pymongo import ReturnDocument
 from pymongo.errors import PyMongoError
 
+from mist_config_guardian_backend.config import get_settings
+from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
 from mist_config_guardian_backend.impact.contracts import DispatchDenial, SessionEvidence, WlanRemovalPlan
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
-from mist_config_guardian_backend.impact.wlan_removal import check_windows, compile_wlan_removal, evaluate_wlan_removal
+from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWlanEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
@@ -21,6 +24,7 @@ from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.change_groups import BeanieChangeGroupStore
 from mist_config_guardian_backend.services.deployment_evidence import collect_deployment
+from mist_config_guardian_backend.services.impact_agent import ImpactAgent
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 logger = logging.getLogger(__name__)
@@ -150,7 +154,7 @@ class ImpactInvestigationService:
             )
         return plan
 
-    async def _poll(self, root: ImpactInvestigation) -> None:
+    async def _poll(self, root: ImpactInvestigation) -> None:  # noqa: C901 - fenced collection and fallback
         now = utc_now()
         # Only a fenced publication advances revision. Lease claims and orphan
         # artifacts are not completed checkpoints and must not consume this cap.
@@ -161,6 +165,8 @@ class ImpactInvestigationService:
         organization = await Organization.get(root.organization_id)
         evidence_as_of = min(now, root.expires_at)
         evidence = []
+        agent = None
+        deployment = await collect_deployment(root, as_of=now)
         # Delayed audit delivery cannot turn a historical change into a fresh hour.
         expired = now > root.expires_at + timedelta(minutes=2)
         if (
@@ -172,32 +178,36 @@ class ImpactInvestigationService:
             token = await service_token(organization, self._vault)
             credential = organization.encrypted_service_token
 
-            async with MistWlanEvidenceClient(token=token, region=organization.cloud_region) as client:
-                for target in plan.targets:
-                    for window in check_windows(plan, evidence_as_of):
-                        dispatch = DispatchRecord(
-                            id=uuid4(),
-                            generation=root.generation,
-                            candidate_revision=root.revision + 1,
-                            target_handle=target.handle,
-                            site_id=target.site_id,
-                            wlan_id=target.wlan_id,
-                            window=window,
-                            reserved_at=utc_now(),
-                        )
-                        reading = await client.capture(
-                            plan=plan,
-                            target_handle=target.handle,
-                            window=window,
-                            reserve_dispatch=partial(self._reserve, root, credential, dispatch),
-                        )
-                        if reading.state not in {"budget_exhausted", "dispatch_denied"}:
-                            await self._finish_dispatch(root, dispatch, reading)
+            async with (
+                asyncio.timeout(120),
+                MistWlanEvidenceClient(token=token, region=organization.cloud_region) as client,
+            ):
+                collected: dict[str, SessionEvidence] = {}
+
+                async def collect(check: CheckCapability) -> SessionEvidence:
+                    if check.ref not in collected:
+                        if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
+                            msg = "Evidence collection stopped after dispatch denial"
+                            raise RuntimeError(msg)
+                        reading = await self._collect(root, plan, check, client, credential)
+                        collected[check.ref] = reading
                         evidence.append(reading)
-                        if reading.state in {"budget_exhausted", "dispatch_denied"}:
-                            break
+                    return collected[check.ref]
+
+                if get_settings().impact_engine_mode == "agent_shadow":
+                    agent = await ImpactAgent(self._vault).run(
+                        root,
+                        plan,
+                        evidence_as_of,
+                        collect,
+                        service_credential=credential,
+                        deployment=deployment,
+                    )
+                # Model failure or omission cannot cancel a rule's required evidence.
+                for check in capabilities(plan, evidence_as_of):
                     if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
                         break
+                    await collect(check)
         assessment = evaluate_wlan_removal(plan, evidence, evidence_as_of=evidence_as_of)
         if root.id is None:
             msg = "Persisted investigation has no identity"
@@ -210,7 +220,8 @@ class ImpactInvestigationService:
             plan=plan,
             assessment=assessment,
             evidence=evidence,
-            deployment=await collect_deployment(root, as_of=now),
+            deployment=deployment,
+            agent=agent,
         )
         await artifact.insert()
         finished = now >= root.expires_at or any(
@@ -238,6 +249,35 @@ class ImpactInvestigationService:
                 }
             },
         )
+
+    async def _collect(
+        self,
+        root: ImpactInvestigation,
+        plan: WlanRemovalPlan,
+        check: CheckCapability,
+        client: MistWlanEvidenceClient,
+        credential: str,
+    ) -> SessionEvidence:
+        target = next(t for t in plan.targets if t.handle == check.target_handle)
+        dispatch = DispatchRecord(
+            id=uuid4(),
+            generation=root.generation,
+            candidate_revision=root.revision + 1,
+            target_handle=target.handle,
+            site_id=target.site_id,
+            wlan_id=target.wlan_id,
+            window=check.window,
+            reserved_at=utc_now(),
+        )
+        reading = await client.capture(
+            plan=plan,
+            target_handle=check.target_handle,
+            window=check.window,
+            reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+        )
+        if reading.state not in {"budget_exhausted", "dispatch_denied"}:
+            await self._finish_dispatch(root, dispatch, reading)
+        return reading
 
     async def _reserve(
         self, root: ImpactInvestigation, credential: str, dispatch: DispatchRecord

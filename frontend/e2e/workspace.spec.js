@@ -535,6 +535,17 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
     targets: [{ handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222' }],
     checks: [{ check_id: 'wlan-client-sessions.v1', target_handle: 'wlan-handle', captured_at: now,
       window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' }],
+    agent: { source: 'model_proposal', state: 'complete', reason: '',
+      proposal: { summary: 'The available history cannot establish the effect of this change.',
+        hypotheses: [{ target_handle: 'wlan-handle', statement: 'Previously connected clients may have been affected.',
+          supporting_checks: [], counterevidence_checks: [], limitations: ['Missing session history prevents attribution.'] }],
+        open_questions: ['Failed joins require an additional evidence capability.'] },
+      memory: null, observations: [] },
+    model_activity: { source: 'live_investigation_root', calls_used: 1, calls_limit: 21,
+      input_bytes_reserved: 1200, input_bytes_limit: 504000,
+      records: [{ id: 'model-attempt-1', candidate_revision: 2, model: 'test-model', state: 'reserved',
+        reserved_at: now, finished_at: null, request_tokens: null, response_tokens: null,
+        input_hash: 'bounded-context-hash', input_json: '{"unmapped_change_count":0}', action: null }] },
     dispatch_log: { source: 'live_investigation_root', unlogged_reservations: 1,
       records: [{ id: 'attempt-1', generation: 2, candidate_revision: 2, check_id: 'wlan-client-sessions.v1',
         target_handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222',
@@ -563,6 +574,15 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await expect(preview).toContainText('may not have reached Mist');
   await page.locator('app-dispatch-log table').scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('dispatch-journal.png'), fullPage: true });
+  const agentPreview = page.getByRole('region', { name: 'Agent investigation proposal' });
+  await agentPreview.scrollIntoViewIfNeeded();
+  await expect(agentPreview).toContainText('hypotheses for review');
+  await expect(agentPreview).toContainText('Missing session history prevents attribution');
+  await page.getByText('Live model activity', { exact: false }).click();
+  await page.getByText('test-model · Outcome unknown', { exact: false }).click();
+  await expect(page.locator('app-agent-investigation')).toContainText('input Unknown');
+  await page.screenshot({ path: info.outputPath('agent-investigation.png'), fullPage: true });
+
 });
 
 test('shared shadow projection stays distinct from production in Changes and Overview', async ({ page }, info) => {

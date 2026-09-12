@@ -33,6 +33,7 @@ class WlanTarget(Contract):
     logical_object_id: str
     before_version_id: str
     after_version_id: str
+    change_kind: Literal["removed", "disabled", "unknown"] = "unknown"
 
 
 class WlanRemovalPlan(Contract):
