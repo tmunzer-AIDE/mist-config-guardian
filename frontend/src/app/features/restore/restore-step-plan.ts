@@ -29,6 +29,7 @@ export interface ActionRow {
   error: string | null;
   running: boolean;
   failed: boolean;
+  comparisonUrl: string | null;
 }
 
 /** Build the ordered action rows for one operation, in dependency order. */
@@ -46,6 +47,9 @@ export function actionRows(operation: RestoreOperation): ActionRow[] {
     error: action.error,
     running: action.status === 'executing',
     failed: action.status === 'failed',
+    comparisonUrl: action.baseline_version_id ? '/history?' + new URLSearchParams({
+      object: action.logical_object_id, a: action.baseline_version_id, b: action.source_version_id,
+    }).toString() : null,
   }));
 }
 

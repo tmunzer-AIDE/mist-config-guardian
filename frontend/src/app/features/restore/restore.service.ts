@@ -52,7 +52,17 @@ export class RestoreService {
     );
   }
 
-  /** Authorize and queue the plan. The token is used once and discarded. */
+  /** Capture a fresh backup and return a new plan for review. */
+  prepare(organizationId: string, operationId: string, credential: RestoreCredential): Promise<RestoreOperation> {
+    return this.authorize(orgPath(organizationId, `/restores/${operationId}/prepare`), credential);
+  }
+
+  executePrepared(organizationId: string, operationId: string): Promise<RestoreOperation> {
+    return firstValueFrom(this.http.post<RestoreOperation>(
+      orgPath(organizationId, `/restores/${operationId}/execute`), { use_prepared_credential: true },
+    ));
+  }
+
   execute(
     organizationId: string,
     operationId: string,

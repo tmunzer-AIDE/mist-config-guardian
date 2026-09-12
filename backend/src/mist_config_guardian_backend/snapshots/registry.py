@@ -32,6 +32,7 @@ class ObjectDefinition:
             "client_secret",
             "passphrase",
             "password",
+            "root_password",
             "private_key",
             "psk",
             "secret",

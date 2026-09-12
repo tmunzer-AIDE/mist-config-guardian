@@ -36,7 +36,11 @@ class Collection:
         assert projection == {"encrypted_delegated_credential": 1, "organization_id": 1}
         for document in self.documents:
             if not all(
-                document.get(key) is not None and document[key] <= value["$lte"]
+                (
+                    document.get(key) in value["$in"]
+                    if "$in" in value
+                    else document.get(key) is not None and document[key] <= value["$lte"]
+                )
                 if isinstance(value, dict)
                 else document.get(key) == value
                 for key, value in criteria.items()
@@ -148,4 +152,14 @@ async def test_release_of_api_token_does_not_attempt_logout(cleanup):
     collection.documents.append(operation)
     await service.release(operation["_id"], "task-1")
     assert operation["status"] == RestoreStatus.PLANNED
+    assert operation["encrypted_delegated_credential"] is None
+
+
+async def test_expiry_revokes_session_awaiting_plan_review(cleanup, httpx_mock):
+    service, vault, collection = cleanup
+    operation = queued(vault, status=RestoreStatus.PLANNED)
+    collection.documents.append(operation)
+    httpx_mock.add_response(url=BASE + "/api/v1/logout", status_code=200)
+    assert await service.expire_stale_credentials() == 1
+    assert operation["status"] == RestoreStatus.FAILED
     assert operation["encrypted_delegated_credential"] is None

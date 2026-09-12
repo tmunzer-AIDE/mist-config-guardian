@@ -609,25 +609,25 @@ describe('RestorePage', () => {
 
     const token = element().querySelector<HTMLInputElement>('.token-input')!;
     expect(token.type).toBe('password');
-    const submit = button('Authorize and execute')!;
+    const submit = button('Capture backup and review new plan')!;
     expect(submit.disabled).toBe(true);
 
     token.value = 'short';
     token.dispatchEvent(new Event('input'));
     await settle();
     expect(text()).toContain('Token looks too short');
-    expect(button('Authorize and execute')!.disabled).toBe(true);
+    expect(button('Capture backup and review new plan')!.disabled).toBe(true);
 
     token.value = 'a-fresh-administrator-token';
     token.dispatchEvent(new Event('input'));
     await settle();
     expect(text()).toContain('Token accepted');
 
-    button('Authorize and execute')!.click();
+    button('Capture backup and review new plan')!.click();
     await tick();
-    const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/execute`);
+    const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`);
     expect(request.request.body).toEqual({ administrator_token: 'a-fresh-administrator-token' });
-    request.flush(operation({ status: 'queued' }));
+    request.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(), status: 'planned' }));
     await settle();
 
     // The credential left in the request body and nowhere else: not in the
@@ -635,15 +635,57 @@ describe('RestorePage', () => {
     expect(element().innerHTML).not.toContain('a-fresh-administrator-token');
     expect(element().querySelector('.token-input')).toBeNull();
     expect(JSON.stringify(navigations)).not.toContain('a-fresh-administrator-token');
-    // The only navigation is the plan becoming the page's canonical URL.
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    httpMock.expectNone(`${OPERATIONS_URL}/op-2/execute`);
+    button('Continue to authorize')!.click();
+    await settle();
+    expect(element().querySelector('.token-input')).toBeNull();
+    button('Execute reviewed plan')!.click();
+    await tick();
+    const execution = httpMock.expectOne(`${OPERATIONS_URL}/op-2/execute`);
+    expect(execution.request.body).toEqual({ use_prepared_credential: true });
+    execution.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(), status: 'queued' }));
+    await settle();
+    // Both the draft and the freshly prepared plan get their own URLs.
     expect(navigations).toEqual([
       { commands: ['/history'], extras: { queryParams: { restore: '1', operation: 'op-1', versions: null, changeGroup: null, step: null, compensate: null }, queryParamsHandling: 'merge', replaceUrl: true } },
+      { commands: ['/history'], extras: { queryParams: { restore: '1', operation: 'op-2', versions: null, changeGroup: null, step: null, compensate: null }, queryParamsHandling: 'merge', replaceUrl: true } },
     ]);
     expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
   });
 
+  it('returns to fresh backup preparation when the review session expires while open', async () => {
+    const now = Date.now();
+    await plan({ baseline_snapshot_id: 'backup-1', prepared_until: new Date(now + 60_000).toISOString() });
+    button('Continue to authorize')!.click();
+    await settle();
+    expect(button('Execute reviewed plan')).toBeTruthy();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001);
+    try {
+      vi.advanceTimersByTime(1000);
+      await settle();
+      expect(button('Execute reviewed plan')).toBeUndefined();
+      expect(text()).toContain('Capture a fresh backup before final review');
+      const token = element().querySelector<HTMLInputElement>('.token-input')!;
+      token.value = 'a-fresh-administrator-token';
+      token.dispatchEvent(new Event('input'));
+      await settle();
+      button('Capture backup and review new plan')!.click();
+      await tick();
+      httpMock.expectNone(`${OPERATIONS_URL}/op-1/execute`);
+      const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`);
+      expect(request.request.body).toEqual({ administrator_token: 'a-fresh-administrator-token' });
+      request.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-2', prepared_until: new Date(now + 120_000).toISOString() }));
+      await settle();
+      expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('shows the approval state and withholds execution until it is granted', async () => {
     await plan({
+      baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(),
       approval: {
         id: 'ap-1',
         restore_operation_id: 'op-1',
@@ -670,12 +712,7 @@ describe('RestorePage', () => {
     expect(text()).toContain('PENDING');
     expect(text()).toContain('Organization-scoped objects — NW-Corp is organization-scoped.');
 
-    const token = element().querySelector<HTMLInputElement>('.token-input')!;
-    token.value = 'a-fresh-administrator-token';
-    token.dispatchEvent(new Event('input'));
-    await settle();
-    // A valid token is still not enough while the approval is outstanding.
-    expect(button('Authorize and execute')!.disabled).toBe(true);
+    expect(button('Execute reviewed plan')!.disabled).toBe(true);
 
     button('Check for a decision')!.click();
     await tick();
@@ -698,6 +735,7 @@ describe('RestorePage', () => {
     await settle();
 
     expect(text()).toContain('APPROVED');
+    expect(button('Execute reviewed plan')!.disabled).toBe(false);
   });
 
   it('submits Mist login without a region and clears the credential fields', async () => {
@@ -722,9 +760,9 @@ describe('RestorePage', () => {
     await settle();
     expect(element.querySelector<HTMLInputElement>('#mist-email')!.value).toBe('admin@example.com');
     expect(element.querySelector<HTMLFormElement>('#mist-restore-login')!.checkValidity()).toBe(true);
-    button('Authorize and execute')!.click();
+    button('Capture backup and review new plan')!.click();
     await settle();
-    const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/execute`);
+    const request = httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`);
     expect(request.request.body).toEqual({ mist_login: { email: 'admin@example.com', password: ' password ' } });
     expect(element.querySelector<HTMLInputElement>('#mist-password')!.value).toBe('');
     expect(element.querySelector('#mist-code')).toBeNull();
@@ -734,7 +772,7 @@ describe('RestorePage', () => {
     await settle();
     TestBed.inject(MistMfaService).prompt()!.complete('123456');
     await settle();
-    const retry = httpMock.expectOne(`${OPERATIONS_URL}/op-1/execute`);
+    const retry = httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`);
     expect(retry.request.body).toEqual({ mist_login: { email: 'admin@example.com', password: ' password ', two_factor: '123456' } });
     retry.flush({ detail: 'Mist rejected the login' }, { status: 422, statusText: 'Unprocessable Content' });
     await settle();
@@ -1406,7 +1444,7 @@ describe('RestorePage', () => {
 
     const token = element().querySelector<HTMLInputElement>('.token-input')!;
     expect(token.disabled).toBe(true);
-    expect(button('Authorize and execute')!.disabled).toBe(true);
+    expect(button('Capture backup and review new plan')!.disabled).toBe(true);
     expect(text()).toContain('Authorizing a restore requires the administrator role');
   });
 

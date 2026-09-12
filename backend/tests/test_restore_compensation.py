@@ -1,10 +1,13 @@
 """Safety snapshots, compensating plans, and their credential requirements."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from beanie import PydanticObjectId
+from beanie.odm.fields import ExpressionField
 
 from mist_config_guardian_backend.api.dependencies import get_current_user, require_organization
 from mist_config_guardian_backend.api.routes.approvals import get_approval_service
@@ -37,6 +40,7 @@ from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
+    _switch_management_differences,
     capture_safety_snapshot,
 )
 from mist_config_guardian_backend.services.restore_planner import (
@@ -188,6 +192,16 @@ def offline_documents(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------------------------------------------------------------- safety snapshot
 
 
+def test_switch_management_debug_does_not_log_values_or_account_names():
+    before = {"root_password": "********", "local_accounts": {"private-user": {"password": "private-value"}}}
+    after = {"root_password": "private-root-password", "radius": {"enabled": True}, "unknown-private-key": "private"}
+    details = _switch_management_differences(before, after)
+    assert "switch_mgmt.root_password:stored=masked-string,live=nonempty-string" in details
+    assert "switch_mgmt.radius:stored=missing,live=dict" in details
+    assert "switch_mgmt.<other-field>:different" in details
+    assert "private" not in str(details)
+
+
 async def test_safety_snapshot_records_the_pre_restore_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_compensation.latest_version",
@@ -222,6 +236,54 @@ async def test_a_changed_live_object_aborts_before_any_write(monkeypatch: pytest
 
     with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
         await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+
+async def test_preflight_debug_reports_fields_without_values(monkeypatch, caplog):
+    vault = _vault()
+    stored = {**CORP_WLAN, "modified_time": 1}
+    baseline = SimpleNamespace(configuration=protect_configuration(stored, vault, sensitive_fields=frozenset({"psk"})))
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.ObjectVersion",
+        SimpleNamespace(
+            logical_object_id=ExpressionField("logical_object_id"),
+            configuration_hash=ExpressionField("configuration_hash"),
+            find_one=AsyncMock(return_value=baseline),
+        ),
+    )
+    operation = _operation(
+        [
+            _action(
+                0, RestoreActionType.UPDATE, expected_current_hash=configuration_hash(stored, ignored_fields=IGNORED)
+            ),
+        ]
+    )
+    client = _FakeMistClient({"mist-0": {**stored, "psk": "another-secret", "modified_time": 2}})
+    with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
+        await capture_safety_snapshot(client, _organization(), operation, vault)
+    assert "baseline_hash_matches=True live_hash_matches=False" in caplog.text
+    assert "changed_fields=['psk']" in caplog.text
+    assert "super-secret" not in caplog.text
+    assert "another-secret" not in caplog.text
+    assert "modified_time" not in caplog.text
+    assert operation.actions[0].status is RestoreActionStatus.PENDING
+
+
+async def test_preflight_debug_failure_preserves_original_error(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.ObjectVersion",
+        SimpleNamespace(
+            logical_object_id=ExpressionField("logical_object_id"),
+            configuration_hash=ExpressionField("configuration_hash"),
+            find_one=AsyncMock(side_effect=RuntimeError("sensitive database details")),
+        ),
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash="stale-hash")])
+    with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
+        await capture_safety_snapshot(
+            _FakeMistClient({"mist-0": dict(CORP_WLAN)}), _organization(), operation, _vault()
+        )
+    assert "diagnostics_unavailable=RuntimeError" in caplog.text
+    assert "sensitive database details" not in caplog.text
 
 
 async def test_a_deleted_live_object_aborts_before_any_write(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -25,6 +25,7 @@ import {
   ApprovalRequest,
   RestoreCredential,
   blocksExecution,
+  hasValidPreparedCredential,
   isRestoreInFlight,
   isRestoreTerminal,
   RestoreMode,
@@ -795,14 +796,17 @@ export class RestorePage {
     if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
       return;
     }
-    if (this.blockedByPreflight() || this.blockedByApproval()) {
+    const prepared = hasValidPreparedCredential(operation);
+    if ((!prepared && token === '') || this.blockedByPreflight() || (prepared && this.blockedByApproval())) {
       return;
     }
     const generation = this.selection.signal;
     this.busy.set(true);
     const queued = await this.ui.track(
-      'Authorizing the restore',
-      () => this.restores.execute(organizationId, operation.id, token),
+      prepared ? 'Executing the reviewed restore' : 'Capturing a fresh pre-restore backup',
+      () => prepared
+        ? this.restores.executePrepared(organizationId, operation.id)
+        : this.restores.prepare(organizationId, operation.id, token),
       generation,
     );
     if (this.stale(generation)) {
@@ -814,6 +818,12 @@ export class RestorePage {
     }
     const current = this.clearOperation();
     this.activeOperation.set(queued);
+    if (queued.status === 'planned') {
+      this.seedSelection(queued);
+      this.currentStep.set('plan');
+      this.canonicalize(organizationId, queued.id, true);
+      return;
+    }
     this.currentStep.set('execute');
     if (isRestoreInFlight(queued.status)) {
       this.startPolling();

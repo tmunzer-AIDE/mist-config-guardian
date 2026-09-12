@@ -20,6 +20,7 @@ export type RestoreActionStatus = 'pending' | 'executing' | 'completed' | 'faile
 export interface RestoreAction {
   logical_object_id: string;
   source_version_id: string;
+  baseline_version_id?: string | null;
   order: number;
   action: RestoreActionKind;
   scope: string;
@@ -80,6 +81,8 @@ export interface RestoreOperation {
    * was recorded; such a plan cannot be rebuilt, so its mode is immutable.
    */
   requested_version_ids?: string[];
+  baseline_snapshot_id?: string | null;
+  prepared_until?: string | null;
   target_at: string;
   status: RestoreStatus;
   actions: RestoreAction[];
@@ -339,4 +342,10 @@ export function approvalStatusTone(status: ApprovalStatus): Tone {
 /** An approval that exists and has not been granted blocks execution. */
 export function blocksExecution(approval: ApprovalRequest | null | undefined): boolean {
   return approval != null && approval.status !== 'approved';
+}
+
+/** Missing or invalid expiry timestamps require a new backup. */
+export function hasValidPreparedCredential(operation: RestoreOperation, now = Date.now()): boolean {
+  return !!operation.baseline_snapshot_id && !!operation.prepared_until &&
+    Date.parse(operation.prepared_until) > now;
 }
