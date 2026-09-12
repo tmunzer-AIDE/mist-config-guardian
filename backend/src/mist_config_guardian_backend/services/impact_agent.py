@@ -75,7 +75,11 @@ An observed neighbor_handle is unverified LLDP context, never a managed device,
 a confirmed powered device, or permission to query the neighbor. Even up=false or
 poe_on=false cannot establish a disruption without earlier usage/transition evidence.
 A missing timestamp cannot be replaced with collection time. Port evidence is
-separate context and cannot contribute to a WLAN verdict. Context handles are never check
+separate context and cannot contribute to a WLAN verdict. neighbor-ap-inventory.v1
+verifies unique AP membership in the source organization/site at collection time.
+Its managed device handle is context only, never an executable check reference.
+Inventory membership cannot confirm an LLDP claim, a PoE dependency, a historical
+relationship or impact. Only enumerated inventory capabilities can be requested. Context handles are never check
 refs or hypothesis targets. When no capabilities exist, report with no hypotheses and
 list the missing evidence in open_questions; do not describe the change as healthy.
 """
@@ -133,6 +137,10 @@ class ImpactAgent:
                     "changes": [{"target_handle": t.handle, "change_kind": t.change_kind} for t in plan.targets],
                     "port_scopes": [
                         {"target_handle": t.handle, "device_context_handle": t.device_handle} for t in plan.port_targets
+                    ],
+                    "neighbor_scopes": [
+                        {"target_handle": t.handle, "source_port_handle": t.source_port_handle}
+                        for t in plan.neighbor_targets
                     ],
                     "configuration_context": plan.change_context.model_dump(mode="json")
                     if plan.change_context

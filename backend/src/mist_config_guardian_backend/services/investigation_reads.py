@@ -3,7 +3,7 @@
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.impact.agent import ModelActivity
-from mist_config_guardian_backend.impact.contracts import PortEvidence
+from mist_config_guardian_backend.impact.contracts import NeighborEvidence, PortEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
@@ -93,6 +93,7 @@ async def shadow_investigation(
                 reason=e.reason,
                 dispatch_denial=e.dispatch_denial,
                 port=e.rows[0] if isinstance(e, PortEvidence) and e.rows else None,
+                managed_neighbor=e.rows[0] if isinstance(e, NeighborEvidence) and e.rows else None,
                 response_error=e.response_error if isinstance(e, PortEvidence) else None,
                 device_mac=next(
                     (t.device_mac for t in artifact.plan.port_targets if t.handle == e.target_handle), None

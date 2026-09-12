@@ -8,6 +8,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { AuditImpactSummary, SHADOW_LABELS } from '../../core/audit-impact.model';
 import { DeploymentEvidence } from '../../core/deployment-evidence.model';
 import { PortSnapshot, PortSnapshotComponent } from '../../shared/port-snapshot';
+import { ManagedNeighbor, ManagedNeighborComponent } from '../../shared/managed-neighbor';
 import { DeploymentEvidenceComponent } from '../../shared/deployment-evidence';
 import { DispatchLog, DispatchLogComponent } from '../../shared/dispatch-log';
 import { AgentCheckpoint, AgentInvestigationComponent, ModelActivity } from '../../shared/agent-investigation';
@@ -48,6 +49,7 @@ export interface ShadowReport {
   checks: {
     check_id: string;
     port?: PortSnapshot | null;
+    managed_neighbor?: ManagedNeighbor | null;
     device_mac?: string | null;
     port_id?: string | null;
     target_handle: string;
@@ -63,7 +65,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
+  imports: [ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -105,7 +107,7 @@ export interface ShadowReport {
               <tbody>@for (check of report.checks; track $index) {
                 <tr><td>{{ check.check_id }}<br>{{ check.device_mac }} {{ check.port_id }}<br>{{ at(check.window.start) }}–{{ at(check.window.end) }}</td>
                   <td>{{ check.state === 'dispatch_denied' ? 'Not dispatched' : check.state }}</td>
-                  <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}<app-port-snapshot [port]="check.port" /></td></tr>
+                  <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}<app-port-snapshot [port]="check.port" /><app-managed-neighbor [neighbor]="check.managed_neighbor" [capturedAt]="check.captured_at" /></td></tr>
               }</tbody>
             </table>
           </div>

@@ -16,12 +16,15 @@ class DispatchRecord(Contract):
     id: UUID
     generation: int = Field(ge=1)
     candidate_revision: int = Field(ge=1)
-    check_id: Literal["wlan-client-sessions.v1", "switch-port-snapshot.v1"] = "wlan-client-sessions.v1"
+    check_id: Literal["wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1"] = (
+        "wlan-client-sessions.v1"
+    )
     target_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
     site_id: UUID
     wlan_id: UUID | None = None
     device_mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{12}$")
     port_id: str | None = Field(default=None, pattern=r"^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$")
+    source_dispatch_id: UUID | None = None
     window: Window
     reserved_at: AwareDatetime
     # Reservation proves authorization, not that Mist received the request.
@@ -37,8 +40,20 @@ class DispatchRecord(Contract):
             if self.wlan_id is None or self.device_mac is not None or self.port_id is not None:
                 msg = "WLAN dispatch requires only a WLAN identity"
                 raise ValueError(msg)
+        elif self.check_id == "neighbor-ap-inventory.v1":
+            if (
+                self.wlan_id is not None
+                or self.device_mac is not None
+                or self.port_id is not None
+                or self.source_dispatch_id is None
+            ):
+                msg = "Inventory dispatch uses only a private source reference, never a neighbor MAC"
+                raise ValueError(msg)
         elif self.wlan_id is not None or self.device_mac is None or self.port_id is None:
             msg = "Port dispatch requires only a device and port identity"
+            raise ValueError(msg)
+        if self.check_id != "neighbor-ap-inventory.v1" and self.source_dispatch_id is not None:
+            msg = "Source references are only valid for inventory checks"
             raise ValueError(msg)
         return self
 

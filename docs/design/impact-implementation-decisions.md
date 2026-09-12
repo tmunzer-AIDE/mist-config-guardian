@@ -831,10 +831,71 @@ of adding that read path.
   Frontend source and API schema did not change; their previously verified 399
   tests were not rerun for this policy consolidation. No live services were used.
 
+## Private neighbor binding and managed AP inventory slice (2026-09-13)
+
+- Implement the previously decided server-only binding seam. Store only normalized
+  candidate MAC ciphertext and typed provenance in a separate collection. Use vault
+  AEAD with the artifact ID and full provenance digest as associated data; hash the
+  ciphertext envelope for reference integrity. Normalize timestamps to UTC milliseconds
+  before hashing because MongoDB truncates finer precision. A BSON round-trip test
+  uses sub-millisecond source timestamps to protect this production boundary.
+- Write the private artifact before completing the port dispatch. Follow only an
+  exact completed source record from the current generation and candidate revision.
+  Verify root identity, immutable port scope, source interval, artifact ID, digest,
+  authenticated provenance, expiry and agreement with the public observed-neighbor
+  digest. A failed/uncertain insert stops collection; an unverifiable binding yields
+  `binding_unavailable` without reserving or sending an inventory request.
+- Source port checks run first in both shadow modes. Their valid bindings extend
+  the shared required menu by at most one AP inventory check per resolved port.
+  The agent can reorder that menu; it cannot supply identities or grow the query
+  set. Keep the model's same-target citation boundary and context handles
+  non-executable. Provider names, claim codes and arbitrary LLDP prose never enter
+  reports, prompt artifacts or dispatch records.
+- Verify AP inventory membership with one organization inventory search filtered
+  by exact site, MAC and `type=ap`, limit two. The local Mist OAS operation
+  `searchOrgInventory` exposes these filters and defaults to AP; the inventory
+  example contains switch virtual-chassis aliases. Start with AP-only exact matches
+  and reject aliases; do not spend three type-specific searches or infer a device
+  UUID absent from the response. Switch/gateway neighbors remain explicit gaps.
+  No live Mist probe was performed for this slice.
+- An inventory match proves current managed AP membership only. It neither validates
+  an LLDP claim nor establishes PoE dependency, historical connection or impact.
+  Expose a distinct managed AP context handle with `relationship=unverified`; do
+  not issue AP operational capabilities yet. Port/inventory evidence remains
+  structurally outside the WLAN evaluator, and production promotion stays gated.
+- Extend derived checkpoint capacity to twelve (eight WLAN, two port, two inventory).
+  Keep 56 Mist calls and 21 model calls per audit. A maximal stable plan funds four
+  full checkpoints plus eight reads at the fifth, ordinarily near +40 minutes.
+  Source discovery now precedes other checks, so it consumes the remaining allowance
+  first. This policy is intentional and does not promise complete hour-long coverage.
+- Register a TTL index on private artifact expiry, including orphans. Pin the
+  organization's monitoring retention when creating the artifact. Reconciliation
+  after retention policy changes and organization deletion remains broader cleanup
+  work; expiry is also enforced at load, independently of asynchronous TTL deletion.
+  No private binding API or generic handle-to-MAC lookup is exposed. Historical
+  public digests cannot authorize queries; obtain a fresh observation in an active
+  checkpoint rather than reconstructing historical identity from current topology.
+- Update the shadow preview and agent evidence display to distinguish managed AP
+  membership from unverified physical relationship. Inventory activity points to its
+  source dispatch rather than displaying an absent switch MAC/port. Carry actual
+  collection timestamps into model evidence and the AP preview; old model evidence
+  keeps an unknown collection time. Preserve legacy
+  prompt and report compatibility; new model requests use prompt version v4.
+
+- Validation: 1,203 backend tests passed, 20 skipped; 401 frontend tests passed.
+  Ruff, source types, changed-file formatting, regenerated OpenAPI, production
+  frontend build and the targeted browser regression passed. Inspected the browser
+  screenshot of the managed AP evidence. Tests cover twelve-check publication in
+  both modes, 56-call terminal exhaustion, BSON timestamp precision, source-write
+  uncertainty, identity tampering, expiry, revocation, missing completions and
+  private-data exclusion from report/model/journal surfaces. CodeRabbit remains
+  signed out; source/diff review used the established local fallback. No live Mist,
+  live Mongo concurrency or model-quality validation was performed.
+
 ## Next implementation queue
 
-1. Extend concrete port discovery into verified managed-neighbor dependencies,
-   then port/PoE event history. Keep one investigator per audit and the same bounded
+1. Build on managed AP membership with port/PoE event history and independently
+   verified physical dependencies. Keep one investigator per audit and the same bounded
    capability plan for the agent and mandatory sweep.
 2. Expand reusable resolvers and collectors as needed, starting with targeted
    port/PoE event history and physical dependencies. Add regression scenarios

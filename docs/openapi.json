@@ -96,16 +96,17 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceView"
             },
-            "maxItems": 10,
+            "maxItems": 12,
             "title": "Observations",
             "type": "array"
           },
           "prompt_version": {
-            "default": "impact-investigator.v3",
+            "default": "impact-investigator.v4",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
-              "impact-investigator.v3"
+              "impact-investigator.v3",
+              "impact-investigator.v4"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -2723,7 +2724,8 @@
             "default": "wlan-client-sessions.v1",
             "enum": [
               "wlan-client-sessions.v1",
-              "switch-port-snapshot.v1"
+              "switch-port-snapshot.v1",
+              "neighbor-ap-inventory.v1"
             ],
             "title": "Check Id",
             "type": "string"
@@ -2821,6 +2823,18 @@
             "format": "uuid",
             "title": "Site Id",
             "type": "string"
+          },
+          "source_dispatch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Dispatch Id"
           },
           "state": {
             "default": "reserved",
@@ -2947,10 +2961,32 @@
       "EvidenceView": {
         "additionalProperties": false,
         "properties": {
+          "captured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
           "gap": {
             "maxLength": 500,
             "title": "Gap",
             "type": "string"
+          },
+          "managed_neighbor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedNeighbor"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "observed_disconnects": {
             "anyOf": [
@@ -3623,6 +3659,39 @@
         "title": "LogoutResponse",
         "type": "object"
       },
+      "ManagedNeighbor": {
+        "additionalProperties": false,
+        "properties": {
+          "device_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Device Handle",
+            "type": "string"
+          },
+          "identity": {
+            "const": "verified_inventory",
+            "default": "verified_inventory",
+            "title": "Identity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "ap",
+            "default": "ap",
+            "title": "Kind",
+            "type": "string"
+          },
+          "relationship": {
+            "const": "unverified",
+            "default": "unverified",
+            "title": "Relationship",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_handle"
+        ],
+        "title": "ManagedNeighbor",
+        "type": "object"
+      },
       "MetricEvidence": {
         "description": "A metric remains visible even when one or both values are unavailable.",
         "properties": {
@@ -4136,11 +4205,12 @@
             "type": "integer"
           },
           "prompt_version": {
-            "default": "impact-investigator.v3",
+            "default": "impact-investigator.v4",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
-              "impact-investigator.v3"
+              "impact-investigator.v3",
+              "impact-investigator.v4"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -7036,6 +7106,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DispatchDenial"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "managed_neighbor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedNeighbor"
               },
               {
                 "type": "null"

@@ -544,7 +544,11 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
       { check_id: 'switch-port-snapshot.v1', target_handle: 'port-handle', captured_at: now,
         device_mac: 'aabbccddee01', port_id: 'ge-0/0/1', window: { start: now, end: now },
         state: 'complete', row_count: 1, reason: 'Most recent state only; no transition established.',
-        port: { up: false, poe_on: null, power_draw: 0, observed_at: null, neighbor_handle: 'unverified-neighbor', neighbor_identity: 'unverified' } }],
+        port: { up: false, poe_on: null, power_draw: 0, observed_at: null, neighbor_handle: 'unverified-neighbor', neighbor_identity: 'unverified' } },
+      { check_id: 'neighbor-ap-inventory.v1', target_handle: 'inventory-handle', captured_at: now,
+        window: { start: now, end: now }, state: 'complete', row_count: 1,
+        reason: 'Exact AP membership verified; physical relationship remains unresolved.',
+        managed_neighbor: { device_handle: 'managed-ap-handle', kind: 'ap', identity: 'verified_inventory', relationship: 'unverified' } }],
     agent: { source: 'model_proposal', state: 'complete', reason: '',
       proposal: { summary: 'The available history cannot establish the effect of this change.',
         hypotheses: [{ target_handle: 'wlan-handle', statement: 'Previously connected clients may have been affected.',
@@ -583,6 +587,10 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await expect(preview).toContainText('Unverified neighbor');
   await preview.locator('app-port-snapshot').filter({ hasText: 'Most recent port state' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('port-snapshot.png'), fullPage: true });
+  await expect(preview).toContainText('Managed AP inventory match: managed-ap-handle');
+  await expect(preview).toContainText('physical link, PoE dependency and impact remain unverified');
+  await preview.locator('app-managed-neighbor').filter({ hasText: 'Managed AP inventory match' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('managed-neighbor.png'), fullPage: true });
   await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });
   await preview.getByText('Live collection activity', { exact: true }).click();
   await expect(preview).toContainText('Outcome unknown');

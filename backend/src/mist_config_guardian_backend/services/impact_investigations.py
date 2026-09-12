@@ -4,7 +4,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from functools import partial
-from uuid import uuid4
+from hashlib import sha256
+from uuid import UUID, uuid4
 
 from beanie import PydanticObjectId
 from beanie.odm.utils.encoder import Encoder
@@ -14,15 +15,19 @@ from pymongo.errors import PyMongoError
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
 from mist_config_guardian_backend.impact.contracts import (
+    CandidateReference,
     DispatchDenial,
     InvestigationEvidence,
+    NeighborEvidence,
+    NeighborTarget,
+    PortEvidence,
     SessionEvidence,
     WlanRemovalPlan,
 )
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
-from mist_config_guardian_backend.integrations.mist_port_evidence import MistPortEvidenceClient
+from mist_config_guardian_backend.integrations.mist_neighbor_evidence import MistNeighborEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
@@ -35,12 +40,14 @@ from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.change_groups import BeanieChangeGroupStore
 from mist_config_guardian_backend.services.deployment_evidence import collect_deployment
 from mist_config_guardian_backend.services.impact_agent import ImpactAgent
+from mist_config_guardian_backend.services.neighbor_bindings import NeighborBindingStore
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 logger = logging.getLogger(__name__)
 _LEASE = timedelta(minutes=3)
 _INTERVAL = timedelta(minutes=10)
 _DURATION = timedelta(hours=1)
+_MAX_RETENTION_DAYS = 36_500
 
 
 class ImpactInvestigationService:
@@ -164,7 +171,7 @@ class ImpactInvestigationService:
             )
         return plan
 
-    async def _poll(self, root: ImpactInvestigation) -> None:  # noqa: C901 - fenced collection and fallback
+    async def _poll(self, root: ImpactInvestigation) -> None:  # noqa: C901, PLR0912, PLR0915 - fenced discovery and fallback
         now = utc_now()
         # Only a fenced publication advances revision. Lease claims and orphan
         # artifacts are not completed checkpoints and must not consume this cap.
@@ -187,10 +194,27 @@ class ImpactInvestigationService:
         ):
             token = await service_token(organization, self._vault)
             credential = organization.encrypted_service_token
+            neighbor_context = None
+            if plan.port_targets:
+                try:
+                    mist_org_id = UUID(str(getattr(organization, "mist_org_id", "")))
+                    retention = getattr(organization, "monitoring_retention_days", None)
+                    if type(retention) is not int or not 1 <= retention <= _MAX_RETENTION_DAYS:
+                        raise ValueError  # noqa: TRY301 - fail closed on invalid organization policy
+                    neighbor_context = (mist_org_id, retention)
+                except ValueError:
+                    plan = plan.model_copy(
+                        update={
+                            "gaps": (
+                                *plan.gaps,
+                                "Neighbor verification lacks a validated Mist organization or retention policy.",
+                            )
+                        }
+                    )
 
             async with (
                 asyncio.timeout(120),
-                MistPortEvidenceClient(token=token, region=organization.cloud_region) as client,
+                MistNeighborEvidenceClient(token=token, region=organization.cloud_region) as client,
             ):
                 collected: dict[str, InvestigationEvidence] = {}
 
@@ -199,12 +223,42 @@ class ImpactInvestigationService:
                         if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
                             msg = "Evidence collection stopped after dispatch denial"
                             raise RuntimeError(msg)
-                        reading = await self._collect(root, plan, check, client, credential)
+                        reading = await self._collect(
+                            root, plan, check, client, credential, neighbor_context=neighbor_context, sources=evidence
+                        )
                         collected[check.ref] = reading
                         evidence.append(reading)
                     return collected[check.ref]
 
-                if get_settings().impact_engine_mode == "agent_shadow":
+                # Discovery prerequisites run once before the model in both modes.
+                # Only completed source bindings can extend the shared required menu.
+                if neighbor_context is not None:
+                    for check in capabilities(plan, evidence_as_of):
+                        if check.check_id == "switch-port-snapshot.v1":
+                            if evidence and evidence[-1].state == "dispatch_denied":
+                                break
+                            await collect(check)
+                    neighbors = []
+                    for reading in evidence:
+                        if isinstance(reading, PortEvidence) and reading.candidate_binding is not None:
+                            port = next(t for t in plan.port_targets if t.handle == reading.target_handle)
+                            binding = reading.candidate_binding
+                            handle = sha256(
+                                f"neighbor-inventory.v1:{binding.artifact_id}:{binding.content_hash}".encode()
+                            ).hexdigest()
+                            neighbors.append(
+                                NeighborTarget(
+                                    handle=handle,
+                                    source_port_handle=port.handle,
+                                    site_id=port.site_id,
+                                    mist_org_id=neighbor_context[0],
+                                    binding=binding,
+                                )
+                            )
+                    plan = plan.model_copy(update={"neighbor_targets": tuple(neighbors)})
+                if get_settings().impact_engine_mode == "agent_shadow" and not (
+                    evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}
+                ):
                     agent = await ImpactAgent(self._vault).run(
                         root,
                         plan,
@@ -262,17 +316,22 @@ class ImpactInvestigationService:
             },
         )
 
-    async def _collect(
+    async def _collect(  # noqa: PLR0913 - exact plan and source context at dispatch boundary
         self,
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistPortEvidenceClient,
+        client: MistNeighborEvidenceClient,
         credential: str,
+        *,
+        neighbor_context: tuple[UUID, int] | None = None,
+        sources: list[InvestigationEvidence] | None = None,
     ) -> InvestigationEvidence:
         if check not in capabilities(plan, max(check.window.end, plan.changed_at + timedelta(microseconds=1))):
             msg = "Collection requires the exact planned capability"
             raise ValueError(msg)
+        if check.check_id == "neighbor-ap-inventory.v1":
+            return await self._collect_neighbor(root, plan, check, client, credential, neighbor_context, sources or [])
         if check.check_id == "switch-port-snapshot.v1":
             port = next(t for t in plan.port_targets if t.handle == check.target_handle)
             dispatch = DispatchRecord(
@@ -287,11 +346,20 @@ class ImpactInvestigationService:
                 window=check.window,
                 reserved_at=utc_now(),
             )
+
+            async def persist(mac: str, source: PortEvidence) -> CandidateReference:
+                if neighbor_context is None:
+                    raise ValueError
+                store = NeighborBindingStore(self._vault)
+                identity = store.identity(root, port, source, check.ref, dispatch.id, *neighbor_context)
+                return await store.persist(identity, mac)
+
             reading = await client.capture_port(
                 plan=plan,
                 target_handle=check.target_handle,
                 window=check.window,
                 reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+                persist_candidate=persist if neighbor_context is not None else None,
             )
             if reading.state != "dispatch_denied":
                 await self._finish_dispatch(root, dispatch, reading)
@@ -314,6 +382,58 @@ class ImpactInvestigationService:
             reserve_dispatch=partial(self._reserve, root, credential, dispatch),
         )
         if reading.state not in {"budget_exhausted", "dispatch_denied"}:
+            await self._finish_dispatch(root, dispatch, reading)
+        return reading
+
+    async def _collect_neighbor(  # noqa: PLR0913, PLR0917 - private source and authority must agree
+        self,
+        root: ImpactInvestigation,
+        plan: WlanRemovalPlan,
+        check: CheckCapability,
+        client: MistNeighborEvidenceClient,
+        credential: str,
+        neighbor_context: tuple[UUID, int] | None,
+        sources: list[InvestigationEvidence],
+    ) -> NeighborEvidence:
+        target = next(t for t in plan.neighbor_targets if t.handle == check.target_handle)
+        port = next(t for t in plan.port_targets if t.handle == target.source_port_handle)
+        source = next((e for e in sources if isinstance(e, PortEvidence) and e.target_handle == port.handle), None)
+        store = NeighborBindingStore(self._vault)
+        try:
+            if source is None or source.candidate_binding != target.binding or neighbor_context is None:
+                raise ValueError  # noqa: TRY301 - missing bindings produce an explicit local gap
+            source_check = next(c for c in capabilities(plan, check.window.end) if c.target_handle == port.handle)
+            expected = store.identity(
+                root, port, source, source_check.ref, target.binding.source_dispatch_id, *neighbor_context
+            )
+            candidate = await store.load(root, expected, target.binding, source)
+        except ValueError:
+            return NeighborEvidence(
+                target_handle=target.handle,
+                window=check.window,
+                captured_at=utc_now(),
+                state="binding_unavailable",
+                reason="The private source binding could not be verified; no inventory request was authorized.",
+            )
+        dispatch = DispatchRecord(
+            id=uuid4(),
+            generation=root.generation,
+            candidate_revision=root.revision + 1,
+            check_id=check.check_id,
+            target_handle=target.handle,
+            site_id=target.site_id,
+            source_dispatch_id=target.binding.source_dispatch_id,
+            window=check.window,
+            reserved_at=utc_now(),
+        )
+        reading = await client.capture_neighbor(
+            plan=plan,
+            target=target,
+            candidate=candidate,
+            window=check.window,
+            reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+        )
+        if reading.state != "dispatch_denied":
             await self._finish_dispatch(root, dispatch, reading)
         return reading
 

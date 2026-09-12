@@ -10,6 +10,7 @@ from hashlib import sha256
 import httpx
 
 from mist_config_guardian_backend.impact.contracts import (
+    CandidateReference,
     DispatchDenial,
     PortEvidence,
     PortResponseError,
@@ -47,6 +48,7 @@ class MistPortEvidenceClient(MistWlanEvidenceClient):
         target_handle: str,
         window: Window,
         reserve_dispatch: Callable[[], Awaitable[DispatchDenial | None]],
+        persist_candidate: Callable[[str, PortEvidence], Awaitable[CandidateReference]] | None = None,
     ) -> PortEvidence:
         target = next((t for t in plan.port_targets if t.handle == target_handle), None)
         if target is None or window.start != plan.changed_at or window.end > plan.changed_at + timedelta(hours=1):
@@ -91,7 +93,7 @@ class MistPortEvidenceClient(MistWlanEvidenceClient):
                             response_bytes=size,
                         )
                 payload = json.loads(body)
-            return self.parse(payload, plan, target, window).model_copy(
+            reading = self.parse(payload, plan, target, window).model_copy(
                 update={"http_status": status, "response_bytes": size}
             )
         except httpx.HTTPStatusError:
@@ -105,6 +107,14 @@ class MistPortEvidenceClient(MistWlanEvidenceClient):
                 exc.code if isinstance(exc, RejectedPortResponseError) else PortResponseError.INVALID_RESPONSE
             )
             reason = response_error.explanation
+        else:
+            # Private persistence runs outside the response-error handler. A failed
+            # or uncertain write leaves the source dispatch reserved and aborts.
+            if persist_candidate and reading.state == "complete" and reading.rows[0].neighbor_handle:
+                mac = payload["results"][0]["neighbor_mac"].replace(":", "").replace("-", "").lower()
+                reference = await persist_candidate(mac, reading)
+                reading = reading.model_copy(update={"candidate_binding": reference})
+            return reading
         return PortEvidence(
             target_handle=target_handle,
             window=window,

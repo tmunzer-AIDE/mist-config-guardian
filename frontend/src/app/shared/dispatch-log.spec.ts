@@ -36,4 +36,15 @@ describe('Dispatch log', () => {
     expect(text).not.toContain('Outcome unknown');
     expect(fixture.nativeElement.querySelector('img')).toBeNull();
   });
+  it('identifies inventory by its source attempt without inventing a switch identity', async () => {
+    await TestBed.configureTestingModule({ imports: [DispatchLogComponent] }).compileComponents();
+    const fixture = TestBed.createComponent(DispatchLogComponent);
+    fixture.componentRef.setInput('log', { source: 'live_investigation_root', unlogged_reservations: 0,
+      records: [{ ...reserved, check_id: 'neighbor-ap-inventory.v1', wlan_id: null,
+        source_dispatch_id: 'source-port-attempt' }] });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('AP inventory · Source attempt source-port-attempt');
+    expect(fixture.nativeElement.textContent).not.toContain('Switch');
+  });
+
 });

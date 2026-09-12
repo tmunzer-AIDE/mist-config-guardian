@@ -19,6 +19,7 @@ from mist_config_guardian_backend.models.investigation import (
     ModelRequestArtifact,
 )
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
+from mist_config_guardian_backend.models.neighbor_binding import NeighborBinding
 from mist_config_guardian_backend.models.notification import Notification
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreOperationStateRecord
@@ -59,6 +60,7 @@ def document_models() -> list[type[Document]]:
         ImpactInvestigation,
         InvestigationRevision,
         ModelRequestArtifact,
+        NeighborBinding,
         Notification,
     ]
 

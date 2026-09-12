@@ -5,10 +5,11 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
+from beanie import PydanticObjectId
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from mist_config_guardian_backend.impact.change_context import ChangeContext
-from mist_config_guardian_backend.impact.limits import MAX_PORT_TARGETS, MAX_WLAN_TARGETS
+from mist_config_guardian_backend.impact.limits import MAX_NEIGHBOR_TARGETS, MAX_PORT_TARGETS, MAX_WLAN_TARGETS
 
 
 class Contract(BaseModel):
@@ -51,6 +52,22 @@ class PortTarget(Contract):
     after_version_id: str
 
 
+class CandidateReference(Contract):
+    artifact_id: PydanticObjectId
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_dispatch_id: UUID
+
+
+class NeighborTarget(Contract):
+    """Inventory-verification capability, never an arbitrary device query."""
+
+    handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_port_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    site_id: UUID
+    mist_org_id: UUID
+    binding: CandidateReference
+
+
 class WlanRemovalPlan(Contract):
     schema_version: Literal[1] = 1
     rule_id: Literal["wlan-removal.v1"] = "wlan-removal.v1"
@@ -60,6 +77,7 @@ class WlanRemovalPlan(Contract):
     changed_at: AwareDatetime
     targets: tuple[WlanTarget, ...] = Field(default=(), max_length=MAX_WLAN_TARGETS)
     port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=MAX_PORT_TARGETS)
+    neighbor_targets: tuple[NeighborTarget, ...] = Field(default=(), max_length=MAX_NEIGHBOR_TARGETS)
     unmapped: tuple[str, ...] = ()
     gaps: tuple[str, ...] = ()
     # These cannot be overridden by a skill or model-proposed corroborating check.
@@ -173,10 +191,14 @@ class PortEvidence(Contract):
     http_status: int | None = Field(default=None, ge=100, le=599)
     response_bytes: int | None = Field(default=None, ge=0)
     response_error: PortResponseError | None = None
+    candidate_binding: CandidateReference | None = None
     dispatch_denial: DispatchDenial | None = None
 
     @model_validator(mode="after")
     def denied_dispatch_has_no_result(self) -> "PortEvidence":
+        if self.candidate_binding is not None and (self.state != "complete" or len(self.rows) != 1):
+            msg = "Candidate binding requires a complete port observation"
+            raise ValueError(msg)
         if self.response_error is not None and (self.state != "error" or self.rows):
             msg = "A rejected response requires error state and no accepted rows"
             raise ValueError(msg)
@@ -191,7 +213,43 @@ class PortEvidence(Contract):
         return self
 
 
-InvestigationEvidence = SessionEvidence | PortEvidence
+class ManagedNeighbor(Contract):
+    device_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    kind: Literal["ap"] = "ap"
+    identity: Literal["verified_inventory"] = "verified_inventory"
+    # Managed membership is separate from the unverified physical/PoE relationship.
+    relationship: Literal["unverified"] = "unverified"
+
+
+class NeighborEvidence(Contract):
+    check_id: Literal["neighbor-ap-inventory.v1"] = "neighbor-ap-inventory.v1"
+    target_handle: str
+    window: Window
+    captured_at: AwareDatetime
+    state: Literal["complete", "partial", "error", "dispatch_denied", "binding_unavailable"]
+    rows: tuple[ManagedNeighbor, ...] = Field(default=(), max_length=1)
+    reason: str = Field(default="", max_length=500)
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def evidence_state(self) -> "NeighborEvidence":
+        if (self.state == "complete") != bool(self.rows):
+            msg = "Only a complete unique inventory verification may contain a managed neighbor"
+            raise ValueError(msg)
+        if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
+            msg = "Dispatch denial must carry its reason"
+            raise ValueError(msg)
+        if self.state in {"dispatch_denied", "binding_unavailable"} and (
+            self.http_status is not None or self.response_bytes is not None
+        ):
+            msg = "An unexecuted inventory check cannot contain transport results"
+            raise ValueError(msg)
+        return self
+
+
+InvestigationEvidence = SessionEvidence | PortEvidence | NeighborEvidence
 
 
 class WlanFinding(Contract):

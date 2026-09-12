@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from mist_config_guardian_backend.impact.agent import AgentCheckpoint, CollectAction, ModelActivity, ReportAction
 from mist_config_guardian_backend.impact.contracts import (
     DispatchDenial,
+    ManagedNeighbor,
     PortResponseError,
     PortRow,
     Window,
@@ -29,6 +30,7 @@ class ShadowCheckResponse(BaseModel):
     reason: str
     dispatch_denial: DispatchDenial | None = None
     port: PortRow | None = None
+    managed_neighbor: ManagedNeighbor | None = None
     response_error: PortResponseError | None = None
     device_mac: str | None = None
     port_id: str | None = None

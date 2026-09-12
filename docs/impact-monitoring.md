@@ -321,10 +321,10 @@ dependencies remain unresolved. The projection always assumes changes effective
 when merge or inheritance semantics are unknown.
 
 The operational catalogue contains historical WLAN client-session checks and
-concrete changed switch-port snapshots (described below).
+concrete changed switch-port snapshots and source-bound AP inventory verification (described below).
 For other changes the agent can describe missing evidence through a summary and open
 questions, while deterministic impact remains unmapped. It does not yet have general
-Mist MCP access, live inventory discovery, port events, OAS retrieval or arbitrary
+Mist MCP access, general inventory discovery, port events, OAS retrieval or arbitrary
 configuration investigation. Rules' required checks still run if the agent omits
 them or cannot produce a valid report. The rule accepts production snapshot type
 `wlans` as well as the earlier `wlan` spelling.
@@ -332,7 +332,7 @@ them or cannot produce a valid report. The rule accepts production snapshot type
 General context includes at most eight objects and six top-level attributes per
 object, with explicit omission counts. Unknown or conflicting immutable versions
 remain gaps. One 200-device audit still owns one agent and its existing model-call
-budget. New requests use prompt version `impact-investigator.v3`; historical v1/v2
+budget. New requests use prompt version `impact-investigator.v4`; historical v1/v2/v3
 records remain readable. General context alone adds no Mist reads; unsupported audits can spend bounded
 AI calls in `agent_shadow`. Resolved port scopes add checks in both shadow modes.
 
@@ -382,7 +382,8 @@ filtered to the validated switch MAC and port. The same menu, cache, dispatch
 journal, credential checks and 56-call audit budget apply to model selections and
 the mandatory sweep. Mixed audits may have eight WLAN checks and two port checks
 per checkpoint; budget exhaustion can stop the investigation before the hour ends.
-No query follows a returned neighbor identity, and no pagination link is followed.
+An encrypted, source-linked candidate may authorize the bounded AP inventory check below.
+No pagination link is followed.
 
 The endpoint returns current or most recent state, not historical transitions.
 `window` on this check denotes the investigation interval, not a provider history
@@ -391,9 +392,11 @@ Zero power draw and false link/PoE state remain distinct from unavailable values
 Empty, duplicate or truncated responses remain partial, never inferred port-down
 results. Site, device, port and device type must match the requested scope.
 
-Only normalized state and an audit/port-bound unverified neighbor handle survive.
+Public evidence retains normalized state and an audit/port-bound unverified neighbor handle.
 LLDP does not establish a managed AP or identify which device consumes PoE. Provider
-names, descriptions and raw neighbor MACs are excluded. The handle grants no checks.
+names, descriptions and raw neighbor MACs are excluded from reports, model inputs and
+activity records. The raw candidate MAC survives only encrypted in a private artifact.
+The public neighbor handle itself grants no checks.
 Port snapshots are pinned to the published revision and shown in the collection
 preview even when the model never requests them; selected snapshots also appear
 under evidence supplied to the agent. They cannot contribute to the WLAN verdict.
@@ -406,7 +409,7 @@ remain readable. Impact matching uses registry families; the legacy singular WLA
 alias is handled centrally, outside rule predicates.
 
 
-Mixed WLAN/port revisions accept the complete ten-check set. Plan target limits,
+Mixed WLAN/port/inventory revisions accept the complete twelve-check set. Plan target limits,
 published evidence capacity and agent observation capacity share one derived bound;
 the 56-request audit budget is unchanged. All compilers examine the same sorted
 64-version prefix, and the port resolver reports its own truncation, removed-device
@@ -418,16 +421,48 @@ provider evidence, not a transport outage. They retain `state=error`, accept no 
 and display fixed explanations. HTTP errors and transport timeouts remain separately
 worded failures. Historical records without a code retain their original meaning.
 
-The next neighbor resolver's private binding and inventory-verification boundary
-is decided in the implementation log. It is not enabled: the current unverified
-neighbor handle still grants no query or managed-device identity.
+### Source-bound managed AP verification
 
+When a complete port snapshot contains a valid neighbor candidate, collection stores
+its normalized MAC encrypted in the private `impact_neighbor_bindings` collection.
+The artifact authenticates the organization, audit, investigation, generation,
+candidate revision, completed source dispatch/check, immutable switch/port target,
+source timestamps and expiry. Timestamp precision is normalized before encryption
+and hashing so a MongoDB round trip preserves the authenticated identity. The
+private artifact must be written before completing the source dispatch. Uncertain
+writes halt the checkpoint; missing, stale or mismatched bindings grant no request.
 
-The default 56-call audit allowance is an independent spending ceiling, shared with
-journal capacity in `impact/limits.py`. It does not fund every possible checkpoint:
-the ordinary seven-checkpoint schedule would require 70 calls for a ten-check plan.
-The separate ten-publication limit is a lifecycle safety cap. A stable maximal plan
-uses 50 calls across five full checkpoints and six more at checkpoint six, then
-records a budget denial for the next check. Failed attempts or smaller saved budgets
-can exhaust earlier. After a successful fenced terminal publication, `next_poll_at`
-is cleared; the normal worker does not keep publishing denial-only revisions.
+Both shadow modes collect port prerequisites first, then add at most two
+`neighbor-ap-inventory.v1` capabilities to the same required menu/cache. Each makes
+one exact MAC/site/type=`ap` search in the configured Mist organization's inventory,
+with a two-row limit, 64 KiB response bound and no pagination or recursive discovery.
+Every request uses the existing lease, fresh service-credential, budget and journal
+reservation guards. Agent participation adds no Mist reads. A model may skip a
+check, but the required sweep still performs it within the available allowance.
+
+Only a unique row matching the exact MAC, organization, site and AP type verifies
+inventory membership. Missing/unassigned/re-homed devices, multiple results and
+virtual-chassis aliases remain unresolved. Switch and gateway neighbor verification
+is deferred. This check establishes membership at collection time, not the truth
+of an LLDP claim, a powered-device relationship, pre-change usage or an outage.
+No downstream AP operational check or impact finding is authorized in this slice.
+
+Public `managed_neighbor` evidence contains an opaque device handle, `kind=ap`,
+`identity=verified_inventory` and `relationship=unverified`. Inventory dispatches
+carry `source_dispatch_id` instead of a raw neighbor identity. Reports and model
+context never expose the private binding, ciphertext or candidate MAC. Existing
+neighbor digests cannot be decoded or backfilled; active checkpoints obtain fresh
+budgeted observations. Private artifacts, including orphan inserts, have a MongoDB
+TTL pinned to the organization's monitoring retention at creation. Later policy
+changes do not rewrite that pinned expiry; comprehensive retention reconciliation
+remains in the queue.
+
+The default 56-call audit allowance remains an independent spending ceiling, shared
+with journal capacity in `impact/limits.py`. A maximal twelve-check plan would need
+84 calls for the ordinary seven-checkpoint schedule. It funds four full checkpoints
+and eight reads at the fifth (ordinarily near +40 minutes), then records a denial
+for the next check. A ten-check plan without inventory still funds five full
+checkpoints and six reads at the sixth. Smaller saved budgets, prior reservations
+and failed attempts can exhaust earlier. The ten-publication cap is a lifecycle
+safety limit. After fenced terminal publication, `next_poll_at` is cleared; the
+normal worker does not keep publishing denial-only revisions.
