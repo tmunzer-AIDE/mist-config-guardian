@@ -42,6 +42,9 @@ def setup_runtime(monkeypatch, *, fence_matches=True, enabled=True):
     )
     monkeypatch.setattr(runtime, "utc_now", lambda: LATER)
     monkeypatch.setattr(runtime.Organization, "get", AsyncMock(return_value=organization))
+    monkeypatch.setattr(
+        runtime.AuditChangeGroup, "find_one", AsyncMock(return_value=SimpleNamespace(audit_id=root.audit_id))
+    )
     monkeypatch.setattr(runtime, "service_token", AsyncMock(return_value="test-token"))
     collection = SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=int(fence_matches))))
     monkeypatch.setattr(ImpactInvestigation, "get_pymongo_collection", lambda *_: collection)
@@ -191,16 +194,83 @@ async def test_foreign_group_does_not_expose_an_investigation(monkeypatch):
     lookup.assert_not_awaited()
 
 
-async def test_repeated_checkpoint_failures_have_a_terminal_stopping_rule(monkeypatch, httpx_mock):
+async def test_published_checkpoints_have_a_terminal_stopping_rule(monkeypatch, httpx_mock):
     service, root, collection, inserted, _ = setup_runtime(monkeypatch)
-    root.generation = 11
+    root.revision = 10
     await service._poll(root)  # noqa: SLF001
     assert not httpx_mock.get_requests()
     assert inserted == []
     update = collection.update_one.await_args.args[1]["$set"]
     assert update["status"] == "incomplete"
     assert update["next_poll_at"] is None
-    assert "attempt limit" in update["stop_reason"]
+    assert "Published checkpoint limit" in update["stop_reason"]
+
+
+async def test_reclaimed_leases_do_not_consume_completed_checkpoints(monkeypatch, httpx_mock):
+    service, root, collection, inserted, _ = setup_runtime(monkeypatch)
+    root.generation = 30
+    for start, end in [(NOW - timedelta(hours=1), NOW), (NOW, LATER)]:
+        httpx_mock.add_response(
+            json={"start": int(start.timestamp()), "end": int(end.timestamp()), "results": [], "total": 0}
+        )
+    await service._poll(root)  # noqa: SLF001
+    assert len(httpx_mock.get_requests()) == 2
+    assert inserted[0].revision == 3
+    predicate, publication = collection.update_one.await_args.args
+    assert predicate["generation"] == 30
+    assert publication["$set"]["revision"] == 3
+
+
+async def test_missing_group_retains_root_and_gap_then_resumes_after_correlation(monkeypatch, httpx_mock):
+    service, root, collection, inserted, _ = setup_runtime(monkeypatch)
+    group_lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(runtime.AuditChangeGroup, "find_one", group_lookup)
+    await service.ensure(ORG, root.audit_id, changed_at=NOW, anchor_known=True)
+    assert collection.update_one.await_args.kwargs["upsert"] is True
+    assert collection.update_one.await_args.args[1]["$setOnInsert"]["audit_id"] == root.audit_id
+    await service._poll(root)  # noqa: SLF001
+    assert not httpx_mock.get_requests()
+    service._configurations.versions_for_audit.assert_not_awaited()  # noqa: SLF001
+    assert inserted[0].assessment.impact == "info"
+    assert any("awaiting correlation" in gap for gap in inserted[0].assessment.gaps)
+    assert collection.update_one.await_args.args[1]["$set"]["next_poll_at"] is not None
+
+    root.revision += 1
+    group_lookup.return_value = SimpleNamespace(audit_id=root.audit_id)
+    for start, end in [(NOW - timedelta(hours=1), NOW), (NOW, LATER)]:
+        httpx_mock.add_response(
+            json={"start": int(start.timestamp()), "end": int(end.timestamp()), "results": [], "total": 0}
+        )
+    await service._poll(root)  # noqa: SLF001
+    assert len(httpx_mock.get_requests()) == 2
+    assert inserted[-1].assessment.impact == "none"
+    assert not any("awaiting correlation" in gap for gap in inserted[-1].assessment.gaps)
+
+
+async def test_missing_group_expires_visibly_without_queries(monkeypatch, httpx_mock):
+    service, root, collection, inserted, _ = setup_runtime(monkeypatch)
+    monkeypatch.setattr(runtime.AuditChangeGroup, "find_one", AsyncMock(return_value=None))
+    root.expires_at = NOW + timedelta(minutes=1)
+    await service._poll(root)  # noqa: SLF001
+    assert not httpx_mock.get_requests()
+    assert any("awaiting correlation" in gap for gap in inserted[0].assessment.gaps)
+    publication = collection.update_one.await_args.args[1]["$set"]
+    assert publication["status"] == "incomplete"
+    assert publication["next_poll_at"] is None
+
+
+async def test_crashes_after_expiry_stop_even_without_successful_checkpoints(monkeypatch):
+    service, root, collection, _, _ = setup_runtime(monkeypatch)
+    root.expires_at = NOW + timedelta(minutes=1)
+    root.generation = 30
+    collection.find_one_and_update = AsyncMock(side_effect=[root.model_dump(mode="python", by_alias=True), None])
+    monkeypatch.setattr(service, "_poll", AsyncMock(side_effect=RuntimeError("Configuration store unavailable")))
+    await service.poll_due()
+    predicate, update = collection.update_one.await_args.args
+    assert predicate["generation"] == 30
+    assert predicate["lease_until"] == {"$gt": LATER}
+    assert update["$set"]["next_poll_at"] is None
+    assert "expired" in update["$set"]["stop_reason"]
 
 
 async def test_shadow_mode_never_invokes_the_legacy_device_ai(monkeypatch):

@@ -187,7 +187,13 @@ def _metric_phrase(metric: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class MetricMovement:
-    """Worst actual comparison within one metric/scope family, with unique counts."""
+    """Worst actual comparison within one metric/scope family, with unique counts.
+
+    ``baseline`` and ``latest`` are the paired values of the single ``scope_id``
+    with the worst delta, never population means. ``sessions`` counts distinct
+    comparable scopes in the family; ``degraded_sessions`` counts affected scopes
+    across that population, not observations belonging to the selected scope.
+    """
 
     metric: str
     baseline: float

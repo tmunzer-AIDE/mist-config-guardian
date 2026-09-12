@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from beanie import PydanticObjectId
 from pymongo import ReturnDocument
 
+from mist_config_guardian_backend.impact.contracts import WlanRemovalPlan
 from mist_config_guardian_backend.impact.wlan_removal import check_windows, compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWlanEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 _LEASE = timedelta(minutes=3)
 _INTERVAL = timedelta(minutes=10)
 _DURATION = timedelta(hours=1)
-_MAX_CHECKPOINT_ATTEMPTS = 10
+_MAX_CHECKPOINTS = 10
 
 
 class ImpactInvestigationService:
@@ -38,10 +39,11 @@ class ImpactInvestigationService:
         changed_at: datetime,
         anchor_known: bool,
     ) -> None:
-        """Receipt retries and late device events cannot reset time or query budgets."""
-        group = await AuditChangeGroup.find_one({"organization_id": organization_id, "audit_id": audit_id})
-        if group is None:
-            return
+        """Persist the audit even before correlation; retries cannot reset budgets.
+
+        Only the authenticated audit receipt path calls this method. An absent
+        group delays evidence collection rather than silently losing the audit.
+        """
         now = utc_now()
         due = max(now, changed_at) + timedelta(seconds=60)
         root = ImpactInvestigation(
@@ -81,6 +83,8 @@ class ImpactInvestigationService:
                 completed += 1
             except Exception:  # bounded lease permits another worker to retry after a crash
                 logger.exception("Shadow impact checkpoint failed for investigation %s", root.id)
+                if utc_now() > root.expires_at + timedelta(minutes=2):
+                    await self._stop(root, "Investigation expired before a checkpoint could be published.")
         return completed
 
     @staticmethod
@@ -92,23 +96,26 @@ class ImpactInvestigationService:
             "lease_until": {"$gt": now},
         }
 
-    async def _poll(self, root: ImpactInvestigation) -> None:
-        now = utc_now()
-        if root.generation > _MAX_CHECKPOINT_ATTEMPTS:
-            await ImpactInvestigation.get_pymongo_collection().update_one(
-                self._fence(root, now),
-                {
-                    "$set": {
-                        "status": "incomplete",
-                        "next_poll_at": None,
-                        "lease_until": None,
-                        "stop_reason": "Checkpoint attempt limit reached; evidence is incomplete.",
-                    }
-                },
-            )
-            return
-        organization = await Organization.get(root.organization_id)
-        versions = await self._configurations.versions_for_audit(root.organization_id, root.audit_id)
+    async def _stop(self, root: ImpactInvestigation, reason: str) -> None:
+        await ImpactInvestigation.get_pymongo_collection().update_one(
+            self._fence(root, utc_now()),
+            {
+                "$set": {
+                    "status": "incomplete",
+                    "next_poll_at": None,
+                    "lease_until": None,
+                    "stop_reason": reason,
+                }
+            },
+        )
+
+    async def _plan(self, root: ImpactInvestigation) -> WlanRemovalPlan:
+        group = await AuditChangeGroup.find_one({"organization_id": root.organization_id, "audit_id": root.audit_id})
+        versions = (
+            await self._configurations.versions_for_audit(root.organization_id, root.audit_id)
+            if group is not None
+            else []
+        )
         # Only terminal versions per object are compiled; conflicting same-audit
         # chains remain a gap until the expander can establish their net change.
         versions.sort(key=lambda item: (str(item.logical_object_id), item.version))
@@ -127,10 +134,25 @@ class ImpactInvestigationService:
             before=before,
             after=versions,
         )
+        if group is None:
+            plan = plan.model_copy(
+                update={"gaps": (*plan.gaps, "Audit change group is not available; awaiting correlation.")}
+            )
         if not root.anchor_known:
             plan = plan.model_copy(
                 update={"gaps": (*plan.gaps, "Audit timestamp is missing; receipt time is only an approximate anchor.")}
             )
+        return plan
+
+    async def _poll(self, root: ImpactInvestigation) -> None:
+        now = utc_now()
+        # Only a fenced publication advances revision. Lease claims and orphan
+        # artifacts are not completed checkpoints and must not consume this cap.
+        if root.revision >= _MAX_CHECKPOINTS:
+            await self._stop(root, "Published checkpoint limit reached; evidence is incomplete.")
+            return
+        plan = await self._plan(root)
+        organization = await Organization.get(root.organization_id)
         evidence_as_of = min(now, root.expires_at)
         evidence = []
         # Delayed audit delivery cannot turn a historical change into a fresh hour.

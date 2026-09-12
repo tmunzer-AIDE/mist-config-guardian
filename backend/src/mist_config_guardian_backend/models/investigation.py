@@ -21,11 +21,11 @@ class ImpactInvestigation(TimestampedModel, Document):
     next_poll_at: datetime | None
     status: Literal["collecting", "monitoring", "completed", "incomplete"] = "collecting"
     stop_reason: str = ""
-    generation: int = 0
+    generation: int = 0  # Lease fencing token, not a completed-checkpoint counter.
     lease_until: datetime | None = None
     calls_used: int = 0
     calls_limit: int = 56
-    revision: int = 0
+    revision: int = 0  # Number of successfully published checkpoints.
     report_id: PydanticObjectId | None = None
 
     class Settings:

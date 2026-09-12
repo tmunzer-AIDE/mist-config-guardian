@@ -70,6 +70,13 @@ described as implemented. The detailed contracts remain in the linked design doc
   It is opt-in with `IMPACT_ENGINE_MODE=shadow`; default `legacy` is unchanged.
   The AI tool loop, remaining rules and production report/topology migration are
   still pending. The preview is diagnostic, not the final common report contract.
+- Shadow runtime review follow-up: missing groups retain audit roots and publish
+  correlation gaps; checkpoint limits count published revisions instead of lease
+  generations, with fenced termination after expiry even on checkpoint failure.
+  Documented worst-scope field semantics and enumerated production consumers.
+  Validation: 960 backend tests passed, 20 skipped; Ruff lint, changed-file format,
+  source type and OpenAPI consistency checks passed. Local diff review completed;
+  no frontend or API contract changed in this follow-up.
 
 ## Gates that require external evidence
 
@@ -91,12 +98,14 @@ described as implemented. The detailed contracts remain in the linked design doc
   Require matching immutable incarnations; do not substitute the logical object's mutable current incarnation. Organization
   WLAN consumers and multiple same-audit versions need further resolution and
   remain gaps. Unknown inheritance remains assumed effective.
+  Schedule and SSID-identity changes are explicitly unmapped in this slice;
+  the broader matrix row does not imply those variants are implemented.
 - Read historical sessions once per WLAN/site/window, never once per AP. Initial
   collection waits 60 seconds; later opportunities occur around +10…+60 minutes
   on the existing worker tick. Configured-device evidence is not required to
   discover the WLAN's clients and is not treated as an exhaustive consumer set.
 - Bound v1 to four WLAN targets, eight reads per checkpoint, 56 reads per audit,
-  ten checkpoint attempts including crash retries, one 1,000-row page per read,
+  ten published checkpoints (not lease claims), one 1,000-row page per read,
   512 KiB per response and a 20-second wall timeout. Target, row, byte and
   pagination limits produce visible incomplete coverage. The collector does not
   follow provider-supplied pagination URLs.
@@ -125,16 +134,67 @@ described as implemented. The detailed contracts remain in the linked design doc
   demonstrates bounded new collection but does not claim reduced total production
   query volume while shadow and legacy collectors coexist.
 
+## Review follow-up: correlation, retries and projection ownership
+
+- Persist the audit root even when the change group is temporarily missing.
+  Only the existing authenticated `audits` receipt path may open it; configured
+  events still cannot open investigations. On each checkpoint, absent correlation
+  produces a durable assessment gap and no operational queries. Later correlation
+  resumes the same root with its original anchor, deadline and query budget.
+  Expiry leaves an incomplete report if correlation never arrives. Until a group
+  exists, the group-keyed preview cannot display that root; storage retains it.
+- `generation` is exclusively the fencing token. The existing `revision` already
+  counts successfully published checkpoints, so it also supplies the checkpoint
+  limit without adding a second counter that could drift. Crashed claims and
+  orphan artifacts do not consume it. A checkpoint exception after expiry stops
+  the root under its current fence, provided the database accepts the update.
+  Database unavailability still requires the existing worker retry/recovery path.
+- `MetricMovement.baseline/latest` belong to the single worst `scope_id`, while
+  `sessions/degraded_sessions` count the distinct comparable population. The
+  class contract now explicitly documents this distinction for future consumers.
+- Prepare projector migration before adding further presentation consumers, but
+  do not promote the WLAN-only shadow assessment to the production verdict for a
+  whole audit. Mixed/unmapped changes, report provenance and the adjudication gate
+  must remain explicit. This follow-up changes no production severity source.
+
+### Enumerated consumer migration audit
+
+Verified against source on 2026-09-12. Notifications currently read the **group**
+projection through `ChangeGroupProjector._notify_impact`, not the session mirror
+directly; that group still derives its severity from device assessments (or legacy
+session mirrors). Moving a tile alone would therefore leave alerts inconsistent.
+
+| Consumer / implementation | Current source | Migration requirement |
+| --- | --- | --- |
+| Changes: `ChangeGroupProjector.rebuild`, `serialize_group`, list severity filters in `services/change_groups.py` | Group severity, recovery and evidence rebuilt from sessions | Publish revision identity, source/mode, coverage and bands together; list filters must use that same published projection. |
+| Recovery: `resolve_recovery_state` in `services/change_groups.py` | Session incidents/peak/current severity and scoped movements | Preserve observed history separately from current audit attribution; do not borrow another audit's recovery. |
+| Overview: `BeanieOverviewReader.change_group_counts` in `services/overview.py` and recent change rows | Group severity/recovery and shared group serialization | Count the same assessment source and revision that Changes presents; unknown must remain distinct from benign. |
+| Notifications: `ChangeGroupProjector._notify_impact` → `NotificationService.notify_impact_detected` | Group critical severity and summary; group deduplication | Gate on an accepted published audit assessment, carry its provenance, and decide revision/recovery alert policy before enabling. |
+| Impact/device health: `services/site_impact.py` | Persisted session assessment, with legacy fallback | Keep observed device health separate from audit-attributed affected devices; never paint serving APs as failed. |
+| Monitoring list/detail: `api/routes/monitoring.py`, `schemas/monitoring.py` | Query filter on session mirror; serializer prefers assessment | Preserve the device-monitoring meaning or explicitly version its replacement; a read-time fallback alone does not fix database filters. |
+| Search: `services/search.py` | Group severity label | Use published group projection and its provenance. |
+| Point-in-time: `services/point_in_time.py` | Group severity for current views, neutral historical display | Resolve a revision at the selected time before exposing historical impact; never leak a later report backward. |
+| Shadow preview: `services/investigation_reads.py` | Exact published artifact pointer plus revision and organization | Retain strict publication/tenant scoping when extracting the shared report projection. |
+| Session writers: `services/impact_analysis.py`, `services/monitoring.py` | Authoritative assessment plus current/peak mirrors and timeline | Keep as device evidence during shadow; remove attribution consumers before retiring compatibility fields and broad polling. |
+
+The next projector slice should add explicit assessment provenance and a shared
+published-audit projection in shadow, with regressions covering lists, counts,
+unknown coverage and notification isolation. Production promotion is a separate
+acceptance-gated switch, not an implicit side effect of adding that read path.
+
 ## Next implementation queue
 
-1. Carry configured-event identities and deployment outcomes into the audit
+1. Prepare the shared published-audit projector and explicit provenance in shadow
+   for Changes/Overview, preserving production notification isolation and the
+   enumerated migration obligations above.
+2. Carry configured-event identities and deployment outcomes into the audit
    evidence contract, preserving occurrence/receipt times and ambiguity. Extend
    resolvers for the remaining three rules without modifying shared device plans.
-2. Add retention cleanup and durable dispatch journaling, then complete the common
+3. Add retention cleanup and durable dispatch journaling, then complete the common
    report schema and topology attribution records. Keep serving-device evidence
    distinct from device failure.
-3. Add the bounded agent tool loop over the tested capability boundary. Extract
+4. Add the bounded agent tool loop over the tested capability boundary. Extract
    rule packs/skills from working checks; add OAS retrieval only for a demonstrated
    unmapped-path consumer. Build operator adjudication/replay before promotion.
-4. Migrate all enumerated consumers, including notifications, to the same audit
+5. Promote all enumerated consumers, including notifications, to the same audit
    assessment revision and retire broad per-device collection after acceptance.
