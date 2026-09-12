@@ -82,5 +82,14 @@ export const routes: Routes = [
     path: 'account/:tab',
     redirectTo: tabRedirect('/account'),
   },
+  {
+    // Unauthenticated by design: the invitation token is the credential, and
+    // the invitee has no account to sign in with yet. It must precede the
+    // wildcard, which would otherwise redirect it to the dashboard.
+    path: 'accept-invitation',
+    loadComponent: () =>
+      import('./features/auth/accept-invitation-page').then((m) => m.AcceptInvitationPage),
+    title: 'Accept invitation · Config Guardian',
+  },
   { path: '**', redirectTo: '' },
 ];

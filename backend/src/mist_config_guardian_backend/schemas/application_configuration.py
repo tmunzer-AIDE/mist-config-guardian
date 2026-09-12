@@ -1,6 +1,7 @@
 """Administrator-managed application configuration schemas."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
@@ -126,3 +127,42 @@ class AiModelListResponse(BaseModel):
     """Models discovered from the configured provider."""
 
     items: list[AiModelResponse]
+
+
+class SmtpSettingsUpdate(BaseModel):
+    """Administrator-supplied SMTP settings; a blank password leaves it untouched."""
+
+    enabled: bool = False
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=587, ge=1, le=65535)
+    security: Literal["starttls", "tls", "none"] = "starttls"
+    username: str = Field(default="", max_length=255)
+    password: SecretStr | None = Field(default=None, max_length=1024)
+    clear_password: bool = False
+    from_address: str = Field(default="", max_length=320)
+    from_name: str = Field(default="", max_length=120)
+
+
+class SmtpSettingsResponse(BaseModel):
+    """Stored SMTP settings with the password reduced to its last four characters."""
+
+    enabled: bool
+    host: str
+    port: int
+    security: Literal["starttls", "tls", "none"]
+    username: str
+    password_set: bool
+    password_last_four: str | None
+    from_address: str
+    from_name: str
+    last_test_at: datetime | None = None
+    last_test_ok: bool | None = None
+    last_test_detail: str | None = None
+
+
+class SmtpConnectionTestResponse(BaseModel):
+    """The outcome of probing the stored SMTP server without sending a message."""
+
+    ok: bool
+    detail: str
+    checked_at: datetime

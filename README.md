@@ -72,6 +72,18 @@ Digests written before this change are still recognised wherever one is
 compared, and the `hashes.backfill_configuration_hashes` worker task rewrites
 them in the background, so no deployment step is required.
 
+A production deployment whose resolved `public_base_url` is `http` now
+**refuses to start**. This is the URL invitation emails build activation links
+from, and a production deployment already forces `session_cookie_secure`, so
+an `http` origin could never have held a session even before this check
+existed — the refusal surfaces a pre-existing misconfiguration rather than
+creating one, but it is a behaviour change on upgrade: such a deployment that
+previously started will now fail at boot until its origin is corrected to
+`https` (or `PUBLIC_BASE_URL` is set to the correct `https` origin). Relatedly,
+`PUBLIC_BASE_URL` may now need to be set explicitly whenever more than one
+`CORS_ORIGINS` entry is configured, since the canonical origin can no longer
+be derived from a single unambiguous choice.
+
 ## Interface design
 
 `docs/design/prototype.html` is the approved design. It is a reference artifact,

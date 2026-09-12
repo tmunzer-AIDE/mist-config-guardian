@@ -5,7 +5,7 @@ import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angula
 import { AuthService, UserRole } from '../../core/auth.service';
 import { formatInstant } from '../../core/format';
 import { Tone } from '../../core/tone';
-import { ManagedUser, UsersService } from './users.service';
+import { ManagedUser, UserInviteResult, UsersService } from './users.service';
 import { type ConfirmRequest } from './settings-page';
 
 const ROLES: readonly UserRole[] = ['viewer', 'operator', 'administrator'];
@@ -42,7 +42,10 @@ export class UsersTab {
   protected readonly busyId = signal('');
   protected readonly notice = signal('');
   protected readonly error = signal('');
-  protected readonly invitationToken = signal<{ email: string; token: string } | null>(null);
+  /** The link to hand over, and the email it was issued for. */
+  protected readonly invitationLink = signal<{ email: string; url: string } | null>(null);
+  protected readonly linkCopied = signal(false);
+  protected readonly canCopyLink = computed(() => typeof navigator?.clipboard?.writeText === 'function');
 
   protected readonly inviteForm = new FormGroup({
     email: new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.email] }),
@@ -91,7 +94,8 @@ export class UsersTab {
     this.inviteOpen.set(true);
     this.error.set('');
     this.notice.set('');
-    this.invitationToken.set(null);
+    this.invitationLink.set(null);
+    this.linkCopied.set(false);
     this.inviteForm.reset({ email: '', display_name: '', role: 'viewer' });
   }
 
@@ -113,27 +117,64 @@ export class UsersTab {
         role: value.role,
       });
       this.closeInvite();
-      // No mail transport exists; outside production the API hands the token
-      // back so it can be shared out of band.
-      this.invitationToken.set(
-        result.invitation_token ? { email: result.user.email, token: result.invitation_token } : null,
-      );
-      this.notice.set(
-        result.invitation_token
-          ? `${result.user.email} invited. This deployment sends no email, so pass the link below on yourself.`
-          : `${result.user.email} invited.`,
-      );
+      this.applyInviteResult(result);
     });
   }
 
   protected async resend(user: ManagedUser): Promise<void> {
     await this.run(user.id, async () => {
       const result = await this.users.resendInvitation(user.id);
-      this.invitationToken.set(
-        result.invitation_token ? { email: result.user.email, token: result.invitation_token } : null,
-      );
-      this.notice.set(`A fresh invitation was issued for ${result.user.email}.`);
+      this.applyInviteResult(result);
     });
+  }
+
+  /** The link to hand over, preferring the canonical one the backend built. */
+  private activationLink(result: UserInviteResult): string | null {
+    if (result.invitation_url) {
+      return result.invitation_url;
+    }
+    if (!result.invitation_token) {
+      return null;
+    }
+    // The backend could not resolve a canonical origin. This is display only,
+    // for an administrator already on this origin: the server neither reads
+    // nor sends it, and it is unreachable whenever an email was attempted.
+    return `${document.baseURI.replace(/\/$/, '')}/accept-invitation#token=${encodeURIComponent(
+      result.invitation_token,
+    )}`;
+  }
+
+  private deliveryNotice(result: UserInviteResult): string {
+    const email = result.user.email;
+    switch (result.delivery) {
+      case 'sent':
+        return `Invitation emailed to ${email}.`;
+      case 'uncertain':
+        return `Sent to ${email}, but the mail server did not confirm. Share this link if it does not arrive.`;
+      case 'not_configured':
+        return `No SMTP server is configured, so no email was sent. Share this link with ${email}.`;
+      case 'failed':
+        return `Email to ${email} failed: ${result.delivery_detail ?? 'unknown error'}. Share this link instead.`;
+    }
+  }
+
+  private applyInviteResult(result: UserInviteResult): void {
+    const url = this.activationLink(result);
+    this.invitationLink.set(url ? { email: result.user.email, url } : null);
+    this.linkCopied.set(false);
+    this.notice.set(this.deliveryNotice(result));
+  }
+
+  protected async copyLink(url: string): Promise<void> {
+    if (!this.canCopyLink()) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      this.linkCopied.set(true);
+    } catch {
+      this.error.set('The browser refused access to the clipboard. Select the link and copy it.');
+    }
   }
 
   protected async changeRole(user: ManagedUser, event: Event): Promise<void> {

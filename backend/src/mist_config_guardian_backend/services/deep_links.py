@@ -23,7 +23,7 @@ CONSUMED_PARAMETERS: Mapping[str, frozenset[str]] = MappingProxyType(
     }
 )
 
-SETTINGS_TABS = frozenset({"organizations", "users", "ai", "health"})
+SETTINGS_TABS = frozenset({"organizations", "users", "ai", "email", "health"})
 
 
 def deep_link(target: str, /, **parameters: str | None) -> dict[str, str]:

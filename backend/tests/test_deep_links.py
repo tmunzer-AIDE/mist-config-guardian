@@ -43,4 +43,5 @@ def test_the_enum_value_addresses_the_registry_directly() -> None:
 
 
 def test_every_settings_tab_the_browser_defines_is_linkable() -> None:
-    assert {"organizations", "users", "ai", "health"} == SETTINGS_TABS
+    """The "email" tab is declared ahead of its browser page, which lands in a later task."""
+    assert {"organizations", "users", "ai", "email", "health"} == SETTINGS_TABS

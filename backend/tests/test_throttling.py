@@ -122,6 +122,37 @@ async def test_each_scope_counts_on_its_own() -> None:
         await service.reserve(Scope("account:a", 1))
 
 
+def test_invitation_scopes_do_not_share_a_bucket_with_password_confirmation() -> None:
+    """Reusing user() would let each starve the other."""
+    service = ThrottleService(_settings())
+    user_id = PydanticObjectId()
+
+    assert service.invitation_target(user_id).key != service.user(user_id).key
+
+
+def test_an_invitation_scope_carries_its_own_window() -> None:
+    service = ThrottleService(_settings())
+
+    assert service.invitation_target(PydanticObjectId()).window == timedelta(minutes=1)
+    assert service.invitation_sender(PydanticObjectId()).window == timedelta(hours=1)
+
+
+def test_an_existing_scope_still_has_no_window_of_its_own() -> None:
+    service = ThrottleService(_settings())
+
+    assert service.account("a@example.com").window is None
+
+
+async def test_a_second_send_to_one_target_inside_the_window_is_refused() -> None:
+    service = ThrottleService(_settings(), MemoryThrottleStore())
+    scope = service.invitation_target(PydanticObjectId())
+
+    await service.reserve(scope)
+
+    with pytest.raises(ThrottledError):
+        await service.reserve(scope)
+
+
 # -------------------------------------------------------------------- api
 
 

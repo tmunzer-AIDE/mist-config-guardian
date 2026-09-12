@@ -2,8 +2,9 @@
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "Mist Config Guardian"
@@ -22,6 +24,10 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     cors_origins: str = "http://localhost:4200,http://localhost:8080"
+    # The canonical origin activation links are built from. Empty means derive
+    # it from a lone CORS origin, which is self-validating: a wrong one stops
+    # the browser application calling the API at all.
+    public_base_url_override: str = Field(default="", validation_alias="PUBLIC_BASE_URL")
     secret_key: SecretStr = SecretStr("development-only-change-before-production-64-character-minimum-key")
 
     mongodb_url: str = "mongodb://localhost:27017"
@@ -65,6 +71,10 @@ class Settings(BaseSettings):
     sign_in_throttle_window_minutes: int = 15
     sign_in_failures_per_account: int = 10
     sign_in_failures_per_address: int = 100
+    # An invitation scope bounds sending, not credential guessing, so each
+    # carries its own window instead of sharing the sign-in one above.
+    invitation_sends_per_target_per_minute: int = 1
+    invitation_sends_per_sender_per_hour: int = 20
 
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "Mist Config Guardian"
@@ -79,6 +89,19 @@ class Settings(BaseSettings):
     def parsed_cors_origins(self) -> list[str]:
         """Return normalized configured CORS origins."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def public_base_url(self) -> str | None:
+        """Return the canonical origin, or ``None`` when it cannot be resolved.
+
+        Several CORS origins never elect one: CORS is an allow-list, and the
+        order within it carries no meaning. Callers that need a link must
+        refuse rather than guess.
+        """
+        if self.public_base_url_override:
+            return self.public_base_url_override.rstrip("/")
+        origins = self.parsed_cors_origins
+        return origins[0].rstrip("/") if len(origins) == 1 else None
 
     @model_validator(mode="after")
     def reject_development_secret_in_production(self) -> "Settings":
@@ -118,6 +141,34 @@ class Settings(BaseSettings):
             self.session_cookie_secure = True
         if self.session_cookie_same_site == "none" and not self.session_cookie_secure:
             msg = "SESSION_COOKIE_SAME_SITE='none' requires SESSION_COOKIE_SECURE"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_public_base_url(self) -> "Settings":
+        """Refuse a public base URL that cannot safely carry an activation link.
+
+        The activation request carries the invitation credential and the
+        password its owner is choosing in one POST, so production requires
+        TLS. Nothing working is broken by that: ``session_cookie_secure`` is
+        already forced true in production, so a plaintext production
+        deployment cannot hold a session and is already non-functional.
+        """
+        if self.public_base_url_override:
+            parsed = urlparse(self.public_base_url_override)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                msg = "PUBLIC_BASE_URL must be an absolute http(s) URL with no credentials, query, or fragment"
+                raise ValueError(msg)
+        resolved = self.public_base_url
+        if self.environment == "production" and resolved is not None and not resolved.startswith("https://"):
+            msg = "PUBLIC_BASE_URL must use https in production"
             raise ValueError(msg)
         return self
 

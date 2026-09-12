@@ -1,7 +1,12 @@
 """Application-wide configuration management."""
 
+import asyncio
+import contextlib
+import logging
+import smtplib
 import time
 from dataclasses import dataclass
+from ipaddress import IPv6Address, ip_address
 from typing import Literal, Protocol
 
 from beanie import PydanticObjectId
@@ -13,6 +18,11 @@ from mist_config_guardian_backend.integrations.ai_provider import (
     AiProviderError,
     OpenAiCompatibleProvider,
 )
+from mist_config_guardian_backend.integrations.smtp import (
+    SmtpCredentials,
+    SmtpNegotiationError,
+    connect_and_authenticate,
+)
 from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.schemas.application_configuration import (
@@ -23,6 +33,9 @@ from mist_config_guardian_backend.schemas.application_configuration import (
     AiSettingsUpdate,
     ImpactAiSettingsResponse,
     ImpactAiSettingsUpdate,
+    SmtpConnectionTestResponse,
+    SmtpSettingsResponse,
+    SmtpSettingsUpdate,
 )
 from mist_config_guardian_backend.security.credentials import (
     CredentialDecryptionError,
@@ -31,6 +44,54 @@ from mist_config_guardian_backend.security.credentials import (
 
 _IMPACT_AI_KEY_CONTEXT = "impact-ai-api-key"
 _AI_PROVIDER_KEY_CONTEXT = "ai-provider-key"
+_SMTP_PASSWORD_CONTEXT = "smtp-password"  # noqa: S105 - an encryption context label, not a secret
+
+logger = logging.getLogger(__name__)
+
+
+def is_loopback_host(host: str) -> bool:
+    """Report whether ``host`` is a literal loopback address.
+
+    Literals only, and never resolved. ``localhost`` is a name: what it
+    points at can change between this check and the connection that trusts
+    it, so a name is never accepted as proof that traffic stays on the
+    machine.
+
+    An IPv4-mapped IPv6 literal such as ``::ffff:127.0.0.1`` is also refused
+    even though it embeds a loopback address: it is a second spelling of an
+    address the accepted-forms error message does not name, and stdlib
+    ``is_loopback`` reports it as loopback only by unwrapping that embedded
+    form, not because the literal itself is one of the two accepted forms.
+    """
+    try:
+        parsed = ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(parsed, IPv6Address) and parsed.ipv4_mapped is not None:
+        return False
+    return parsed.is_loopback
+
+
+def _probe_smtp(credentials: SmtpCredentials) -> tuple[bool, str]:
+    """Connect, upgrade, and authenticate, reporting what happened.
+
+    Never sends a message: connecting, upgrading, and authenticating is the
+    whole check, and there is nobody to send a real message to. Reaches the
+    server through the same ``connect_and_authenticate`` the mail transport
+    uses, so the verified TLS contexts and the login-failure hardening (a
+    hostile or buggy server can echo the AUTH line back in its reply) exist
+    in exactly one place rather than being reimplemented, and potentially
+    weakened, here.
+    """
+    try:
+        client = connect_and_authenticate(credentials, timeout=10.0)
+    except SmtpNegotiationError as exc:
+        return False, exc.detail
+    with contextlib.suppress(OSError, smtplib.SMTPException):
+        client.quit()
+    if credentials.security == "none":
+        return True, "Connected. This connection is unencrypted."
+    return True, "Connected and authenticated over TLS."
 
 
 class ApplicationConfigurationError(ValueError):
@@ -276,6 +337,186 @@ class ApplicationConfigurationService:
             )
             for model in models
         ]
+
+    # -- SMTP settings -------------------------------------------------------
+    async def get_smtp(self) -> SmtpSettingsResponse:
+        """Return stored SMTP settings without the password."""
+        return self._smtp_response(await self._get_or_create())
+
+    async def update_smtp(self, request: SmtpSettingsUpdate) -> SmtpSettingsResponse:
+        """Persist SMTP settings, refusing configurations that cannot be secured."""
+        if request.enabled:
+            self._validate_smtp(request)
+        configuration = await self._get_or_create()
+        password = request.password.get_secret_value() if request.password is not None else None
+        encrypted_smtp_password = configuration.encrypted_smtp_password
+        smtp_password_last_four = configuration.smtp_password_last_four
+        if password:
+            encrypted_smtp_password = self._vault.encrypt_for_context(
+                password,
+                context=_SMTP_PASSWORD_CONTEXT,
+            )
+            smtp_password_last_four = password[-4:].rjust(4, "*")
+        elif request.clear_password:
+            encrypted_smtp_password = None
+            smtp_password_last_four = None
+
+        # Only the fields this method owns are written, with a targeted $set
+        # rather than configuration.save(). A whole-document save() would
+        # carry this instance's AI settings - read before this call, never
+        # refreshed - back over whatever an administrator changed there while
+        # this request was in flight, silently reverting it. See webhooks.py
+        # for the same hazard against the encrypted webhook secret.
+        fields: dict[str, object] = {
+            "smtp_enabled": request.enabled,
+            "smtp_host": request.host.strip(),
+            "smtp_port": request.port,
+            "smtp_security": request.security,
+            "smtp_username": request.username.strip(),
+            "encrypted_smtp_password": encrypted_smtp_password,
+            "smtp_password_last_four": smtp_password_last_four,
+            "smtp_from_address": request.from_address.strip(),
+            "smtp_from_name": request.from_name.strip(),
+            "updated_at": utc_now(),
+        }
+        await ApplicationConfiguration.get_pymongo_collection().update_one(
+            {"_id": configuration.id},
+            {"$set": fields},
+        )
+        for name, value in fields.items():
+            setattr(configuration, name, value)
+        return self._smtp_response(configuration)
+
+    async def test_smtp_connection(self) -> SmtpConnectionTestResponse:
+        """Probe the stored SMTP server without sending a message.
+
+        Connecting, upgrading, and authenticating is the whole check: proving
+        a message can be sent would mean sending one, and there is nobody to
+        send it to.
+        """
+        configuration = await self._get_or_create()
+        credentials = await self.smtp_credentials()
+        if credentials is None:
+            ok, detail = False, "Email is not enabled."
+        else:
+            ok, detail = await asyncio.to_thread(_probe_smtp, credentials)
+        checked_at = utc_now()
+        # Only the test-result fields are this method's business. The probe
+        # above can take up to ten seconds; a configuration.save() afterward
+        # would carry this now-stale instance's SMTP and AI settings - read
+        # before the probe started - back over whatever an administrator
+        # changed there in the meantime, including a credential rotation this
+        # read-only diagnostic has no business reverting.
+        fields: dict[str, object] = {
+            "smtp_last_test_at": checked_at,
+            "smtp_last_test_ok": ok,
+            "smtp_last_test_detail": detail,
+            "updated_at": checked_at,
+        }
+        await ApplicationConfiguration.get_pymongo_collection().update_one(
+            {"_id": configuration.id},
+            {"$set": fields},
+        )
+        for name, value in fields.items():
+            setattr(configuration, name, value)
+        return SmtpConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
+
+    def _validate_smtp(self, request: SmtpSettingsUpdate) -> None:
+        """Refuse an enabled configuration that cannot deliver safely."""
+        if not request.host.strip():
+            msg = "An SMTP host is required to enable email"
+            raise ApplicationConfigurationError(msg)
+        if not request.from_address.strip():
+            msg = "A from address is required to enable email"
+            raise ApplicationConfigurationError(msg)
+        if self._settings.public_base_url is None:
+            msg = (
+                "PUBLIC_BASE_URL must be set before enabling email: the application "
+                "cannot tell which of its origins invitation links should use"
+            )
+            raise ApplicationConfigurationError(msg)
+        if request.security == "none":
+            if request.username.strip():
+                msg = "An unencrypted connection cannot carry a username and password"
+                raise ApplicationConfigurationError(msg)
+            host = request.host.strip()
+            if self._settings.environment == "production" and not is_loopback_host(host):
+                msg = (
+                    "An unencrypted connection is only allowed in production to a literal "
+                    "loopback address such as 127.0.0.1 or ::1"
+                )
+                raise ApplicationConfigurationError(msg)
+
+    async def smtp_credentials(self) -> SmtpCredentials | None:
+        """Return decrypted SMTP credentials when email is enabled and safe to use.
+
+        ``_validate_smtp`` enforces the plaintext rules only when an
+        administrator submits ``PUT /settings/smtp``. A stored document is
+        never re-checked after that, so a configuration saved as safe -
+        ``security="none"`` against a loopback host while ``environment`` was
+        "development" - stays on disk unchanged if the same database is later
+        promoted to production, and would otherwise go on shipping the
+        activation token in the clear forever. Re-asserting the rules here,
+        the single place both the mail sender and the connection probe obtain
+        credentials, closes that gap.
+
+        A configuration that fails this check degrades to ``None`` rather
+        than raising: ``None`` means "email not configured" to every caller,
+        so the route reports ``not_configured`` and returns the activation
+        credential to the administrator instead of 500ing the invite and
+        stranding the account.
+        """
+        configuration = await ApplicationConfiguration.find_one(ApplicationConfiguration.key == "global")
+        if configuration is None or not configuration.smtp_enabled:
+            return None
+        if configuration.smtp_security == "none":
+            if configuration.smtp_username:
+                logger.warning(
+                    "Refusing stored SMTP configuration for host %s: security=none "
+                    "may not be combined with a username in any environment",
+                    configuration.smtp_host,
+                )
+                return None
+            if self._settings.environment == "production" and not is_loopback_host(configuration.smtp_host):
+                logger.warning(
+                    "Refusing stored SMTP configuration for host %s: security=none is only "
+                    "allowed in production against a literal loopback address",
+                    configuration.smtp_host,
+                )
+                return None
+        password = ""
+        if configuration.encrypted_smtp_password is not None:
+            password = self._vault.decrypt_for_context(
+                configuration.encrypted_smtp_password,
+                context=_SMTP_PASSWORD_CONTEXT,
+            )
+        return SmtpCredentials(
+            host=configuration.smtp_host,
+            port=configuration.smtp_port,
+            security=configuration.smtp_security,
+            username=configuration.smtp_username,
+            password=password,
+            from_address=configuration.smtp_from_address,
+            from_name=configuration.smtp_from_name,
+        )
+
+    @staticmethod
+    def _smtp_response(configuration: ApplicationConfiguration) -> SmtpSettingsResponse:
+        """Project stored settings into the administrator-visible shape."""
+        return SmtpSettingsResponse(
+            enabled=configuration.smtp_enabled,
+            host=configuration.smtp_host,
+            port=configuration.smtp_port,
+            security=configuration.smtp_security,
+            username=configuration.smtp_username,
+            password_set=configuration.encrypted_smtp_password is not None,
+            password_last_four=configuration.smtp_password_last_four,
+            from_address=configuration.smtp_from_address,
+            from_name=configuration.smtp_from_name,
+            last_test_at=configuration.smtp_last_test_at,
+            last_test_ok=configuration.smtp_last_test_ok,
+            last_test_detail=configuration.smtp_last_test_detail,
+        )
 
     # -- internals ---------------------------------------------------------
     def _draft_runtime(self, configuration: ApplicationConfiguration, draft: AiProviderDraft) -> AiRuntimeConfiguration:

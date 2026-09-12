@@ -32,15 +32,22 @@ export interface UserInviteRequest {
   role: UserRole;
 }
 
+export type InvitationDelivery = 'sent' | 'uncertain' | 'not_configured' | 'failed';
+
 /**
- * The invitation token is returned outside production only, because this
- * deployment has no mail transport. It is shown once and never stored.
+ * A created invitation and what became of it.
+ *
+ * `invitation_token` and `invitation_url` are populated unless positive SMTP
+ * acceptance was observed: "email did not carry it" is not observable, so the
+ * rule errs towards giving the administrator something to pass on themselves.
  */
 export interface UserInviteResult {
   user: ManagedUser;
   invitation_expires_at: string | null;
+  delivery: InvitationDelivery;
   invitation_token: string | null;
-  delivery: string;
+  invitation_url: string | null;
+  delivery_detail: string | null;
 }
 
 export interface UserFilters {
@@ -123,6 +130,17 @@ export class UsersService {
     const user = await firstValueFrom(this.http.post<ManagedUser>(`${API_ROOT}/users/${id}/activate`, {}));
     this.replace(user);
     return user;
+  }
+
+  /**
+   * Redeem an invitation token for a password, activating the account it was
+   * issued for. Unauthenticated: the token is the credential, and there is no
+   * signed-in user yet to attach this call to.
+   */
+  async acceptInvitation(token: string, password: string): Promise<void> {
+    await firstValueFrom(
+      this.http.post<void>(`${API_ROOT}/users/accept-invitation`, { token, password }),
+    );
   }
 
   /** Forget the cached page, so the next visit refetches. */

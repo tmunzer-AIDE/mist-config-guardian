@@ -15,11 +15,18 @@
     @if (error()) {
       <p class="failure" role="alert">{{ error() }}</p>
     }
-    @if (invitationToken(); as invitation) {
+    @if (invitationLink(); as invitation) {
       <div class="token">
         <span class="cg-badge cg-badge--warn">SHOWN ONCE</span>
-        <p class="token-text">Invitation token for {{ invitation.email }}:</p>
-        <code class="cg-mono token-value">{{ invitation.token }}</code>
+        <p class="token-text">Activation link for {{ invitation.email }}:</p>
+        <div class="token-link-row">
+          <a class="cg-mono token-value" [href]="invitation.url">{{ invitation.url }}</a>
+          @if (canCopyLink()) {
+            <button class="cg-btn cg-btn--sm" type="button" (click)="copyLink(invitation.url)">
+              {{ linkCopied() ? 'Copied' : 'Copy link' }}
+            </button>
+          }
+        </div>
       </div>
     }
 
@@ -51,7 +58,7 @@
           </div>
           <div class="invite-actions">
             <button class="cg-btn cg-btn--primary" type="submit" [disabled]="isBusy('invite')">
-              {{ isBusy('invite') ? 'Inviting…' : 'Send invitation' }}
+              {{ isBusy('invite') ? 'Inviting…' : 'Invite user' }}
             </button>
             <button class="cg-btn" type="button" (click)="closeInvite()">Cancel</button>
           </div>

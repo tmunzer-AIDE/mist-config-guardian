@@ -25,10 +25,16 @@ from mist_config_guardian_backend.models.challenge import ThrottleBucket
 
 @dataclass(frozen=True, slots=True)
 class Scope:
-    """One counted key and the number of failures it tolerates per window."""
+    """One counted key, the number of attempts it tolerates, and its window.
+
+    ``window`` is ``None`` for the sign-in scopes, which share the service's
+    window. A scope that bounds something other than credential guessing sets
+    its own rather than inheriting a window chosen for passwords.
+    """
 
     key: str
     limit: int
+    window: timedelta | None = None
 
 
 class ThrottledError(Exception):
@@ -181,6 +187,26 @@ class ThrottleService:
         host = request.client.host if request.client is not None else "unknown"
         return Scope(f"address:{host}", self._settings.sign_in_failures_per_address)
 
+    def invitation_target(self, user_id: PydanticObjectId) -> Scope:
+        """The scope bounding how often one invitee can be mailed."""
+        return Scope(
+            f"invite-target:{user_id}",
+            self._settings.invitation_sends_per_target_per_minute,
+            timedelta(minutes=1),
+        )
+
+    def invitation_sender(self, admin_id: PydanticObjectId) -> Scope:
+        """The scope bounding what one administrator's account can emit.
+
+        This is what limits the invite endpoint at all: there is no target
+        user before the invitation is created.
+        """
+        return Scope(
+            f"invite-sender:{admin_id}",
+            self._settings.invitation_sends_per_sender_per_hour,
+            timedelta(hours=1),
+        )
+
     # ---------------------------------------------------------------- actions
     async def reserve(self, *scopes: Scope) -> None:
         """Count an attempt before it is made, refusing it if that exceeds a limit.
@@ -196,7 +222,7 @@ class ThrottleService:
         """
         reserved: list[Scope] = []
         for scope in scopes:
-            count = await self._store.record(scope.key, self._window)
+            count = await self._store.record(scope.key, scope.window or self._window)
             if count > scope.limit:
                 # Read the window before giving anything back: releasing the
                 # last attempt on a scope can close its bucket entirely.
@@ -220,7 +246,7 @@ class ThrottleService:
     async def failed(self, *scopes: Scope) -> None:
         """Count one failure against every scope, outside a reservation."""
         for scope in scopes:
-            await self._store.record(scope.key, self._window)
+            await self._store.record(scope.key, scope.window or self._window)
 
     async def release(self, *scopes: Scope) -> None:
         """Give back reservations an attempt did not spend as a failure.
