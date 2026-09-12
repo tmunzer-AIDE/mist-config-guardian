@@ -65,6 +65,9 @@
 .live-button.active span {
   background: var(--tone-ok-ink);
 }
+.exact-time {
+  position: relative;
+}
 .exact-time > summary {
   list-style: none;
 }
@@ -80,10 +83,9 @@
 }
 .exact-time form {
   position: absolute;
-  top: 64px;
-  right: 24px;
-  width: 360px;
-  max-width: calc(100% - 24px);
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(360px, calc(100vw - 88px));
   box-sizing: border-box;
   padding: 20px;
   background: var(--surface-raised, #fff);
@@ -253,6 +255,10 @@ input:focus-visible {
   outline-offset: 3px;
 }
 @media (max-width: 1000px) {
+  .exact-time form {
+    left: 0;
+    right: auto;
+  }
   :host {
     padding-inline: 16px;
   }
@@ -271,7 +277,11 @@ input:focus-visible {
     gap: 10px;
   }
   .time-mode {
-    flex-wrap: wrap;
+    width: 100%;
+  }
+  .exact-time {
+    flex: 1;
+    min-width: 0;
   }
   .range-control {
     margin-left: 0;
@@ -288,8 +298,8 @@ input:focus-visible {
     display: none;
   }
   .exact-time form {
-    top: 110px;
-    right: 12px;
+    left: auto;
+    right: 0;
   }
 }
 

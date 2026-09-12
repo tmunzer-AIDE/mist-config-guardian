@@ -493,3 +493,27 @@ test('time explorer previews dragging, commits on release, and stays usable on m
   await page.keyboard.press('Escape');
   await expect(page.locator('.exact-time')).not.toHaveAttribute('open', '');
 });
+
+
+test('exact-time popover follows its trigger when the toolbar wraps', async ({ page }, info) => {
+  await page.goto('/overview');
+  for (const width of [320, 390, 600, 601, 768, 999, 1000, 1280]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const trigger = page.locator('.exact-time summary');
+    await trigger.click();
+    const form = page.locator('.exact-time form');
+    await expect(form).toBeVisible();
+    await expect(page.locator('#view-at-time')).toBeFocused();
+    const anchor = await trigger.boundingBox();
+    const popup = await form.boundingBox();
+    expect(popup.y - (anchor.y + anchor.height)).toBeCloseTo(8, 0);
+    expect(popup.x).toBeGreaterThanOrEqual(0);
+    expect(popup.x + popup.width).toBeLessThanOrEqual(width);
+    if (width === 390 || width === 768) {
+      await page.screenshot({ path: info.outputPath(`exact-time-${width}.png`) });
+    }
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(form).toBeHidden();
+    await expect(trigger).toBeFocused();
+  }
+});
