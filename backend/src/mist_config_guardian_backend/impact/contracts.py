@@ -1,6 +1,7 @@
 """Small, versioned contracts shared by collectors, rules and future investigators."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -67,16 +68,54 @@ class SessionRow(Contract):
         return self
 
 
+class DispatchDenial(StrEnum):
+    CREDENTIALS_UNAVAILABLE = "credentials_unavailable"
+    CREDENTIALS_CHANGED = "credentials_changed"
+    WINDOW_EXPIRED = "window_expired"
+    LEASE_LOST = "lease_lost"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    JOURNAL_FULL = "journal_full"
+    RESERVATION_REJECTED = "reservation_rejected"
+
+    @property
+    def explanation(self) -> str:
+        return {
+            self.CREDENTIALS_UNAVAILABLE: "Dispatch denied: organization access is unavailable or no longer verified.",
+            self.CREDENTIALS_CHANGED: "Dispatch denied: the service credential changed; review organization access.",
+            self.WINDOW_EXPIRED: "Dispatch denied: the investigation collection window expired.",
+            self.LEASE_LOST: "Dispatch denied: this worker no longer holds an active investigation lease.",
+            self.BUDGET_EXHAUSTED: "Dispatch denied: the investigation request budget is exhausted.",
+            self.JOURNAL_FULL: "Dispatch denied: the investigation request journal is full.",
+            self.RESERVATION_REJECTED: (
+                "Dispatch denied: reservation was rejected; the reason could not be established."
+            ),
+        }[self]
+
+
 class SessionEvidence(Contract):
     check_id: Literal["wlan-client-sessions.v1"] = "wlan-client-sessions.v1"
     target_handle: str
     window: Window
     captured_at: AwareDatetime
-    state: Literal["complete", "partial", "error", "pending", "budget_exhausted"]
+    # budget_exhausted is retained for persisted evidence from the earlier collector.
+    state: Literal["complete", "partial", "error", "pending", "budget_exhausted", "dispatch_denied"]
     rows: tuple[SessionRow, ...] = Field(default=(), max_length=1000)
     reason: str = ""
     http_status: int | None = Field(default=None, ge=100, le=599)
     response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def denied_dispatch_has_no_result(self) -> "SessionEvidence":
+        if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
+            msg = "Dispatch denial requires a reason and dispatch_denied state"
+            raise ValueError(msg)
+        if self.dispatch_denial is not None and (
+            self.rows or self.http_status is not None or self.response_bytes is not None
+        ):
+            msg = "A denied dispatch cannot contain a response"
+            raise ValueError(msg)
+        return self
 
 
 class WlanFinding(Contract):

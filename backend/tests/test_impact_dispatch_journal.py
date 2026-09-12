@@ -1,6 +1,7 @@
 """Dispatch records survive failure independently of evidence publication."""
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -13,8 +14,10 @@ from bson.codec_options import CodecOptions
 from pydantic import ValidationError
 from pymongo.errors import ConnectionFailure
 
-from mist_config_guardian_backend.impact.contracts import Window
+from mist_config_guardian_backend.impact.contracts import DispatchDenial, SessionEvidence, Window
 from mist_config_guardian_backend.impact.dispatch import DispatchRecord
+from mist_config_guardian_backend.models.organization import OrganizationStatus
+from mist_config_guardian_backend.services import impact_investigations as runtime
 from mist_config_guardian_backend.services import investigation_reads
 from test_impact_investigation_runtime import setup_runtime
 from test_wlan_investigation import LATER, NOW, ORG
@@ -54,6 +57,12 @@ def journal_runtime(monkeypatch):
             return SimpleNamespace(matched_count=0)
         return SimpleNamespace(matched_count=1)
 
+    async def read(query, projection):
+        assert query == {"_id": root.id, "organization_id": ORG}
+        assert projection["dispatches"] == {"$slice": [55, 1]}
+        return {**stored, "lease_until": root.lease_until, "dispatches": stored["dispatches"][55:56]}
+
+    collection.find_one.side_effect = read
     collection.update_one.side_effect = update
     return service, root, collection, artifacts, stored
 
@@ -265,3 +274,93 @@ async def test_result_for_another_handle_cannot_complete_a_reservation(monkeypat
     with pytest.raises(ValueError, match="identity does not match"):
         await service._finish_dispatch(root, record, reading)  # noqa: SLF001
     collection.update_one.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "cause", ["revoked", "changed", "expired", "budget", "journal", "lease", "missing", "read_error", "unknown"]
+)
+async def test_denials_explain_the_blocker_without_dispatch_or_budget_use(monkeypatch, httpx_mock, cause):
+    service, root, collection, artifacts, stored = journal_runtime(monkeypatch)
+    original_get = runtime.Organization.get
+    organization = await original_get(ORG)
+    expected = DispatchDenial.RESERVATION_REJECTED
+    if cause in {"revoked", "changed", "expired"}:
+        replacement = SimpleNamespace(
+            status=OrganizationStatus.DISABLED if cause == "revoked" else OrganizationStatus.VERIFIED,
+            encrypted_service_token="replacement" if cause == "changed" else organization.encrypted_service_token,
+        )
+
+        async def fresh(_org_id):
+            if cause == "expired":
+                monkeypatch.setattr(runtime, "utc_now", lambda: root.expires_at + timedelta(minutes=3))
+            return replacement
+
+        async def get(org_id):
+            runtime.Organization.get.side_effect = fresh
+            return await original_get(org_id)
+
+        monkeypatch.setattr(runtime.Organization, "get", AsyncMock(side_effect=get))
+        expected = {
+            "revoked": DispatchDenial.CREDENTIALS_UNAVAILABLE,
+            "changed": DispatchDenial.CREDENTIALS_CHANGED,
+            "expired": DispatchDenial.WINDOW_EXPIRED,
+        }[cause]
+    elif cause == "budget":
+        stored["calls_used"] = root.calls_limit
+        expected = DispatchDenial.BUDGET_EXHAUSTED
+    elif cause == "journal":
+        stored["dispatches"] = [{}] * 56
+        expected = DispatchDenial.JOURNAL_FULL
+    elif cause == "lease":
+        stored["generation"] += 1
+        expected = DispatchDenial.LEASE_LOST
+    else:
+        collection.update_one.side_effect = None
+        collection.update_one.return_value = SimpleNamespace(matched_count=0)
+        if cause == "read_error":
+            collection.find_one.side_effect = ConnectionFailure("secret connection detail")
+        elif cause == "missing":
+            collection.find_one.side_effect = None
+            collection.find_one.return_value = None
+    used_before, records_before = stored["calls_used"], len(stored["dispatches"])
+    await service._poll(root)  # noqa: SLF001
+    assert not httpx_mock.get_requests()
+    assert stored["calls_used"] == used_before
+    assert len(stored["dispatches"]) == records_before
+    assert len(artifacts[0].evidence) == 1  # Stop at the first denial, including remaining targets/windows.
+    evidence = artifacts[0].evidence[0]
+    assert evidence.state == "dispatch_denied"
+    assert evidence.dispatch_denial is expected
+    assert evidence.reason == expected.explanation
+    assert evidence.http_status is evidence.response_bytes is None
+    assert artifacts[0].assessment.impact == "info"
+    assert collection.find_one.await_count == int(cause not in {"revoked", "changed", "expired"})
+    # The API preserves the discriminant independently of the human-readable message.
+    artifact = artifacts[0]
+    root.report_id, root.revision = artifact.id, artifact.revision
+    monkeypatch.setattr(runtime.ImpactInvestigation, "find_one", AsyncMock(return_value=root))
+    monkeypatch.setattr(runtime.InvestigationRevision, "find_one", AsyncMock(return_value=artifact))
+    response = await investigation_reads.shadow_investigation(ORG, PydanticObjectId())
+    assert response.checks[0].dispatch_denial is expected
+    assert "secret connection detail" not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("state", "complete"),
+        ("dispatch_denial", None),
+        ("http_status", 200),
+        ("response_bytes", 0),
+    ],
+)
+def test_dispatch_denial_cannot_claim_a_collected_response(field, value):
+    denied = SessionEvidence(
+        target_handle="a" * 64,
+        window=Window(start=NOW, end=LATER),
+        captured_at=LATER,
+        state="dispatch_denied",
+        dispatch_denial=DispatchDenial.CREDENTIALS_CHANGED,
+    )
+    with pytest.raises(ValidationError):
+        SessionEvidence.model_validate({**denied.model_dump(), field: value})

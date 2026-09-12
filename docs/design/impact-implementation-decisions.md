@@ -367,6 +367,48 @@ of adding that read path.
   stale-worker logging, finite journal size, response metadata, immutable completed
   records, result identity, legacy gaps and excluded secret-bearing fields.
 
+## Dispatch-denial review follow-up
+
+- Replace the collector's boolean reservation result with an explicit denial enum
+  (or `None` only after successful atomic reservation). New evidence uses
+  `dispatch_denied` plus `dispatch_denial`: unavailable/unverified organization,
+  changed service credential, expired collection window, lost lease, exhausted
+  request budget, full journal, or rejected reservation with unknown cause.
+  Preserve the old `budget_exhausted` evidence state for historical artifacts;
+  do not guess its original cause. The preview exposes the nullable discriminant
+  and a fixed human-readable explanation, with “Not dispatched” in the UI.
+- Successful reservations keep their existing atomic budget/journal write and
+  make no new read. After a definite zero-match rejection, perform at most one
+  organization-scoped root read, projected to generation, lease, budget and one
+  journal sentinel record. This is a snapshot of the currently visible blocker,
+  not proof of which predicate failed earlier. Prefer a lost lease over budget,
+  and budget over journal when several blockers are visible. Missing roots,
+  changed-but-unexplained state and database read errors remain
+  `reservation_rejected`; never retry HTTP on the strength of diagnostic reads.
+  An uncertain reservation acknowledgement still raises before HTTP and is not
+  converted into a definite denial.
+- Stop collecting at the first denial. Publish incomplete evidence only through
+  the existing fence; a worker that lost its lease cannot replace the current
+  report. Denials spend no budget and create no request journal record. The
+  evidence contract prevents a denial from carrying rows or transport metadata.
+  Credential preflight/decryption failures outside reservation retain their
+  existing behavior; this change classifies dispatch authorization decisions.
+- Clarify that response bytes measure content actually read. An HTTP error can
+  supply a status with no byte count because its body was not consumed. A blank
+  value is not measured zero, and an unfinished journal entry does not establish
+  whether a body was read before the worker stopped.
+- This is a bounded review follow-up, not the next switch rule. Port/PoE event
+  history remains the next rule's historical evidence source. Local source/diff
+  review completed; CodeRabbit remains signed out.
+
+- Validation: 1,038 backend tests passed, 20 skipped; 392 frontend tests passed.
+  Thirteen added backend cases cover denial reasons through the preview API,
+  zero HTTP/budget use, diagnostic-read failure and invalid denial/result
+  combinations. The added frontend regression distinguishes changed credentials
+  from spending limits. Ruff lint, source types, changed-file formatting and
+  OpenAPI consistency passed. No production build or browser rerun was needed
+  for the label/help-text changes; the frontend suite compiled the templates.
+
 ## Next implementation queue
 
 1. Extend resolvers and checks for the remaining three rules without modifying

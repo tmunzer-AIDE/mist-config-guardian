@@ -8,8 +8,9 @@ from uuid import uuid4
 from beanie import PydanticObjectId
 from beanie.odm.utils.encoder import Encoder
 from pymongo import ReturnDocument
+from pymongo.errors import PyMongoError
 
-from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import DispatchDenial, SessionEvidence, WlanRemovalPlan
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.wlan_removal import check_windows, compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWlanEvidenceClient
@@ -190,9 +191,13 @@ class ImpactInvestigationService:
                             window=window,
                             reserve_dispatch=partial(self._reserve, root, credential, dispatch),
                         )
-                        if reading.state != "budget_exhausted":
+                        if reading.state not in {"budget_exhausted", "dispatch_denied"}:
                             await self._finish_dispatch(root, dispatch, reading)
                         evidence.append(reading)
+                        if reading.state in {"budget_exhausted", "dispatch_denied"}:
+                            break
+                    if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
+                        break
         assessment = evaluate_wlan_removal(plan, evidence, evidence_as_of=evidence_as_of)
         if root.id is None:
             msg = "Persisted investigation has no identity"
@@ -208,7 +213,9 @@ class ImpactInvestigationService:
             deployment=await collect_deployment(root, as_of=now),
         )
         await artifact.insert()
-        finished = now >= root.expires_at or any(item.state == "budget_exhausted" for item in evidence)
+        finished = now >= root.expires_at or any(
+            item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
+        )
         if finished:
             status = "completed" if assessment.coverage == "complete" else "incomplete"
             next_poll = None
@@ -232,16 +239,17 @@ class ImpactInvestigationService:
             },
         )
 
-    async def _reserve(self, root: ImpactInvestigation, credential: str, dispatch: DispatchRecord) -> bool:
+    async def _reserve(
+        self, root: ImpactInvestigation, credential: str, dispatch: DispatchRecord
+    ) -> DispatchDenial | None:
         fresh = await Organization.get(root.organization_id)
         now = utc_now()
-        if (
-            fresh is None
-            or fresh.status is not OrganizationStatus.VERIFIED
-            or fresh.encrypted_service_token != credential
-            or now > root.expires_at + timedelta(minutes=2)
-        ):
-            return False
+        if fresh is None or fresh.status is not OrganizationStatus.VERIFIED:
+            return DispatchDenial.CREDENTIALS_UNAVAILABLE
+        if fresh.encrypted_service_token != credential:
+            return DispatchDenial.CREDENTIALS_CHANGED
+        if now > root.expires_at + timedelta(minutes=2):
+            return DispatchDenial.WINDOW_EXPIRED
         record = dispatch.model_copy(update={"reserved_at": now})
         # Budget and journal reservation share one atomic root write. If it fails
         # or its result is uncertain, capture does not issue the HTTP request.
@@ -253,7 +261,36 @@ class ImpactInvestigationService:
             },
             {"$inc": {"calls_used": 1}, "$push": {"dispatches": Encoder().encode(record)}},
         )
-        return result.matched_count == 1
+        if result.matched_count == 1:
+            return None
+        return await self._reservation_blocker(root)
+
+    @staticmethod
+    async def _reservation_blocker(root: ImpactInvestigation) -> DispatchDenial:
+        # Diagnostic snapshot only: this read cannot authorize a retry or prove
+        # which predicate failed at the earlier atomic write. Never read payloads.
+        try:
+            current = await ImpactInvestigation.get_pymongo_collection().find_one(
+                {"_id": root.id, "organization_id": root.organization_id},
+                {
+                    "generation": 1,
+                    "lease_until": 1,
+                    "calls_used": 1,
+                    "dispatches": {"$slice": [MAX_DISPATCHES - 1, 1]},
+                },
+            )
+        except PyMongoError:
+            return DispatchDenial.RESERVATION_REJECTED
+        if current is None:
+            return DispatchDenial.RESERVATION_REJECTED
+        lease_until = current.get("lease_until")
+        if current.get("generation") != root.generation or lease_until is None or lease_until <= utc_now():
+            return DispatchDenial.LEASE_LOST
+        if current.get("calls_used", 0) >= root.calls_limit:
+            return DispatchDenial.BUDGET_EXHAUSTED
+        if current.get("dispatches"):
+            return DispatchDenial.JOURNAL_FULL
+        return DispatchDenial.RESERVATION_REJECTED
 
     @staticmethod
     async def _finish_dispatch(root: ImpactInvestigation, dispatch: DispatchRecord, reading: SessionEvidence) -> None:

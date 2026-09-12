@@ -10,7 +10,13 @@ from typing import Self
 
 import httpx
 
-from mist_config_guardian_backend.impact.contracts import SessionEvidence, SessionRow, Window, WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import (
+    DispatchDenial,
+    SessionEvidence,
+    SessionRow,
+    Window,
+    WlanRemovalPlan,
+)
 from mist_config_guardian_backend.impact.wlan_removal import authorize_check
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
 from mist_config_guardian_backend.models.base import utc_now
@@ -47,7 +53,7 @@ class MistWlanEvidenceClient(AbstractAsyncContextManager["MistWlanEvidenceClient
         plan: WlanRemovalPlan,
         target_handle: str,
         window: Window,
-        reserve_dispatch: Callable[[], Awaitable[bool]],
+        reserve_dispatch: Callable[[], Awaitable[DispatchDenial | None]],
         check_id: str = "wlan-client-sessions.v1",
     ) -> SessionEvidence:
         target = authorize_check(plan, check_id=check_id, target_handle=target_handle)
@@ -58,8 +64,16 @@ class MistWlanEvidenceClient(AbstractAsyncContextManager["MistWlanEvidenceClient
         ):
             msg = "Window exceeds the audit's allowed evidence interval"
             raise ValueError(msg)
-        if not await reserve_dispatch():
-            return self._result(target_handle, window, "budget_exhausted", "Dispatch authorization or budget expired.")
+        denial = await reserve_dispatch()
+        if denial is not None:
+            return SessionEvidence(
+                target_handle=target_handle,
+                window=window,
+                captured_at=utc_now(),
+                state="dispatch_denied",
+                dispatch_denial=denial,
+                reason=denial.explanation,
+            )
         path = f"/api/v1/sites/{target.site_id}/clients/sessions/search"
         params = {
             "wlan_id": str(target.wlan_id),

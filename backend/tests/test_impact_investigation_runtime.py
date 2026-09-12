@@ -47,7 +47,10 @@ def setup_runtime(monkeypatch, *, fence_matches=True, enabled=True):
         runtime.AuditChangeGroup, "find_one", AsyncMock(return_value=SimpleNamespace(audit_id=root.audit_id))
     )
     monkeypatch.setattr(runtime, "service_token", AsyncMock(return_value="test-token"))
-    collection = SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=int(fence_matches))))
+    collection = SimpleNamespace(
+        update_one=AsyncMock(return_value=SimpleNamespace(matched_count=int(fence_matches))),
+        find_one=AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(ImpactInvestigation, "get_pymongo_collection", lambda *_: collection)
     # Initialize documents through a validating BaseModel path without a database.
     monkeypatch.setattr(InvestigationRevision, "get_pymongo_collection", lambda *_: collection)
@@ -95,7 +98,7 @@ async def test_lost_lease_prevents_dispatch_and_cannot_publish_over_new_owner(mo
     await service._poll(root)  # noqa: SLF001
     assert not httpx_mock.get_requests()
     assert inserted[0].assessment.impact == "info"
-    assert all(e.state == "budget_exhausted" for e in inserted[0].evidence)
+    assert all(e.state == "dispatch_denied" for e in inserted[0].evidence)
     predicate = collection.update_one.await_args_list[-1].args[0]
     assert predicate["generation"] == root.generation
     assert predicate["lease_until"] == {"$gt": LATER}

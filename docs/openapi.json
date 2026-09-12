@@ -2494,6 +2494,19 @@
         "title": "DiffVersionRef",
         "type": "object"
       },
+      "DispatchDenial": {
+        "enum": [
+          "credentials_unavailable",
+          "credentials_changed",
+          "window_expired",
+          "lease_lost",
+          "budget_exhausted",
+          "journal_full",
+          "reservation_rejected"
+        ],
+        "title": "DispatchDenial",
+        "type": "string"
+      },
       "DispatchLog": {
         "additionalProperties": false,
         "description": "Current root activity, explicitly separate from a published report revision.",
@@ -6288,6 +6301,16 @@
           "check_id": {
             "title": "Check Id",
             "type": "string"
+          },
+          "dispatch_denial": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DispatchDenial"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reason": {
             "title": "Reason",

@@ -8,7 +8,7 @@ import pytest
 from beanie import PydanticObjectId
 from pydantic import ValidationError
 
-from mist_config_guardian_backend.impact.contracts import SessionEvidence, SessionRow
+from mist_config_guardian_backend.impact.contracts import DispatchDenial, SessionEvidence, SessionRow
 from mist_config_guardian_backend.impact.wlan_removal import (
     authorize_check,
     check_windows,
@@ -201,7 +201,7 @@ async def capture(httpx_mock, response, *, reserve=True, status=200):
     window = check_windows(compiled, LATER)[0]
     if reserve:
         httpx_mock.add_response(json=payload(window, **response), status_code=status)
-    dispatch = AsyncMock(return_value=reserve)
+    dispatch = AsyncMock(return_value=None if reserve else DispatchDenial.BUDGET_EXHAUSTED)
     async with MistWlanEvidenceClient(token="test-token", region=MistCloudRegion.GLOBAL_01) as client:
         evidence = await client.capture(
             plan=compiled, target_handle=compiled.targets[0].handle, window=window, reserve_dispatch=dispatch
@@ -222,7 +222,7 @@ async def test_collector_uses_one_site_wlan_query_without_device_fanout(httpx_mo
 
 
 async def test_budget_or_stale_lease_stops_before_network_dispatch(httpx_mock):
-    assert (await capture(httpx_mock, {}, reserve=False)).state == "budget_exhausted"
+    assert (await capture(httpx_mock, {}, reserve=False)).state == "dispatch_denied"
     assert not httpx_mock.get_requests()
 
 
@@ -273,7 +273,7 @@ async def test_response_byte_limit_leaves_a_visible_partial_check(httpx_mock):
             plan=compiled,
             target_handle=compiled.targets[0].handle,
             window=check_windows(compiled, LATER)[0],
-            reserve_dispatch=AsyncMock(return_value=True),
+            reserve_dispatch=AsyncMock(return_value=None),
         )
     assert result.state == "partial"
     assert "byte limit" in result.reason

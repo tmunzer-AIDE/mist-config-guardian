@@ -50,6 +50,21 @@ describe('ShadowInvestigation', () => {
     expect(text).not.toContain('Impact: No observed disconnect');
   });
 
+  it('shows revoked dispatch access as an evidence gap rather than a budget limit', async () => {
+    const fixture = setup();
+    fixture.nativeElement.querySelector('button').click();
+    TestBed.inject(HttpTestingController).expectOne(() => true).flush({ ...report, status: 'incomplete',
+      checks: [{ ...report.checks[0], state: 'dispatch_denied', dispatch_denial: 'credentials_changed',
+        reason: 'Dispatch denied: the service credential changed; review organization access.' }] });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('Not dispatched');
+    expect(text).toContain('review organization access');
+    expect(text).toContain('Impact: Insufficient evidence');
+    expect(text).not.toContain('budget is exhausted');
+  });
+
   it('discards an old response after switching organization', async () => {
     const fixture = setup();
     fixture.nativeElement.querySelector('button').click();

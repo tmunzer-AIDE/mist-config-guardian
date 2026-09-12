@@ -70,6 +70,7 @@ async def shadow_investigation(
                 state=e.state,
                 row_count=len(e.rows),
                 reason=e.reason,
+                dispatch_denial=e.dispatch_denial,
             )
             for e in artifact.evidence
         ]

@@ -49,6 +49,8 @@ export interface ShadowReport {
     state: string;
     row_count: number;
     reason: string;
+    dispatch_denial?: 'credentials_unavailable' | 'credentials_changed' | 'window_expired' |
+      'lease_lost' | 'budget_exhausted' | 'journal_full' | 'reservation_rejected' | null;
   }[];
 }
 
@@ -94,7 +96,8 @@ export interface ShadowReport {
               <caption>Bounded WLAN client-session checks</caption>
               <thead><tr><th>Window</th><th>State</th><th>Rows</th><th>Details</th></tr></thead>
               <tbody>@for (check of report.checks; track $index) {
-                <tr><td>{{ at(check.window.start) }}–{{ at(check.window.end) }}</td><td>{{ check.state }}</td>
+                <tr><td>{{ at(check.window.start) }}–{{ at(check.window.end) }}</td>
+                  <td>{{ check.state === 'dispatch_denied' ? 'Not dispatched' : check.state }}</td>
                   <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}</td></tr>
               }</tbody>
             </table>

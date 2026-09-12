@@ -281,3 +281,23 @@ navigation, the AI tool loop and production migration remain future work.
 
 Implementation decisions and rollout gates are recorded in
 [impact-implementation-decisions.md](design/impact-implementation-decisions.md).
+
+### Dispatch authorization diagnostics
+
+New denied checks use `state: dispatch_denied` and a nullable enum field,
+`dispatch_denial`, in the investigation preview. The reasons distinguish
+`credentials_unavailable`, `credentials_changed`, `window_expired`, `lease_lost`,
+`budget_exhausted`, `journal_full` and `reservation_rejected` (unknown cause).
+The collection table displays the fixed explanation. Historical
+`budget_exhausted` evidence stays readable without inventing a more precise cause.
+
+Collection stops on the first denial, with no request journal entry or budget
+charge for that check. A rejected atomic reservation can trigger one bounded
+local diagnostic read; this identifies the visible blocker at read time and
+cannot authorize dispatch. Failed or uncertain reservation writes still prevent
+HTTP execution. Any published result still requires the current worker's fence.
+
+The activity table's byte count is consumed response content, not the response's
+advertised size. HTTP errors may have a status but no size because collection
+stopped before reading their body. Unknown sizes and unfinished attempts must not
+be interpreted as measured zero.

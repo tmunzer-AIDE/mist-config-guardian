@@ -30,6 +30,8 @@ export interface DispatchLog {
       <summary>Live collection activity</summary>
       <p>This activity belongs to the current investigation and may include attempts outside the published report.
         A reserved request with no recorded result has an unknown outcome; it may not have reached Mist.</p>
+      <p>Bytes count only response content read by the collector. Unknown means no size was recorded,
+        including when an HTTP error stopped collection before reading the body.</p>
       @if (log(); as log) {
         @if (log.unlogged_reservations) {
           <p role="status">{{ log.unlogged_reservations }} earlier budget reservations have no journal entry.</p>

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from mist_config_guardian_backend.impact.contracts import Window, WlanAssessment
+from mist_config_guardian_backend.impact.contracts import DispatchDenial, Window, WlanAssessment
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
@@ -19,6 +19,7 @@ class ShadowCheckResponse(BaseModel):
     state: str
     row_count: int
     reason: str
+    dispatch_denial: DispatchDenial | None = None
 
 
 class ShadowTargetResponse(BaseModel):
