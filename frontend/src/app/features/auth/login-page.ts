@@ -46,7 +46,6 @@ export class LoginPage {
   protected readonly regions = MIST_REGIONS;
   protected readonly regionLabel = regionLabel;
   protected readonly mistRegion = new FormControl<MistCloudRegion>('global_01', { nonNullable: true });
-  protected readonly mistCode = new FormControl('', { nonNullable: true });
 
   private readonly challengeToken = signal('');
 
@@ -113,7 +112,6 @@ export class LoginPage {
   protected toggleMist(): void {
     this.mistMode.update((value) => !value);
     this.loginForm.controls.password.reset();
-    this.mistCode.reset();
     this.error.set('');
   }
 
@@ -124,15 +122,12 @@ export class LoginPage {
     }
     const { email, password } = this.loginForm.getRawValue();
     this.loginForm.controls.password.reset();
-    const mistCode = this.mistCode.value.trim();
-    this.mistCode.reset();
     await this.attempt(async () => {
       const result = this.mistMode()
         ? await this.auth.loginMist({
             email,
             password,
             region: this.mistRegion.value,
-            ...(mistCode ? { two_factor: mistCode } : {}),
           })
         : await this.auth.login(email, password);
       if (result.mfa_required) {

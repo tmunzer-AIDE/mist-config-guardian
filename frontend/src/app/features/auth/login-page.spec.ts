@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 
+import { MistMfaService } from '../../core/mist-mfa.service';
 import { LoginPage } from './login-page';
 
 describe('LoginPage bootstrap gate', () => {
@@ -73,7 +74,16 @@ describe('LoginPage bootstrap gate', () => {
     const request = http.expectOne('/api/v1/auth/login/mist');
     expect(request.request.body).toEqual({ email: 'admin@example.com', password: ' mist password ', region: 'emea_01' });
     expect(password.value).toBe('');
-    request.flush({ detail: 'Mist rejected the login' }, { status: 401, statusText: 'Unauthorized' });
+    expect(element.querySelector('[autocomplete="one-time-code"]')).toBeNull();
+    expect(email.name).toBe('username');
+    expect(password.name).toBe('password');
+    request.flush({ detail: { code: 'mist_mfa_required' } }, { status: 409, statusText: 'Conflict' });
+    await drain();
+    TestBed.inject(MistMfaService).prompt()!.complete('123456');
+    await drain();
+    const retry = http.expectOne('/api/v1/auth/login/mist');
+    expect(retry.request.body).toEqual({ email: 'admin@example.com', password: ' mist password ', region: 'emea_01', two_factor: '123456' });
+    retry.flush({ detail: 'Mist rejected the login' }, { status: 401, statusText: 'Unauthorized' });
     await drain();
     expect(element.textContent).toContain('Mist rejected the login');
   });

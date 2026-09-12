@@ -7,7 +7,12 @@ from typing import Any
 
 import httpx
 
-from mist_config_guardian_backend.integrations.mist_session import credential_headers, login_session, logout_session
+from mist_config_guardian_backend.integrations.mist_session import (
+    MistMfaChallengeError,
+    credential_headers,
+    login_session,
+    logout_session,
+)
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 
@@ -46,6 +51,10 @@ class MistVerificationError(ValueError):
     """Raised when a Mist credential cannot satisfy onboarding requirements."""
 
 
+class MistMfaRequiredError(MistVerificationError):
+    """A Mist login needs a multi-factor code before it can continue."""
+
+
 @dataclass(frozen=True)
 class MistOrganizationAccess:
     """Verified organization identity and access metadata."""
@@ -74,6 +83,8 @@ class MistVerificationService:
             retained = False
             try:
                 result = await login_session(client, payload)
+            except MistMfaChallengeError as exc:
+                raise MistMfaRequiredError(str(exc)) from exc
             except (httpx.HTTPError, ValueError) as exc:
                 msg = str(exc) if isinstance(exc, ValueError) else "Mist authentication is unavailable; try again"
                 raise MistVerificationError(msg) from exc

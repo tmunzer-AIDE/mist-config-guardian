@@ -16,7 +16,7 @@ from mist_config_guardian_backend.api.dependencies import (
     require_organization,
 )
 from mist_config_guardian_backend.api.routes.approvals import get_approval_service
-from mist_config_guardian_backend.integrations.mist import MistVerificationError
+from mist_config_guardian_backend.integrations.mist import MistMfaRequiredError, MistVerificationError
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreStatus
 from mist_config_guardian_backend.models.user import User
@@ -361,6 +361,10 @@ async def _authorize_and_queue(
             credential,
             task_id,
         )
+    except MistMfaRequiredError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}
+        ) from exc
     except (RestoreAuthorizationError, MistVerificationError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if reserved.id is None:

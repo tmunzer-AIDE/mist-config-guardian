@@ -12,7 +12,11 @@ from mist_config_guardian_backend.api.dependencies import (
     get_user_service,
 )
 from mist_config_guardian_backend.config import Settings, get_settings
-from mist_config_guardian_backend.integrations.mist import MistVerificationError, MistVerificationService
+from mist_config_guardian_backend.integrations.mist import (
+    MistMfaRequiredError,
+    MistVerificationError,
+    MistVerificationService,
+)
 from mist_config_guardian_backend.models.user import User, UserStatus
 from mist_config_guardian_backend.schemas.auth import (
     BootstrapAdminRequest,
@@ -157,6 +161,10 @@ async def mist_login(  # noqa: PLR0913, PLR0917
     await reserve_or_raise(throttle, account, address)
     try:
         _credential, identity = await mist.login(payload, payload.region)
+    except MistMfaRequiredError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}
+        ) from exc
     except MistVerificationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     user = await User.find_one(

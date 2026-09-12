@@ -2,6 +2,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
+import { MistMfaService } from './mist-mfa.service';
 import { API_ROOT } from './api';
 import { MistCloudRegion } from './organization.model';
 
@@ -64,6 +65,7 @@ const ROLE_RANK: Record<UserRole, number> = { viewer: 0, operator: 1, administra
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly http = inject(HttpClient);
+  private readonly mistMfa = inject(MistMfaService);
   private readonly userState = signal<CurrentUser | null>(null);
   private readonly resolvedState = signal(false);
   /**
@@ -119,9 +121,9 @@ export class AuthService {
   }
 
   async loginMist(credentials: MistLoginCredentials & { region: MistCloudRegion }): Promise<LoginResult> {
-    const response = await firstValueFrom(
-      this.http.post<LoginResult>(`${API_ROOT}/auth/login/mist`, credentials),
-    );
+    const response = await this.mistMfa.run((two_factor) => firstValueFrom(
+      this.http.post<LoginResult>(`${API_ROOT}/auth/login/mist`, { ...credentials, ...(two_factor ? { two_factor } : {}) }),
+    ));
     if (!response.mfa_required) {
       this.userState.set(response.user);
       this.sessionState.update((value) => value + 1);
