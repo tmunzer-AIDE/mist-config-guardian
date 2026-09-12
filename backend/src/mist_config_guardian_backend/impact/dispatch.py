@@ -6,8 +6,10 @@ from uuid import UUID
 from pydantic import AwareDatetime, Field, model_validator
 
 from mist_config_guardian_backend.impact.contracts import Contract, Window
+from mist_config_guardian_backend.impact.limits import MAX_AUDIT_CALLS
 
-MAX_DISPATCHES = 56
+# One journal slot per authorized operational request.
+MAX_DISPATCHES = MAX_AUDIT_CALLS
 
 
 class DispatchRecord(Contract):

@@ -1,7 +1,9 @@
 """The largest legal required set must survive collection, storage and publication."""
 
 import re
+from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -16,9 +18,9 @@ from mist_config_guardian_backend.services import impact_investigations as runti
 from mist_config_guardian_backend.snapshots.registry import SITE_OBJECTS, ObjectFamily
 from test_impact_agent import AI_URL, agent_runtime, ai_response, read_context
 from test_impact_change_context import gap_report, use_data
-from test_impact_dispatch_journal import empty_response
+from test_impact_dispatch_journal import empty_response, journal_runtime
 from test_impact_port_scope import payload, port_inputs
-from test_wlan_investigation import LATER, inputs
+from test_wlan_investigation import LATER, NOW, inputs
 
 
 def mixed_inputs():
@@ -95,3 +97,53 @@ async def test_maximal_mixed_audit_publishes_all_ten_checks_once(monkeypatch, ht
         InvestigationRevision.model_validate(
             {**artifact.model_dump(), "evidence": [*artifact.evidence, artifact.evidence[0]]}
         )
+
+
+async def test_maximal_plan_exhausts_at_sixth_checkpoint_and_stops_polling(monkeypatch, httpx_mock):
+    service, root, collection, artifacts, stored = journal_runtime(monkeypatch)
+    monkeypatch.setattr(runtime, "get_settings", lambda: SimpleNamespace(impact_engine_mode="shadow"))
+    use_data(service, mixed_inputs())
+    root.revision = 0
+    assert root.calls_limit == 56
+    httpx_mock.add_callback(
+        empty_response, method="GET", url=re.compile(r".*/clients/sessions/search\?.*"), is_reusable=True
+    )
+    httpx_mock.add_callback(
+        lambda request: httpx.Response(200, json=payload(port_id=request.url.params["port_id"])),
+        method="GET",
+        url=re.compile(r".*/stats/ports/search\?.*"),
+        is_reusable=True,
+    )
+    for checkpoint in range(6):
+        now = NOW + timedelta(minutes=1 if checkpoint == 0 else checkpoint * 10)
+        monkeypatch.setattr(runtime, "utc_now", lambda now=now: now)
+        root.generation += 1
+        stored["generation"] = root.generation
+        root.lease_until = now + timedelta(minutes=3)
+        await service._poll(root)  # noqa: SLF001
+        query, mutation = collection.update_one.await_args.args
+        assert query["revision"] == root.revision
+        assert query["generation"] == root.generation
+        for key, value in mutation["$set"].items():
+            setattr(root, key, value)
+    assert stored["calls_used"] == 56
+    assert len(httpx_mock.get_requests()) == len(stored["dispatches"]) == 56
+    assert [len(artifact.evidence) for artifact in artifacts] == [10, 10, 10, 10, 10, 7]
+    assert all(d["state"] == "complete" for d in stored["dispatches"])
+    assert artifacts[-1].evidence[-1].dispatch_denial == "budget_exhausted"
+    assert root.status == "incomplete"
+    assert root.revision == 6
+    assert root.next_poll_at is None
+    assert root.lease_until is None
+
+    # Emulate the scheduler's Mongo due predicate against the published root;
+    # the exhausted root must not be claimed again at the last scheduled tick.
+    async def claim(query, *_args, **_kwargs):
+        assert query["next_poll_at"] == {"$ne": None, "$lte": NOW + timedelta(hours=1)}
+        assert root.next_poll_at is None
+
+    collection.find_one_and_update = AsyncMock(side_effect=claim)
+    monkeypatch.setattr(runtime, "utc_now", lambda: NOW + timedelta(hours=1))
+    assert await service.poll_due() == 0
+    assert len(artifacts) == 6
+    assert len(httpx_mock.get_requests()) == 56

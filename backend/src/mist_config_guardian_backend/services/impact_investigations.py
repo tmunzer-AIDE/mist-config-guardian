@@ -20,6 +20,7 @@ from mist_config_guardian_backend.impact.contracts import (
     WlanRemovalPlan,
 )
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
+from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_port_evidence import MistPortEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -40,7 +41,6 @@ logger = logging.getLogger(__name__)
 _LEASE = timedelta(minutes=3)
 _INTERVAL = timedelta(minutes=10)
 _DURATION = timedelta(hours=1)
-_MAX_CHECKPOINTS = 10
 
 
 class ImpactInvestigationService:
@@ -168,7 +168,7 @@ class ImpactInvestigationService:
         now = utc_now()
         # Only a fenced publication advances revision. Lease claims and orphan
         # artifacts are not completed checkpoints and must not consume this cap.
-        if root.revision >= _MAX_CHECKPOINTS:
+        if root.revision >= MAX_PUBLISHED_CHECKPOINTS:
             await self._stop(root, "Published checkpoint limit reached; evidence is incomplete.")
             return
         plan = await self._plan(root)

@@ -795,6 +795,42 @@ of adding that read path.
   source-link tampering, raw-MAC/prose leakage, alias ambiguity, replay across audits,
   credential revocation, orphan artifacts and equal discovery cost with/without AI.
 
+## Audit spending ceiling and checkpoint lifecycle (2026-09-13)
+
+- Keep the operational spending ceiling at 56 calls per audit. This is an
+  independent resource limit, not a guarantee that every required check will run
+  at every checkpoint. Do not derive a larger allowance from the maximum plan or
+  lifecycle cap. Store `MAX_AUDIT_CALLS` and `MAX_PUBLISHED_CHECKPOINTS` in the shared
+  limits module; derive journal capacity and the default persisted call allowance
+  from `MAX_AUDIT_CALLS`. Preserve historical per-root allowances and the independent
+  journal-cap guard. This consolidates policy without increasing spending.
+- The ten-published-checkpoint limit is a lifecycle safety cap. Ordinary undelayed
+  scheduling has seven checkpoints: initial settled collection, then +10 through
+  +60 minutes. A maximal ten-check plan would need 70 calls on that schedule, or
+  100 if it reached the safety cap. Neither is promised by the 56-call allowance.
+- Intended exhaustion for a stable maximal plan with no earlier failed attempts:
+  five complete ten-read checkpoints, then six reads at checkpoint six. The next
+  check records `dispatch_denied`/`budget_exhausted` without a request or journal
+  reservation. Under the ordinary schedule this occurs near +50 minutes. Smaller
+  plans may reach the end of the hour; retries, prior reservations, lower historical
+  budgets and changing plans can exhaust earlier. Agent ordering can affect which
+  checks fit the remaining budget, but cannot increase the allowance.
+- Correct the lifecycle description: after a successful fenced publication with a
+  dispatch denial, the worker clears `next_poll_at` and releases its lease. A mixed
+  incomplete assessment is published once and is no longer claimable by the normal
+  poll loop; there is no ongoing series of denial-only revisions. A failed or stale
+  root publication is a separate existing retry case, not successful termination.
+- Add a sequential six-checkpoint regression with real HTTP mocks and BSON journal
+  encoding. Assert 56 completed dispatch records, evidence sizes 10/10/10/10/10/7,
+  one final denied check, `incomplete`, revision six, cleared lease and no next poll.
+  Check that the scheduler's due predicate excludes the terminal root at +60.
+  This emulates the Mongo predicate; it is not a live database concurrency test.
+
+- Validation: 1,170 backend tests passed, 20 skipped. Ruff, source types,
+  changed-file formatting, OpenAPI consistency and local diff review passed.
+  Frontend source and API schema did not change; their previously verified 399
+  tests were not rerun for this policy consolidation. No live services were used.
+
 ## Next implementation queue
 
 1. Extend concrete port discovery into verified managed-neighbor dependencies,

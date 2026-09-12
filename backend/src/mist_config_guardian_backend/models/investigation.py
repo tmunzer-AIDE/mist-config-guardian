@@ -17,7 +17,7 @@ from mist_config_guardian_backend.impact.agent import (
 from mist_config_guardian_backend.impact.contracts import InvestigationEvidence, WlanAssessment, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
-from mist_config_guardian_backend.impact.limits import MAX_CHECKPOINT_EVIDENCE
+from mist_config_guardian_backend.impact.limits import MAX_AUDIT_CALLS, MAX_CHECKPOINT_EVIDENCE
 from mist_config_guardian_backend.models.base import TimestampedModel
 
 # Also excludes payloads embedded by the initial agent release. No bulk migration
@@ -58,7 +58,7 @@ class ImpactInvestigation(TimestampedModel, Document):
     generation: int = 0  # Lease fencing token, not a completed-checkpoint counter.
     lease_until: datetime | None = None
     calls_used: int = 0
-    calls_limit: int = 56
+    calls_limit: int = MAX_AUDIT_CALLS
     revision: int = 0  # Number of successfully published checkpoints.
     report_id: PydanticObjectId | None = None
     dispatches: list[DispatchRecord] = Field(default_factory=list, max_length=MAX_DISPATCHES)

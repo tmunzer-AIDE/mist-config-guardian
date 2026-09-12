@@ -421,3 +421,13 @@ worded failures. Historical records without a code retain their original meaning
 The next neighbor resolver's private binding and inventory-verification boundary
 is decided in the implementation log. It is not enabled: the current unverified
 neighbor handle still grants no query or managed-device identity.
+
+
+The default 56-call audit allowance is an independent spending ceiling, shared with
+journal capacity in `impact/limits.py`. It does not fund every possible checkpoint:
+the ordinary seven-checkpoint schedule would require 70 calls for a ten-check plan.
+The separate ten-publication limit is a lifecycle safety cap. A stable maximal plan
+uses 50 calls across five full checkpoints and six more at checkpoint six, then
+records a budget denial for the next check. Failed attempts or smaller saved budgets
+can exhaust earlier. After a successful fenced terminal publication, `next_poll_at`
+is cleared; the normal worker does not keep publishing denial-only revisions.
