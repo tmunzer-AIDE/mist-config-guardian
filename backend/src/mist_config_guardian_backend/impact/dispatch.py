@@ -16,9 +16,9 @@ class DispatchRecord(Contract):
     id: UUID
     generation: int = Field(ge=1)
     candidate_revision: int = Field(ge=1)
-    check_id: Literal["wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1"] = (
-        "wlan-client-sessions.v1"
-    )
+    check_id: Literal[
+        "wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1", "switch-port-events.v1"
+    ] = "wlan-client-sessions.v1"
     target_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
     site_id: UUID
     wlan_id: UUID | None = None

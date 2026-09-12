@@ -466,3 +466,25 @@ checkpoints and six reads at the sixth. Smaller saved budgets, prior reservation
 and failed attempts can exhaust earlier. The ten-publication cap is a lifecycle
 safety limit. After fenced terminal publication, `next_poll_at` is cleared; the
 normal worker does not keep publishing denial-only revisions.
+
+
+### Scoped port event history and service findings
+
+Validated changed ports now add `switch-port-events.v1` to both shadow modes.
+One bounded site event search covers the hour before the audit through the current
+checkpoint, filtered by switch MAC; only exact-port allowlisted events survive.
+Provider prose and events for other ports cannot contribute. Truncated history is
+partial, and no events is not proof of a healthy link or powered device.
+
+`domain_findings` carries separate port-link and port-power findings. Link loss
+requires prior up evidence. Port-power loss requires actual recent pre-change
+positive power delivery plus a post-change PoE-disable event; merely enabling PoE
+is insufficient. These findings identify the switch port service, not an AP outage.
+They can contribute a provisional critical result with incomplete overall coverage.
+New assessments use `impact-domains.v1`; legacy WLAN-only assessments remain readable.
+
+The maximum checkpoint now has fourteen checks. The 56-call budget funds four
+complete maximal checkpoints, then stops on the next denied check. Smaller plans
+retain more of the hour. The agent sees at most twenty of the two hundred retained
+port events, with explicit omissions; the report's collection evidence keeps the
+full retained set. No producer claims a clean result from an omitted event tail.

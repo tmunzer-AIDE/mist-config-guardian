@@ -9,6 +9,7 @@ import { formatInstant } from '../core/format';
     @if (assessment(); as value) {
       <div class="shadow" aria-label="Shadow audit assessment">
         <strong>Shadow · {{ labels[value.result] }}</strong>
+        @if (value.impact) { <span>Impact: {{ value.impact === 'info' ? 'Insufficient evidence' : value.impact }}</span> }
         @if (value.confidence || value.coverage) {
           <span>Confidence: {{ value.confidence ?? 'unknown' }} · Session coverage: {{ value.coverage ?? 'unknown' }}</span>
         }

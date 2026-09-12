@@ -10,6 +10,7 @@ from mist_config_guardian_backend.impact.agent import AgentCheckpoint, CollectAc
 from mist_config_guardian_backend.impact.contracts import (
     DispatchDenial,
     ManagedNeighbor,
+    PortEventRow,
     PortResponseError,
     PortRow,
     Window,
@@ -17,6 +18,7 @@ from mist_config_guardian_backend.impact.contracts import (
 )
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
+from mist_config_guardian_backend.impact.limits import MAX_PORT_EVENTS
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 
 
@@ -30,6 +32,7 @@ class ShadowCheckResponse(BaseModel):
     reason: str
     dispatch_denial: DispatchDenial | None = None
     port: PortRow | None = None
+    port_events: tuple[PortEventRow, ...] = Field(default=(), max_length=MAX_PORT_EVENTS)
     managed_neighbor: ManagedNeighbor | None = None
     response_error: PortResponseError | None = None
     device_mac: str | None = None

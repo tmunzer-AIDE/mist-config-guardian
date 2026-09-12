@@ -892,6 +892,42 @@ of adding that read path.
   signed out; source/diff review used the established local fallback. No live Mist,
   live Mongo concurrency or model-quality validation was performed.
 
+## Port event history and terminal infrastructure findings (2026-09-13)
+
+- Verified Mist's live device-event constants and a scoped switch port-down record.
+  Use only `SW_PORT_UP`, `SW_PORT_DOWN`, `SW_POE_PORT_ENABLED` and
+  `SW_POE_PORT_DISABLED`. The documented site event endpoint has no exact port
+  filter: request the validated switch and bounded interval, then retain only the
+  exact port and allowlisted event types. Do not parse provider prose or follow
+  pagination. A 1,000-row/256 KiB source cap and 200 retained-event cap leave explicit
+  partial coverage. Keep at most 20 events in a model view with an omission count.
+- Add event history to the shared deterministic/agent menu. The maximum is now
+  fourteen checks; plan, revision and model evidence limits derive together. The
+  unchanged 56-call allowance funds four full maximal checkpoints. The next check
+  is denied and terminal publication clears the next poll. Independent regression
+  expectations assert fourteen, not the derived cap under test.
+- Concrete `disabled` and `poe_disabled` changes select port-availability and PoE
+  evaluators. A prior port-up plus post-change port-down supports a provisional
+  link disruption; positive later up evidence records recovery. Same-time opposing
+  events, empty/truncated history and missing prior state remain unknown.
+- PoE enabled/disabled events describe administrative state, not power consumption.
+  Critical port-power loss requires a complete exact-port event history plus a
+  measured positive-power/PoE-on snapshot timestamped within five minutes before
+  this audit. Missing timestamps, post-change samples and measured zero cannot
+  establish that baseline. This narrow case may be unavailable in practice; do
+  not substitute aggregate switch power draw, prior configuration or client count.
+  The claim concerns port power only, with plausible attribution, never AP failure.
+- Compose terminal severities by maximum. Infrastructure evidence remains outside
+  the WLAN evaluator. New domain findings are separate typed records; unmapped
+  attributes and uncertain dependencies retain partial coverage. Historical peak
+  retention across checkpoints remains part of the common report work that follows.
+
+- Validation for this slice: 1,221 backend tests passed, 20 skipped; 403 frontend
+  tests passed. Ruff, source types, changed-file formatting, OpenAPI generation and
+  local source/diff review passed. Port transition identity/ordering, zero/stale
+  power, ambiguous events, model omissions and fourteen-check/56-call bounds have
+  regressions. The live probe verified event vocabulary and shape, not outage attribution.
+
 ## Next implementation queue
 
 1. Build on managed AP membership with port/PoE event history and independently

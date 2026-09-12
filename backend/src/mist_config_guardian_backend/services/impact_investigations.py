@@ -25,9 +25,10 @@ from mist_config_guardian_backend.impact.contracts import (
     WlanRemovalPlan,
 )
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
+from mist_config_guardian_backend.impact.domain_evaluation import compose_domains
 from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
-from mist_config_guardian_backend.integrations.mist_neighbor_evidence import MistNeighborEvidenceClient
+from mist_config_guardian_backend.integrations.mist_port_history import MistPortHistoryClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
@@ -202,6 +203,7 @@ class ImpactInvestigationService:
                     if type(retention) is not int or not 1 <= retention <= _MAX_RETENTION_DAYS:
                         raise ValueError  # noqa: TRY301 - fail closed on invalid organization policy
                     neighbor_context = (mist_org_id, retention)
+                    plan = plan.model_copy(update={"port_history": True})
                 except ValueError:
                     plan = plan.model_copy(
                         update={
@@ -214,7 +216,7 @@ class ImpactInvestigationService:
 
             async with (
                 asyncio.timeout(120),
-                MistNeighborEvidenceClient(token=token, region=organization.cloud_region) as client,
+                MistPortHistoryClient(token=token, region=organization.cloud_region) as client,
             ):
                 collected: dict[str, InvestigationEvidence] = {}
 
@@ -275,6 +277,7 @@ class ImpactInvestigationService:
         assessment = evaluate_wlan_removal(
             plan, [e for e in evidence if isinstance(e, SessionEvidence)], evidence_as_of=evidence_as_of
         )
+        assessment = compose_domains(plan, evidence, assessment)
         if root.id is None:
             msg = "Persisted investigation has no identity"
             raise ValueError(msg)
@@ -316,12 +319,12 @@ class ImpactInvestigationService:
             },
         )
 
-    async def _collect(  # noqa: PLR0913 - exact plan and source context at dispatch boundary
+    async def _collect(  # noqa: C901, PLR0913 - exact plan and source context at dispatch boundary
         self,
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistNeighborEvidenceClient,
+        client: MistPortHistoryClient,
         credential: str,
         *,
         neighbor_context: tuple[UUID, int] | None = None,
@@ -330,6 +333,33 @@ class ImpactInvestigationService:
         if check not in capabilities(plan, max(check.window.end, plan.changed_at + timedelta(microseconds=1))):
             msg = "Collection requires the exact planned capability"
             raise ValueError(msg)
+        if check.check_id == "switch-port-events.v1":
+            if neighbor_context is None:
+                msg_0 = "Port events require a validated organization"
+                raise ValueError(msg_0)
+            port = next(t for t in plan.port_targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=port.handle,
+                site_id=port.site_id,
+                device_mac=port.device_mac,
+                port_id=port.port_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            reading = await client.capture_port_history(
+                plan=plan,
+                target=port,
+                mist_org_id=neighbor_context[0],
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+            if reading.state != "dispatch_denied":
+                await self._finish_dispatch(root, dispatch, reading)
+            return reading
         if check.check_id == "neighbor-ap-inventory.v1":
             return await self._collect_neighbor(root, plan, check, client, credential, neighbor_context, sources or [])
         if check.check_id == "switch-port-snapshot.v1":
@@ -390,7 +420,7 @@ class ImpactInvestigationService:
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistNeighborEvidenceClient,
+        client: MistPortHistoryClient,
         credential: str,
         neighbor_context: tuple[UUID, int] | None,
         sources: list[InvestigationEvidence],

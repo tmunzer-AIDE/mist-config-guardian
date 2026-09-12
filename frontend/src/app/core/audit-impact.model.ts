@@ -12,7 +12,7 @@ export interface AuditImpactSummary {
   stop_reason: string;
   policy_version: string | null;
   evaluated_at: string | null;
-  impact: 'info' | 'none' | 'warning' | null;
+  impact: 'info' | 'none' | 'warning' | 'critical' | null;
   confidence: 'low' | 'medium' | null;
   coverage: 'complete' | 'partial' | 'unmapped' | null;
   gap_count: number;

@@ -103,6 +103,13 @@ def inventory_payload():
 
 def register_port(httpx_mock):
     httpx_mock.add_callback(
+        empty_response,
+        method="GET",
+        url=re.compile(r".*/devices/events/search\?.*"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_callback(
         lambda request: httpx.Response(200, json=payload(port_id=request.url.params["port_id"])),
         method="GET",
         url=PORT_URL,
@@ -111,7 +118,7 @@ def register_port(httpx_mock):
 
 
 @pytest.mark.parametrize("mode", ["shadow", "agent_shadow"])
-async def test_maximal_discovery_publishes_twelve_checks_without_extra_agent_reads(monkeypatch, httpx_mock, mode):
+async def test_maximal_discovery_publishes_fourteen_checks_without_extra_agent_reads(monkeypatch, httpx_mock, mode):
     service, root, collection, artifacts, stored = neighbor_runtime(monkeypatch, mode, mixed=True)
     register_port(httpx_mock)
     httpx_mock.add_callback(
@@ -138,15 +145,15 @@ async def test_maximal_discovery_publishes_twelve_checks_without_extra_agent_rea
             assert "secret-" not in str(context)
             observed = {e["ref"] for e in context["observations"]}
             missing = [c["ref"] for c in context["capabilities"] if c["ref"] not in observed]
-            assert len(context["capabilities"]) == 12
+            assert len(context["capabilities"]) == 14
             return ai_response({"action": "collect", "checks": missing[:8]} if missing else gap_report())
 
         httpx_mock.add_callback(model, method="POST", url=AI_URL, is_reusable=True)
     await service._poll(root)  # noqa: SLF001
     assert len(artifacts) == 1
     artifact = artifacts[0]
-    assert len(capabilities(artifact.plan, artifact.evidence[0].window.end)) == 12
-    assert len(artifact.evidence) == stored["calls_used"] == len(stored["dispatches"]) == 12
+    assert len(capabilities(artifact.plan, artifact.evidence[0].window.end)) == 14
+    assert len(artifact.evidence) == stored["calls_used"] == len(stored["dispatches"]) == 14
     assert all(d["state"] == "complete" for d in stored["dispatches"])
     neighbors = [e for e in artifact.evidence if isinstance(e, NeighborEvidence)]
     assert len(neighbors) == 2
@@ -184,12 +191,12 @@ async def test_inventory_rejects_ambiguity_and_scope_without_recursive_queries(m
         method="GET", url=INVENTORY_URL, json=response, status_code=429 if mutation == "http" else 200
     )
     await service._poll(root)  # noqa: SLF001
-    reading = artifacts[0].evidence[-1]
+    reading = next(e for e in artifacts[0].evidence if isinstance(e, NeighborEvidence))
     assert isinstance(reading, NeighborEvidence)
     assert reading.state == ("partial" if mutation in {"multiple", "missing", "cursor"} else "error")
     assert not reading.rows
     assert "secret" not in reading.model_dump_json()
-    assert len(httpx_mock.get_requests()) == stored["calls_used"] == 2
+    assert len(httpx_mock.get_requests()) == stored["calls_used"] == 3
 
 
 @pytest.mark.parametrize("committed", [False, True])
@@ -260,9 +267,9 @@ async def test_binding_tampering_never_authorizes_inventory(monkeypatch, httpx_m
         monkeypatch.setattr(neighbor_bindings.NeighborBindingStore, "persist", persist)
     register_port(httpx_mock)
     await service._poll(root)  # noqa: SLF001
-    assert artifacts[0].evidence[-1].state == "binding_unavailable"
+    assert next(e for e in artifacts[0].evidence if isinstance(e, NeighborEvidence)).state == "binding_unavailable"
     assert artifacts[0].assessment.impact == "info"
-    assert len(httpx_mock.get_requests()) == stored["calls_used"] == 1
+    assert len(httpx_mock.get_requests()) == stored["calls_used"] == 2
 
 
 def test_private_collection_has_expiring_orphan_retention():
@@ -300,13 +307,13 @@ async def test_private_source_never_bypasses_live_dispatch_authority(monkeypatch
         assert stored["dispatches"][0]["state"] == "reserved"
     else:
         await service._poll(root)  # noqa: SLF001
-        reading = artifacts[0].evidence[-1]
+        reading = next(e for e in artifacts[0].evidence if isinstance(e, NeighborEvidence))
         assert reading.state == ("dispatch_denied" if fault == "credentials" else "binding_unavailable")
         if fault == "credentials":
             assert reading.dispatch_denial == "credentials_changed"
             assert collection.update_one.await_args.args[1]["$set"]["next_poll_at"] is None
     assert len(stored["bindings"]) == 1
-    assert stored["calls_used"] == len(httpx_mock.get_requests()) == 1
+    assert stored["calls_used"] == len(httpx_mock.get_requests()) == (2 if fault == "expired" else 1)
 
 
 async def test_public_preview_exposes_inventory_result_without_private_binding(monkeypatch, httpx_mock):
@@ -319,7 +326,7 @@ async def test_public_preview_exposes_inventory_result_without_private_binding(m
     monkeypatch.setattr(investigation_reads, "read_investigation_root", AsyncMock(return_value=root))
     monkeypatch.setattr(InvestigationRevision, "find_one", AsyncMock(return_value=artifacts[0]))
     preview = await investigation_reads.shadow_investigation(root.organization_id, PydanticObjectId())
-    row = preview.checks[-1]
+    row = next(c for c in preview.checks if c.check_id == "neighbor-ap-inventory.v1")
     assert row.managed_neighbor.identity == "verified_inventory"
     assert row.managed_neighbor.relationship == "unverified"
     assert row.device_mac is None
@@ -355,7 +362,7 @@ async def test_inventory_executor_rejects_unplanned_arguments_before_reserving(m
                 plan=plan, target=target, candidate=candidate, window=window, reserve_dispatch=reserve
             )
     reserve.assert_not_awaited()
-    assert len(httpx_mock.get_requests()) == 2
+    assert len(httpx_mock.get_requests()) == 3
 
 
 async def test_dynamic_maximal_plan_stops_at_fifty_six_reads(monkeypatch, httpx_mock):
@@ -377,7 +384,7 @@ async def test_dynamic_maximal_plan_stops_at_fifty_six_reads(monkeypatch, httpx_
         for key, value in collection.update_one.await_args.args[1]["$set"].items():
             setattr(root, key, value)
     assert stored["calls_used"] == len(httpx_mock.get_requests()) == 56
-    assert [len(a.evidence) for a in artifacts] == [12, 12, 12, 12, 9]
+    assert [len(a.evidence) for a in artifacts] == [14, 14, 14, 14, 1]
     assert artifacts[-1].evidence[-1].dispatch_denial == "budget_exhausted"
     assert root.next_poll_at is None
     assert root.status == "incomplete"

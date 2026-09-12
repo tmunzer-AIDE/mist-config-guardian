@@ -1,6 +1,6 @@
 """Versioned investigator actions, bounded memory and model request metadata."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from typing import Annotated, Literal
@@ -14,13 +14,15 @@ from mist_config_guardian_backend.impact.contracts import (
     InvestigationEvidence,
     ManagedNeighbor,
     NeighborEvidence,
+    PortEventRow,
     PortEvidence,
+    PortHistoryEvidence,
     PortResponseError,
     PortRow,
     Window,
     WlanRemovalPlan,
 )
-from mist_config_guardian_backend.impact.limits import MAX_CHECKPOINT_EVIDENCE
+from mist_config_guardian_backend.impact.limits import MAX_AGENT_PORT_EVENTS, MAX_CHECKPOINT_EVIDENCE
 from mist_config_guardian_backend.impact.wlan_removal import check_windows
 
 MAX_MODEL_CALLS = 21
@@ -37,11 +39,11 @@ ShortText = Annotated[str, Field(min_length=1, max_length=500)]
 
 class CheckCapability(Contract):
     ref: Handle
-    check_id: Literal["wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1"] = (
-        "wlan-client-sessions.v1"
-    )
+    check_id: Literal[
+        "wlan-client-sessions.v1", "switch-port-snapshot.v1", "neighbor-ap-inventory.v1", "switch-port-events.v1"
+    ] = "wlan-client-sessions.v1"
     target_handle: Handle
-    phase: Literal["baseline", "followup", "snapshot"]
+    phase: Literal["baseline", "followup", "snapshot", "history"]
     window: Window
 
 
@@ -77,6 +79,17 @@ def capabilities(plan: WlanRemovalPlan, as_of: datetime) -> tuple[CheckCapabilit
             )
             for target in plan.neighbor_targets
         )
+        + tuple(
+            CheckCapability(
+                ref=sha256(f"{target.handle}:port-events:{as_of.isoformat()}".encode()).hexdigest(),
+                check_id="switch-port-events.v1",
+                target_handle=target.handle,
+                phase="history",
+                window=Window(start=plan.changed_at - timedelta(hours=1), end=as_of),
+            )
+            for target in plan.port_targets
+            if plan.port_history
+        )
     )
 
 
@@ -90,6 +103,8 @@ class EvidenceView(Contract):
     sampled_clients: int | None = Field(default=None, ge=0)
     observed_disconnects: int | None = Field(default=None, ge=0)
     port: PortRow | None = None
+    port_events: tuple[PortEventRow, ...] = Field(default=(), max_length=MAX_AGENT_PORT_EVENTS)
+    omitted_events: int = Field(default=0, ge=0)
     managed_neighbor: ManagedNeighbor | None = None
     response_error: PortResponseError | None = None
     gap: str = Field(max_length=500)
@@ -99,6 +114,17 @@ def evidence_view(check: CheckCapability, reading: InvestigationEvidence, change
     if (reading.check_id, reading.target_handle, reading.window) != (check.check_id, check.target_handle, check.window):
         msg = "Evidence does not match the authorized check"
         raise ValueError(msg)
+    if isinstance(reading, PortHistoryEvidence):
+        return EvidenceView(
+            ref=check.ref,
+            target_handle=check.target_handle,
+            window=check.window,
+            state=reading.state,
+            captured_at=reading.captured_at,
+            port_events=reading.rows[-MAX_AGENT_PORT_EVENTS:],
+            omitted_events=max(0, len(reading.rows) - MAX_AGENT_PORT_EVENTS),
+            gap=reading.reason,
+        )
     if isinstance(reading, NeighborEvidence):
         return EvidenceView(
             ref=check.ref,

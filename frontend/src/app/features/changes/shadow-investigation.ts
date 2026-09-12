@@ -9,12 +9,15 @@ import { AuditImpactSummary, SHADOW_LABELS } from '../../core/audit-impact.model
 import { DeploymentEvidence } from '../../core/deployment-evidence.model';
 import { PortSnapshot, PortSnapshotComponent } from '../../shared/port-snapshot';
 import { ManagedNeighbor, ManagedNeighborComponent } from '../../shared/managed-neighbor';
+import { DomainFinding, DomainFindingsComponent } from '../../shared/domain-findings';
+import { PortEvent, PortEventsComponent } from '../../shared/port-events';
 import { DeploymentEvidenceComponent } from '../../shared/deployment-evidence';
 import { DispatchLog, DispatchLogComponent } from '../../shared/dispatch-log';
 import { AgentCheckpoint, AgentInvestigationComponent, ModelActivity } from '../../shared/agent-investigation';
 
 interface ShadowAssessment {
-  impact: 'info' | 'none' | 'warning';
+  impact: 'info' | 'none' | 'warning' | 'critical';
+  domain_findings?: DomainFinding[];
   confidence: 'low' | 'medium';
   coverage: 'complete' | 'partial' | 'unmapped';
   gaps: string[];
@@ -49,6 +52,7 @@ export interface ShadowReport {
   checks: {
     check_id: string;
     port?: PortSnapshot | null;
+    port_events?: PortEvent[]; omitted_events?: number;
     managed_neighbor?: ManagedNeighbor | null;
     device_mac?: string | null;
     port_id?: string | null;
@@ -65,7 +69,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
+  imports: [DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -97,6 +101,7 @@ export interface ShadowReport {
             <ul>@for (gap of assessment.gaps; track $index) { <li>{{ gap }}</li> }</ul>
           }
         } @else { <p>{{ report.status === "incomplete" ? "No assessment could be completed." : "Waiting for the initial evidence checkpoint." }}</p> }
+        <app-domain-findings [findings]="report.assessment?.domain_findings" />
         <app-deployment-evidence [evidence]="report.deployment" />
         <details>
           <summary>Collection checks · {{ report.calls_used }}/{{ report.calls_limit }} requests used</summary>
@@ -107,7 +112,7 @@ export interface ShadowReport {
               <tbody>@for (check of report.checks; track $index) {
                 <tr><td>{{ check.check_id }}<br>{{ check.device_mac }} {{ check.port_id }}<br>{{ at(check.window.start) }}–{{ at(check.window.end) }}</td>
                   <td>{{ check.state === 'dispatch_denied' ? 'Not dispatched' : check.state }}</td>
-                  <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}<app-port-snapshot [port]="check.port" /><app-managed-neighbor [neighbor]="check.managed_neighbor" [capturedAt]="check.captured_at" /></td></tr>
+                  <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}<app-port-snapshot [port]="check.port" /><app-port-events [events]="check.port_events" [omitted]="check.omitted_events ?? 0" /><app-managed-neighbor [neighbor]="check.managed_neighbor" [capturedAt]="check.captured_at" /></td></tr>
               }</tbody>
             </table>
           </div>
@@ -142,8 +147,10 @@ export class ShadowInvestigation {
   protected readonly at = (value: string) => formatInstant(new Date(value));
   protected readonly impactLabel = computed(() => {
     const projection = this.report()?.shadow_impact;
+    if (projection?.impact === 'critical') return 'Critical service loss · attribution provisional';
     if (projection) return SHADOW_LABELS[projection.result];
     const band = this.report()?.assessment?.impact;
+    if (band === 'critical') return 'Critical service loss · attribution provisional';
     if (band === 'none' && this.report()?.assessment?.coverage !== 'complete') return 'Insufficient evidence';
     return band === 'info' ? 'Insufficient evidence' : band === 'none' ? 'No observed disconnect' : 'Possible disruption';
   });

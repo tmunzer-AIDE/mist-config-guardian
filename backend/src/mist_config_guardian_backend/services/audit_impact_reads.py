@@ -106,7 +106,7 @@ def project_published_impact(root: dict[str, Any], artifact: dict[str, Any] | No
         summary.gap_count = len(assessment["gaps"])
         summary.unmapped_count = len(artifact["plan"]["unmapped"])
         summary.result = "insufficient_evidence"
-        if summary.impact == "warning":
+        if summary.impact in {"warning", "critical"}:
             summary.result = "possible_disruption"
         elif summary.impact == "none" and summary.coverage == "complete" and root["status"] != "incomplete":
             summary.result = "no_observed_disconnect"

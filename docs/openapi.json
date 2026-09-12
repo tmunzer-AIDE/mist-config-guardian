@@ -96,7 +96,7 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceView"
             },
-            "maxItems": 12,
+            "maxItems": 14,
             "title": "Observations",
             "type": "array"
           },
@@ -854,7 +854,8 @@
                 "enum": [
                   "info",
                   "none",
-                  "warning"
+                  "warning",
+                  "critical"
                 ],
                 "type": "string"
               },
@@ -2725,7 +2726,8 @@
             "enum": [
               "wlan-client-sessions.v1",
               "switch-port-snapshot.v1",
-              "neighbor-ap-inventory.v1"
+              "neighbor-ap-inventory.v1",
+              "switch-port-events.v1"
             ],
             "title": "Check Id",
             "type": "string"
@@ -2880,6 +2882,142 @@
         "title": "DispatchRecord",
         "type": "object"
       },
+      "DomainFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "default": "undetermined",
+            "enum": [
+              "plausible",
+              "undetermined"
+            ],
+            "title": "Attribution",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "current_impact": {
+            "enum": [
+              "info",
+              "none",
+              "warning",
+              "critical"
+            ],
+            "title": "Current Impact",
+            "type": "string"
+          },
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "explanation": {
+            "maxLength": 500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "recovered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered At"
+          },
+          "rule_id": {
+            "enum": [
+              "port-availability.v1",
+              "switch-poe.v1",
+              "wlan-authentication.v1"
+            ],
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "service": {
+            "enum": [
+              "port_link",
+              "port_power",
+              "wlan_authentication"
+            ],
+            "title": "Service",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "possible_disruption",
+              "recovered"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "target_handle",
+          "state",
+          "impact",
+          "current_impact",
+          "confidence",
+          "service",
+          "explanation"
+        ],
+        "title": "DomainFinding",
+        "type": "object"
+      },
       "EmailChangeConfirmRequest": {
         "description": "Confirmation of a pending email change.",
         "properties": {
@@ -3000,6 +3138,12 @@
             ],
             "title": "Observed Disconnects"
           },
+          "omitted_events": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted Events",
+            "type": "integer"
+          },
           "port": {
             "anyOf": [
               {
@@ -3009,6 +3153,15 @@
                 "type": "null"
               }
             ]
+          },
+          "port_events": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PortEventRow"
+            },
+            "maxItems": 20,
+            "title": "Port Events",
+            "type": "array"
           },
           "ref": {
             "pattern": "^[0-9a-f]{64}$",
@@ -5832,6 +5985,32 @@
         "title": "PointInTimeStateResponse",
         "type": "object"
       },
+      "PortEventRow": {
+        "additionalProperties": false,
+        "properties": {
+          "event_type": {
+            "enum": [
+              "SW_PORT_UP",
+              "SW_PORT_DOWN",
+              "SW_POE_PORT_ENABLED",
+              "SW_POE_PORT_DISABLED"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_type",
+          "occurred_at"
+        ],
+        "title": "PortEventRow",
+        "type": "object"
+      },
       "PortResponseError": {
         "enum": [
           "scope_mismatch",
@@ -7131,6 +7310,15 @@
                 "type": "null"
               }
             ]
+          },
+          "port_events": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PortEventRow"
+            },
+            "maxItems": 200,
+            "title": "Port Events",
+            "type": "array"
           },
           "port_id": {
             "anyOf": [
@@ -8885,6 +9073,14 @@
             "title": "Coverage",
             "type": "string"
           },
+          "domain_findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DomainFinding"
+            },
+            "title": "Domain Findings",
+            "type": "array"
+          },
           "evaluated_at": {
             "format": "date-time",
             "title": "Evaluated At",
@@ -8908,14 +9104,18 @@
             "enum": [
               "info",
               "none",
-              "warning"
+              "warning",
+              "critical"
             ],
             "title": "Impact",
             "type": "string"
           },
           "policy_version": {
-            "const": "wlan-removal.v1",
             "default": "wlan-removal.v1",
+            "enum": [
+              "wlan-removal.v1",
+              "impact-domains.v1"
+            ],
             "title": "Policy Version",
             "type": "string"
           },

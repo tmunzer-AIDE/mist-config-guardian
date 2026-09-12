@@ -237,7 +237,8 @@ async def test_required_port_read_is_identical_with_or_without_agent(monkeypatch
     assert stored["dispatches"][0]["check_id"] == "switch-port-snapshot.v1"
     assert stored["dispatches"][0]["state"] == "complete"
     assert artifacts[0].assessment.impact == "info"
-    assert artifacts[0].assessment.coverage == "unmapped"
+    assert artifacts[0].assessment.coverage == "partial"
+    assert artifacts[0].assessment.domain_findings[0].state == "unknown"
     assert isinstance(artifacts[0].evidence[0], PortEvidence)
 
 

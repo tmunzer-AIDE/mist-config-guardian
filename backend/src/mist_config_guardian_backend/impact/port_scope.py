@@ -4,6 +4,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from hashlib import sha256
+from typing import Literal
 
 from mist_config_guardian_backend.impact.change_context import device_context_handle, immutable_device_identity
 from mist_config_guardian_backend.impact.contracts import PortTarget
@@ -77,6 +78,7 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
             gaps.add("Port discovery has no baseline; current concrete entries may omit removed ports.")
         site, mac, _ = identity
         ports: set[str] = set()
+        domains: dict[str, set[Literal["port-availability.v1", "switch-poe.v1"]]] = {}
         for name in _CONTAINERS:
             if name not in version.changed_fields:
                 continue
@@ -92,6 +94,11 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
                     gaps.add("Port ranges, aggregates and dynamic selectors require additional resolution.")
                     continue
                 ports.add(port)
+                left, right = old.get(port, {}), new.get(port, {})
+                if isinstance(left, dict) and isinstance(right, dict):
+                    for attribute, domain in (("disabled", "port-availability.v1"), ("poe_disabled", "switch-poe.v1")):
+                        if left.get(attribute) != right.get(attribute):
+                            domains.setdefault(port, set()).add(domain)
         for port in sorted(ports):
             handle = sha256(
                 (
@@ -111,6 +118,7 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
                     site_id=site,
                     device_mac=mac,
                     port_id=port,
+                    domains=tuple(sorted(domains.get(port, set()))),
                     before_version_id=str(comparable.id) if comparable else None,
                     after_version_id=str(version.id),
                 )
@@ -119,7 +127,7 @@ def compile_port_targets(  # noqa: C901, PLR0912, PLR0915 - bounded identity and
         gaps.add("The two-port discovery budget was reached; additional changed ports were not queried.")
     if resolved:
         gaps.add(
-            "Port snapshots provide context only; managed-neighbor identity, "
+            "Port snapshots provide context only; historical powered-device identity, "
             "historical transitions and impact remain unresolved."
         )
     return resolved[:MAX_PORT_TARGETS], tuple(sorted(gaps))

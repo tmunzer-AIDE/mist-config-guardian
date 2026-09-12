@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { PortSnapshot, PortSnapshotComponent } from './port-snapshot';
 import { ManagedNeighbor, ManagedNeighborComponent } from './managed-neighbor';
+import { PortEvent, PortEventsComponent } from './port-events';
 import { ModelRequestDetailsComponent } from './model-request-details';
 
 interface Proposal {
@@ -17,6 +18,7 @@ export interface AgentCheckpoint {
   memory: { source_revision: number; proposal: Proposal } | null;
   observations: { ref: string; target_handle: string; state: string; sampled_clients: number | null;
     captured_at?: string | null; observed_disconnects: number | null; port?: PortSnapshot | null;
+    port_events?: PortEvent[]; omitted_events?: number;
     managed_neighbor?: ManagedNeighbor | null; gap: string; window: { start: string; end: string } }[];
 }
 export interface ModelActivity {
@@ -32,7 +34,7 @@ export interface ModelActivity {
 
 @Component({
   selector: 'app-agent-investigation',
-  imports: [ManagedNeighborComponent, ModelRequestDetailsComponent, PortSnapshotComponent],
+  imports: [PortEventsComponent, ManagedNeighborComponent, ModelRequestDetailsComponent, PortSnapshotComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (checkpoint(); as agent) {
@@ -60,7 +62,7 @@ export interface ModelActivity {
           <div class="scroll"><table><thead><tr><th>Check reference</th><th>Window</th><th>State</th><th>Sampled clients</th><th>Observed disconnects</th></tr></thead>
             <tbody>@for (evidence of agent.observations; track evidence.ref) {
               <tr><td>{{ evidence.ref }}</td><td>{{ evidence.window.start }}–{{ evidence.window.end }}</td>
-                <td>{{ evidence.state }} {{ evidence.gap }}<app-port-snapshot [port]="evidence.port" /><app-managed-neighbor [neighbor]="evidence.managed_neighbor" [capturedAt]="evidence.captured_at" /></td><td>{{ evidence.sampled_clients ?? '—' }}</td><td>{{ evidence.observed_disconnects ?? '—' }}</td></tr>
+                <td>{{ evidence.state }} {{ evidence.gap }}<app-port-snapshot [port]="evidence.port" /><app-port-events [events]="evidence.port_events" [omitted]="evidence.omitted_events ?? 0" /><app-managed-neighbor [neighbor]="evidence.managed_neighbor" [capturedAt]="evidence.captured_at" /></td><td>{{ evidence.sampled_clients ?? '—' }}</td><td>{{ evidence.observed_disconnects ?? '—' }}</td></tr>
             }</tbody></table></div>
           <p>Counts describe returned samples; incomplete samples cannot establish absence of impact.</p>
         </details>

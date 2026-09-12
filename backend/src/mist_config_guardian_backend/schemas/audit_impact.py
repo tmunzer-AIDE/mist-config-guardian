@@ -23,7 +23,7 @@ class AuditImpactSummary(BaseModel):
     stop_reason: str = ""
     policy_version: str | None = None
     evaluated_at: datetime | None = None
-    impact: Literal["info", "none", "warning"] | None = None
+    impact: Literal["info", "none", "warning", "critical"] | None = None
     confidence: Literal["low", "medium"] | None = None
     coverage: Literal["complete", "partial", "unmapped"] | None = None
     gap_count: int = 0

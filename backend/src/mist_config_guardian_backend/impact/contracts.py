@@ -9,7 +9,12 @@ from beanie import PydanticObjectId
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from mist_config_guardian_backend.impact.change_context import ChangeContext
-from mist_config_guardian_backend.impact.limits import MAX_NEIGHBOR_TARGETS, MAX_PORT_TARGETS, MAX_WLAN_TARGETS
+from mist_config_guardian_backend.impact.limits import (
+    MAX_NEIGHBOR_TARGETS,
+    MAX_PORT_EVENTS,
+    MAX_PORT_TARGETS,
+    MAX_WLAN_TARGETS,
+)
 
 
 class Contract(BaseModel):
@@ -48,6 +53,7 @@ class PortTarget(Contract):
     site_id: UUID
     device_mac: str = Field(pattern=r"^[0-9a-f]{12}$")
     port_id: str = Field(pattern=r"^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$")
+    domains: tuple[Literal["port-availability.v1", "switch-poe.v1"], ...] = ()
     before_version_id: str | None = None
     after_version_id: str
 
@@ -78,6 +84,7 @@ class WlanRemovalPlan(Contract):
     targets: tuple[WlanTarget, ...] = Field(default=(), max_length=MAX_WLAN_TARGETS)
     port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=MAX_PORT_TARGETS)
     neighbor_targets: tuple[NeighborTarget, ...] = Field(default=(), max_length=MAX_NEIGHBOR_TARGETS)
+    port_history: bool = False
     unmapped: tuple[str, ...] = ()
     gaps: tuple[str, ...] = ()
     # These cannot be overridden by a skill or model-proposed corroborating check.
@@ -249,9 +256,6 @@ class NeighborEvidence(Contract):
         return self
 
 
-InvestigationEvidence = SessionEvidence | PortEvidence | NeighborEvidence
-
-
 class WlanFinding(Contract):
     target_handle: str
     state: Literal["unknown", "no_observed_impact", "possible_disruption"]
@@ -264,13 +268,64 @@ class WlanFinding(Contract):
     explanation: str
 
 
+class DomainFinding(Contract):
+    rule_id: Literal["port-availability.v1", "switch-poe.v1", "wlan-authentication.v1"]
+    target_handle: str
+    state: Literal["unknown", "possible_disruption", "recovered"]
+    impact: Literal["info", "warning", "critical"]
+    current_impact: Literal["info", "none", "warning", "critical"]
+    confidence: Literal["low", "medium"]
+    attribution: Literal["plausible", "undetermined"] = "undetermined"
+    device_mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{12}$")
+    port_id: str | None = None
+    service: Literal["port_link", "port_power", "wlan_authentication"]
+    occurred_at: AwareDatetime | None = None
+    recovered_at: AwareDatetime | None = None
+    explanation: str = Field(max_length=500)
+
+
 class WlanAssessment(Contract):
     schema_version: Literal[1] = 1
-    policy_version: Literal["wlan-removal.v1"] = "wlan-removal.v1"
+    policy_version: Literal["wlan-removal.v1", "impact-domains.v1"] = "wlan-removal.v1"
     audit_id: str
     evaluated_at: datetime
-    impact: Literal["info", "none", "warning"]
+    impact: Literal["info", "none", "warning", "critical"]
     confidence: Literal["low", "medium"]
     coverage: Literal["complete", "partial", "unmapped"]
+    domain_findings: tuple[DomainFinding, ...] = ()
     findings: tuple[WlanFinding, ...]
     gaps: tuple[str, ...]
+
+
+class PortEventRow(Contract):
+    event_type: Literal["SW_PORT_UP", "SW_PORT_DOWN", "SW_POE_PORT_ENABLED", "SW_POE_PORT_DISABLED"]
+    occurred_at: AwareDatetime
+
+
+class PortHistoryEvidence(Contract):
+    check_id: Literal["switch-port-events.v1"] = "switch-port-events.v1"
+    target_handle: str
+    window: Window
+    captured_at: AwareDatetime
+    state: Literal["complete", "partial", "error", "dispatch_denied"]
+    rows: tuple[PortEventRow, ...] = Field(default=(), max_length=MAX_PORT_EVENTS)
+    reason: str = Field(default="", max_length=500)
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def valid_state(self) -> "PortHistoryEvidence":
+        if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
+            msg = "Dispatch denial requires an explicit reason"
+            raise ValueError(msg)
+        if self.state in {"error", "dispatch_denied"} and self.rows:
+            msg = "Failed collection cannot contain accepted events"
+            raise ValueError(msg)
+        if self.state == "dispatch_denied" and (self.http_status is not None or self.response_bytes is not None):
+            msg = "Unexecuted checks cannot contain transport metadata"
+            raise ValueError(msg)
+        return self
+
+
+InvestigationEvidence = SessionEvidence | PortEvidence | NeighborEvidence | PortHistoryEvidence
