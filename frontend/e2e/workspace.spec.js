@@ -340,7 +340,7 @@ test('overlay breakpoints, mobile navigation, exact UTC time and keyboard contro
   await page.screenshot({ path: info.outputPath('mobile.png') });
   await page.locator('.exact-time summary').click();
   await page.locator('#view-at-time').fill('2026-09-09T10:00');
-  await page.getByRole('button', { name: 'Apply time', exact: true }).click();
+  await page.getByRole('button', { name: 'View configuration', exact: true }).click();
   await expect(page.locator('.context-note')).toContainText('Historical inventory');
   await page.getByRole('button', { name: 'Live', exact: true }).click();
   await expect(page.locator('.context-note')).toHaveCount(0);
@@ -468,4 +468,28 @@ test('device evidence shows one session and one finding with capture history on 
   await page.screenshot({ path: info.outputPath('evidence-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: 'Back to site impact', exact: false }).click();
   await expect(page).toHaveURL(/\/impact\?site=site1&device=aabbccddee04/);
+});
+
+test('time explorer previews dragging, commits on release, and stays usable on mobile', async ({ page }, info) => {
+  await page.goto('/overview');
+  const slider = page.locator('.track-seek');
+  await expect(slider).toBeVisible();
+  const box = await slider.boundingBox();
+  await page.mouse.move(box.x + box.width * .5, box.y + 16);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * .25, box.y + 16);
+  await expect(page.locator('.time-heading')).toContainText('Preview');
+  await expect(page.locator('.live-button')).toHaveAttribute('aria-pressed', 'true');
+  await page.mouse.up();
+  await expect(page.locator('.live-button')).toHaveAttribute('aria-pressed', 'false');
+  expect(Number(await slider.getAttribute('aria-valuenow'))).toBeCloseTo(25, 0);
+  await page.screenshot({ path: info.outputPath('timeline-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(slider).toBeVisible();
+  expect(await page.evaluate(() => document.body.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('timeline-mobile.png') });
+  await page.locator('.exact-time summary').click();
+  await expect(page.locator('#view-at-time')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.exact-time')).not.toHaveAttribute('open', '');
 });
