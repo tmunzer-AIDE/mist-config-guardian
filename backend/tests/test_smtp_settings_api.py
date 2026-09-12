@@ -4,7 +4,10 @@ The API tests run over the same in-memory ``ApplicationConfiguration``
 double the unit-level ``test_smtp_settings.py`` suite uses (there is no
 MongoDB in this process), following the stub described in that file's
 ``service`` fixture and the Task 4 report: ``_get_or_create`` and the
-class-level ``find_one``/``save`` Beanie calls are monkeypatched directly.
+class-level ``find_one`` Beanie call are monkeypatched directly, and
+``get_pymongo_collection`` is stubbed to a bare ``AsyncMock`` since
+``update_smtp``/``test_smtp_connection`` persist through a targeted
+``update_one`` rather than ``save()``.
 
 Two things the design spec asks for that a straight port of the plan's
 example tests would miss:
@@ -67,13 +70,16 @@ def _user(role: UserRole) -> User:
 def _build_service(monkeypatch: pytest.MonkeyPatch) -> ApplicationConfigurationService:
     """A real service over one shared in-memory configuration document.
 
-    ``_get_or_create`` and the class-level ``find_one``/``save`` calls
+    ``_get_or_create`` and the class-level ``find_one`` call
     (``smtp_credentials`` and ``update_smtp`` reach the database through
     different methods, mirroring ``ai_runtime``'s existing style) are
     stubbed to the same document, so a write made through one route is
     visible to a later read in the same test — matching the "service"
     fixture in ``test_smtp_settings.py`` and the stub the Task 4 report
     describes for unit-testing ``smtp_credentials`` without Mongo.
+    ``update_smtp`` and ``test_smtp_connection`` write to that document
+    in place (a targeted ``update_one``, not ``save()``), so the shared
+    instance still carries every write forward.
     """
     vault = CredentialVault(
         Settings(
@@ -93,7 +99,10 @@ def _build_service(monkeypatch: pytest.MonkeyPatch) -> ApplicationConfigurationS
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
     monkeypatch.setattr(ApplicationConfiguration, "key", "global", raising=False)
     monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    # update_smtp and test_smtp_connection persist through a targeted $set
+    # against the pymongo collection rather than configuration.save(); the
+    # shared in-memory document is what these tests actually assert on.
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
     return service
 
 

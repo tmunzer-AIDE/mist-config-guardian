@@ -198,10 +198,14 @@ export class EmailTab {
   // ---------------------------------------------------------------- actions
   /** Save the complete draft; an untouched password field keeps the stored one. */
   protected async saveSettings(): Promise<void> {
-    const password = this.passwordDraft().trim();
+    // Passwords are opaque byte strings: trimming would silently store a
+    // different password than the operator typed. The raw length, not the
+    // trimmed value, decides whether a replacement was entered, so an
+    // all-whitespace password is still sent rather than mistaken for "blank".
+    const password = this.passwordDraft();
     const body: SmtpSettingsUpdate = {
       ...this.updateBody(),
-      ...(this.clearPassword() ? { clear_password: true } : password ? { password } : {}),
+      ...(this.clearPassword() ? { clear_password: true } : password.length > 0 ? { password } : {}),
     };
     const saved = await this.persist(body, 'SMTP settings saved.');
     if (saved) {

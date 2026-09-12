@@ -349,25 +349,42 @@ class ApplicationConfigurationService:
             self._validate_smtp(request)
         configuration = await self._get_or_create()
         password = request.password.get_secret_value() if request.password is not None else None
+        encrypted_smtp_password = configuration.encrypted_smtp_password
+        smtp_password_last_four = configuration.smtp_password_last_four
         if password:
-            configuration.encrypted_smtp_password = self._vault.encrypt_for_context(
+            encrypted_smtp_password = self._vault.encrypt_for_context(
                 password,
                 context=_SMTP_PASSWORD_CONTEXT,
             )
-            configuration.smtp_password_last_four = password[-4:].rjust(4, "*")
+            smtp_password_last_four = password[-4:].rjust(4, "*")
         elif request.clear_password:
-            configuration.encrypted_smtp_password = None
-            configuration.smtp_password_last_four = None
+            encrypted_smtp_password = None
+            smtp_password_last_four = None
 
-        configuration.smtp_enabled = request.enabled
-        configuration.smtp_host = request.host.strip()
-        configuration.smtp_port = request.port
-        configuration.smtp_security = request.security
-        configuration.smtp_username = request.username.strip()
-        configuration.smtp_from_address = request.from_address.strip()
-        configuration.smtp_from_name = request.from_name.strip()
-        configuration.touch()
-        await configuration.save()
+        # Only the fields this method owns are written, with a targeted $set
+        # rather than configuration.save(). A whole-document save() would
+        # carry this instance's AI settings - read before this call, never
+        # refreshed - back over whatever an administrator changed there while
+        # this request was in flight, silently reverting it. See webhooks.py
+        # for the same hazard against the encrypted webhook secret.
+        fields: dict[str, object] = {
+            "smtp_enabled": request.enabled,
+            "smtp_host": request.host.strip(),
+            "smtp_port": request.port,
+            "smtp_security": request.security,
+            "smtp_username": request.username.strip(),
+            "encrypted_smtp_password": encrypted_smtp_password,
+            "smtp_password_last_four": smtp_password_last_four,
+            "smtp_from_address": request.from_address.strip(),
+            "smtp_from_name": request.from_name.strip(),
+            "updated_at": utc_now(),
+        }
+        await ApplicationConfiguration.get_pymongo_collection().update_one(
+            {"_id": configuration.id},
+            {"$set": fields},
+        )
+        for name, value in fields.items():
+            setattr(configuration, name, value)
         return self._smtp_response(configuration)
 
     async def test_smtp_connection(self) -> SmtpConnectionTestResponse:
@@ -384,11 +401,24 @@ class ApplicationConfigurationService:
         else:
             ok, detail = await asyncio.to_thread(_probe_smtp, credentials)
         checked_at = utc_now()
-        configuration.smtp_last_test_at = checked_at
-        configuration.smtp_last_test_ok = ok
-        configuration.smtp_last_test_detail = detail
-        configuration.touch()
-        await configuration.save()
+        # Only the test-result fields are this method's business. The probe
+        # above can take up to ten seconds; a configuration.save() afterward
+        # would carry this now-stale instance's SMTP and AI settings - read
+        # before the probe started - back over whatever an administrator
+        # changed there in the meantime, including a credential rotation this
+        # read-only diagnostic has no business reverting.
+        fields: dict[str, object] = {
+            "smtp_last_test_at": checked_at,
+            "smtp_last_test_ok": ok,
+            "smtp_last_test_detail": detail,
+            "updated_at": checked_at,
+        }
+        await ApplicationConfiguration.get_pymongo_collection().update_one(
+            {"_id": configuration.id},
+            {"$set": fields},
+        )
+        for name, value in fields.items():
+            setattr(configuration, name, value)
         return SmtpConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
 
     def _validate_smtp(self, request: SmtpSettingsUpdate) -> None:

@@ -169,6 +169,38 @@ describe('EmailTab', () => {
     expect(element.innerHTML).not.toContain('s3cr3t-pass');
   });
 
+  it('sends a whitespace-padded password verbatim, without trimming it', async () => {
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+
+    // Passwords are opaque byte strings: trimming would silently store a
+    // different password than the operator typed.
+    tab.passwordDraft.set(' hunter2 ');
+    const saving = tab.saveSettings();
+    const request = http.expectOne('/api/v1/settings/smtp');
+
+    expect((request.request.body as { password?: string }).password).toBe(' hunter2 ');
+    request.flush({ ...STORED, password_set: true, password_last_four: '2 **' });
+    await saving;
+  });
+
+  it('sends an all-whitespace password rather than treating it as blank', async () => {
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+
+    tab.passwordDraft.set('   ');
+    const saving = tab.saveSettings();
+    const request = http.expectOne('/api/v1/settings/smtp');
+
+    // A trimmed truthiness check would see '' and omit the field, which the
+    // backend reads as "leave the stored password unchanged" - the wrong
+    // outcome for a password an operator deliberately typed.
+    expect(Object.keys(request.request.body as object)).toContain('password');
+    expect((request.request.body as { password?: string }).password).toBe('   ');
+    request.flush({ ...STORED, password_set: true, password_last_four: '   ' });
+    await saving;
+  });
+
   it('clears the stored password and omits password when asked to clear it', async () => {
     const fixture = await render('administrator', { password_set: true, password_last_four: '**r2' });
     const tab = fixture.componentInstance as unknown as TabInternals;

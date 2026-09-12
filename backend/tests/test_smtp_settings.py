@@ -1,9 +1,11 @@
 """SMTP settings persistence and its request schema."""
 
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from beanie import PydanticObjectId
 from pydantic import SecretStr, ValidationError
 
 from mist_config_guardian_backend.config import Settings
@@ -15,6 +17,27 @@ from mist_config_guardian_backend.services.application_configuration import (
     ApplicationConfigurationService,
     is_loopback_host,
 )
+
+
+class _RecordingCollection:
+    """A fake pymongo collection that merges ``update_one`` into a seeded document.
+
+    Real enough to prove a targeted write cannot clobber a field it does not
+    name: the document starts with values the write under test does not own
+    (standing in for a concurrent change - an AI credential rotation, say -
+    made by another request), and after ``update_one`` merges only its
+    ``$set`` keys in, everything else must be exactly what it started as.
+    """
+
+    def __init__(self, document: dict[str, Any]) -> None:
+        self.document = dict(document)
+        self.filter: dict[str, Any] | None = None
+        self.set_fields: dict[str, Any] | None = None
+
+    async def update_one(self, criteria: dict[str, Any], update: dict[str, Any]) -> None:
+        self.filter = criteria
+        self.set_fields = update["$set"]
+        self.document.update(self.set_fields)
 
 
 def test_smtp_is_disabled_until_an_administrator_enables_it() -> None:
@@ -90,7 +113,10 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ApplicationConfigurationService:
     configuration_service = ApplicationConfigurationService(vault, settings)
     configuration = ApplicationConfiguration.model_construct(key="global")
     monkeypatch.setattr(configuration_service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    # update_smtp writes only the fields it owns through a targeted $set
+    # rather than configuration.save(); these tests only care about the
+    # in-memory result, so the collection itself can be a bare AsyncMock.
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
     return configuration_service
 
 
@@ -130,7 +156,7 @@ def make_service(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], Application
         configuration_service = ApplicationConfigurationService(vault, settings)
         configuration = ApplicationConfiguration.model_construct(key="global")
         monkeypatch.setattr(configuration_service, "_get_or_create", AsyncMock(return_value=configuration))
-        monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+        monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
         return configuration_service
 
     return _make
@@ -236,6 +262,116 @@ async def test_a_blank_password_leaves_the_stored_one_untouched(service: Applica
 
     assert response.password_set
     assert response.password_last_four == "ter2"
+
+
+# -- update_smtp / test_smtp_connection: a targeted write, not a full save() -
+#
+# Beanie's save() writes the whole document. Reloading it before an
+# awaited step - a probe that can take up to ten seconds, in
+# test_smtp_connection's case - and then saving afterward would carry
+# whatever this instance read back over any change completed by another
+# request in the meantime, including an AI credential rotation. Both
+# methods must instead persist only the fields they own, the same pattern
+# webhooks.py uses for the encrypted webhook secret.
+
+
+def _service_with_collection(
+    monkeypatch: pytest.MonkeyPatch, configuration: ApplicationConfiguration, collection: _RecordingCollection
+) -> ApplicationConfigurationService:
+    vault = CredentialVault(
+        Settings(
+            environment="test",
+            database_enabled=False,
+            credential_encryption_key=SecretStr("test-encryption-key"),
+        )
+    )
+    settings = Settings(
+        environment="test",
+        database_enabled=False,
+        credential_encryption_key=SecretStr("test-encryption-key"),
+        cors_origins="https://app.example.test",
+    )
+    configuration_service = ApplicationConfigurationService(vault, settings)
+    monkeypatch.setattr(configuration_service, "_get_or_create", AsyncMock(return_value=configuration))
+    monkeypatch.setattr(ApplicationConfiguration, "key", "global", raising=False)
+    monkeypatch.setattr(ApplicationConfiguration, "find_one", AsyncMock(return_value=configuration))
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", lambda: collection)
+    return configuration_service
+
+
+async def test_update_smtp_persists_only_the_fields_it_owns(monkeypatch: pytest.MonkeyPatch) -> None:
+    configuration_id = PydanticObjectId()
+    configuration = ApplicationConfiguration.model_construct(id=configuration_id, key="global")
+    # Stands in for an AI settings change another request completed while
+    # this one was building its update - concurrent with respect to the
+    # document this request read, not to the write itself.
+    collection = _RecordingCollection(
+        {
+            "_id": configuration_id,
+            "impact_ai_enabled": True,
+            "encrypted_impact_ai_api_key": "rotated-provider-key-cipher",
+        }
+    )
+    service = _service_with_collection(monkeypatch, configuration, collection)
+
+    await service.update_smtp(
+        SmtpSettingsUpdate(enabled=True, host="mail.example.com", from_address="a@example.com", password="hunter2")
+    )
+
+    assert collection.filter == {"_id": configuration_id}
+    assert collection.set_fields is not None
+    assert set(collection.set_fields) == {
+        "smtp_enabled",
+        "smtp_host",
+        "smtp_port",
+        "smtp_security",
+        "smtp_username",
+        "encrypted_smtp_password",
+        "smtp_password_last_four",
+        "smtp_from_address",
+        "smtp_from_name",
+        "updated_at",
+    }
+    # The concurrent AI credential rotation this request never read must survive.
+    assert collection.document["encrypted_impact_ai_api_key"] == "rotated-provider-key-cipher"
+    assert collection.document["impact_ai_enabled"] is True
+
+
+async def test_smtp_connection_test_persists_only_the_test_result_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    configuration_id = PydanticObjectId()
+    # smtp_enabled=False means smtp_credentials() answers "not configured"
+    # without a probe, so the test needs no network I/O of its own.
+    configuration = ApplicationConfiguration.model_construct(
+        id=configuration_id,
+        key="global",
+        smtp_enabled=False,
+    )
+    collection = _RecordingCollection(
+        {
+            "_id": configuration_id,
+            "impact_ai_enabled": True,
+            "encrypted_impact_ai_api_key": "rotated-provider-key-cipher",
+            "smtp_host": "mail.example.com",
+        }
+    )
+    service = _service_with_collection(monkeypatch, configuration, collection)
+
+    response = await service.test_smtp_connection()
+
+    assert response.ok is False
+    assert collection.filter == {"_id": configuration_id}
+    assert collection.set_fields is not None
+    assert set(collection.set_fields) == {
+        "smtp_last_test_at",
+        "smtp_last_test_ok",
+        "smtp_last_test_detail",
+        "updated_at",
+    }
+    # Neither the concurrent AI rotation nor the stored host this request
+    # never re-read may be touched by a read-only connection probe.
+    assert collection.document["encrypted_impact_ai_api_key"] == "rotated-provider-key-cipher"
+    assert collection.document["impact_ai_enabled"] is True
+    assert collection.document["smtp_host"] == "mail.example.com"
 
 
 async def test_disabled_smtp_has_no_credentials(
