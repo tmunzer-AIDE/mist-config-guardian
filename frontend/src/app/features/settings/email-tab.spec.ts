@@ -201,6 +201,23 @@ describe('EmailTab', () => {
     await saving;
   });
 
+  it('enables saving for an all-whitespace password draft', async () => {
+    // saveSettings() sends such a password correctly, but the Save button is
+    // gated on dirty(); a trimmed check there left the button disabled and the
+    // password unreachable through the UI, which calling saveSettings()
+    // directly cannot detect.
+    const fixture = await render('administrator');
+    const tab = fixture.componentInstance as unknown as TabInternals;
+
+    tab.passwordDraft.set('   ');
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const buttons = [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')];
+    const save = buttons.find((candidate) => candidate.textContent?.includes('Save SMTP settings'));
+    expect(save?.disabled).toBe(false);
+  });
+
   it('clears the stored password and omits password when asked to clear it', async () => {
     const fixture = await render('administrator', { password_set: true, password_last_four: '**r2' });
     const tab = fixture.componentInstance as unknown as TabInternals;

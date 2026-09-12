@@ -79,7 +79,10 @@ export class EmailTab {
       this.username().trim() !== current.username ||
       this.fromAddress().trim() !== current.from_address ||
       this.fromName().trim() !== current.from_name ||
-      this.passwordDraft().trim() !== '' ||
+      // Length, not a trimmed comparison: a password is an opaque string, so
+      // an all-whitespace draft is a real edit. Trimming here would leave the
+      // Save button disabled and make that password unsaveable through the UI.
+      this.passwordDraft().length > 0 ||
       this.clearPassword()
     );
   });
