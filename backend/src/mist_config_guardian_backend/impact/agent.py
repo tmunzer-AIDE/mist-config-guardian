@@ -9,7 +9,14 @@ from uuid import UUID
 from beanie import PydanticObjectId
 from pydantic import AwareDatetime, Field, TypeAdapter
 
-from mist_config_guardian_backend.impact.contracts import Contract, SessionEvidence, Window, WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import (
+    Contract,
+    InvestigationEvidence,
+    PortEvidence,
+    PortRow,
+    Window,
+    WlanRemovalPlan,
+)
 from mist_config_guardian_backend.impact.wlan_removal import check_windows
 
 MAX_MODEL_CALLS = 21
@@ -18,7 +25,7 @@ MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
-PROMPT_VERSION = "impact-investigator.v2"
+PROMPT_VERSION = "impact-investigator.v3"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -26,9 +33,9 @@ ShortText = Annotated[str, Field(min_length=1, max_length=500)]
 
 class CheckCapability(Contract):
     ref: Handle
-    check_id: Literal["wlan-client-sessions.v1"] = "wlan-client-sessions.v1"
+    check_id: Literal["wlan-client-sessions.v1", "switch-port-snapshot.v1"] = "wlan-client-sessions.v1"
     target_handle: Handle
-    phase: Literal["baseline", "followup"]
+    phase: Literal["baseline", "followup", "snapshot"]
     window: Window
 
 
@@ -42,6 +49,15 @@ def capabilities(plan: WlanRemovalPlan, as_of: datetime) -> tuple[CheckCapabilit
         )
         for target in plan.targets
         for phase, window in zip(("baseline", "followup"), check_windows(plan, as_of), strict=True)
+    ) + tuple(
+        CheckCapability(
+            ref=sha256(f"{target.handle}:snapshot:{as_of.isoformat()}".encode()).hexdigest(),
+            check_id="switch-port-snapshot.v1",
+            target_handle=target.handle,
+            phase="snapshot",
+            window=Window(start=plan.changed_at, end=as_of),
+        )
+        for target in plan.port_targets
     )
 
 
@@ -51,15 +67,25 @@ class EvidenceView(Contract):
     window: Window
     state: str
     # Counts describe the returned sample; partial results cannot prove absence.
-    sampled_clients: int = Field(ge=0)
-    observed_disconnects: int = Field(ge=0)
+    sampled_clients: int | None = Field(default=None, ge=0)
+    observed_disconnects: int | None = Field(default=None, ge=0)
+    port: PortRow | None = None
     gap: str = Field(max_length=500)
 
 
-def evidence_view(check: CheckCapability, reading: SessionEvidence, changed_at: datetime) -> EvidenceView:
+def evidence_view(check: CheckCapability, reading: InvestigationEvidence, changed_at: datetime) -> EvidenceView:
     if (reading.check_id, reading.target_handle, reading.window) != (check.check_id, check.target_handle, check.window):
         msg = "Evidence does not match the authorized check"
         raise ValueError(msg)
+    if isinstance(reading, PortEvidence):
+        return EvidenceView(
+            ref=check.ref,
+            target_handle=check.target_handle,
+            window=check.window,
+            state=reading.state,
+            port=reading.rows[0] if reading.rows else None,
+            gap=reading.reason,
+        )
     return EvidenceView(
         ref=check.ref,
         target_handle=check.target_handle,
@@ -132,7 +158,9 @@ class ModelDispatchDenial(StrEnum):
 
 
 class AgentCheckpoint(Contract):
-    prompt_version: Literal["impact-investigator.v1", "impact-investigator.v2"] = PROMPT_VERSION
+    prompt_version: Literal["impact-investigator.v1", "impact-investigator.v2", "impact-investigator.v3"] = (
+        PROMPT_VERSION
+    )
     source: Literal["model_proposal"] = "model_proposal"
     state: Literal[
         "complete",
@@ -147,7 +175,7 @@ class AgentCheckpoint(Contract):
     reason: str = Field(default="", max_length=500)
     proposal: AgentProposal | None = None
     memory: AgentMemory | None = None
-    observations: tuple[EvidenceView, ...] = Field(default=(), max_length=8)
+    observations: tuple[EvidenceView, ...] = Field(default=(), max_length=10)
     # These local identities refer to durable model reservations, not model prose.
     request_ids: tuple[UUID, ...] = Field(default=(), max_length=MAX_CHECKPOINT_CALLS)
 
@@ -157,7 +185,9 @@ class ModelRequestRecord(Contract):
     generation: int = Field(ge=1)
     candidate_revision: int = Field(ge=1)
     reserved_at: AwareDatetime
-    prompt_version: Literal["impact-investigator.v1", "impact-investigator.v2"] = PROMPT_VERSION
+    prompt_version: Literal["impact-investigator.v1", "impact-investigator.v2", "impact-investigator.v3"] = (
+        PROMPT_VERSION
+    )
     input_hash: Handle
     model: str = Field(max_length=255)
     input_bytes: int = Field(ge=1, le=MAX_INPUT_BYTES)

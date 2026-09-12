@@ -96,15 +96,16 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceView"
             },
-            "maxItems": 8,
+            "maxItems": 10,
             "title": "Observations",
             "type": "array"
           },
           "prompt_version": {
-            "default": "impact-investigator.v2",
+            "default": "impact-investigator.v3",
             "enum": [
               "impact-investigator.v1",
-              "impact-investigator.v2"
+              "impact-investigator.v2",
+              "impact-investigator.v3"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -2719,10 +2720,25 @@
             "type": "integer"
           },
           "check_id": {
-            "const": "wlan-client-sessions.v1",
             "default": "wlan-client-sessions.v1",
+            "enum": [
+              "wlan-client-sessions.v1",
+              "switch-port-snapshot.v1"
+            ],
             "title": "Check Id",
             "type": "string"
+          },
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
           },
           "finished_at": {
             "anyOf": [
@@ -2758,6 +2774,18 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "pattern": "^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
           },
           "reserved_at": {
             "format": "date-time",
@@ -2814,9 +2842,16 @@
             "$ref": "#/components/schemas/Window"
           },
           "wlan_id": {
-            "format": "uuid",
-            "title": "Wlan Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wlan Id"
           }
         },
         "required": [
@@ -2825,7 +2860,6 @@
           "candidate_revision",
           "target_handle",
           "site_id",
-          "wlan_id",
           "window",
           "reserved_at"
         ],
@@ -2919,9 +2953,26 @@
             "type": "string"
           },
           "observed_disconnects": {
-            "minimum": 0.0,
-            "title": "Observed Disconnects",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Disconnects"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ref": {
             "pattern": "^[0-9a-f]{64}$",
@@ -2929,9 +2980,16 @@
             "type": "string"
           },
           "sampled_clients": {
-            "minimum": 0.0,
-            "title": "Sampled Clients",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampled Clients"
           },
           "state": {
             "title": "State",
@@ -2951,8 +3009,6 @@
           "target_handle",
           "window",
           "state",
-          "sampled_clients",
-          "observed_disconnects",
           "gap"
         ],
         "title": "EvidenceView",
@@ -4070,10 +4126,11 @@
             "type": "integer"
           },
           "prompt_version": {
-            "default": "impact-investigator.v2",
+            "default": "impact-investigator.v3",
             "enum": [
               "impact-investigator.v1",
-              "impact-investigator.v2"
+              "impact-investigator.v2",
+              "impact-investigator.v3"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -5695,6 +5752,78 @@
         "title": "PointInTimeStateResponse",
         "type": "object"
       },
+      "PortRow": {
+        "additionalProperties": false,
+        "description": "Most recent reported port state, not a transition or a managed peer identity.",
+        "properties": {
+          "neighbor_handle": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbor Handle"
+          },
+          "neighbor_identity": {
+            "const": "unverified",
+            "default": "unverified",
+            "title": "Neighbor Identity",
+            "type": "string"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "poe_on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poe On"
+          },
+          "power_draw": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power Draw"
+          },
+          "up": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up"
+          }
+        },
+        "title": "PortRow",
+        "type": "object"
+      },
       "ProfileResponse": {
         "description": "The parts of an account its owner may edit.",
         "properties": {
@@ -6873,6 +7002,17 @@
             "title": "Check Id",
             "type": "string"
           },
+          "device_mac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
           "dispatch_denial": {
             "anyOf": [
               {
@@ -6882,6 +7022,27 @@
                 "type": "null"
               }
             ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
           },
           "reason": {
             "title": "Reason",

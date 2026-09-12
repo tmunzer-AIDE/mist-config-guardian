@@ -13,10 +13,15 @@ from pymongo.errors import PyMongoError
 
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
-from mist_config_guardian_backend.impact.contracts import DispatchDenial, SessionEvidence, WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import (
+    DispatchDenial,
+    InvestigationEvidence,
+    SessionEvidence,
+    WlanRemovalPlan,
+)
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
-from mist_config_guardian_backend.integrations.mist_wlan_evidence import MistWlanEvidenceClient
+from mist_config_guardian_backend.integrations.mist_port_evidence import MistPortEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
@@ -185,11 +190,11 @@ class ImpactInvestigationService:
 
             async with (
                 asyncio.timeout(120),
-                MistWlanEvidenceClient(token=token, region=organization.cloud_region) as client,
+                MistPortEvidenceClient(token=token, region=organization.cloud_region) as client,
             ):
-                collected: dict[str, SessionEvidence] = {}
+                collected: dict[str, InvestigationEvidence] = {}
 
-                async def collect(check: CheckCapability) -> SessionEvidence:
+                async def collect(check: CheckCapability) -> InvestigationEvidence:
                     if check.ref not in collected:
                         if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
                             msg = "Evidence collection stopped after dispatch denial"
@@ -213,7 +218,9 @@ class ImpactInvestigationService:
                     if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
                         break
                     await collect(check)
-        assessment = evaluate_wlan_removal(plan, evidence, evidence_as_of=evidence_as_of)
+        assessment = evaluate_wlan_removal(
+            plan, [e for e in evidence if isinstance(e, SessionEvidence)], evidence_as_of=evidence_as_of
+        )
         if root.id is None:
             msg = "Persisted investigation has no identity"
             raise ValueError(msg)
@@ -260,9 +267,35 @@ class ImpactInvestigationService:
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistWlanEvidenceClient,
+        client: MistPortEvidenceClient,
         credential: str,
-    ) -> SessionEvidence:
+    ) -> InvestigationEvidence:
+        if check not in capabilities(plan, max(check.window.end, plan.changed_at + timedelta(microseconds=1))):
+            msg = "Collection requires the exact planned capability"
+            raise ValueError(msg)
+        if check.check_id == "switch-port-snapshot.v1":
+            port = next(t for t in plan.port_targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=port.handle,
+                site_id=port.site_id,
+                device_mac=port.device_mac,
+                port_id=port.port_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            reading = await client.capture_port(
+                plan=plan,
+                target_handle=check.target_handle,
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+            if reading.state != "dispatch_denied":
+                await self._finish_dispatch(root, dispatch, reading)
+            return reading
         target = next(t for t in plan.targets if t.handle == check.target_handle)
         dispatch = DispatchRecord(
             id=uuid4(),
@@ -338,7 +371,9 @@ class ImpactInvestigationService:
         return DispatchDenial.RESERVATION_REJECTED
 
     @staticmethod
-    async def _finish_dispatch(root: ImpactInvestigation, dispatch: DispatchRecord, reading: SessionEvidence) -> None:
+    async def _finish_dispatch(
+        root: ImpactInvestigation, dispatch: DispatchRecord, reading: InvestigationEvidence
+    ) -> None:
         # An old worker may finish only its own reserved record. This factual log
         # update cannot publish evidence or alter the current worker's lease.
         if (reading.check_id, reading.target_handle, reading.window) != (

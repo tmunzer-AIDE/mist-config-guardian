@@ -33,7 +33,7 @@ from mist_config_guardian_backend.impact.agent import (
     evidence_view,
 )
 from mist_config_guardian_backend.impact.change_context import device_context_handle
-from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import InvestigationEvidence, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
 from mist_config_guardian_backend.models.base import utc_now
@@ -63,18 +63,24 @@ Do not invent metrics, identities, evidence, or severity/confidence ratings. Exp
 exclusions apply to all attribution. Describe missing capabilities as open questions.
 Historical observations are context, not fresh evidence. Never request secret values.
 Deployment candidates are context only: they establish neither impact nor permission
-to query a device. The current catalogue cannot inspect individual devices.
+to query a device. Only the explicit capability catalogue authorizes reads.
 configuration_context describes recorded attribute changes, not confirmed effective
 runtime changes. Values and unrecognized keys are withheld. Assume changes effective
 when inheritance or merge semantics are unknown. A device_handle identifies only a
 changed-device candidate from immutable configuration; matching deployment context
 handles link these two observations, not causation or a dependency. Template consumers
-and physical/service relationships are unresolved. Context handles are never check
+and service relationships are unresolved. Port snapshot checks inspect only concrete
+resolved changed ports. They return most recent state, not historical transitions.
+An observed neighbor_handle is unverified LLDP context, never a managed device,
+a confirmed powered device, or permission to query the neighbor. Even up=false or
+poe_on=false cannot establish a disruption without earlier usage/transition evidence.
+A missing timestamp cannot be replaced with collection time. Port evidence is
+separate context and cannot contribute to a WLAN verdict. Context handles are never check
 refs or hypothesis targets. When no capabilities exist, report with no hypotheses and
 list the missing evidence in open_questions; do not describe the change as healthy.
 """
 
-Collector = Callable[[CheckCapability], Awaitable[SessionEvidence]]
+Collector = Callable[[CheckCapability], Awaitable[InvestigationEvidence]]
 
 
 class ImpactAgent:
@@ -125,6 +131,9 @@ class ImpactAgent:
                     "as_of": as_of.isoformat(),
                     "remaining_checkpoint_model_calls": MAX_CHECKPOINT_CALLS - len(request_ids),
                     "changes": [{"target_handle": t.handle, "change_kind": t.change_kind} for t in plan.targets],
+                    "port_scopes": [
+                        {"target_handle": t.handle, "device_context_handle": t.device_handle} for t in plan.port_targets
+                    ],
                     "configuration_context": plan.change_context.model_dump(mode="json")
                     if plan.change_context
                     else None,

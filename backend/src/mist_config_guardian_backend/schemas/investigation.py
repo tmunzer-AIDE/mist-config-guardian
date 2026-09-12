@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.impact.agent import AgentCheckpoint, CollectAction, ModelActivity, ReportAction
-from mist_config_guardian_backend.impact.contracts import DispatchDenial, Window, WlanAssessment
+from mist_config_guardian_backend.impact.contracts import DispatchDenial, PortRow, Window, WlanAssessment
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
@@ -22,6 +22,9 @@ class ShadowCheckResponse(BaseModel):
     row_count: int
     reason: str
     dispatch_denial: DispatchDenial | None = None
+    port: PortRow | None = None
+    device_mac: str | None = None
+    port_id: str | None = None
 
 
 class ModelRequestDetails(BaseModel):

@@ -31,11 +31,11 @@ def device_inputs():
             "mac": MAC,
             "site_id": SITE,
             "type": "switch",
-            "port_config": {"ge-0/0/1": {"poe": True}},
+            "port_config": {"ge-0/0/1-2": {"poe": True}},
         }
     data["after"][0].is_deleted = False
     data["after"][0].changed_fields = ["port_config"]
-    data["after"][0].configuration["port_config"] = {"ge-0/0/1": {"poe": False}}
+    data["after"][0].configuration["port_config"] = {"ge-0/0/1-2": {"poe": False}}
     return data
 
 
@@ -72,7 +72,7 @@ def test_general_context_uses_immutable_device_identity_and_links_deployment_han
     data["logicals"][0].current_mist_id = "another mutable identity"
     assert context(data).changes[0].device_handle == change.device_handle
     raw = context(data).model_dump_json()
-    for forbidden in (MAC, SITE, "ge-0/0/1", "ignore all", "mutable", '"poe"'):
+    for forbidden in (MAC, SITE, "ge-0/0/1-2", "ignore all", "mutable", '"poe"'):
         assert forbidden not in raw
 
 
@@ -183,7 +183,7 @@ async def test_unmapped_switch_change_runs_one_agent_without_mist_requests(monke
     assert stored["calls_used"] == 0
     assert stored["model_calls_used"] == 1
     assert artifacts[0].agent.state == "complete"
-    assert artifacts[0].agent.prompt_version == "impact-investigator.v2"
+    assert artifacts[0].agent.prompt_version == "impact-investigator.v3"
     assert artifacts[0].assessment.impact == "info"
     assert artifacts[0].assessment.coverage == "unmapped"
     assert artifacts[0].plan.change_context.changes[0].object_type == "devices"

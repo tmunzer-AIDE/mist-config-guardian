@@ -14,7 +14,7 @@ from mist_config_guardian_backend.impact.agent import (
     AgentCheckpoint,
     ModelRequestRecord,
 )
-from mist_config_guardian_backend.impact.contracts import SessionEvidence, WlanAssessment, WlanRemovalPlan
+from mist_config_guardian_backend.impact.contracts import InvestigationEvidence, WlanAssessment, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.models.base import TimestampedModel
@@ -84,7 +84,7 @@ class InvestigationRevision(Document):
     generated_at: datetime
     plan: WlanRemovalPlan
     assessment: WlanAssessment
-    evidence: list[SessionEvidence] = Field(default_factory=list, max_length=8)
+    evidence: list[InvestigationEvidence] = Field(default_factory=list, max_length=8)
     deployment: DeploymentEvidence | None = None
     agent: AgentCheckpoint | None = None
 

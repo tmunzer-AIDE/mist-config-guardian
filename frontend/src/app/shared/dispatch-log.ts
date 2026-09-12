@@ -11,7 +11,9 @@ export interface DispatchLog {
     check_id: string;
     target_handle: string;
     site_id: string;
-    wlan_id: string;
+    wlan_id: string | null;
+    device_mac?: string | null;
+    port_id?: string | null;
     window: { start: string; end: string };
     reserved_at: string;
     state: 'reserved' | 'complete' | 'partial' | 'error';
@@ -40,10 +42,10 @@ export interface DispatchLog {
           <div class="scroll">
             <table>
               <caption>Read-only checks · response metadata only</caption>
-              <thead><tr><th>Check and scope</th><th>Evidence window</th><th>Attempt timing</th><th>Result</th></tr></thead>
+              <thead><tr><th>Check and scope</th><th>Investigation interval</th><th>Attempt timing</th><th>Result</th></tr></thead>
               <tbody>@for (entry of log.records; track entry.id) {
                 <tr>
-                  <td>{{ entry.check_id }}<br>Site {{ entry.site_id }}<br>WLAN {{ entry.wlan_id }}
+                  <td>{{ entry.check_id }}<br>Site {{ entry.site_id }}<br>@if (entry.wlan_id) { WLAN {{ entry.wlan_id }} } @else { Switch {{ entry.device_mac }} · Port {{ entry.port_id }} }
                     <br>Worker {{ entry.generation }} · candidate revision {{ entry.candidate_revision }}
                     <br>Attempt {{ entry.id }}</td>
                   <td>{{ at(entry.window.start) }}–{{ at(entry.window.end) }}</td>

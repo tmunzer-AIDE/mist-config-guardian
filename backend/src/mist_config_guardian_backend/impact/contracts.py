@@ -38,6 +38,18 @@ class WlanTarget(Contract):
     change_kind: Literal["removed", "disabled", "unknown"] = "unknown"
 
 
+class PortTarget(Contract):
+    """One concrete changed switch port, bound to immutable audit versions."""
+
+    handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    device_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    site_id: UUID
+    device_mac: str = Field(pattern=r"^[0-9a-f]{12}$")
+    port_id: str = Field(pattern=r"^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$")
+    before_version_id: str | None = None
+    after_version_id: str
+
+
 class WlanRemovalPlan(Contract):
     schema_version: Literal[1] = 1
     rule_id: Literal["wlan-removal.v1"] = "wlan-removal.v1"
@@ -46,6 +58,7 @@ class WlanRemovalPlan(Contract):
     audit_id: str
     changed_at: AwareDatetime
     targets: tuple[WlanTarget, ...] = Field(default=(), max_length=4)
+    port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=2)
     unmapped: tuple[str, ...] = ()
     gaps: tuple[str, ...] = ()
     # These cannot be overridden by a skill or model-proposed corroborating check.
@@ -120,6 +133,46 @@ class SessionEvidence(Contract):
             msg = "A denied dispatch cannot contain a response"
             raise ValueError(msg)
         return self
+
+
+class PortRow(Contract):
+    """Most recent reported port state, not a transition or a managed peer identity."""
+
+    up: bool | None = Field(default=None, strict=True)
+    poe_on: bool | None = Field(default=None, strict=True)
+    power_draw: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
+    observed_at: AwareDatetime | None = None
+    neighbor_handle: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    neighbor_identity: Literal["unverified"] = "unverified"
+
+
+class PortEvidence(Contract):
+    check_id: Literal["switch-port-snapshot.v1"] = "switch-port-snapshot.v1"
+    target_handle: str
+    # Requested investigation interval only: this endpoint cannot query history.
+    window: Window
+    captured_at: AwareDatetime
+    state: Literal["complete", "partial", "error", "dispatch_denied"]
+    rows: tuple[PortRow, ...] = Field(default=(), max_length=1)
+    reason: str = Field(default="", max_length=500)
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def denied_dispatch_has_no_result(self) -> "PortEvidence":
+        if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
+            msg = "Dispatch denial requires a reason and dispatch_denied state"
+            raise ValueError(msg)
+        if self.dispatch_denial is not None and (
+            self.rows or self.http_status is not None or self.response_bytes is not None
+        ):
+            msg = "A denied dispatch cannot contain a response"
+            raise ValueError(msg)
+        return self
+
+
+InvestigationEvidence = SessionEvidence | PortEvidence
 
 
 class WlanFinding(Contract):

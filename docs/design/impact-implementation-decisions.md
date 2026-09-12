@@ -643,11 +643,85 @@ of adding that read path.
   completed; CodeRabbit remains signed out. No live model-quality, Mist discovery
   or Mongo concurrency validation was performed.
 
+## Registry binding and concrete port discovery (2026-09-13)
+
+- Treat the historical `wlan`/`wlans` mismatch as a production integration defect:
+  real persisted WLAN changes could not produce targets before `e0795dd`. Earlier
+  synthetic successes do not validate that connection to production data. Add
+  registry-owned object families and match those throughout impact compilation;
+  centralize the historical singular alias. Test both actual registered entries
+  and a renamed registry key so a predicate cannot silently depend on a duplicate
+  vocabulary. Historical assessments remain as recorded; do not backfill verdicts.
+  Adjudication must include captured production vocabulary and immutable versions.
+- Distinguish missing baselines from replaced incarnations in agent-facing gaps.
+  Keep before-presence unknown in both cases: replacement establishes an identity
+  boundary, not an attribute-level comparison. Unknown effective scope still assumes
+  effective. A replaced device cannot authorize a port query until resolved.
+- Add the first operational leg of physical discovery: immutable direct switch
+  change -> concrete port -> most recent observed port/PoE state and neighbor hint.
+  Validate stable immutable MAC/site/type using the shared identity resolver.
+  Resolve changed or removed concrete `ge`, `xe`, `et` entries in `port_config` and
+  `port_config_overwrite`. Do not expand ranges, aggregates, dynamic selectors,
+  template/profile consumers or routing/service dependencies. Admit at most two
+  ports after examining at most 64 audit versions and 256 keys per container pair;
+  record unsupported, incomplete and truncated scope. Missing baselines can query
+  known current concrete entries but explicitly cannot recover removed entries.
+- Confirm the endpoint and field contract against the local Mist OAS at
+  `/Users/tmunzer/4_dev/API/mist_openapi/mist.openapi.json`: operation
+  `searchSiteSwOrGwPorts`, response `SwitchPortsSearch`, configuration schemas
+  `switch_port_config_overwrites` / `switch_port_config_overwrite`. The endpoint
+  returns current or most recent port statistics and has no historical filters.
+  Do not treat envelope times or collection time as a port transition timestamp.
+  Tests use registry-derived devices and documented `poe_disabled` configuration,
+  rather than the previous context-only fixture's invented `poe` configuration.
+  That context fixture now uses an unresolved range to preserve its empty-menu case.
+- Implement one exact site/MAC/port read per `switch-port-snapshot.v1` capability,
+  requesting two rows to detect ambiguity, capped at 64 KiB and 20 seconds. Do not
+  paginate. Scope mismatch, invalid booleans/numbers and invalid responses fail
+  closed. Missing, duplicate or truncated observations stay partial. Preserve
+  measured false/zero separately from missing values and explicit observation time
+  separately from capture time. An older timestamp remains older evidence.
+- A neighbor MAC reported through LLDP is not a trusted inventory identity. Retain
+  only its audit/port-bound opaque handle with literal `neighbor_identity=unverified`.
+  Discard provider prose and names. Neither the handle nor PoE state establishes a
+  managed AP, powered-device identity, disruption or query authorization. The next
+  resolver must verify the neighbor against organization/site inventory before
+  issuing any downstream capability. Port event history remains a separate check
+  to implement; snapshots alone cannot prove a transition.
+- Add port targets to the existing plan envelope for backward compatibility and
+  use the identical capability generator/cache for the agent and mandatory sweep.
+  At most ten checks now fit a checkpoint (eight WLAN plus two ports); keep the
+  original 56-call per-audit cap, even when that ends a mixed investigation early.
+  Agent participation remains neutral in Mist cost, but these new capabilities add
+  up to two deterministic reads per checkpoint in either shadow mode. One audit
+  still owns one agent. Root budget/journal writes and dispatch/publication fences
+  are unchanged. Port completion uncertainty stops publication, just like WLAN.
+- Keep `PortEvidence` separate from the frozen extra-forbid `SessionEvidence`.
+  Pass only session evidence to the WLAN evaluator; port configuration paths stay
+  unmapped. Agent explanations may describe selected port evidence as context, not
+  as WLAN attribution. New prompt version v3 links port targets to pseudonymous
+  changed-device context; v1/v2 remain readable. No production verdict is promoted.
+- Display snapshots in the published collection preview independently of whether
+  the model selected them, and in agent evidence when selected. Show unavailable
+  observation time and unverified neighbor identity explicitly. API changes:
+  client counts on agent evidence are nullable; dispatch WLAN identity is nullable
+  for port checks and replaced by validated device/port identity. No raw transcripts,
+  neighbor MACs or configuration values are exposed by these new report fields.
+- Validation: 1,156 backend tests passed, 20 skipped; 399 frontend tests passed.
+  Thirty-eight new backend regressions cover registry metadata and renamed keys,
+  audit identity, selector limits, presence/zero/timing, response validation, agent
+  cache/neighbor rejection, shared spending, journal uncertainty and WLAN exclusion.
+  The UI regression covers missing/false/zero values and escaped neighbor text.
+  Ruff, source types, OpenAPI consistency, production build and the isolated browser
+  preview passed; the port table was visually inspected. Local source/diff review
+  completed while CodeRabbit remains signed out. No live Mist discovery,
+  model-quality evaluation or real Mongo concurrency test is claimed.
+
 ## Next implementation queue
 
-1. Extend the general change context and local candidate foundation into operational
-   discovery: resolve trusted physical dependencies and build the shared capability
-   plan. Keep one investigator per audit; do not add a manual rule for every attribute.
+1. Extend concrete port discovery into verified managed-neighbor dependencies,
+   then port/PoE event history. Keep one investigator per audit and the same bounded
+   capability plan for the agent and mandatory sweep.
 2. Expand reusable resolvers and collectors as needed, starting with targeted
    port/PoE event history and physical dependencies. Add regression scenarios
    and domain skills; avoid requiring a bespoke rule for every attribute.

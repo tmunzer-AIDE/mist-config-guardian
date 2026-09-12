@@ -14,7 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion, VersionEvent
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
 
 MAX_CONTEXT_OBJECTS = 8
 MAX_CONTEXT_FIELDS = 6
@@ -27,6 +27,7 @@ _LABELS = frozenset(
         "enabled",
         "disabled",
         "port_config",
+        "port_config_overwrite",
         "port_usages",
         "poe",
         "networks",
@@ -112,7 +113,7 @@ def device_context_handle(organization_id: str, audit_id: str, site: UUID, mac: 
     return sha256(f"{organization_id}:{audit_id}:{site}:{mac}".encode()).hexdigest()
 
 
-def compile_change_context(
+def compile_change_context(  # noqa: C901 - explicit baseline and identity classification
     *,
     organization_id: str,
     audit_id: str,
@@ -155,8 +156,12 @@ def compile_change_context(
             if prior is not None and prior.incarnation_id != version.incarnation_id
             else "baseline_unavailable"
         )
-        if not paired:
-            gaps.add("Some changes lack a comparable immutable baseline; merge and effective scope remain unresolved.")
+        if comparison == "incarnation_changed":
+            gaps.add(
+                "An object was replaced across incarnations; its earlier configuration is not a comparable baseline."
+            )
+        elif not paired:
+            gaps.add("An immutable baseline is unavailable; earlier attribute state and effective scope are unknown.")
         handle = sha256(
             f"change-context.v1:{organization_id}:{audit_id}:{prior.id if prior else None}:{version.id}".encode()
         ).hexdigest()
@@ -183,9 +188,13 @@ def compile_change_context(
                     else "present",
                 )
             )
-        definition = get_definition(logical.scope, "wlans" if logical.object_type == "wlan" else logical.object_type)
-        identity = _device_identity(version, prior if paired else None) if logical.object_type == "devices" else None
-        if logical.object_type == "devices" and identity is None:
+        definition = impact_definition(logical.scope, logical.object_type)
+        identity = (
+            immutable_device_identity(version, prior if paired else None)
+            if definition and definition.family is ObjectFamily.DEVICE
+            else None
+        )
+        if definition and definition.family is ObjectFamily.DEVICE and identity is None:
             gaps.add(
                 "A changed device lacks a consistent immutable MAC, site or type; no device candidate was inferred."
             )
@@ -222,7 +231,7 @@ def compile_change_context(
     return ChangeContext(changes=tuple(changes), omitted_object_count=omitted, gaps=tuple(sorted(gaps)))
 
 
-def _device_identity(
+def immutable_device_identity(
     version: ObjectVersion, prior: ObjectVersion | None
 ) -> tuple[UUID, str, Literal["ap", "switch", "gateway"]] | None:
     """Read identity from immutable configuration, never today's logical-object fields."""

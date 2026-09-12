@@ -276,8 +276,9 @@ bounded page per check. Current organization status, credential identity, budget
 and worker lease are verified before each request. Each published revision pins
 its normalized evidence; repeated checkpoints retain separate immutable artifacts.
 The preview follows only the published root pointer, never a losing worker's
-unpublished artifact. Full MCP journaling, retention cleanup, historical report
-navigation, the AI tool loop and production migration remain future work.
+unpublished artifact. Raw MCP transcript archival, retention cleanup, historical report navigation and
+production migration remain future work. The bounded AI loop and metadata journals
+are described below.
 
 Implementation decisions and rollout gates are recorded in
 [impact-implementation-decisions.md](design/impact-implementation-decisions.md).
@@ -319,7 +320,8 @@ not query permissions or proof of impact; template consumers and physical/servic
 dependencies remain unresolved. The projection always assumes changes effective
 when merge or inheritance semantics are unknown.
 
-The operational catalogue still contains only historical WLAN client-session checks.
+The operational catalogue contains historical WLAN client-session checks and
+concrete changed switch-port snapshots (described below).
 For other changes the agent can describe missing evidence through a summary and open
 questions, while deterministic impact remains unmapped. It does not yet have general
 Mist MCP access, live inventory discovery, port events, OAS retrieval or arbitrary
@@ -330,9 +332,9 @@ them or cannot produce a valid report. The rule accepts production snapshot type
 General context includes at most eight objects and six top-level attributes per
 object, with explicit omission counts. Unknown or conflicting immutable versions
 remain gaps. One 200-device audit still owns one agent and its existing model-call
-budget. New requests use prompt version `impact-investigator.v2`; historical v1
-records remain readable. This extends reasoning context without adding Mist reads;
-unsupported audits can now spend bounded AI calls in `agent_shadow`.
+budget. New requests use prompt version `impact-investigator.v3`; historical v1/v2
+records remain readable. General context alone adds no Mist reads; unsupported audits can spend bounded
+AI calls in `agent_shadow`. Resolved port scopes add checks in both shadow modes.
 
 Each checkpoint allows three model requests; each audit allows 21 requests and
 504,000 reserved input-content bytes. Each request admits at most 24,000 input
@@ -362,3 +364,43 @@ and preview reads exclude those old embedded bodies without deleting stored hist
 Agent-selected checks and the deterministic required sweep share the same bounded
 capability set and collection cache. Agent participation adds no Mist calls; future
 discovery must preserve that property by extending the shared plan.
+
+
+### Concrete switch-port snapshots
+
+Both shadow modes now resolve up to two concrete changed switch ports per audit
+checkpoint from immutable device configurations. The supported containers are
+`port_config` and `port_config_overwrite`; concrete `ge`, `xe` and `et` interfaces
+are admitted. Removed entries are included. Ranges, aggregate interfaces, dynamic
+selectors, profile/template consumers and cross-incarnation device identities
+remain unresolved. Missing baselines assume effective and allow known current
+concrete entries, with a gap for potentially missing removed entries. This is a
+scope resolver, not a rule declaring impact for every changed port attribute.
+
+Each `switch-port-snapshot.v1` check performs exactly one site port-search request,
+filtered to the validated switch MAC and port. The same menu, cache, dispatch
+journal, credential checks and 56-call audit budget apply to model selections and
+the mandatory sweep. Mixed audits may have eight WLAN checks and two port checks
+per checkpoint; budget exhaustion can stop the investigation before the hour ends.
+No query follows a returned neighbor identity, and no pagination link is followed.
+
+The endpoint returns current or most recent state, not historical transitions.
+`window` on this check denotes the investigation interval, not a provider history
+query. Missing observation time stays unknown; collection time cannot replace it.
+Zero power draw and false link/PoE state remain distinct from unavailable values.
+Empty, duplicate or truncated responses remain partial, never inferred port-down
+results. Site, device, port and device type must match the requested scope.
+
+Only normalized state and an audit/port-bound unverified neighbor handle survive.
+LLDP does not establish a managed AP or identify which device consumes PoE. Provider
+names, descriptions and raw neighbor MACs are excluded. The handle grants no checks.
+Port snapshots are pinned to the published revision and shown in the collection
+preview even when the model never requests them; selected snapshots also appear
+under evidence supplied to the agent. They cannot contribute to the WLAN verdict.
+Port-related changes remain unmapped pending historical evidence and evaluation.
+
+Preview compatibility: client counts on agent evidence are nullable for non-client
+checks; `port` holds the separate snapshot. Dispatch `wlan_id` is nullable for port
+checks, which instead require `device_mac` and `port_id`. Existing WLAN records
+remain readable. Impact matching uses registry families; the legacy singular WLAN
+alias is handled centrally, outside rule predicates.

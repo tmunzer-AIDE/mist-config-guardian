@@ -19,7 +19,9 @@ from mist_config_guardian_backend.impact.contracts import (
     WlanRemovalPlan,
     WlanTarget,
 )
+from mist_config_guardian_backend.impact.port_scope import compile_port_targets
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
+from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
 
 _MAX_VERSIONS = 64
 _MAX_TARGETS = 4
@@ -66,7 +68,13 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
             and prior.configuration.get("enabled") is not False
             and version.configuration.get("enabled") is False
         )
-        if logical is None or logical.object_type not in {"wlan", "wlans"} or not (version.is_deleted or disabled):
+        definition = impact_definition(logical.scope, logical.object_type) if logical else None
+        if (
+            logical is None
+            or definition is None
+            or definition.family is not ObjectFamily.WLAN
+            or not (version.is_deleted or disabled)
+        ):
             unmapped.update(f"{object_id}:{field}" for field in fields)
             continue
         if not version.is_deleted:
@@ -85,7 +93,12 @@ def compile_wlan_removal(  # noqa: C901, PLR0913 - explicit per-input fail-safe 
         gaps.add("WLAN target budget reached; remaining WLANs were not checked.")
     if len(unmapped) > _MAX_UNMAPPED:
         gaps.add("Unmapped path display limit reached.")
+    port_targets, port_gaps = compile_port_targets(
+        organization_id=organization_id, audit_id=audit_id, logicals=logicals, before=before, after=after
+    )
+    gaps.update(port_gaps)
     return WlanRemovalPlan(
+        port_targets=port_targets,
         organization_id=organization_id,
         audit_id=audit_id,
         changed_at=changed_at,

@@ -540,7 +540,11 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
     },
     targets: [{ handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222' }],
     checks: [{ check_id: 'wlan-client-sessions.v1', target_handle: 'wlan-handle', captured_at: now,
-      window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' }],
+      window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' },
+      { check_id: 'switch-port-snapshot.v1', target_handle: 'port-handle', captured_at: now,
+        device_mac: 'aabbccddee01', port_id: 'ge-0/0/1', window: { start: now, end: now },
+        state: 'complete', row_count: 1, reason: 'Most recent state only; no transition established.',
+        port: { up: false, poe_on: null, power_draw: 0, observed_at: null, neighbor_handle: 'unverified-neighbor', neighbor_identity: 'unverified' } }],
     agent: { source: 'model_proposal', state: 'complete', reason: '',
       proposal: { summary: 'The available history cannot establish the effect of this change.',
         hypotheses: [{ target_handle: 'wlan-handle', statement: 'Previously connected clients may have been affected.',
@@ -573,6 +577,12 @@ test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async (
   await page.screenshot({ path: info.outputPath('deployment-evidence.png'), fullPage: true });
   await preview.getByText('Collection checks', { exact: false }).click();
   await expect(preview).toContainText('Mist returned HTTP 500.');
+  await expect(preview).toContainText('Link: Off');
+  await expect(preview).toContainText('PoE: Unknown');
+  await expect(preview).toContainText('Time unavailable');
+  await expect(preview).toContainText('Unverified neighbor');
+  await preview.locator('app-port-snapshot').filter({ hasText: 'Most recent port state' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('port-snapshot.png'), fullPage: true });
   await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });
   await preview.getByText('Live collection activity', { exact: true }).click();
   await expect(preview).toContainText('Outcome unknown');
