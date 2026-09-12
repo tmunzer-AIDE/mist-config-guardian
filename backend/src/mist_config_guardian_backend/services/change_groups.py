@@ -187,13 +187,15 @@ def _metric_phrase(metric: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class MetricMovement:
-    """One SLE metric's measured movement across a change group's sessions."""
+    """Worst actual comparison within one metric/scope family, with unique counts."""
 
     metric: str
     baseline: float
     latest: float
     sessions: int
     degraded_sessions: int
+    scope: str = "device"
+    scope_id: str = ""
 
     @property
     def delta(self) -> float:
@@ -585,7 +587,12 @@ def build_metrics(
         ChangeMetricResponse(
             label=_metric_label(movement.metric),
             value=f"{movement.latest:.0f}%",
-            **{"from": f"from {movement.baseline:.0f}%"},
+            **{
+                "from": (
+                    f"from {movement.baseline:.0f}% · worst {movement.scope} {movement.scope_id}; "
+                    f"{movement.degraded_sessions}/{movement.sessions} affected"
+                )
+            },
             severity=movement.severity,
         )
         for movement in banded
@@ -677,9 +684,9 @@ def build_assessment(evidence: GroupEvidenceInput, recovery: RecoveryState) -> s
         return "No monitored metric moved beyond the noise band during the window."
     metric = _metric_phrase(worst.metric).capitalize()
     points = abs(round(worst.delta))
-    noun = evidence.device_noun
     first = (
-        f"{metric} fell {points} points across {worst.degraded_sessions} of {evidence.session_count} monitored {noun}"
+        f"{metric} fell {points} points in the worst measured {worst.scope} scope; "
+        f"{worst.degraded_sessions} of {worst.sessions} measured {worst.scope} scopes degraded"
     )
     if recovery is RecoveryState.UNRECOVERED and evidence.monitored_for is not None:
         first = f"{first} and has not recovered in {format_duration(evidence.monitored_for)}."
@@ -703,10 +710,10 @@ def _competing_clause(evidence: GroupEvidenceInput) -> str:
     site = _site_phrase(evidence.site_labels)
     count = len(evidence.competing_group_ids)
     if not count:
-        return f"no other change group touched {site}, so the regression is attributable to this change group"
+        return f"no competing change was recorded at {site}; timing alone does not establish causation"
     if count == 1:
-        return f"1 other change group touched {site}, so attribution is shared with that change"
-    return f"{count} other change groups touched {site}, so attribution is shared with those changes"
+        return f"1 other change group touched {site}; attribution remains uncertain"
+    return f"{count} other change groups touched {site}; attribution remains uncertain"
 
 
 def _site_phrase(site_labels: Sequence[str]) -> str:
@@ -749,31 +756,45 @@ def build_evidence(
 
 
 def measure_movements(sessions: Sequence[MonitoringSession]) -> tuple[MetricMovement, ...]:
-    """Average each metric's baseline and latest observation across sessions."""
-    totals: dict[str, list[tuple[float, float]]] = {}
+    """Keep actual worst comparisons; never average devices or mix scope families."""
+    scopes: dict[tuple[str, str], dict[str, tuple[float, float]]] = {}
     for session in sessions:
         latest = session.observations[-1] if session.observations else None
         if session.baseline is None or latest is None:
             continue
-        for metric, baseline in session.baseline.values.items():
-            current = latest.values.get(metric)
-            if current is not None:
-                totals.setdefault(metric, []).append((baseline, current))
+        scope = session.baseline.scope
+        scope_id = session.baseline.scope_id or (session.site_id if scope == "site" else session.device_mac)
+        rows = (
+            session.assessment.metrics
+            if session.assessment
+            else evidence_rows(session.baseline, latest, session.relevance_plan)
+        )
+        for row in rows:
+            if not row.selected or not row.comparable or row.baseline is None or row.latest is None:
+                continue
+            entities = scopes.setdefault((row.name, scope), {})
+            pair = (row.baseline, row.latest)
+            previous = entities.get(scope_id)
+            # Repeated site-wide samples must not count once per AP. Conflicting
+            # shared windows retain the worst observation instead of averaging it.
+            if previous is None or pair[1] - pair[0] < previous[1] - previous[0]:
+                entities[scope_id] = pair
     movements = []
-    for metric, pairs in totals.items():
-        baseline = sum(pair[0] for pair in pairs) / len(pairs)
-        current = sum(pair[1] for pair in pairs) / len(pairs)
-        degraded = sum(1 for before, after in pairs if after - before <= TILE_BAND)
+    for (metric, scope), entities in scopes.items():
+        scope_id, (baseline, current) = min(entities.items(), key=lambda item: (item[1][1] - item[1][0], item[0]))
+        degraded = sum(1 for before, after in entities.values() if after - before <= TILE_BAND)
         movements.append(
             MetricMovement(
                 metric=metric,
                 baseline=round(baseline, 2),
                 latest=round(current, 2),
-                sessions=len(pairs),
+                sessions=len(entities),
                 degraded_sessions=degraded,
+                scope=scope,
+                scope_id=scope_id,
             )
         )
-    return tuple(sorted(movements, key=lambda movement: (movement.delta, movement.metric)))
+    return tuple(sorted(movements, key=lambda movement: (movement.delta, movement.metric, movement.scope)))
 
 
 def resolve_recovery_state(
@@ -916,10 +937,18 @@ class ChangeGroupProjector:
         group.occurred_at = _resolve_occurred_at(group, changed_objects, sessions)
 
         movements = measure_movements(sessions)
-        group.impact_severity = worst_severity(session.impact_severity for session in sessions)
+        group.impact_severity = worst_severity(
+            session.assessment.severity if session.assessment else session.impact_severity for session in sessions
+        )
         group.recovery_state = resolve_recovery_state(sessions, movements)
         group.baseline_confidence = resolve_baseline_confidence(sessions)
-        group.degraded_metrics = sorted({metric for session in sessions for metric in session.degraded_metrics})
+        group.degraded_metrics = sorted(
+            {
+                metric
+                for session in sessions
+                for metric in (session.assessment.degraded_metrics if session.assessment else session.degraded_metrics)
+            }
+        )
 
         evidence = await self._collect_evidence(organization_id, group, sessions, movements)
         group.deterministic_assessment = build_assessment(evidence, group.recovery_state)

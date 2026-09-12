@@ -11,7 +11,7 @@ import httpx
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
 from mist_config_guardian_backend.models.monitoring import DeviceType
 from mist_config_guardian_backend.models.organization import MistCloudRegion
-from mist_config_guardian_backend.models.telemetry import DeviceStateObservation
+from mist_config_guardian_backend.models.telemetry import DeviceStateObservation, TelemetrySource
 
 _PAGE_SIZE = 1000
 _MAX_PAGES = 5
@@ -129,39 +129,49 @@ class MistTelemetryClient(AbstractAsyncContextManager["MistTelemetryClient"]):
     ) -> None:
         await self._client.aclose()
 
-    async def capture(self, *, site_id: str, device_mac: str, device_type: DeviceType) -> DeviceStateObservation:
+    async def capture(
+        self,
+        *,
+        site_id: str,
+        device_mac: str,
+        device_type: DeviceType,
+        sources: frozenset[TelemetrySource] | None = None,
+    ) -> DeviceStateObservation:
         """Persist only operational fields, never raw WLAN or device configuration."""
         state = DeviceStateObservation()
         base = f"/api/v1/sites/{site_id}"
         path = f"{base}/stats/devices/{device_id(device_mac)}"
-        jobs = [self._device(state, path, device_type)]
+        tables: dict[str, tuple[str, dict[str, str]]] = {}
+        embedded = {"device"}
         if device_type is DeviceType.AP:
-            jobs.extend(
-                [
-                    self._table(state, "wlans", f"{base}/wlans/derived", {}),
-                    self._table(state, "clients", f"{path}/clients", {}),
-                ]
-            )
+            embedded.add("radios")
+            tables = {"wlans": (f"{base}/wlans/derived", {}), "clients": (f"{path}/clients", {})}
         else:
             now = int(state.captured_at.timestamp())
             window = {"start": str(now - 300), "end": str(now)}
-            jobs.extend(
-                [
-                    self._table(state, "ports", f"{base}/stats/ports/search", {"mac": device_mac}),
-                    self._table(state, "bgp", f"{base}/stats/bgp_peers/search", {"mac": device_mac, **window}),
-                    self._table(state, "ospf", f"{base}/stats/ospf_peers/search", {"mac": device_mac, **window}),
-                ]
-            )
+            tables = {
+                "ports": (f"{base}/stats/ports/search", {"mac": device_mac}),
+                "bgp": (f"{base}/stats/bgp_peers/search", {"mac": device_mac, **window}),
+                "ospf": (f"{base}/stats/ospf_peers/search", {"mac": device_mac, **window}),
+            }
             if device_type is DeviceType.SWITCH:
-                jobs.append(
-                    self._table(state, "clients", f"{base}/wired_clients/search", {"device_mac": device_mac, **window})
-                )
+                tables["clients"] = (f"{base}/wired_clients/search", {"device_mac": device_mac, **window})
+            else:
+                embedded.update({"tunnels", "vpn_peers"})
+        selected: set[str] = set(sources) if sources is not None else embedded | tables.keys()
+        state.errors.update(
+            dict.fromkeys(selected - embedded - tables.keys(), "Unsupported source for this device type.")
+        )
+        jobs = [self._table(state, key, url, params) for key, (url, params) in tables.items() if key in selected]
+        if selected & embedded:
+            jobs.append(self._device(state, path, device_type, selected))
         await asyncio.gather(*jobs)
         return state
 
-    async def _device(self, state: DeviceStateObservation, path: str, kind: DeviceType) -> None:
+    async def _device(self, state: DeviceStateObservation, path: str, kind: DeviceType, selected: set[str]) -> None:
         try:
-            params = {"fields": "tunnels,vpn_peers"} if kind is DeviceType.GATEWAY else {}
+            fields = ",".join(key for key in ("tunnels", "vpn_peers") if key in selected)
+            params = {"fields": fields} if kind is DeviceType.GATEWAY and fields else {}
             response = await self._client.get(path, params=params)
             response.raise_for_status()
             record = response.json()
@@ -174,7 +184,7 @@ class MistTelemetryClient(AbstractAsyncContextManager["MistTelemetryClient"]):
                 if isinstance(value, dict):
                     state.device[key] = _select(value, ["usage", "idle", "user", "system"])
             state.available.append("device")
-            if kind is DeviceType.AP:
+            if kind is DeviceType.AP and "radios" in selected:
                 radios = record.get("radio_stat")
                 if isinstance(radios, dict) and all(isinstance(value, dict) for value in radios.values()):
                     state.radios = [
@@ -185,7 +195,8 @@ class MistTelemetryClient(AbstractAsyncContextManager["MistTelemetryClient"]):
                     state.errors["radios"] = "RF statistics unavailable for this device."
             if kind is DeviceType.GATEWAY:
                 for key in ("tunnels", "vpn_peers"):
-                    self._store_rows(state, key, record.get(key))
+                    if key in selected:
+                        self._store_rows(state, key, record.get(key))
         except (httpx.HTTPError, ValueError):
             state.errors["device"] = "Device statistics unavailable; check Mist permissions and connectivity."
 

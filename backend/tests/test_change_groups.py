@@ -666,8 +666,10 @@ async def test_rebuild_writes_the_designs_evidence_lines() -> None:
     assert labels[2] == "Competing changes at this site: none"
     assert labels[3].startswith("Baseline confidence: high · ")
     assert group.deterministic_assessment is not None
-    assert "Capacity fell 29 points across 6 of 6 monitored APs" in group.deterministic_assessment
-    assert "no other change group touched Seattle-DC" in group.deterministic_assessment
+    assert "Capacity fell 29 points in the worst measured site scope" in group.deterministic_assessment
+    assert "1 of 1 measured site scopes degraded" in group.deterministic_assessment
+    assert "no competing change was recorded at Seattle-DC" in group.deterministic_assessment
+    assert "timing alone does not establish causation" in group.deterministic_assessment
     assert group.summary is not None
     assert group.summary.startswith("j.mercer updated 2 objects at Seattle-DC.")
     assert "6 APs entered monitoring." in group.summary
@@ -875,8 +877,8 @@ async def test_summary_renders_the_designs_metric_tiles() -> None:
     assert card.device_count == 6
     assert card.is_mine is True
     tiles = [(tile.label, tile.value, tile.from_, tile.severity.value) for tile in card.metrics]
-    assert tiles[0] == ("CAPACITY", "12%", "from 41%", "critical")
-    assert tiles[1] == ("TIME TO CONNECT", "84%", "from 91%", "warning")
+    assert tiles[0] == ("CAPACITY", "12%", "from 41% · worst site site-seattle; 1/1 affected", "critical")
+    assert tiles[1] == ("TIME TO CONNECT", "84%", "from 91% · worst site site-seattle; 1/1 affected", "warning")
     assert tiles[2][0] == "SAMPLES"
     assert tiles[3] == ("INCIDENTS", "None", "", "none")
 
@@ -1164,7 +1166,7 @@ async def test_list_endpoint_returns_the_page_and_total() -> None:
     item = body["items"][0]
     assert item["impact_label"] == f"CRITICAL {MINUS_SIGN}29"
     assert item["devices_label"] == "6 APs · Seattle-DC"
-    assert item["metrics"][0]["from"] == "from 41%"
+    assert item["metrics"][0]["from"] == "from 41% · worst site site-seattle; 1/1 affected"
     assert item["is_mine"] is True
 
 
@@ -1653,3 +1655,37 @@ def test_operational_outage_is_not_reported_recovered_without_sle_movements():
     session.peak_impact_severity = ImpactSeverity.CRITICAL
     session.impact_severity = ImpactSeverity.NONE
     assert resolve_recovery_state([session], ()) is RecoveryState.RECOVERED
+
+
+def test_movements_keep_worst_actual_device_and_unique_affected_count():
+    sessions = [_session(mac=str(i), baseline={"coverage": 99}, latest={"coverage": 99}) for i in range(20)]
+    down = _session(mac="down", baseline={"coverage": 99}, latest={"coverage": 0}, severity=ImpactSeverity.CRITICAL)
+    sessions.append(down)
+    for session in sessions:
+        session.baseline.scope = "device"
+        session.baseline.scope_id = session.device_mac
+        for sample in session.observations:
+            sample.scope = "device"
+            sample.scope_id = session.device_mac
+    movements = measure_movements([*sessions, down])
+    assert len(movements) == 1
+    worst = movements[0]
+    assert (worst.baseline, worst.latest, worst.delta) == (99, 0, -99)
+    assert (worst.sessions, worst.degraded_sessions, worst.scope_id) == (21, 1, "down")
+    assert resolve_recovery_state(sessions, movements) == RecoveryState.UNRECOVERED
+
+
+def test_movements_keep_site_and_device_scope_separate_and_reject_scope_mismatch():
+    site = _session(mac="site-copy", baseline={"coverage": 99}, latest={"coverage": 99})
+    device = _session(mac="ap", baseline={"coverage": 99}, latest={"coverage": 0})
+    device.baseline.scope = "device"
+    device.baseline.scope_id = "ap"
+    for sample in device.observations:
+        sample.scope = "device"
+        sample.scope_id = "ap"
+    movements = measure_movements([site, device])
+    assert [(m.scope, m.latest) for m in movements] == [("device", 0), ("site", 99)]
+    device.observations[-1].scope_id = "other-ap"
+    assert [m.scope for m in measure_movements([site, device])] == ["site"]
+    site.relevance_plan = RelevancePlan(metrics=[])
+    assert measure_movements([site]) == ()

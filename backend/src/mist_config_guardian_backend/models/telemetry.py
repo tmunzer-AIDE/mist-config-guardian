@@ -1,10 +1,13 @@
 """Allowlisted operational evidence; configuration secrets never enter these records."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.models.base import utc_now
+
+TelemetrySource = Literal["device", "radios", "wlans", "clients", "ports", "bgp", "ospf", "tunnels", "vpn_peers"]
 
 
 class DeviceStateObservation(BaseModel):

@@ -47,10 +47,18 @@ described as implemented. The detailed contracts remain in the linked design doc
 
 - `17a29e5`: evidence-state contract, relevance evaluator seam, persisted device
   assessment and site/device UI projections; design and MCP capability notes.
-- Confidence follow-up: count only complete, selected, comparable observations;
+- `4a53177`, confidence follow-up: count only complete, selected, comparable observations;
   latest failed comparison keeps confidence low. Eight regression cases; 914
   backend tests passed, 20 skipped; lint/format/type/OpenAPI checks passed.
-- Next: WLAN-removal slice and projection consistency. Agent runtime, live report
+- Projection and collection follow-up: actual worst before/after pairs remain
+  separate for site/device scopes, repeated scope observations are deduplicated,
+  affected counts drive recovery, and legacy prose no longer infers causation
+  from absence of competing audits. Typed telemetry source selection can omit
+  irrelevant endpoints; existing callers retain broad capture until migration.
+  918 backend tests passed, 20 skipped; Ruff lint and source type checks passed.
+  The repository-wide format check also identifies one pre-existing formatting
+  difference in `api/routes/auth.py`, outside this patch.
+- Next: WLAN-removal slice. Agent runtime, live report
   rendering and the remaining three rules are not yet implemented.
 
 ## Gates that require external evidence
