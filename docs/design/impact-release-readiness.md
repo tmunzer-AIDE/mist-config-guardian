@@ -52,12 +52,25 @@ have established whether the new scoped coverage misses real outages.
 ## Acceptance and remaining prerequisites
 
 An administrator reviews 20–50 actual historical audits with a rationale and explicit
-human attestation against an exact published report. A fixed audit-hash split selects
-the held-out subset; it must contain at least three critical outages and three benign
+human attestation against an exact published report. A publicly computable audit hash selects
+a deterministic 25% subsample of administrator-selected audits; it must contain at least three critical outages and three benign
 changes. The UI reports TP/FN/FP/TN, critical misses, abstentions, precision, recall and
-specificity. Misses, false alarms, unresolved evidence and held-out abstentions fail;
+specificity. Misses, false alarms, unresolved evidence and scored-subsample abstentions fail;
 ties do not pass. At this sample size these are conservative case counts, not statistical
-calibration or probability estimates. Continued adjudication is required after release.
+calibration or probability estimates; denominators may be single digits.
+
+This is **not an independent held-out set**: administrators choose the audits and can
+compute membership before submitting. Sample composition can therefore be selected
+against the scored subset. There is no deployment/incident grouping; a change and its
+rollback can fall on opposite sides. The API retains the compatibility names `held_out`
+and `adjudicated_held_out_cases`, but `eligible` means only that diagnostic count criteria
+passed, not that independent validation or production approval has been established.
+
+Before production validation, implement deployment/incident grouping (including
+rollbacks), freeze the eligible cohort and group membership before scoring, and separate
+selection/development from independent evaluation. Record the evaluation protocol and
+prevent iterative sample substitution against results. These controls are not implemented
+by the current hash split. Continued adjudication is also required after release.
 
 Deterministic replay re-evaluates retained typed evidence and the published history
 chain without Mist or model calls. Labels bind to evidence-chain and policy hashes;
@@ -67,8 +80,9 @@ activates production automatically.
 
 **No real acceptance labels were submitted during implementation.** Remaining work:
 
-1. Run the reviewed shadow build on representative real changes and independently
-   adjudicate them, including benign changes and actual outages.
+1. Implement and review the independent evaluation controls above, then run the
+   shadow build on the frozen representative cohort and independently adjudicate
+   it, including benign changes and actual outages.
 2. Resolve any failures or unsupported cases revealed by that evaluation. Complete
    the production group-consumer migration and notification publication boundary,
    then retire broad attribution collection in a separately reviewed release.

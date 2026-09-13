@@ -60,6 +60,7 @@
           },
           "eligible": {
             "default": false,
+            "description": "Diagnostic count criteria passed; not independent validation or production approval.",
             "title": "Eligible",
             "type": "boolean"
           },
@@ -75,6 +76,7 @@
           },
           "held_out": {
             "default": 0,
+            "description": "Compatibility field: count in the public audit-hash subsample, not a blinded held-out set.",
             "title": "Held Out",
             "type": "integer"
           },

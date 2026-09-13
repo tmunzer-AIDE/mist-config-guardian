@@ -29,11 +29,12 @@ interface Acceptance {
       <button class="cg-btn" type="button" (click)="read()" [disabled]="busy()">Check acceptance counts</button>
       @if (message()) { <p role="status">{{ message() }}</p> }
       @if (result(); as result) {
-        <p><strong>{{ result.eligible ? 'Acceptance set passed · manual release still required' : 'Promotion blocked' }}</strong></p>
-        <p>{{ result.total }} reviewed changes · {{ result.held_out }} in the fixed held-out subset.</p>
+        <p><strong>{{ result.eligible ? 'Diagnostic count criteria passed · independent validation still required' : 'Promotion blocked' }}</strong></p>
+        <p>{{ result.total }} reviewed changes · {{ result.held_out }} in the public audit-hash subsample.</p>
+        <p>Administrators select the audits and can predict subset membership. Related changes and rollbacks are not grouped. This is not an independent held-out evaluation or production approval.</p>
         <p>TP {{ result.true_positive }} · FN {{ result.false_negative }} · FP {{ result.false_positive }} · TN {{ result.true_negative }}
           · Critical misses {{ result.critical_misses }} · Abstentions {{ result.abstentions }}</p>
-        <p>Recall {{ percent(result.recall) }} · Precision {{ percent(result.precision) }} · Specificity {{ percent(result.specificity) }}. Small samples do not establish statistical calibration.</p>
+        <p>Recall {{ percent(result.recall) }} · Precision {{ percent(result.precision) }} · Specificity {{ percent(result.specificity) }}. These rates may have single-digit denominators and do not establish statistical calibration.</p>
         <ul>@for (reason of result.reasons; track $index) { <li>{{ reason }}</li> }</ul>
       }
     </details>

@@ -47,7 +47,8 @@ async def test_maximal_mixed_audit_publishes_all_ten_checks_once(monkeypatch, ht
     data = mixed_inputs()
     use_data(service, data)
     menu = capabilities(compile_wlan_removal(**data), LATER)
-    assert len(menu) == 10  # Independent regression boundary, not derived from the cap under test.
+    # Original mixed-plan scenario; test_impact_auth_evidence guards the full 22-check boundary.
+    assert len(menu) == 10
     if mode == "agent_shadow":
 
         def respond(request):

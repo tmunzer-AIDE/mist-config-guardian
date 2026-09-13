@@ -1,4 +1,4 @@
-"""Conservative held-out acceptance counts; no synthetic or model supplied ground truth."""
+"""Diagnostic counts on a public audit-hash subsample, not an independent held-out evaluation."""
 
 from hashlib import sha256
 from importlib.resources import files
@@ -44,6 +44,7 @@ def policy_hash() -> str:
 
 
 def held_out(audit_id: str) -> bool:
+    """Compatibility name: publicly computable membership, with no deployment grouping or blinding."""
     return int(sha256(f"impact-holdout.v1:{audit_id}".encode()).hexdigest()[:8], 16) % 4 == 0
 
 
@@ -56,9 +57,15 @@ class AcceptanceCase(Contract):
 
 class AcceptanceResult(Contract):
     policy_hash: str
-    eligible: bool = False
+    eligible: bool = Field(
+        default=False,
+        description="Diagnostic count criteria passed; not independent validation or production approval.",
+    )
     total: int = 0
-    held_out: int = 0
+    held_out: int = Field(
+        default=0,
+        description="Compatibility field: count in the public audit-hash subsample, not a blinded held-out set.",
+    )
     true_positive: int = 0
     false_negative: int = 0
     false_positive: int = 0
@@ -94,7 +101,9 @@ def acceptance(cases: list[AcceptanceCase], *, fingerprint: str) -> AcceptanceRe
     positives = [c for c in held if c.label in {"critical_outage", "noncritical_outage"}]
     negatives = [c for c in held if c.label == "benign"]
     if sum(c.label == "critical_outage" for c in positives) < MIN_HELD_OUT_CLASS or len(negatives) < MIN_HELD_OUT_CLASS:
-        reasons.append("The fixed held-out subset requires at least three critical outages and three benign changes.")
+        reasons.append(
+            "The public audit-hash subsample requires at least three critical outages and three benign changes."
+        )
     tp = sum(c.valid and c.predicted in {"warning", "critical"} for c in positives)
     critical_misses = sum(
         c.label == "critical_outage" and (not c.valid or c.predicted != "critical") for c in positives
@@ -104,7 +113,7 @@ def acceptance(cases: list[AcceptanceCase], *, fingerprint: str) -> AcceptanceRe
     tn = sum(c.valid and c.predicted == "none" for c in negatives)
     abstentions = sum(not c.valid or c.predicted == "info" or c.label == "uncertain" for c in held)
     if fn or fp or abstentions or critical_misses:
-        reasons.append("Held-out misses, false alarms or abstentions fail closed; ties do not pass.")
+        reasons.append("Scored-subsample misses, false alarms or abstentions fail closed; ties do not pass.")
     if any(c.label == "benign" and c.predicted == "critical" for c in cases):
         reasons.append("A false critical attribution exists in the adjudicated set.")
     return AcceptanceResult(

@@ -98,7 +98,9 @@ described as implemented. The detailed contracts remain in the linked design doc
 ## Gates that require external evidence
 
 - Human labels: 20–50 historical changes with a held-out set grouped by deployment
-  or outage, including benign and critical cases. No fabricated labels.
+  or outage, including benign and critical cases. This is an unmet production-validation
+  requirement: the current public per-audit hash implements neither grouping nor
+  blinding. No fabricated labels.
 - Runtime connection: verify Guardian worker access independently of the desktop
   Mist MCP connection, including allowed historical WLAN/client queries.
 - Numeric confidence/impact scores remain deferred; bands and evidence explanations
@@ -997,7 +999,8 @@ of adding that read path.
   sample inflation; changed publications reject stale submissions. Agent tools
   cannot create labels. Replay follows the full published parent chain and hashes
   its retained plan/evidence/assessment; missing or altered evidence fails closed.
-- Select a fixed 25% held-out split by audit hash. Require 20–50 reviewed audits,
+- Select a fixed 25% diagnostic subsample by public audit hash; this is not
+  independent held-out validation (see the correction below). Require 20–50 reviewed audits,
   at least three held-out critical and three benign cases, and show TP/FN/FP/TN,
   critical severity misses, abstentions, precision, recall and specificity.
   Detection metrics use warning-or-critical as positive; critical severity misses
@@ -1083,3 +1086,18 @@ are summarized in that handoff, rather than implied by historical “next” lis
 - Broad collection retirement follows that migration, with rollback retaining the
   legacy mode and historical assessments. It is not silently removed from the current
   shadow comparison, and remains an explicit acceptance-dependent implementation task.
+
+## 2026-09-13 — Acceptance sampling review correction
+
+- The public per-audit hash is a reproducible scoring subsample of administrator-selected
+  audits, not a blinded held-out set. Zero-tolerance count criteria cannot prevent
+  selection against a known subset. UI, API descriptions and release notes now say so.
+- Deployment/incident grouping remains unimplemented. A change and its rollback may
+  split independently. Before production validation, add a frozen group-aware cohort,
+  a selection/evaluation separation protocol and controls against iterative substitution.
+  Merely salting the current hash would not establish independence.
+- Keep compatibility field names and current diagnostic arithmetic, without presenting
+  `eligible` as production approval. Small, potentially single-digit denominators remain
+  prominent. No production mode is enabled by this correction.
+- The ten-check mixed test preserves its original scenario; the independent maximum
+  boundary moved to the twenty-two-check all-domain test and its overflow assertion.
