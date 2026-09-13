@@ -12,8 +12,10 @@ from pydantic import AwareDatetime, Field, TypeAdapter
 from mist_config_guardian_backend.impact.contracts import (
     ApAdjacency,
     ApEvidence,
+    AttributeDocumentation,
     AuthEvidence,
     Contract,
+    DocumentationEvidence,
     InvestigationEvidence,
     ManagedNeighbor,
     NeighborEvidence,
@@ -35,7 +37,7 @@ MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
-PROMPT_VERSION = "impact-investigator.v6"
+PROMPT_VERSION = "impact-investigator.v7"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -50,6 +52,7 @@ class CheckCapability(Contract):
         "switch-port-events.v1",
         "wlan-auth-events.v1",
         "neighbor-ap-statistics.v1",
+        "mist-docs-attribute.v1",
     ] = "wlan-client-sessions.v1"
     target_handle: Handle
     phase: Literal["baseline", "followup", "snapshot", "history"]
@@ -122,6 +125,16 @@ def capabilities(plan: WlanRemovalPlan, as_of: datetime) -> tuple[CheckCapabilit
             for target in plan.neighbor_targets
             if plan.neighbor_statistics
         )
+        + tuple(
+            CheckCapability(
+                ref=sha256(f"{target.handle}:documentation:{as_of.isoformat()}".encode()).hexdigest(),
+                check_id="mist-docs-attribute.v1",
+                target_handle=target.handle,
+                phase="snapshot",
+                window=Window(start=plan.changed_at, end=as_of),
+            )
+            for target in plan.documentation_targets
+        )
     )
 
 
@@ -139,16 +152,29 @@ class EvidenceView(Contract):
     auth_successes: int | None = Field(default=None, ge=0)
     auth_failures: int | None = Field(default=None, ge=0)
     omitted_events: int = Field(default=0, ge=0)
+    documentation: AttributeDocumentation | None = None
     ap_adjacency: ApAdjacency | None = None
     managed_neighbor: ManagedNeighbor | None = None
     response_error: PortResponseError | None = None
     gap: str = Field(max_length=500)
 
 
-def evidence_view(check: CheckCapability, reading: InvestigationEvidence, changed_at: datetime) -> EvidenceView:
+def evidence_view(  # noqa: PLR0911 - one typed projection per evidence family
+    check: CheckCapability, reading: InvestigationEvidence, changed_at: datetime
+) -> EvidenceView:
     if (reading.check_id, reading.target_handle, reading.window) != (check.check_id, check.target_handle, check.window):
         msg = "Evidence does not match the authorized check"
         raise ValueError(msg)
+    if isinstance(reading, DocumentationEvidence):
+        return EvidenceView(
+            ref=check.ref,
+            target_handle=check.target_handle,
+            window=check.window,
+            state=reading.state,
+            captured_at=reading.captured_at,
+            documentation=reading.rows[0] if reading.rows else None,
+            gap=reading.reason,
+        )
     if isinstance(reading, ApEvidence):
         return EvidenceView(
             ref=check.ref,
@@ -282,6 +308,7 @@ class AgentCheckpoint(Contract):
         "impact-investigator.v4",
         "impact-investigator.v5",
         "impact-investigator.v6",
+        "impact-investigator.v7",
     ] = PROMPT_VERSION
     source: Literal["model_proposal"] = "model_proposal"
     skills: tuple[SkillReference, ...] = Field(default=(), max_length=4)
@@ -315,6 +342,7 @@ class ModelRequestRecord(Contract):
         "impact-investigator.v4",
         "impact-investigator.v5",
         "impact-investigator.v6",
+        "impact-investigator.v7",
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)

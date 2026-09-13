@@ -28,13 +28,32 @@ also opens in a full-screen dialog; Escape returns to the inline view and preser
 the scroll position. Protected values remain redacted, so identical placeholders
 are not presented as confirmed raw-text changes.
 
-## Timing
+## Audit investigation status
+
+The bounded audit engine is implemented for opt-in `shadow` and `agent_shadow`
+comparison. Production remains `legacy`. In either shadow mode the old AI narrator
+is suppressed; only `agent_shadow` runs the new bounded investigator. One audit owns
+one investigation, including changes deployed to many devices. Configured-device
+receipts are deployment context, not proof of impact or an expected-fleet denominator.
+
+The current domains are WLAN removal/disable, selected WLAN authentication changes,
+concrete switch-port availability and PoE changes. Unsupported changes stay unmapped.
+Typed reports contain impact/confidence bands, current and historical peak impact,
+source evidence tables/charts/timelines, gaps and scoped device associations. The
+optional topology overlay does not change live device health. Logs and revision history
+remain separately inspectable; human adjudication never runs through the agent.
+
+See [release readiness](design/impact-release-readiness.md) for exact coverage,
+budgets and the acceptance-dependent production migration. The timing and collection
+behavior below describes the retained legacy device-monitoring path.
+
+## Legacy timing
 
 Impact assessments now persist the verdict, evidence coverage, relevance plan and
 per-metric comparison together. API views read that result; older sessions use one
 explicit compatibility projection. Scalar severity/summary fields remain mirrors
 for existing indexes and clients. Current monitoring passes `legacy_all`, preserving
-the existing evidence selection until audit-specific rules are implemented.
+the existing evidence selection while audit-specific rules run in shadow comparison.
 
 Metric rows include the union of planned and recorded metric identities, including
 failed or unsampled metrics. Each side records its evidence state and nullable

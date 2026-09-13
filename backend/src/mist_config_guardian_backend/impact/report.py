@@ -12,6 +12,7 @@ from mist_config_guardian_backend.impact.contracts import (
     ApEvidence,
     AuthEvidence,
     Contract,
+    DocumentationEvidence,
     InvestigationEvidence,
     PortEvidence,
     PortHistoryEvidence,
@@ -284,6 +285,16 @@ def _dataset(index: int, reading: InvestigationEvidence) -> EvidenceDataset:
             ("PoE enabled", None if row.poe_on is None else str(row.poe_on)),
             ("Power draw (W)", row.power_draw),
             ("Observed at", row.observed_at.isoformat() if row.observed_at else None),
+        ]
+    elif isinstance(reading, DocumentationEvidence) and reading.rows:
+        doc = reading.rows[0]
+        rows = [
+            ("Attribute", f"{doc.schema_name}.{doc.attribute}"),
+            ("Type", doc.value_type),
+            ("Description", doc.description),
+            ("Source pointer", doc.source_pointer),
+            ("OAS version", doc.source_version),
+            ("Corpus SHA-256", doc.corpus_hash),
         ]
     elif isinstance(reading, ApEvidence) and reading.rows:
         ap = reading.rows[0]

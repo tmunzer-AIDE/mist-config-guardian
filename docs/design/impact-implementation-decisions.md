@@ -1034,16 +1034,52 @@ of adding that read path.
   Prompt v6 resolves repeated observation targets through their capability refs,
   retaining full identities in immutable artifacts and the 24 KB model-input cap.
 
-## Next implementation queue
+## 2026-09-13 — Bounded pinned attribute knowledge
 
-1. Build on managed AP membership with port/PoE event history and independently
-   verified physical dependencies. Keep one investigator per audit and the same bounded
-   capability plan for the agent and mandatory sweep.
-2. Expand reusable resolvers and collectors as needed, starting with targeted
-   port/PoE event history and physical dependencies. Add regression scenarios
-   and domain skills; avoid requiring a bespoke rule for every attribute.
-3. Complete the common report/topology integration and retention cleanup; add
-   bounded OAS retrieval for demonstrated knowledge gaps. Build operator
-   adjudication/replay before promotion.
-4. Promote all enumerated consumers, including notifications, to the same audit
-   assessment revision and retire broad per-device collection after acceptance.
+- Ship a library consumed by the existing capability collector, not an independent
+  MCP service. The corpus contains four hand-reviewed OAS attribute fixtures:
+  switch BGP/OSPF configuration and WLAN identity/schedule. It records OAS version,
+  whole-source SHA-256, source pointers and a separately verified corpus hash.
+  Unknown types/references stay unknown; no recursive or live reference fetch occurs.
+- Resolve at most two document handles from immutable change-context attributes,
+  using registry object families. The agent selects only existing capability refs;
+  there is no free-text search, URL, filename, cursor or arbitrary entity argument.
+  The immutable documentation evidence cannot enter any terminal impact evaluator
+  or serve as an agent hypothesis target. It supports explanations and open questions.
+- Each executed lookup reserves the same audit budget and journal slot as an operational
+  check. Repeated requests within a checkpoint use the shared cache and consume no
+  additional check reservation; model requests still consume their own budget. Fresh lease/credentials are required before local lookup.
+  Documentation records have no site/device identity or HTTP status by construction.
+- Maximum checkpoint evidence is twenty-two (twenty operational plus two local
+  lookups). The 56-call budget and 24 KB model-input limit remain unchanged.
+  Prompt v7 omits repeated provenance hashes from model-visible definitions while
+  retaining complete source metadata in report artifacts and operator tables.
+- Keep an external MCP adapter deferred until an external consumer needs it. The
+  library is the application consumer's interface and avoids a second authentication,
+  deployment and logging surface. Updating fixtures requires reviewing changed OAS
+  fields and replacing the content hash; mismatched assets fail closed.
+
+## 2026-09-13 — Completion and production boundary
+
+The bounded v1 implementation queue is complete. See [release readiness](impact-release-readiness.md)
+for the current consumer map, operational limits, validation and remaining release prerequisites.
+Earlier sections record decisions at their original milestones; current limits and support
+are summarized in that handoff, rather than implied by historical “next” lists.
+
+- Keep the three existing mutually exclusive modes. Both shadow modes suppress the
+  legacy AI narrator; only `agent_shadow` invokes the bounded investigator. Legacy
+  deterministic device collection remains for comparison until genuine acceptance.
+- Production audit routing is deliberately not exposed as an unused activation flag.
+  Human acceptance is evidence for a later release, not permission for this runtime
+  to change notification, filtering or aggregate semantics automatically.
+- Promote the entire group-consumer set together after acceptance: Changes and its
+  filters/recovery, Overview counts, Search and notifications must share the published
+  audit projection and provenance. Keep device health and historical views distinct.
+- Adopt notification deduplication by organization/audit/policy and observed peak band
+  when implementing promotion. Repeated checkpoints at the same peak must not re-alert;
+  a newly higher observed peak may alert once. Unknown evidence never emits recovery.
+  Recovered current service does not erase a previously observed peak. Notification
+  delivery and persisted group projection need one durable publication/outbox boundary.
+- Broad collection retirement follows that migration, with rollback retaining the
+  legacy mode and historical assessments. It is not silently removed from the current
+  shadow comparison, and remains an explicit acceptance-dependent implementation task.

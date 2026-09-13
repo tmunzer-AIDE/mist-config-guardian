@@ -253,19 +253,20 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceView"
             },
-            "maxItems": 20,
+            "maxItems": 22,
             "title": "Observations",
             "type": "array"
           },
           "prompt_version": {
-            "default": "impact-investigator.v6",
+            "default": "impact-investigator.v7",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
               "impact-investigator.v3",
               "impact-investigator.v4",
               "impact-investigator.v5",
-              "impact-investigator.v6"
+              "impact-investigator.v6",
+              "impact-investigator.v7"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -1017,6 +1018,88 @@
         ],
         "title": "ApprovalStatus",
         "type": "string"
+      },
+      "AttributeDocumentation": {
+        "additionalProperties": false,
+        "properties": {
+          "attribute": {
+            "maxLength": 64,
+            "title": "Attribute",
+            "type": "string"
+          },
+          "corpus_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Corpus Hash",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 240,
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "enum": [
+              "switch.bgp_config",
+              "switch.ospf_config",
+              "wlan.ssid",
+              "wlan.schedule"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "pattern": "^#/components/schemas/[a-zA-Z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "schema_name": {
+            "maxLength": 64,
+            "title": "Schema Name",
+            "type": "string"
+          },
+          "source_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "source_pointer": {
+            "maxLength": 160,
+            "pattern": "^#/components/schemas/[a-zA-Z0-9_]+/properties/[a-zA-Z0-9_]+$",
+            "title": "Source Pointer",
+            "type": "string"
+          },
+          "source_version": {
+            "maxLength": 40,
+            "title": "Source Version",
+            "type": "string"
+          },
+          "value_type": {
+            "maxLength": 32,
+            "title": "Value Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schema_name",
+          "attribute",
+          "value_type",
+          "description",
+          "source_pointer",
+          "corpus_hash",
+          "source_hash",
+          "source_version"
+        ],
+        "title": "AttributeDocumentation",
+        "type": "object"
       },
       "AuditImpactSummary": {
         "description": "An audit's shadow result; never substitutes for production severity.",
@@ -1878,7 +1961,7 @@
               "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             },
-            "maxItems": 20,
+            "maxItems": 22,
             "minItems": 1,
             "title": "Checks",
             "type": "array"
@@ -2811,7 +2894,8 @@
               "neighbor-ap-inventory.v1",
               "switch-port-events.v1",
               "wlan-auth-events.v1",
-              "neighbor-ap-statistics.v1"
+              "neighbor-ap-statistics.v1",
+              "mist-docs-attribute.v1"
             ],
             "title": "Check Id",
             "type": "string"
@@ -2827,6 +2911,23 @@
               }
             ],
             "title": "Device Mac"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "enum": [
+                  "switch.bgp_config",
+                  "switch.ospf_config",
+                  "wlan.ssid",
+                  "wlan.schedule"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
           },
           "finished_at": {
             "anyOf": [
@@ -2906,9 +3007,16 @@
             "title": "Row Count"
           },
           "site_id": {
-            "format": "uuid",
-            "title": "Site Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Id"
           },
           "source_dispatch_id": {
             "anyOf": [
@@ -2959,7 +3067,6 @@
           "generation",
           "candidate_revision",
           "target_handle",
-          "site_id",
           "window",
           "reserved_at"
         ],
@@ -3353,6 +3460,16 @@
               }
             ],
             "title": "Captured At"
+          },
+          "documentation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttributeDocumentation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "gap": {
             "maxLength": 500,
@@ -3909,7 +4026,7 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceDataset"
             },
-            "maxItems": 20,
+            "maxItems": 22,
             "title": "Datasets",
             "type": "array"
           },
@@ -4756,14 +4873,15 @@
             "type": "integer"
           },
           "prompt_version": {
-            "default": "impact-investigator.v6",
+            "default": "impact-investigator.v7",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
               "impact-investigator.v3",
               "impact-investigator.v4",
               "impact-investigator.v5",
-              "impact-investigator.v6"
+              "impact-investigator.v6",
+              "impact-investigator.v7"
             ],
             "title": "Prompt Version",
             "type": "string"

@@ -43,8 +43,23 @@ describe('Dispatch log', () => {
       records: [{ ...reserved, check_id: 'neighbor-ap-inventory.v1', wlan_id: null,
         source_dispatch_id: 'source-port-attempt' }] });
     fixture.detectChanges();
-    expect(fixture.nativeElement.textContent).toContain('AP inventory · Source attempt source-port-attempt');
+    expect(fixture.nativeElement.textContent).toContain('AP check · Source attempt source-port-attempt');
     expect(fixture.nativeElement.textContent).not.toContain('Switch');
+  });
+
+  it('identifies local documentation without inventing a site or HTTP response', async () => {
+    await TestBed.configureTestingModule({ imports: [DispatchLogComponent] }).compileComponents();
+    const fixture = TestBed.createComponent(DispatchLogComponent);
+    fixture.componentRef.setInput('log', { source: 'live_investigation_root', unlogged_reservations: 0,
+      records: [{ ...reserved, check_id: 'mist-docs-attribute.v1', site_id: null, wlan_id: null,
+        document_id: 'switch.bgp_config', state: 'complete', response_bytes: 200, row_count: 1 }] });
+    fixture.detectChanges();
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Pinned OAS · switch.bgp_config');
+    expect(text).toContain('Local library · Bytes 200');
+    expect(text).not.toContain('Site ');
+    expect(text).not.toContain('HTTP Unknown');
+    expect(text).not.toContain('Switch');
   });
 
 });

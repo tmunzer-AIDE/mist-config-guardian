@@ -93,9 +93,9 @@ async def test_maximal_mixed_audit_publishes_all_ten_checks_once(monkeypatch, ht
     assert mutation["$set"]["report_id"] == artifact.id
     assert mutation["$set"]["revision"] == root.revision + 1
     assert mutation["$set"]["next_poll_at"] > LATER
-    with pytest.raises(ValidationError, match="at most 20"):
+    with pytest.raises(ValidationError, match="at most 22"):
         InvestigationRevision.model_validate(
-            {**artifact.model_dump(), "evidence": [*artifact.evidence, *artifact.evidence, artifact.evidence[0]]}
+            {**artifact.model_dump(), "evidence": [*artifact.evidence, *artifact.evidence, *artifact.evidence[:3]]}
         )
 
 

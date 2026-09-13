@@ -653,3 +653,56 @@ test('shared shadow projection stays distinct from production in Changes and Ove
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('shadow-overview-mobile.png'), fullPage: true });
 });
+
+test('structured impact report keeps historical peak, source values and human gate distinct', async ({ page }, info) => {
+  const section = { state: 'partial', explanation: 'Only bounded evidence is available.' };
+  const report = { schema_version: 1, investigation_id: 'i1', audit_id: 'audit0', revision: 2,
+    generated_at: now, evidence_as_of: now, peak_impact: 'critical', peak_revision: 1, peak_confidence: 'medium',
+    current_impact: 'info', confidence: 'low', history_complete: true, coverage: 'partial', attribution: 'plausible',
+    sections: Object.fromEntries(['summary','change','scope','findings','evidence','timeline','context','gaps_and_next_checks'].map(key => [key, section])),
+    impacted_devices: [{ device_mac: '001122aabbcc', site_id: 'site1', role: 'serving_affected_clients', service: 'wlan_sessions',
+      target_handle: 'target', port_id: null, impact: 'warning', current_impact: 'info', confidence: 'low', attribution: 'plausible', device_failure: 'not_established' }],
+    omitted_device_impacts: 0, device_coverage: 'observed_only', gaps: ['Current collection failed. Earlier observed impact remains recorded.'],
+    datasets: [{ id: 'evidence-0', check_id: 'wlan-client-sessions.v1', target_handle: 'target',
+      window: { start: now, end: now }, captured_at: now, state: 'partial', title: 'Observed client sample', kind: 'bar',
+      columns: ['Serving AP', 'Clients'], rows: [['001122aabbcc', 3], ['001122aabbdd', 0]], omitted_rows: 0,
+      explanation: 'Counts describe observed clients, not the expected fleet.' }],
+  };
+  const previous = { ...report, revision: 1, current_impact: 'critical' };
+  await page.route('**/investigation/history', route => route.fulfill({ json: {
+    investigation_id: 'i1', published_revision: 2, complete: true, reports: [report, previous], gaps: [],
+  } }));
+  await page.route('**/investigation/acceptance', route => route.fulfill({ json: {
+    eligible: false, total: 0, held_out: 0, true_positive: 0, false_negative: 0, false_positive: 0, true_negative: 0,
+    critical_misses: 0, abstentions: 0, recall: null, precision: null, specificity: null,
+    reasons: ['Adjudicate 20 to 50 historical changes before promotion.'],
+  } }));
+  await page.route('**/change-groups/*/investigation', route => route.fulfill({ json: {
+    mode: 'shadow', id: 'i1', audit_id: 'audit0', status: 'completed', revision: 2,
+    changed_at: now, expires_at: now, calls_used: 4, calls_limit: 56, targets: [], checks: [],
+    assessment: { impact: 'info', confidence: 'low', coverage: 'partial', gaps: [], findings: [] },
+    shadow_impact: { result: 'possible_disruption', report_id: 'aaaaaaaaaaaaaaaaaaaaaaaa', revision: 2, impact: 'critical' },
+    report,
+  } }));
+  await page.goto('/changes');
+  await page.locator('.row--group').first().click();
+  await page.getByRole('button', { name: 'Review shadow evidence' }).click();
+  const structured = page.getByRole('region', { name: 'Structured impact report' });
+  await expect(structured).toContainText('Peak impact: critical');
+  await expect(structured).toContainText('Current impact: Unknown');
+  await expect(structured).toContainText('Served affected clients');
+  await structured.getByText('Observed client sample · partial', { exact: true }).click();
+  await structured.getByRole('img').scrollIntoViewIfNeeded();
+  await expect(structured.getByRole('table').last()).toContainText('001122aabbdd');
+  await page.screenshot({ path: info.outputPath('structured-report.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Review checkpoint history' }).click();
+  await page.getByRole('button', { name: 'Revision 1 ·', exact: false }).click();
+  await expect(structured).toContainText('Current impact: critical');
+  await expect(page.getByText('Current checkpoint details · revision 2')).toBeVisible();
+  await page.getByText('Human review and release readiness', { exact: true }).click();
+  await page.getByRole('button', { name: 'Check acceptance counts' }).click();
+  await expect(page.locator('app-impact-adjudication')).toContainText('Promotion blocked');
+  await expect(page.getByRole('button', { name: 'Record review' })).toBeDisabled();
+  await page.locator('app-impact-adjudication').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('human-acceptance.png'), fullPage: true });
+});

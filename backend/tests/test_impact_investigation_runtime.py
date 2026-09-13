@@ -4,6 +4,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
@@ -284,10 +285,11 @@ async def test_crashes_after_expiry_stop_even_without_successful_checkpoints(mon
     assert "expired" in update["$set"]["stop_reason"]
 
 
-async def test_shadow_mode_never_invokes_the_legacy_device_ai(monkeypatch):
+@pytest.mark.parametrize("mode", ["shadow", "agent_shadow"])
+async def test_shadow_mode_never_invokes_the_legacy_device_ai(monkeypatch, mode):
     from mist_config_guardian_backend.services import monitoring  # noqa: PLC0415
 
-    monkeypatch.setattr(monitoring, "get_settings", lambda: SimpleNamespace(impact_engine_mode="shadow"))
+    monkeypatch.setattr(monitoring, "get_settings", lambda: SimpleNamespace(impact_engine_mode=mode))
     provider = AsyncMock()
     monkeypatch.setattr(monitoring, "OpenAiCompatibleImpactProvider", provider)
     service = monitoring.MonitoringPollService(

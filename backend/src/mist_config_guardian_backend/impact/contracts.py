@@ -10,6 +10,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from mist_config_guardian_backend.impact.change_context import ChangeContext
 from mist_config_guardian_backend.impact.limits import (
+    MAX_DOCUMENTATION_TARGETS,
     MAX_NEIGHBOR_TARGETS,
     MAX_PORT_EVENTS,
     MAX_PORT_TARGETS,
@@ -75,6 +76,29 @@ class NeighborTarget(Contract):
     binding: CandidateReference
 
 
+DocumentationId = Literal["switch.bgp_config", "switch.ospf_config", "wlan.ssid", "wlan.schedule"]
+
+
+class DocumentationTarget(Contract):
+    handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    document_id: DocumentationId
+
+
+class AttributeDocumentation(Contract):
+    id: DocumentationId
+    schema_name: str = Field(max_length=64)
+    attribute: str = Field(max_length=64)
+    value_type: str = Field(max_length=32)
+    description: str = Field(max_length=240)
+    reference: str | None = Field(default=None, pattern=r"^#/components/schemas/[a-zA-Z0-9_]+$", max_length=160)
+    source_pointer: str = Field(
+        pattern=r"^#/components/schemas/[a-zA-Z0-9_]+/properties/[a-zA-Z0-9_]+$", max_length=160
+    )
+    corpus_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_version: str = Field(max_length=40)
+
+
 class WlanRemovalPlan(Contract):
     schema_version: Literal[1] = 1
     rule_id: Literal["wlan-removal.v1"] = "wlan-removal.v1"
@@ -85,6 +109,7 @@ class WlanRemovalPlan(Contract):
     targets: tuple[WlanTarget, ...] = Field(default=(), max_length=MAX_WLAN_TARGETS)
     port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=MAX_PORT_TARGETS)
     neighbor_targets: tuple[NeighborTarget, ...] = Field(default=(), max_length=MAX_NEIGHBOR_TARGETS)
+    documentation_targets: tuple[DocumentationTarget, ...] = Field(default=(), max_length=MAX_DOCUMENTATION_TARGETS)
     neighbor_statistics: bool = False
     port_history: bool = False
     unmapped: tuple[str, ...] = ()
@@ -402,6 +427,37 @@ class ApEvidence(Contract):
         return self
 
 
+class DocumentationEvidence(Contract):
+    check_id: Literal["mist-docs-attribute.v1"] = "mist-docs-attribute.v1"
+    target_handle: str
+    window: Window
+    captured_at: AwareDatetime
+    state: Literal["complete", "error", "dispatch_denied"]
+    rows: tuple[AttributeDocumentation, ...] = Field(default=(), max_length=1)
+    reason: str = Field(default="", max_length=500)
+    http_status: None = None
+    response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def evidence_state(self) -> "DocumentationEvidence":
+        if (self.state == "complete") != bool(self.rows) or (
+            (self.state == "dispatch_denied") != (self.dispatch_denial is not None)
+        ):
+            msg = "Documentation state must match its rows and denial reason"
+            raise ValueError(msg)
+        if self.state == "dispatch_denied" and self.response_bytes is not None:
+            msg = "An unexecuted documentation check cannot contain result bytes"
+            raise ValueError(msg)
+        return self
+
+
 InvestigationEvidence = (
-    SessionEvidence | PortEvidence | NeighborEvidence | PortHistoryEvidence | AuthEvidence | ApEvidence
+    SessionEvidence
+    | PortEvidence
+    | NeighborEvidence
+    | PortHistoryEvidence
+    | AuthEvidence
+    | ApEvidence
+    | DocumentationEvidence
 )

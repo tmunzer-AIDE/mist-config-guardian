@@ -19,6 +19,7 @@ from mist_config_guardian_backend.impact.contracts import (
     AuthEvidence,
     CandidateReference,
     DispatchDenial,
+    DocumentationEvidence,
     InvestigationEvidence,
     NeighborEvidence,
     NeighborTarget,
@@ -28,6 +29,7 @@ from mist_config_guardian_backend.impact.contracts import (
 )
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.domain_evaluation import compose_domains
+from mist_config_guardian_backend.impact.knowledge import describe_attribute, documentation_plan
 from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.report import build_report
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
@@ -182,7 +184,7 @@ class ImpactInvestigationService:
             plan = plan.model_copy(
                 update={"gaps": (*plan.gaps, "Audit timestamp is missing; receipt time is only an approximate anchor.")}
             )
-        return plan
+        return documentation_plan(plan)
 
     async def _poll(self, root: ImpactInvestigation) -> None:  # noqa: C901, PLR0912, PLR0915 - fenced discovery and fallback
         now = utc_now()
@@ -345,7 +347,7 @@ class ImpactInvestigationService:
             },
         )
 
-    async def _collect(  # noqa: C901, PLR0913 - exact plan and source context at dispatch boundary
+    async def _collect(  # noqa: C901, PLR0911, PLR0912, PLR0913 - exact plan and source context at dispatch boundary
         self,
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
@@ -359,6 +361,49 @@ class ImpactInvestigationService:
         if check not in capabilities(plan, max(check.window.end, plan.changed_at + timedelta(microseconds=1))):
             msg = "Collection requires the exact planned capability"
             raise ValueError(msg)
+        if check.check_id == "mist-docs-attribute.v1":
+            target = next(t for t in plan.documentation_targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=target.handle,
+                document_id=target.document_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            denial = await self._reserve(root, credential, dispatch)
+            if denial:
+                return DocumentationEvidence(
+                    target_handle=target.handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="dispatch_denied",
+                    dispatch_denial=denial,
+                    reason=denial.explanation,
+                )
+            try:
+                document = describe_attribute(target.document_id)
+                reading = DocumentationEvidence(
+                    target_handle=target.handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="complete",
+                    rows=(document,),
+                    response_bytes=len(document.model_dump_json().encode()),
+                    reason="Pinned attribute documentation only; not evidence of service state or impact.",
+                )
+            except (ValueError, OSError):
+                reading = DocumentationEvidence(
+                    target_handle=target.handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="error",
+                    reason="Pinned documentation is unavailable or failed integrity validation.",
+                )
+            await self._finish_dispatch(root, dispatch, reading)
+            return reading
         if check.check_id == "wlan-auth-events.v1":
             if neighbor_context is None:
                 return AuthEvidence(

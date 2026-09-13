@@ -112,9 +112,12 @@ def test_missing_clients_and_empty_attempts_never_mean_no_impact():
 
 
 @pytest.mark.parametrize("mode", ["shadow", "agent_shadow"])
-async def test_all_four_domains_fit_twenty_checks_and_publish_once(monkeypatch, httpx_mock, mode):
+async def test_all_domains_and_documentation_fit_twenty_two_checks_and_publish_once(monkeypatch, httpx_mock, mode):
     service, root, _, artifacts, stored = neighbor_runtime(monkeypatch, mode)
     data = mixed_inputs()
+    switch = data["after"][0]
+    switch.changed_fields = [*switch.changed_fields, "bgp_config", "ospf_config"]
+    switch.configuration.update(bgp_config={}, ospf_config={})
     for v in data["after"]:
         if "enabled" in v.configuration:
             v.changed_fields = [*v.changed_fields, "auth"]
@@ -131,6 +134,10 @@ async def test_all_four_domains_fit_twenty_checks_and_publish_once(monkeypatch, 
             context = read_context(request)
             assert all(c["window_ref"] in context["windows"] for c in context["capabilities"])
             assert all(row["window_ref"] in context["windows"] for row in context["observations"])
+            assert all(
+                "captured_at" in row or 0 <= row["captured_ref"] < len(context["capture_times"])
+                for row in context["observations"]
+            )
             assert context["domain_skills"]
             observed = {row["ref"] for row in context["observations"]}
             missing = [c["ref"] for c in context["capabilities"] if c["ref"] not in observed]
@@ -138,7 +145,7 @@ async def test_all_four_domains_fit_twenty_checks_and_publish_once(monkeypatch, 
 
         httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
     await service._poll(root)  # noqa: SLF001
-    assert stored["calls_used"] == len(artifacts[0].evidence) == 20
+    assert stored["calls_used"] == len(artifacts[0].evidence) == 22
     assert len(artifacts) == 1
     assert all(record["state"] == "complete" for record in stored["dispatches"])
     assert InvestigationRevision.model_validate_json(artifacts[0].model_dump_json()).evidence == artifacts[0].evidence
@@ -150,7 +157,7 @@ async def test_all_four_domains_fit_twenty_checks_and_publish_once(monkeypatch, 
             "wlan-authentication.v1",
             "switch-poe.v1",
         }
-    with pytest.raises(ValidationError, match="at most 20"):
+    with pytest.raises(ValidationError, match="at most 22"):
         InvestigationRevision.model_validate(
             {**artifacts[0].model_dump(), "evidence": [*artifacts[0].evidence, artifacts[0].evidence[0]]}
         )

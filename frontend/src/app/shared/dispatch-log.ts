@@ -10,7 +10,8 @@ export interface DispatchLog {
     candidate_revision: number;
     check_id: string;
     target_handle: string;
-    site_id: string;
+    site_id: string | null;
+    document_id?: string | null;
     wlan_id: string | null;
     device_mac?: string | null;
     port_id?: string | null;
@@ -46,14 +47,14 @@ export interface DispatchLog {
               <thead><tr><th>Check and scope</th><th>Investigation interval</th><th>Attempt timing</th><th>Result</th></tr></thead>
               <tbody>@for (entry of log.records; track entry.id) {
                 <tr>
-                  <td>{{ entry.check_id }}<br>Site {{ entry.site_id }}<br>@if (entry.wlan_id) { WLAN {{ entry.wlan_id }} } @else if (entry.source_dispatch_id) { AP inventory · Source attempt {{ entry.source_dispatch_id }} } @else { Switch {{ entry.device_mac }} · Port {{ entry.port_id }} }
+                  <td>{{ entry.check_id }}<br>@if (entry.site_id) { Site {{ entry.site_id }}<br> }@if (entry.document_id) { Pinned OAS · {{ entry.document_id }} } @else if (entry.wlan_id) { WLAN {{ entry.wlan_id }} } @else if (entry.source_dispatch_id) { AP check · Source attempt {{ entry.source_dispatch_id }} } @else { Switch {{ entry.device_mac }} · Port {{ entry.port_id }} }
                     <br>Worker {{ entry.generation }} · candidate revision {{ entry.candidate_revision }}
                     <br>Attempt {{ entry.id }}</td>
                   <td>{{ at(entry.window.start) }}–{{ at(entry.window.end) }}</td>
                   <td>Reserved {{ at(entry.reserved_at) }}<br>
                     {{ entry.finished_at ? 'Recorded result ' + at(entry.finished_at) : 'No result recorded' }}</td>
                   <td>{{ entry.state === 'reserved' ? 'Outcome unknown' : entry.state }}<br>
-                    HTTP {{ entry.http_status ?? 'Unknown' }} · Bytes {{ entry.response_bytes ?? 'Unknown' }}
+                    {{ entry.document_id ? 'Local library' : 'HTTP ' + (entry.http_status ?? 'Unknown') }} · Bytes {{ entry.response_bytes ?? 'Unknown' }}
                     <br>Parsed rows {{ entry.row_count ?? 'Unknown' }}</td>
                 </tr>
               }</tbody>

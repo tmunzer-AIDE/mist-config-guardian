@@ -16,7 +16,14 @@ VerdictLabel = Literal["critical_outage", "benign", "noncritical_outage", "uncer
 def policy_hash() -> str:
     """Invalidate acceptance when a load-bearing rule, resolver or contract changes."""
     digest = sha256(b"impact-acceptance.v1")
-    for filename in ("contracts.py", "domain_evaluation.py", "wlan_removal.py", "port_scope.py", "limits.py"):
+    for filename in (
+        "contracts.py",
+        "knowledge.py",
+        "domain_evaluation.py",
+        "wlan_removal.py",
+        "port_scope.py",
+        "limits.py",
+    ):
         digest.update(filename.encode())
         digest.update(files("mist_config_guardian_backend.impact").joinpath(filename).read_bytes())
     package = files("mist_config_guardian_backend")

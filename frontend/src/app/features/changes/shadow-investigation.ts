@@ -124,7 +124,7 @@ export interface ShadowReport {
         <app-domain-findings [findings]="report.assessment?.domain_findings" />
         <app-deployment-evidence [evidence]="report.deployment" />
         <details>
-          <summary>Collection checks · {{ report.calls_used }}/{{ report.calls_limit }} requests used</summary>
+          <summary>Collection checks · {{ report.calls_used }}/{{ report.calls_limit }} checks used</summary>
           <div class="checks">
             <table>
               <caption>Bounded evidence checks</caption>

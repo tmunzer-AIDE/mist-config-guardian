@@ -5,10 +5,10 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from mist_config_guardian_backend.impact.contracts import Contract, Window
+from mist_config_guardian_backend.impact.contracts import Contract, DocumentationId, Window
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_CALLS
 
-# One journal slot per authorized operational request.
+# One journal slot per authorized operational or local documentation check.
 MAX_DISPATCHES = MAX_AUDIT_CALLS
 
 
@@ -23,9 +23,11 @@ class DispatchRecord(Contract):
         "switch-port-events.v1",
         "wlan-auth-events.v1",
         "neighbor-ap-statistics.v1",
+        "mist-docs-attribute.v1",
     ] = "wlan-client-sessions.v1"
     target_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
-    site_id: UUID
+    site_id: UUID | None = None
+    document_id: DocumentationId | None = None
     wlan_id: UUID | None = None
     device_mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{12}$")
     port_id: str | None = Field(default=None, pattern=r"^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$")
@@ -41,6 +43,21 @@ class DispatchRecord(Contract):
 
     @model_validator(mode="after")
     def target_kind(self) -> "DispatchRecord":
+        if self.check_id == "mist-docs-attribute.v1":
+            if (
+                self.http_status is not None
+                or self.document_id is None
+                or any(
+                    v is not None
+                    for v in (self.site_id, self.wlan_id, self.device_mac, self.port_id, self.source_dispatch_id)
+                )
+            ):
+                msg = "Documentation dispatch requires only a pinned document identity"
+                raise ValueError(msg)
+            return self
+        if self.site_id is None or self.document_id is not None:
+            msg = "Operational checks require a site and cannot carry a documentation identity"
+            raise ValueError(msg)
         if self.check_id in {"wlan-client-sessions.v1", "wlan-auth-events.v1"}:
             if self.wlan_id is None or self.device_mac is not None or self.port_id is not None:
                 msg = "WLAN dispatch requires only a WLAN identity"
