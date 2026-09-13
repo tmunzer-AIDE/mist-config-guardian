@@ -183,7 +183,7 @@ async def test_unmapped_switch_change_runs_one_agent_without_mist_requests(monke
     assert stored["calls_used"] == 0
     assert stored["model_calls_used"] == 1
     assert artifacts[0].agent.state == "complete"
-    assert artifacts[0].agent.prompt_version == "impact-investigator.v7"
+    assert artifacts[0].agent.prompt_version == "impact-investigator.v8"
     assert artifacts[0].assessment.impact == "info"
     assert artifacts[0].assessment.coverage == "unmapped"
     assert artifacts[0].plan.change_context.changes[0].object_type == "devices"

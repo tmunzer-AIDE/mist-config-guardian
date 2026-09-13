@@ -49,4 +49,16 @@ describe('Agent investigation', () => {
     expect(text).not.toContain('Proposal ready');
     expect(fixture.nativeElement.querySelector('img')).toBeNull();
   });
+  it('distinguishes classified rejections from historical missing diagnostics', async () => {
+    await TestBed.configureTestingModule({ imports: [AgentInvestigationComponent], providers: [provideHttpClient(), provideHttpClientTesting()] }).compileComponents();
+    const fixture = TestBed.createComponent(AgentInvestigationComponent);
+    fixture.componentRef.setInput('activity', { ...activity, records: [
+      { ...activity.records[0], state: 'invalid_response', response_error: 'empty_collection' },
+      { ...activity.records[0], id: 'old-request', state: 'invalid_response' },
+    ] });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Validation failure: empty_collection');
+    expect(fixture.nativeElement.textContent).toContain('Specific validation reason was not recorded');
+  });
+
 });

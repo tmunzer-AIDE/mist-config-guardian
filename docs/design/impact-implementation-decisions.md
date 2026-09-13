@@ -1101,3 +1101,22 @@ are summarized in that handoff, rather than implied by historical “next” lis
   prominent. No production mode is enabled by this correction.
 - The ten-check mixed test preserves its original scenario; the independent maximum
   boundary moved to the twenty-two-check all-domain test and its overflow assertion.
+
+## 2026-09-13 — Empty-menu agent responses and bounded rejection diagnostics
+
+- Live Gemma requests returned 17 tokens against a 1,500-token allowance for an
+  unmapped network-template change. No capability or observation was available.
+  Historical rejected content was deliberately not retained, so its precise failure
+  cannot be reconstructed; an empty collection is a possible cause, not a proven one.
+- Prompt v8 supplies only the report schema when the menu is empty and includes a
+  minimal report example with empty hypotheses. The existing validator still rejects
+  invented checks/targets; this does not add DNS/template evidence coverage.
+- Persist only a fixed rejection enum (invalid JSON, schema mismatch, oversized
+  output, empty collection, unknown/repeated check, unobserved/foreign evidence).
+  Display it in live model activity and use a fixed explanation on the checkpoint.
+  No raw rejected content, Pydantic input values or provider prose is stored. Older
+  records explicitly lack a specific reason; they are not retrospectively classified.
+- Keep the current model/Mist budgets and mandatory evidence sweep. No repair retry,
+  model fallback, extra tool, live replay or deployed code override is introduced.
+  This improves the empty-menu prompt and diagnosis, not a guarantee that every model
+  obeys its schema. A normal image release is required to apply the change in k3s.

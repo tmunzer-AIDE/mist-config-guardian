@@ -31,7 +31,7 @@ export interface ModelActivity {
   calls_limit: number;
   input_bytes_reserved: number;
   input_bytes_limit: number;
-  records: { id: string; candidate_revision: number; model: string; state: string; reserved_at: string;
+  records: { id: string; candidate_revision: number; model: string; state: string; response_error?: string | null; reserved_at: string;
     finished_at: string | null; request_tokens: number | null; response_tokens: number | null;
     input_hash: string }[];
 }
@@ -96,6 +96,8 @@ export interface ModelActivity {
           <details><summary>{{ request.model }} · {{ request.state === 'reserved' ? 'Outcome unknown' : request.state }} · candidate revision {{ request.candidate_revision }}</summary>
             <p>Request {{ request.id }} · reserved {{ request.reserved_at }} · result {{ request.finished_at ?? 'Not recorded' }}</p>
             <p>Tokens: input {{ request.request_tokens ?? 'Unknown' }} · output {{ request.response_tokens ?? 'Unknown' }}</p>
+            @if (request.response_error) { <p>Validation failure: {{ request.response_error }}</p> }
+            @else if (request.state === 'invalid_response') { <p>Specific validation reason was not recorded for this request.</p> }
             <p>Input fingerprint: {{ request.input_hash }}</p>
             <app-model-request-details [organizationId]="organizationId()" [groupId]="groupId()" [requestId]="request.id" />
           </details>

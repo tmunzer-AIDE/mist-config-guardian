@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from beanie import PydanticObjectId
-from pydantic import AwareDatetime, Field, TypeAdapter
+from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from mist_config_guardian_backend.impact.contracts import (
     ApAdjacency,
@@ -37,7 +37,7 @@ MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
-PROMPT_VERSION = "impact-investigator.v7"
+PROMPT_VERSION = "impact-investigator.v8"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -309,6 +309,7 @@ class AgentCheckpoint(Contract):
         "impact-investigator.v5",
         "impact-investigator.v6",
         "impact-investigator.v7",
+        "impact-investigator.v8",
     ] = PROMPT_VERSION
     source: Literal["model_proposal"] = "model_proposal"
     skills: tuple[SkillReference, ...] = Field(default=(), max_length=4)
@@ -330,6 +331,26 @@ class AgentCheckpoint(Contract):
     request_ids: tuple[UUID, ...] = Field(default=(), max_length=MAX_CHECKPOINT_CALLS)
 
 
+class ModelResponseError(StrEnum):
+    INVALID_JSON = "invalid_json"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    OUTPUT_TOO_LARGE = "output_too_large"
+    EMPTY_COLLECTION = "empty_collection"
+    UNKNOWN_CHECK = "unknown_or_repeated_check"
+    INVALID_EVIDENCE = "unobserved_or_foreign_evidence"
+
+    @property
+    def explanation(self) -> str:
+        return {
+            self.INVALID_JSON: "Model response was not a single valid JSON action.",
+            self.SCHEMA_MISMATCH: "Model JSON did not match the required action schema.",
+            self.OUTPUT_TOO_LARGE: "Model output byte limit reached.",
+            self.EMPTY_COLLECTION: "Model requested an empty check collection; return a report instead.",
+            self.UNKNOWN_CHECK: "Unknown or repeated check ref",
+            self.INVALID_EVIDENCE: "Unobserved or foreign evidence reference",
+        }[self]
+
+
 class ModelRequestRecord(Contract):
     id: UUID
     generation: int = Field(ge=1)
@@ -343,6 +364,7 @@ class ModelRequestRecord(Contract):
         "impact-investigator.v5",
         "impact-investigator.v6",
         "impact-investigator.v7",
+        "impact-investigator.v8",
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)
@@ -351,11 +373,19 @@ class ModelRequestRecord(Contract):
     input_artifact_id: PydanticObjectId | None = None
     input_context_hash: Handle | None = None
     state: Literal["reserved", "complete", "invalid_response", "provider_error"] = "reserved"
+    response_error: ModelResponseError | None = None
     finished_at: AwareDatetime | None = None
     request_tokens: int | None = Field(default=None, ge=0)
     response_tokens: int | None = Field(default=None, ge=0)
     action_artifact_id: PydanticObjectId | None = None
     action_hash: Handle | None = None
+
+    @model_validator(mode="after")
+    def response_error_state(self) -> "ModelRequestRecord":
+        if self.response_error is not None and self.state != "invalid_response":
+            msg = "A model response error requires invalid_response state"
+            raise ValueError(msg)
+        return self
 
 
 class ModelActivity(Contract):

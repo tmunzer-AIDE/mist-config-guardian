@@ -199,6 +199,17 @@ async def test_invalid_model_actions_cannot_dispatch_and_required_checks_still_r
     assert artifacts[0].agent.proposal is None
     assert artifacts[0].assessment.impact == "none"  # Required evidence, never the model's rating.
     assert stored["model_requests"][0]["action_artifact_id"] is None
+    assert (
+        stored["model_requests"][0]["response_error"]
+        == {
+            "foreign_ref": "unknown_or_repeated_check",
+            "extra_url": "schema_mismatch",
+            "write_tool": "schema_mismatch",
+            "severity": "schema_mismatch",
+            "unobserved_ref": "unobserved_or_foreign_evidence",
+            "oversize": "output_too_large",
+        }[bad]
+    )
     assert len([r for r in httpx_mock.get_requests() if r.method == "GET"]) == 2
     assert all(r.url.host != "attacker.invalid" for r in httpx_mock.get_requests())
 

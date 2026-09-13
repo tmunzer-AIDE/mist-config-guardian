@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from beanie import PydanticObjectId
 from beanie.odm.utils.encoder import Encoder
+from pydantic import ValidationError
 
 from mist_config_guardian_backend.impact.agent import (
     ACTION_ADAPTER,
@@ -28,6 +29,7 @@ from mist_config_guardian_backend.impact.agent import (
     EvidenceView,
     ModelDispatchDenial,
     ModelRequestRecord,
+    ModelResponseError,
     ReportAction,
     capabilities,
     evidence_view,
@@ -87,6 +89,14 @@ budget. Documentation cannot establish service state, be outage evidence, author
 new checks/entities or serve as a hypothesis target. Describe unresolved knowledge
 and capability limits plainly; never call an unmonitored change healthy.
 """
+
+
+class InvalidModelActionError(ValueError):
+    """Fixed diagnostic category, never provider text or validation input values."""
+
+    def __init__(self, error: ModelResponseError) -> None:
+        self.error = error
+        super().__init__(error.explanation)
 
 
 Collector = Callable[[CheckCapability], Awaitable[InvestigationEvidence]]
@@ -249,8 +259,18 @@ class ImpactAgent:
                 system = (
                     _SYSTEM
                     + "\nJSON action schema:\n"
-                    + json.dumps(ACTION_ADAPTER.json_schema(), separators=(",", ":"))
+                    + json.dumps(
+                        ACTION_ADAPTER.json_schema() if menu else ReportAction.model_json_schema(),
+                        separators=(",", ":"),
+                    )
                 )
+                if not menu:
+                    system += (
+                        "\nNo checks are available. Return only a report JSON object with empty hypotheses. "
+                        "Never return collect with an empty checks array. Example structure: "
+                        '{"action":"report","report":{"summary":"Required evidence is unavailable.",'
+                        '"hypotheses":[],"open_questions":["Which scoped evidence can establish impact?"]}}'
+                    )
                 size = len((system + data).encode())
                 if size > MAX_INPUT_BYTES:
                     return self._stopped(
@@ -302,17 +322,18 @@ class ImpactAgent:
                 try:
                     action = self._parse(completion.content)
                     self._validate_action(action, menu, observations)
-                except ValueError:
+                except InvalidModelActionError as exc:
                     await self._finish(
                         root,
                         record,
                         "invalid_response",
+                        response_error=exc.error,
                         request_tokens=completion.request_tokens,
                         response_tokens=completion.response_tokens,
                     )
                     return self._stopped(
                         "invalid_response",
-                        "Model action or evidence references were invalid; no proposed action was executed.",
+                        exc.error.explanation + " No proposed action was executed.",
                         memory,
                         observations,
                         request_ids,
@@ -381,9 +402,18 @@ class ImpactAgent:
     @staticmethod
     def _parse(content: str) -> AgentAction:
         if len(content.encode()) > MAX_OUTPUT_BYTES:
-            msg = "Model output byte limit reached"
-            raise ValueError(msg)
-        return ACTION_ADAPTER.validate_json(content)
+            raise InvalidModelActionError(ModelResponseError.OUTPUT_TOO_LARGE)
+        try:
+            return ACTION_ADAPTER.validate_json(content)
+        except ValidationError as exc:
+            errors = exc.errors(include_input=False, include_context=False, include_url=False)
+            if any(e["type"] == "json_invalid" for e in errors):
+                reason = ModelResponseError.INVALID_JSON
+            elif any(e["type"] == "too_short" and e["loc"] == ("collect", "checks") for e in errors):
+                reason = ModelResponseError.EMPTY_COLLECTION
+            else:
+                reason = ModelResponseError.SCHEMA_MISMATCH
+            raise InvalidModelActionError(reason) from None
 
     @staticmethod
     def _stopped(
@@ -412,8 +442,7 @@ class ImpactAgent:
         by_ref = {item.ref: item for item in menu}
         if isinstance(action, CollectAction):
             if len(set(action.checks)) != len(action.checks) or any(ref not in by_ref for ref in action.checks):
-                msg = "Unknown or repeated check ref"
-                raise ValueError(msg)
+                raise InvalidModelActionError(ModelResponseError.UNKNOWN_CHECK)
             return
         targets = {item.target_handle for item in menu if item.check_id != "mist-docs-attribute.v1"}
         for hypothesis in action.report.hypotheses:
@@ -421,8 +450,7 @@ class ImpactAgent:
             if hypothesis.target_handle not in targets or any(
                 ref not in observations or observations[ref].target_handle != hypothesis.target_handle for ref in refs
             ):
-                msg = "Unobserved or foreign evidence reference"
-                raise ValueError(msg)
+                raise InvalidModelActionError(ModelResponseError.INVALID_EVIDENCE)
 
     @staticmethod
     async def _previous(root: ImpactInvestigation) -> InvestigationRevision | Literal[False] | None:
@@ -488,6 +516,7 @@ class ImpactAgent:
         state: str,
         action: AgentAction | None = None,
         *,
+        response_error: ModelResponseError | None = None,
         request_tokens: int | None = None,
         response_tokens: int | None = None,
     ) -> None:
@@ -502,6 +531,7 @@ class ImpactAgent:
             {
                 **record.model_dump(),
                 "state": state,
+                "response_error": response_error,
                 "finished_at": utc_now(),
                 "action_artifact_id": action_artifact_id,
                 "action_hash": action_hash,
@@ -514,6 +544,7 @@ class ImpactAgent:
                 include={
                     "state",
                     "finished_at",
+                    "response_error",
                     "action_artifact_id",
                     "action_hash",
                     "request_tokens",
