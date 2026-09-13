@@ -143,3 +143,12 @@ async def test_history_follows_published_parents_and_rejects_foreign_artifacts(m
     history = await investigation_reads.report_history(ORG, PydanticObjectId())
     assert not history.complete
     assert [r.revision for r in history.reports] == [2]
+
+
+def test_resolved_earlier_uncertainty_does_not_become_a_permanent_peak():
+    data = report_inputs()
+    clean = data["assessment"]
+    data["assessment"] = clean.model_copy(update={"impact": "info", "coverage": "partial"})
+    previous = build_report(**data)
+    data.update(revision=2, previous=previous, assessment=clean)
+    assert build_report(**data).peak_impact == "none"

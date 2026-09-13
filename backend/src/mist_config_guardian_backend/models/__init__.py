@@ -2,6 +2,7 @@
 
 from beanie import Document
 
+from mist_config_guardian_backend.models.adjudication import ImpactAdjudication
 from mist_config_guardian_backend.models.application_configuration import (
     AiRequestAudit,
     ApplicationConfiguration,
@@ -57,6 +58,7 @@ def document_models() -> list[type[Document]]:
         RestoreOperationStateRecord,
         RestoreApproval,
         MonitoringSession,
+        ImpactAdjudication,
         ImpactInvestigation,
         InvestigationRevision,
         ModelRequestArtifact,

@@ -134,7 +134,11 @@ def build_report(  # noqa: PLR0913 - immutable publication identity and source d
     ):
         msg = "Previous report does not match the publication chain"
         raise ValueError(msg)
-    retain_peak = previous is not None and _ORDER[previous.peak_impact] > _ORDER[assessment.impact]
+    retain_peak = (
+        previous is not None
+        and previous.peak_impact in {"warning", "critical"}
+        and _ORDER[previous.peak_impact] > _ORDER[assessment.impact]
+    )
     available = ReportSection(state="available", explanation="Recorded in this immutable revision.")
     gaps = tuple(dict.fromkeys((*assessment.gaps, *plan.gaps)))
     return ImpactReport(

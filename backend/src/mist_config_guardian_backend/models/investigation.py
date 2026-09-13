@@ -38,10 +38,12 @@ class ModelRequestArtifact(Document):
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_json: str = Field(max_length=24_000)
     created_at: datetime
+    retained_until: datetime | None = None
 
     class Settings:
         name = "impact_model_request_artifacts"
         indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("retained_until", 1)], expireAfterSeconds=0),
             IndexModel([("organization_id", 1), ("investigation_id", 1), ("request_id", 1)]),
         ]
 
@@ -49,6 +51,7 @@ class ModelRequestArtifact(Document):
 class ImpactInvestigation(TimestampedModel, Document):
     organization_id: PydanticObjectId
     audit_id: str
+    retained_until: datetime | None = None
     anchor_known: bool = True
     changed_at: datetime
     first_due_at: datetime
@@ -72,6 +75,7 @@ class ImpactInvestigation(TimestampedModel, Document):
     class Settings:
         name = "impact_investigations"
         indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("retained_until", 1)], expireAfterSeconds=0),
             IndexModel([("organization_id", 1), ("audit_id", 1)], unique=True, name="audit_investigation_unique"),
             IndexModel([("next_poll_at", 1), ("lease_until", 1)]),
         ]
@@ -84,6 +88,7 @@ class InvestigationRevision(Document):
     investigation_id: PydanticObjectId
     revision: int
     generated_at: datetime
+    retained_until: datetime | None = None
     previous_report_id: PydanticObjectId | None = None
     plan: WlanRemovalPlan
     assessment: WlanAssessment
@@ -95,5 +100,6 @@ class InvestigationRevision(Document):
     class Settings:
         name = "investigation_revisions"
         indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("retained_until", 1)], expireAfterSeconds=0),
             IndexModel([("organization_id", 1), ("investigation_id", 1), ("revision", -1)]),
         ]

@@ -75,11 +75,19 @@ class ImpactInvestigationService:
         group delays evidence collection rather than silently losing the audit.
         """
         now = utc_now()
+        organization = await Organization.get(organization_id)
+        retention_days = getattr(organization, "monitoring_retention_days", 90)
+        retained_until = (
+            now + timedelta(days=retention_days)
+            if type(retention_days) is int and 1 <= retention_days <= _MAX_RETENTION_DAYS
+            else None
+        )
         due = max(now, changed_at) + timedelta(seconds=60)
         root = ImpactInvestigation(
             organization_id=organization_id,
             audit_id=audit_id,
             changed_at=changed_at,
+            retained_until=retained_until,
             anchor_known=anchor_known,
             first_due_at=due,
             expires_at=changed_at + _DURATION,
@@ -292,6 +300,7 @@ class ImpactInvestigationService:
             revision=root.revision + 1,
             generated_at=utc_now(),
             previous_report_id=root.report_id,
+            retained_until=root.retained_until,
             plan=plan,
             assessment=assessment,
             evidence=evidence,

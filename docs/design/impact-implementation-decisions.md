@@ -990,6 +990,28 @@ of adding that read path.
   mutable names/IPs to assert a physical relationship. An independently validated,
   bounded source of switch identity is required before the capability expands.
 
+## 2026-09-13 — Human acceptance and retention
+
+- Administrator labels are explicit, immutable human attestations attached to the
+  exact terminal publication. One label per audit/policy fingerprint prevents
+  sample inflation; changed publications reject stale submissions. Agent tools
+  cannot create labels. Replay follows the full published parent chain and hashes
+  its retained plan/evidence/assessment; missing or altered evidence fails closed.
+- Select a fixed 25% held-out split by audit hash. Require 20–50 reviewed audits,
+  at least three held-out critical and three benign cases, and show TP/FN/FP/TN,
+  critical severity misses, abstentions, precision, recall and specificity.
+  Detection metrics use warning-or-critical as positive; critical severity misses
+  are a separate stricter gate. Any miss, false alarm, held-out abstention or
+  unresolved case fails. Passing counts never enables production automatically.
+- Pin retention at root creation from organization monitoring policy, propagating
+  it to revision and model artifacts. Mongo TTL includes orphan inserts. Hourly
+  bounded backfill covers legacy records; organization-orphan cleanup includes
+  encrypted neighbor bindings after a one-day grace and a query time limit.
+  There is no organization-delete UI route to change. Missing retained evidence
+  makes old acceptance cases invalid rather than preserving a stale pass.
+- Only observed warning/critical peaks persist across later uncertainty. An early
+  unknown is not an observed outage and may be resolved by complete later evidence.
+
 ## Next implementation queue
 
 1. Build on managed AP membership with port/PoE event history and independently

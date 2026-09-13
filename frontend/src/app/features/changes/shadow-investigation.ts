@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import { firstValueFrom } from 'rxjs';
 
 import { ImpactReport, ReportHistory } from '../../core/impact-report.model';
+import { ImpactAdjudicationComponent } from '../../shared/impact-adjudication';
 import { ImpactReportComponent } from '../../shared/impact-report';
 import { orgPath } from '../../core/api';
 import { formatInstant } from '../../core/format';
@@ -72,7 +73,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
+  imports: [ImpactAdjudicationComponent, ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -134,6 +135,9 @@ export interface ShadowReport {
             </table>
           </div>
         </details>
+        <app-impact-adjudication [organizationId]="organizationId()" [groupId]="groupId()"
+          [reportId]="report.shadow_impact?.report_id" [revision]="report.revision"
+          [terminal]="report.status === 'completed' || report.status === 'incomplete'" />
         <app-dispatch-log [log]="report.dispatch_log" />
         <app-agent-investigation [checkpoint]="report.agent" [activity]="report.model_activity"
           [organizationId]="organizationId()" [groupId]="groupId()" />

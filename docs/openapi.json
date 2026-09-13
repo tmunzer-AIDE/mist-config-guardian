@@ -39,6 +39,163 @@
         "title": "AcceptInvitationRequest",
         "type": "object"
       },
+      "AcceptanceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "abstentions": {
+            "default": 0,
+            "title": "Abstentions",
+            "type": "integer"
+          },
+          "activation": {
+            "const": "manual_release_required",
+            "default": "manual_release_required",
+            "title": "Activation",
+            "type": "string"
+          },
+          "critical_misses": {
+            "default": 0,
+            "title": "Critical Misses",
+            "type": "integer"
+          },
+          "eligible": {
+            "default": false,
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "false_negative": {
+            "default": 0,
+            "title": "False Negative",
+            "type": "integer"
+          },
+          "false_positive": {
+            "default": 0,
+            "title": "False Positive",
+            "type": "integer"
+          },
+          "held_out": {
+            "default": 0,
+            "title": "Held Out",
+            "type": "integer"
+          },
+          "policy_hash": {
+            "title": "Policy Hash",
+            "type": "string"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "reasons": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "scope": {
+            "const": "adjudicated_held_out_cases",
+            "default": "adjudicated_held_out_cases",
+            "title": "Scope",
+            "type": "string"
+          },
+          "specificity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specificity"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "true_negative": {
+            "default": 0,
+            "title": "True Negative",
+            "type": "integer"
+          },
+          "true_positive": {
+            "default": 0,
+            "title": "True Positive",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_hash"
+        ],
+        "title": "AcceptanceResult",
+        "type": "object"
+      },
+      "AdjudicationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "human_reviewed": {
+            "const": true,
+            "title": "Human Reviewed",
+            "type": "boolean"
+          },
+          "label": {
+            "enum": [
+              "critical_outage",
+              "benign",
+              "noncritical_outage",
+              "uncertain"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 1500,
+            "minLength": 10,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "report_id": {
+            "pattern": "^[0-9a-f]{24}$",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "report_id",
+          "revision",
+          "label",
+          "rationale",
+          "human_reviewed"
+        ],
+        "title": "AdjudicationRequest",
+        "type": "object"
+      },
       "AffectedDeviceResponse": {
         "description": "One device that received configuration from a change group.",
         "properties": {
@@ -12263,6 +12420,136 @@
           }
         ],
         "summary": "Read Shadow Investigation",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/acceptance": {
+      "get": {
+        "operationId": "read_acceptance_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_acceptance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptanceResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Acceptance",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/adjudication": {
+      "post": {
+        "operationId": "label_investigation_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_adjudication_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjudicationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Label Investigation Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Adjudication Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Label Investigation",
         "tags": [
           "Change Groups"
         ]

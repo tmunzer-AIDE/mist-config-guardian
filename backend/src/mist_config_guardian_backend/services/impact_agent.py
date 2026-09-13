@@ -529,5 +529,6 @@ class ImpactAgent:
             kind=kind,
             content_hash=sha256(content.encode()).hexdigest(),
             content_json=content,
+            retained_until=root.retained_until,
             created_at=utc_now(),
         ).insert()
