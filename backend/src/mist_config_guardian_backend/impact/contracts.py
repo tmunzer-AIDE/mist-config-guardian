@@ -85,6 +85,7 @@ class WlanRemovalPlan(Contract):
     targets: tuple[WlanTarget, ...] = Field(default=(), max_length=MAX_WLAN_TARGETS)
     port_targets: tuple["PortTarget", ...] = Field(default=(), max_length=MAX_PORT_TARGETS)
     neighbor_targets: tuple[NeighborTarget, ...] = Field(default=(), max_length=MAX_NEIGHBOR_TARGETS)
+    neighbor_statistics: bool = False
     port_history: bool = False
     unmapped: tuple[str, ...] = ()
     gaps: tuple[str, ...] = ()
@@ -364,4 +365,43 @@ class AuthEvidence(Contract):
         return self
 
 
-InvestigationEvidence = SessionEvidence | PortEvidence | NeighborEvidence | PortHistoryEvidence | AuthEvidence
+class ApAdjacency(Contract):
+    device_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
+    connected: bool | None = Field(default=None, strict=True)
+    observed_at: AwareDatetime | None = None
+    relationship: Literal["corroborated_recent", "unverified"] = "unverified"
+    historical_dependency: Literal["not_established"] = "not_established"
+    device_failure: Literal["not_established"] = "not_established"
+
+
+class ApEvidence(Contract):
+    check_id: Literal["neighbor-ap-statistics.v1"] = "neighbor-ap-statistics.v1"
+    target_handle: str
+    window: Window
+    captured_at: AwareDatetime
+    state: Literal["complete", "partial", "error", "dispatch_denied", "binding_unavailable"]
+    rows: tuple[ApAdjacency, ...] = Field(default=(), max_length=1)
+    reason: str = Field(default="", max_length=500)
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    response_bytes: int | None = Field(default=None, ge=0)
+    dispatch_denial: DispatchDenial | None = None
+
+    @model_validator(mode="after")
+    def evidence_state(self) -> "ApEvidence":
+        if (self.state == "complete") != bool(self.rows):
+            msg = "Only a unique validated AP snapshot may contain a row"
+            raise ValueError(msg)
+        if (self.state == "dispatch_denied") != (self.dispatch_denial is not None):
+            msg = "Dispatch denial must carry its reason"
+            raise ValueError(msg)
+        if self.state in {"dispatch_denied", "binding_unavailable"} and (
+            self.http_status is not None or self.response_bytes is not None
+        ):
+            msg = "An unexecuted AP check cannot contain transport results"
+            raise ValueError(msg)
+        return self
+
+
+InvestigationEvidence = (
+    SessionEvidence | PortEvidence | NeighborEvidence | PortHistoryEvidence | AuthEvidence | ApEvidence
+)

@@ -15,6 +15,7 @@ from pymongo.errors import PyMongoError
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
 from mist_config_guardian_backend.impact.contracts import (
+    ApEvidence,
     AuthEvidence,
     CandidateReference,
     DispatchDenial,
@@ -30,7 +31,7 @@ from mist_config_guardian_backend.impact.domain_evaluation import compose_domain
 from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.report import build_report
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
-from mist_config_guardian_backend.integrations.mist_auth_evidence import MistImpactEvidenceClient
+from mist_config_guardian_backend.integrations.mist_ap_evidence import MistScopedEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import (
     ROOT_METADATA_PROJECTION,
@@ -228,7 +229,7 @@ class ImpactInvestigationService:
 
             async with (
                 asyncio.timeout(120),
-                MistImpactEvidenceClient(token=token, region=organization.cloud_region) as client,
+                MistScopedEvidenceClient(token=token, region=organization.cloud_region) as client,
             ):
                 collected: dict[str, InvestigationEvidence] = {}
 
@@ -269,7 +270,7 @@ class ImpactInvestigationService:
                                     binding=binding,
                                 )
                             )
-                    plan = plan.model_copy(update={"neighbor_targets": tuple(neighbors)})
+                    plan = plan.model_copy(update={"neighbor_targets": tuple(neighbors), "neighbor_statistics": True})
                 if get_settings().impact_engine_mode == "agent_shadow" and not (
                     evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}
                 ):
@@ -349,7 +350,7 @@ class ImpactInvestigationService:
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistImpactEvidenceClient,
+        client: MistScopedEvidenceClient,
         credential: str,
         *,
         neighbor_context: tuple[UUID, int] | None = None,
@@ -416,7 +417,7 @@ class ImpactInvestigationService:
             if reading.state != "dispatch_denied":
                 await self._finish_dispatch(root, dispatch, reading)
             return reading
-        if check.check_id == "neighbor-ap-inventory.v1":
+        if check.check_id in {"neighbor-ap-inventory.v1", "neighbor-ap-statistics.v1"}:
             return await self._collect_neighbor(root, plan, check, client, credential, neighbor_context, sources or [])
         if check.check_id == "switch-port-snapshot.v1":
             port = next(t for t in plan.port_targets if t.handle == check.target_handle)
@@ -476,11 +477,11 @@ class ImpactInvestigationService:
         root: ImpactInvestigation,
         plan: WlanRemovalPlan,
         check: CheckCapability,
-        client: MistImpactEvidenceClient,
+        client: MistScopedEvidenceClient,
         credential: str,
         neighbor_context: tuple[UUID, int] | None,
         sources: list[InvestigationEvidence],
-    ) -> NeighborEvidence:
+    ) -> NeighborEvidence | ApEvidence:
         target = next(t for t in plan.neighbor_targets if t.handle == check.target_handle)
         port = next(t for t in plan.port_targets if t.handle == target.source_port_handle)
         source = next((e for e in sources if isinstance(e, PortEvidence) and e.target_handle == port.handle), None)
@@ -494,7 +495,8 @@ class ImpactInvestigationService:
             )
             candidate = await store.load(root, expected, target.binding, source)
         except ValueError:
-            return NeighborEvidence(
+            evidence_type = ApEvidence if check.check_id == "neighbor-ap-statistics.v1" else NeighborEvidence
+            return evidence_type(
                 target_handle=target.handle,
                 window=check.window,
                 captured_at=utc_now(),
@@ -512,13 +514,23 @@ class ImpactInvestigationService:
             window=check.window,
             reserved_at=utc_now(),
         )
-        reading = await client.capture_neighbor(
-            plan=plan,
-            target=target,
-            candidate=candidate,
-            window=check.window,
-            reserve_dispatch=partial(self._reserve, root, credential, dispatch),
-        )
+        if check.check_id == "neighbor-ap-statistics.v1":
+            reading = await client.capture_ap(
+                plan=plan,
+                target=target,
+                candidate=candidate,
+                source=source,
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+        else:
+            reading = await client.capture_neighbor(
+                plan=plan,
+                target=target,
+                candidate=candidate,
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
         if reading.state != "dispatch_denied":
             await self._finish_dispatch(root, dispatch, reading)
         return reading

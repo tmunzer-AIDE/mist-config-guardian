@@ -22,6 +22,7 @@ class DispatchRecord(Contract):
         "neighbor-ap-inventory.v1",
         "switch-port-events.v1",
         "wlan-auth-events.v1",
+        "neighbor-ap-statistics.v1",
     ] = "wlan-client-sessions.v1"
     target_handle: str = Field(pattern=r"^[0-9a-f]{64}$")
     site_id: UUID
@@ -44,7 +45,7 @@ class DispatchRecord(Contract):
             if self.wlan_id is None or self.device_mac is not None or self.port_id is not None:
                 msg = "WLAN dispatch requires only a WLAN identity"
                 raise ValueError(msg)
-        elif self.check_id == "neighbor-ap-inventory.v1":
+        elif self.check_id in {"neighbor-ap-inventory.v1", "neighbor-ap-statistics.v1"}:
             if (
                 self.wlan_id is not None
                 or self.device_mac is not None
@@ -56,7 +57,10 @@ class DispatchRecord(Contract):
         elif self.wlan_id is not None or self.device_mac is None or self.port_id is None:
             msg = "Port dispatch requires only a device and port identity"
             raise ValueError(msg)
-        if self.check_id != "neighbor-ap-inventory.v1" and self.source_dispatch_id is not None:
+        if (
+            self.check_id not in {"neighbor-ap-inventory.v1", "neighbor-ap-statistics.v1"}
+            and self.source_dispatch_id is not None
+        ):
             msg = "Source references are only valid for inventory checks"
             raise ValueError(msg)
         return self

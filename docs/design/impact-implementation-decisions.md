@@ -1012,6 +1012,28 @@ of adding that read path.
 - Only observed warning/critical peaks persist across later uncertainty. An early
   unknown is not an observed outage and may be resolved by complete later evidence.
 
+## 2026-09-13 — Recent reciprocal AP adjacency
+
+- The earlier site-statistics gap does not apply to organization statistics:
+  `/orgs/{org_id}/stats/devices` documents exact MAC and site filters. A read-only
+  live probe supplied an actual device ID; its single-device statistics confirmed
+  `lldp_stat.chassis_id`, `port_id`, `ap_port_name`, `port_stat` and `last_seen`.
+  Provider notes were present and are deliberately excluded from the contract.
+- Add one bounded AP statistics check per private port candidate, independently of
+  inventory membership. Both use the encrypted resolver-issued source binding;
+  neither the public managed-device handle nor any model argument selects a MAC.
+  The executor revalidates the completed source dispatch and private binding before
+  every check, with the same lease/credential/budget fence.
+- Corroboration requires exact reciprocal switch chassis/port identity, both
+  reported interfaces up, AP connected and both observations within five minutes.
+  This is recent reported adjacency, not historical attachment, exclusive power,
+  loss of service or causation. Statistics never enter a WLAN or port verdict.
+- Maximum required evidence is now twenty checks, derived across all contracts.
+  The 56-call budget remains independent; a maximal plan funds two full checkpoints
+  plus sixteen reads. Agent and required sweep share the identical menu/cache.
+  Prompt v6 resolves repeated observation targets through their capability refs,
+  retaining full identities in immutable artifacts and the 24 KB model-input cap.
+
 ## Next implementation queue
 
 1. Build on managed AP membership with port/PoE event history and independently

@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from mist_config_guardian_backend.impact.contracts import (
+    ApEvidence,
     AuthEvidence,
     Contract,
     InvestigationEvidence,
@@ -283,6 +284,14 @@ def _dataset(index: int, reading: InvestigationEvidence) -> EvidenceDataset:
             ("PoE enabled", None if row.poe_on is None else str(row.poe_on)),
             ("Power draw (W)", row.power_draw),
             ("Observed at", row.observed_at.isoformat() if row.observed_at else None),
+        ]
+    elif isinstance(reading, ApEvidence) and reading.rows:
+        ap = reading.rows[0]
+        rows = [
+            ("Recent adjacency", ap.relationship),
+            ("Reported connected", str(ap.connected) if ap.connected is not None else None),
+            ("Observed at", ap.observed_at.isoformat() if ap.observed_at else None),
+            ("Historical dependency", ap.historical_dependency),
         ]
     else:
         rows = [("Inventory membership", "Verified" if reading.rows else None)]

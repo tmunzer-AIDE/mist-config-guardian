@@ -80,9 +80,13 @@ A missing timestamp cannot be replaced with collection time. Port evidence is
 separate context and cannot contribute to a WLAN verdict. neighbor-ap-inventory.v1
 verifies unique AP membership in the source organization/site at collection time.
 Its managed device handle is context only, never an executable check reference.
+neighbor-ap-statistics.v1 is separately authorized from the server-only source binding.
+It can corroborate recently reported reciprocal adjacency. It cannot establish
+historical attachment, sole power delivery, an outage or causation.
 Inventory membership cannot confirm an LLDP claim, a PoE dependency, a historical
 relationship or impact. Only enumerated inventory capabilities can be requested. Context handles are never check
-refs or hypothesis targets. When no capabilities exist, report with no hypotheses and
+refs or hypothesis targets. Observations with a ref in the current capability menu
+inherit target_handle from that capability when omitted. When no capabilities exist, report with no hypotheses and
 list the missing evidence in open_questions; do not describe the change as healthy.
 """
 
@@ -94,6 +98,7 @@ def _evidence_context(
 ) -> dict[str, object]:
     windows = {}
     window_ids = {}
+    menu_refs = {item.ref for item in menu}
     for item in (*menu, *observations, *history):
         key = item.window.model_dump_json()
         if key not in window_ids:
@@ -105,7 +110,10 @@ def _evidence_context(
         return {
             **item.model_dump(
                 mode="json",
-                exclude={"window"},
+                exclude={
+                    "window",
+                    *(("target_handle",) if isinstance(item, EvidenceView) and item.ref in menu_refs else ()),
+                },
                 exclude_none=True,
                 exclude_defaults=isinstance(item, EvidenceView),
             ),

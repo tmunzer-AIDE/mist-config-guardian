@@ -253,18 +253,19 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceView"
             },
-            "maxItems": 18,
+            "maxItems": 20,
             "title": "Observations",
             "type": "array"
           },
           "prompt_version": {
-            "default": "impact-investigator.v5",
+            "default": "impact-investigator.v6",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
               "impact-investigator.v3",
               "impact-investigator.v4",
-              "impact-investigator.v5"
+              "impact-investigator.v5",
+              "impact-investigator.v6"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -767,6 +768,65 @@
           }
         },
         "title": "AiSettingsUpdate",
+        "type": "object"
+      },
+      "ApAdjacency": {
+        "additionalProperties": false,
+        "properties": {
+          "connected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connected"
+          },
+          "device_failure": {
+            "const": "not_established",
+            "default": "not_established",
+            "title": "Device Failure",
+            "type": "string"
+          },
+          "device_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Device Handle",
+            "type": "string"
+          },
+          "historical_dependency": {
+            "const": "not_established",
+            "default": "not_established",
+            "title": "Historical Dependency",
+            "type": "string"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "relationship": {
+            "default": "unverified",
+            "enum": [
+              "corroborated_recent",
+              "unverified"
+            ],
+            "title": "Relationship",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_handle"
+        ],
+        "title": "ApAdjacency",
         "type": "object"
       },
       "ApprovalCreateRequest": {
@@ -1818,7 +1878,7 @@
               "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             },
-            "maxItems": 18,
+            "maxItems": 20,
             "minItems": 1,
             "title": "Checks",
             "type": "array"
@@ -2750,7 +2810,8 @@
               "switch-port-snapshot.v1",
               "neighbor-ap-inventory.v1",
               "switch-port-events.v1",
-              "wlan-auth-events.v1"
+              "wlan-auth-events.v1",
+              "neighbor-ap-statistics.v1"
             ],
             "title": "Check Id",
             "type": "string"
@@ -3247,6 +3308,16 @@
       "EvidenceView": {
         "additionalProperties": false,
         "properties": {
+          "ap_adjacency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApAdjacency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "auth_failures": {
             "anyOf": [
               {
@@ -3838,7 +3909,7 @@
             "items": {
               "$ref": "#/components/schemas/EvidenceDataset"
             },
-            "maxItems": 18,
+            "maxItems": 20,
             "title": "Datasets",
             "type": "array"
           },
@@ -4685,13 +4756,14 @@
             "type": "integer"
           },
           "prompt_version": {
-            "default": "impact-investigator.v5",
+            "default": "impact-investigator.v6",
             "enum": [
               "impact-investigator.v1",
               "impact-investigator.v2",
               "impact-investigator.v3",
               "impact-investigator.v4",
-              "impact-investigator.v5"
+              "impact-investigator.v5",
+              "impact-investigator.v6"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -7695,6 +7767,16 @@
       },
       "ShadowCheckResponse": {
         "properties": {
+          "ap_adjacency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApAdjacency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "captured_at": {
             "format": "date-time",
             "title": "Captured At",

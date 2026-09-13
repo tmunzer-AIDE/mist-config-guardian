@@ -16,7 +16,7 @@ from pymongo.errors import ConnectionFailure
 
 from mist_config_guardian_backend.impact.agent import capabilities
 from mist_config_guardian_backend.impact.contracts import NeighborEvidence
-from mist_config_guardian_backend.integrations import mist_neighbor_evidence, mist_port_evidence
+from mist_config_guardian_backend.integrations import mist_ap_evidence, mist_neighbor_evidence, mist_port_evidence
 from mist_config_guardian_backend.models import document_models
 from mist_config_guardian_backend.models.investigation import InvestigationRevision
 from mist_config_guardian_backend.models.neighbor_binding import NeighborBinding
@@ -43,7 +43,7 @@ def neighbor_runtime(monkeypatch, mode="shadow", *, mixed=False):
     monkeypatch.setattr(runtime, "get_settings", lambda: SimpleNamespace(impact_engine_mode=mode))
     # Non-millisecond timestamps exercise the real BSON precision boundary.
     precise = LATER.replace(microsecond=123456)
-    for module in (runtime, neighbor_bindings, mist_port_evidence, mist_neighbor_evidence):
+    for module in (runtime, neighbor_bindings, mist_port_evidence, mist_neighbor_evidence, mist_ap_evidence):
         monkeypatch.setattr(module, "utc_now", lambda: precise)
     use_data(service, mixed_inputs() if mixed else port_inputs())
     stored["bindings"] = []
@@ -101,7 +101,29 @@ def inventory_payload():
     }
 
 
+AP_URL = re.compile(r".*/orgs/[^/]+/stats/devices\?.*")
+
+
 def register_port(httpx_mock):
+    httpx_mock.add_callback(
+        lambda request: httpx.Response(
+            200,
+            json=[
+                {
+                    "mac": request.url.params["mac"],
+                    "org_id": str(MIST_ORG),
+                    "site_id": str(SITE),
+                    "type": "ap",
+                    "status": "connected",
+                    "last_seen": LATER.timestamp(),
+                }
+            ],
+        ),
+        method="GET",
+        url=AP_URL,
+        is_reusable=True,
+        is_optional=True,
+    )
     httpx_mock.add_callback(
         empty_response,
         method="GET",
@@ -118,7 +140,7 @@ def register_port(httpx_mock):
 
 
 @pytest.mark.parametrize("mode", ["shadow", "agent_shadow"])
-async def test_maximal_discovery_publishes_fourteen_checks_without_extra_agent_reads(monkeypatch, httpx_mock, mode):
+async def test_maximal_discovery_publishes_sixteen_checks_without_extra_agent_reads(monkeypatch, httpx_mock, mode):
     service, root, collection, artifacts, stored = neighbor_runtime(monkeypatch, mode, mixed=True)
     register_port(httpx_mock)
     httpx_mock.add_callback(
@@ -145,15 +167,15 @@ async def test_maximal_discovery_publishes_fourteen_checks_without_extra_agent_r
             assert "secret-" not in str(context)
             observed = {e["ref"] for e in context["observations"]}
             missing = [c["ref"] for c in context["capabilities"] if c["ref"] not in observed]
-            assert len(context["capabilities"]) == 14
+            assert len(context["capabilities"]) == 16
             return ai_response({"action": "collect", "checks": missing[:8]} if missing else gap_report())
 
         httpx_mock.add_callback(model, method="POST", url=AI_URL, is_reusable=True)
     await service._poll(root)  # noqa: SLF001
     assert len(artifacts) == 1
     artifact = artifacts[0]
-    assert len(capabilities(artifact.plan, artifact.evidence[0].window.end)) == 14
-    assert len(artifact.evidence) == stored["calls_used"] == len(stored["dispatches"]) == 14
+    assert len(capabilities(artifact.plan, artifact.evidence[0].window.end)) == 16
+    assert len(artifact.evidence) == stored["calls_used"] == len(stored["dispatches"]) == 16
     assert all(d["state"] == "complete" for d in stored["dispatches"])
     neighbors = [e for e in artifact.evidence if isinstance(e, NeighborEvidence)]
     assert len(neighbors) == 2
@@ -196,7 +218,7 @@ async def test_inventory_rejects_ambiguity_and_scope_without_recursive_queries(m
     assert reading.state == ("partial" if mutation in {"multiple", "missing", "cursor"} else "error")
     assert not reading.rows
     assert "secret" not in reading.model_dump_json()
-    assert len(httpx_mock.get_requests()) == stored["calls_used"] == 3
+    assert len(httpx_mock.get_requests()) == stored["calls_used"] == 4
 
 
 @pytest.mark.parametrize("committed", [False, True])
@@ -362,7 +384,7 @@ async def test_inventory_executor_rejects_unplanned_arguments_before_reserving(m
                 plan=plan, target=target, candidate=candidate, window=window, reserve_dispatch=reserve
             )
     reserve.assert_not_awaited()
-    assert len(httpx_mock.get_requests()) == 3
+    assert len(httpx_mock.get_requests()) == 4
 
 
 async def test_dynamic_maximal_plan_stops_at_fifty_six_reads(monkeypatch, httpx_mock):
@@ -375,7 +397,7 @@ async def test_dynamic_maximal_plan_stops_at_fifty_six_reads(monkeypatch, httpx_
     httpx_mock.add_response(url=INVENTORY_URL, json=inventory_payload(), is_reusable=True)
     for checkpoint in range(5):
         now = root.changed_at + timedelta(minutes=1 if checkpoint == 0 else checkpoint * 10)
-        for module in (runtime, neighbor_bindings, mist_port_evidence, mist_neighbor_evidence):
+        for module in (runtime, neighbor_bindings, mist_port_evidence, mist_neighbor_evidence, mist_ap_evidence):
             monkeypatch.setattr(module, "utc_now", lambda now=now: now)
         root.generation += 1
         stored["generation"] = root.generation
@@ -383,8 +405,10 @@ async def test_dynamic_maximal_plan_stops_at_fifty_six_reads(monkeypatch, httpx_
         await service._poll(root)  # noqa: SLF001
         for key, value in collection.update_one.await_args.args[1]["$set"].items():
             setattr(root, key, value)
+        if root.next_poll_at is None:
+            break
     assert stored["calls_used"] == len(httpx_mock.get_requests()) == 56
-    assert [len(a.evidence) for a in artifacts] == [14, 14, 14, 14, 1]
+    assert [len(a.evidence) for a in artifacts] == [16, 16, 16, 9]
     assert artifacts[-1].evidence[-1].dispatch_denial == "budget_exhausted"
     assert root.next_poll_at is None
     assert root.status == "incomplete"

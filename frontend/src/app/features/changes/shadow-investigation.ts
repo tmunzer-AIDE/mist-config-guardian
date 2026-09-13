@@ -13,6 +13,7 @@ import { DeploymentEvidence } from '../../core/deployment-evidence.model';
 import { PortSnapshot, PortSnapshotComponent } from '../../shared/port-snapshot';
 import { ManagedNeighbor, ManagedNeighborComponent } from '../../shared/managed-neighbor';
 import { DomainFinding, DomainFindingsComponent } from '../../shared/domain-findings';
+import { ApAdjacency, ApAdjacencyComponent } from '../../shared/ap-adjacency';
 import { PortEvent, PortEventsComponent } from '../../shared/port-events';
 import { DeploymentEvidenceComponent } from '../../shared/deployment-evidence';
 import { DispatchLog, DispatchLogComponent } from '../../shared/dispatch-log';
@@ -57,6 +58,7 @@ export interface ShadowReport {
     check_id: string;
     port?: PortSnapshot | null;
     port_events?: PortEvent[]; omitted_events?: number;
+    ap_adjacency?: ApAdjacency | null;
     managed_neighbor?: ManagedNeighbor | null;
     device_mac?: string | null;
     port_id?: string | null;
@@ -73,7 +75,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [ImpactAdjudicationComponent, ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
+  imports: [ApAdjacencyComponent, ImpactAdjudicationComponent, ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -130,7 +132,7 @@ export interface ShadowReport {
               <tbody>@for (check of report.checks; track $index) {
                 <tr><td>{{ check.check_id }}<br>{{ check.device_mac }} {{ check.port_id }}<br>{{ at(check.window.start) }}–{{ at(check.window.end) }}</td>
                   <td>{{ check.state === 'dispatch_denied' ? 'Not dispatched' : check.state }}</td>
-                  <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}<app-port-snapshot [port]="check.port" /><app-port-events [events]="check.port_events" [omitted]="check.omitted_events ?? 0" /><app-managed-neighbor [neighbor]="check.managed_neighbor" [capturedAt]="check.captured_at" /></td></tr>
+                  <td>{{ check.row_count }}</td><td>{{ check.reason || 'Collected' }}<app-port-snapshot [port]="check.port" /><app-port-events [events]="check.port_events" [omitted]="check.omitted_events ?? 0" /><app-ap-adjacency [value]="check.ap_adjacency" /><app-managed-neighbor [neighbor]="check.managed_neighbor" [capturedAt]="check.captured_at" /></td></tr>
               }</tbody>
             </table>
           </div>

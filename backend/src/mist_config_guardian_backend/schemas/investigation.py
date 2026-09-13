@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.impact.agent import AgentCheckpoint, CollectAction, ModelActivity, ReportAction
 from mist_config_guardian_backend.impact.contracts import (
+    ApAdjacency,
     DispatchDenial,
     ManagedNeighbor,
     PortEventRow,
@@ -34,6 +35,7 @@ class ShadowCheckResponse(BaseModel):
     dispatch_denial: DispatchDenial | None = None
     port: PortRow | None = None
     port_events: tuple[PortEventRow, ...] = Field(default=(), max_length=MAX_PORT_EVENTS)
+    ap_adjacency: ApAdjacency | None = None
     managed_neighbor: ManagedNeighbor | None = None
     response_error: PortResponseError | None = None
     device_mac: str | None = None

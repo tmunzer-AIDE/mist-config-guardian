@@ -29,6 +29,7 @@ def policy_hash() -> str:
         "integrations/mist_neighbor_evidence.py",
         "integrations/mist_port_history.py",
         "integrations/mist_auth_evidence.py",
+        "integrations/mist_ap_evidence.py",
     ):
         digest.update(path.encode())
         digest.update(package.joinpath(path).read_bytes())

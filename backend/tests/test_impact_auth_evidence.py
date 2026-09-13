@@ -112,7 +112,7 @@ def test_missing_clients_and_empty_attempts_never_mean_no_impact():
 
 
 @pytest.mark.parametrize("mode", ["shadow", "agent_shadow"])
-async def test_all_four_domains_fit_eighteen_checks_and_publish_once(monkeypatch, httpx_mock, mode):
+async def test_all_four_domains_fit_twenty_checks_and_publish_once(monkeypatch, httpx_mock, mode):
     service, root, _, artifacts, stored = neighbor_runtime(monkeypatch, mode)
     data = mixed_inputs()
     for v in data["after"]:
@@ -138,7 +138,7 @@ async def test_all_four_domains_fit_eighteen_checks_and_publish_once(monkeypatch
 
         httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
     await service._poll(root)  # noqa: SLF001
-    assert stored["calls_used"] == len(artifacts[0].evidence) == 18
+    assert stored["calls_used"] == len(artifacts[0].evidence) == 20
     assert len(artifacts) == 1
     assert all(record["state"] == "complete" for record in stored["dispatches"])
     assert InvestigationRevision.model_validate_json(artifacts[0].model_dump_json()).evidence == artifacts[0].evidence
@@ -150,7 +150,7 @@ async def test_all_four_domains_fit_eighteen_checks_and_publish_once(monkeypatch
             "wlan-authentication.v1",
             "switch-poe.v1",
         }
-    with pytest.raises(ValidationError, match="at most 18"):
+    with pytest.raises(ValidationError, match="at most 20"):
         InvestigationRevision.model_validate(
             {**artifacts[0].model_dump(), "evidence": [*artifacts[0].evidence, artifacts[0].evidence[0]]}
         )

@@ -1,3 +1,4 @@
+import { ApAdjacency, ApAdjacencyComponent } from './ap-adjacency';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { PortSnapshot, PortSnapshotComponent } from './port-snapshot';
 import { ManagedNeighbor, ManagedNeighborComponent } from './managed-neighbor';
@@ -21,7 +22,8 @@ export interface AgentCheckpoint {
     captured_at?: string | null; observed_disconnects: number | null; port?: PortSnapshot | null;
     auth_successes?: number | null; auth_failures?: number | null;
     port_events?: PortEvent[]; omitted_events?: number;
-    managed_neighbor?: ManagedNeighbor | null; gap: string; window: { start: string; end: string } }[];
+    ap_adjacency?: ApAdjacency | null;
+  managed_neighbor?: ManagedNeighbor | null; gap: string; window: { start: string; end: string } }[];
 }
 export interface ModelActivity {
   source: 'live_investigation_root';
@@ -36,7 +38,7 @@ export interface ModelActivity {
 
 @Component({
   selector: 'app-agent-investigation',
-  imports: [PortEventsComponent, ManagedNeighborComponent, ModelRequestDetailsComponent, PortSnapshotComponent],
+  imports: [ApAdjacencyComponent, PortEventsComponent, ManagedNeighborComponent, ModelRequestDetailsComponent, PortSnapshotComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (checkpoint(); as agent) {
@@ -73,7 +75,7 @@ export interface ModelActivity {
                   @if (evidence.auth_successes !== undefined && evidence.auth_successes !== null) {
                     <p>Authentication events · Successful {{ evidence.auth_successes }} · Failed {{ evidence.auth_failures ?? 'Unknown' }}</p>
                   }
-                  <app-port-snapshot [port]="evidence.port" /><app-port-events [events]="evidence.port_events" [omitted]="evidence.omitted_events ?? 0" /><app-managed-neighbor [neighbor]="evidence.managed_neighbor" [capturedAt]="evidence.captured_at" /></td><td>{{ evidence.sampled_clients ?? '—' }}</td><td>{{ evidence.observed_disconnects ?? '—' }}</td></tr>
+                  <app-port-snapshot [port]="evidence.port" /><app-port-events [events]="evidence.port_events" [omitted]="evidence.omitted_events ?? 0" /><app-ap-adjacency [value]="evidence.ap_adjacency" /><app-managed-neighbor [neighbor]="evidence.managed_neighbor" [capturedAt]="evidence.captured_at" /></td><td>{{ evidence.sampled_clients ?? '—' }}</td><td>{{ evidence.observed_disconnects ?? '—' }}</td></tr>
             }</tbody></table></div>
           <p>Counts describe returned samples; incomplete samples cannot establish absence of impact.</p>
         </details>
