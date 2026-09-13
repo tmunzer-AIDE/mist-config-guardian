@@ -82,6 +82,9 @@ secrets:
 
 config:
   environment: production
+  # legacy, shadow (deterministic), or agent_shadow (requires AI provider setup).
+  # Shadow modes retain legacy production verdicts and notifications.
+  impactEngineMode: legacy
   apiV1Prefix: /api/v1
   corsOrigins: https://guardian.example.com
   # The browser address passkeys are verified against, and the domain they are

@@ -1,3 +1,7 @@
+{{- $impactEngineMode := default "legacy" .Values.config.impactEngineMode -}}
+{{- if not (has $impactEngineMode (list "legacy" "shadow" "agent_shadow")) -}}
+{{- fail "config.impactEngineMode must be legacy, shadow, or agent_shadow" -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,6 +12,7 @@ data:
   APP_NAME: Mist Config Guardian
   APP_VERSION: {{ .Chart.AppVersion | quote }}
   ENVIRONMENT: {{ .Values.config.environment | quote }}
+  IMPACT_ENGINE_MODE: {{ $impactEngineMode | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
   WEBAUTHN_ORIGIN: {{ include "mist-config-guardian.webauthnOrigin" . | quote }}

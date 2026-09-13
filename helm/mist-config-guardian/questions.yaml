@@ -3,6 +3,16 @@ categories:
   - Security
 
 questions:
+  - variable: config.impactEngineMode
+    default: legacy
+    type: enum
+    options:
+      - legacy
+      - shadow
+      - agent_shadow
+    label: Impact engine mode
+    description: Shadow modes retain legacy production verdicts and notifications. Agent shadow requires AI provider configuration.
+    group: Workloads
   - variable: replicaCount
     default: 1
     type: int

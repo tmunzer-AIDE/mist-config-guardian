@@ -132,6 +132,22 @@ The chart includes `questions.yaml` for guided installation in Rancher-compatibl
 catalog UIs. Configure the container images, workload sizing, the datastores,
 networking, and application secrets through the form.
 
+Set `config.impactEngineMode` to `legacy` (default), `shadow` (deterministic
+audit investigations), or `agent_shadow` (also runs the configured AI provider).
+Both shadow modes retain legacy production verdicts and notifications. The setting
+is also available in the Rancher Workloads form. ConfigMap checksums roll the API,
+worker and scheduler when it changes. For an existing release, preserve its values:
+
+```bash
+helm upgrade config-guardian ./helm/mist-config-guardian \
+  --namespace mist --reuse-values \
+  --set config.impactEngineMode=shadow --wait --timeout 5m
+```
+
+Use your own release name and namespace if different. `agent_shadow` additionally
+requires AI provider configuration in the application. Changing this value does
+not promote audit verdicts to production.
+
 MongoDB, Redis, and InfluxDB are deployed with the release by default, each with
 a persistent volume. Set `mongodb.enabled`, `redis.enabled`, or
 `influxdb.enabled` to `false` to point the application at an existing service
