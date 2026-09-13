@@ -162,9 +162,7 @@ async def mist_login(  # noqa: PLR0913, PLR0917
     try:
         _credential, identity = await mist.login(payload, payload.region)
     except MistMfaRequiredError as exc:
-        raise HTTPException(
-            status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}
-        ) from exc
+        raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
     except MistVerificationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     user = await User.find_one(
