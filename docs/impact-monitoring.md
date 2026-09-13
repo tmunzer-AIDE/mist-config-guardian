@@ -28,7 +28,56 @@ also opens in a full-screen dialog; Escape returns to the inline view and preser
 the scroll position. Protected values remain redacted, so identical placeholders
 are not presented as confirmed raw-text changes.
 
-## Timing
+## Audit investigation status
+
+The bounded audit engine is implemented for opt-in `shadow` and `agent_shadow`
+comparison. Production remains `legacy`. In either shadow mode the old AI narrator
+is suppressed; only `agent_shadow` runs the new bounded investigator. One audit owns
+one investigation, including changes deployed to many devices. Configured-device
+receipts are deployment context, not proof of impact or an expected-fleet denominator.
+
+The current domains are WLAN removal/disable, selected WLAN authentication changes,
+concrete switch-port availability and PoE changes. Unsupported changes stay unmapped.
+Typed reports contain impact/confidence bands, current and historical peak impact,
+source evidence tables/charts/timelines, gaps and scoped device associations. The
+optional topology overlay does not change live device health. Logs and revision history
+remain separately inspectable; human adjudication never runs through the agent.
+
+See [release readiness](design/impact-release-readiness.md) for exact coverage,
+budgets and the acceptance-dependent production migration. The timing and collection
+behavior below describes the retained legacy device-monitoring path.
+
+## Legacy timing
+
+Impact assessments now persist the verdict, evidence coverage, relevance plan and
+per-metric comparison together. API views read that result; older sessions use one
+explicit compatibility projection. Scalar severity/summary fields remain mirrors
+for existing indexes and clients. Current monitoring passes `legacy_all`, preserving
+the existing evidence selection while audit-specific rules run in shadow comparison.
+
+Metric rows include the union of planned and recorded metric identities, including
+failed or unsampled metrics. Each side records its evidence state and nullable
+value; missing values never render as zero or receive an invented delta. Known
+scope identities must match. Collection-wide discovery failures remain separate
+from metric failures. An explicitly empty relevance plan selects no evidence;
+selected plans independently filter SLEs, incidents and operational finding kinds.
+
+API compatibility: `ImpactMetric.baseline` and `latest` are now nullable, as is an
+unavailable delta. External clients must accept null and use evidence state instead
+of assuming every row contains floats. Regenerate clients from `docs/openapi.json`
+before adopting this contract; null must not be converted to zero.
+
+The site view uses `error` health for failed monitoring/deployment sessions unless
+their assessment is already critical, which remains critical. This lifecycle
+presentation keeps failures filterable without changing the stored impact verdict.
+
+The legacy Changes-view baseline-confidence band counts only observations with
+complete comparable evidence for the selected metrics. Failed, unsampled,
+incomparable or unselected observations do not increase the count; an unusable
+latest comparison keeps confidence low. This is a collection/comparison quality
+heuristic, not causal confidence. Group metric tiles retain the actual worst
+comparison and unique affected-scope counts, keeping site and device scopes
+separate. They do not average healthy and degraded devices.
 
 A supported Mist `device-events` configuration trigger immediately starts an
 active monitoring session. Guardian requests device-scoped SLE summaries for the
@@ -76,6 +125,9 @@ Observations now record whether their scope is a site or a device. Legacy baseli
 polling site SLE; new device baselines continue polling device SLE. Different
 scopes are never compared. HTTP failures, malformed responses and unexplained
 missing metrics prevent a clean verdict and appear explicitly in the Impact page.
+A legacy baseline with unknown scope identity cannot be compared to a newly
+identified observation. Preserve the known identity and both measurements, omit
+the delta, mark coverage insufficient and record a session warning.
 Valid responses with no sampled traffic are recorded in `no_data`, separately
 from `errors`. They contribute to collection coverage but receive no invented
 success rate or numeric delta. A quiet roaming or join metric therefore does not
@@ -152,3 +204,324 @@ and documentation checks do not establish live endpoint compatibility.
 The committed OpenAPI document is generated with `make openapi` and validated by
 `make check`. Its version comes from the backend package, independent of the
 working directory, local `.env` files and `APP_VERSION` overrides.
+
+
+## Audit-owned WLAN shadow preview
+
+`IMPACT_ENGINE_MODE=shadow` enables the first deterministic audit investigation.
+Set the same value on the API and worker processes and restart them; the default
+is `legacy`. This does not enable an AI investigator or change the published
+impact/notification verdict. It suppresses the old per-device AI narrator while
+legacy deterministic monitoring continues for comparison.
+
+New audit receipts create one investigation per organization/audit. Initial
+collection waits 60 seconds. The existing worker tick services subsequent
+checkpoints around +10 through +60 minutes from the audit timestamp. A retry or
+late configured event does not create another investigation or reset its budget.
+
+The first rule recognizes site WLAN deletion or disablement from immutable
+configuration versions and scopes historical client-session queries by site and
+WLAN UUID. Unsupported attributes, organization WLAN consumer assignment,
+missing history, changed incarnations and exhausted limits remain visible gaps.
+Historical disconnects are possible disruption, not proof of AP failure or
+causation. AP health and aggregate site SLEs cannot enter this rule's verdict.
+
+In **Changes**, open a change and choose **Review shadow evidence**. The on-demand
+preview shows impact/confidence bands, scoped findings, serving AP identities,
+coverage gaps and normalized collection outcomes. It does not expose raw client
+identifiers. It is available only in the current view, and is a diagnostic preview
+rather than the final common report/chart contract or a topology impact overlay.
+
+In shadow mode, Changes rows, change details and the Overview feed also show a
+shared compact audit assessment: result, confidence, session-evidence coverage
+and report revision. Expanded summaries include the evidence timestamp, policy,
+gaps and unmapped-attribute counts. A stopped investigation cannot present an
+earlier clean checkpoint as a completed clean investigation.
+
+Overview's **Shadow review** counts describe only the returned feed (up to 50
+changes), including rows hidden by its local actor/impact filter. They partition
+that feed into possible disruption, no observed disconnect, insufficient evidence,
+awaiting evidence, unavailable assessment and no investigation recorded. They are
+not organization-wide outage counts. Production badges, filters, aggregate totals
+and notifications continue to use the legacy projection until acceptance.
+
+API additions: change summaries/details expose `impact_source` and nullable
+`shadow_impact`; Overview exposes nullable `shadow_feed_counts`, and its existing
+`counts` identifies `impact_source`. Historical impact sources are null. In legacy
+mode or historical views, the shadow fields are null and no shadow batch reads run.
+In shadow mode, a missing investigation is an explicit `not_recorded` result, not
+null or a clean verdict. An unreadable publication is `unavailable`. The detailed
+investigation response also includes the same compact `shadow_impact` contract.
+These are additive fields; existing severity fields retain their meaning.
+
+The detailed shadow report now also includes **Configuration deployment evidence**.
+It lists observed device outcomes and event receipts, with separate occurrence and
+receipt times. An explicit audit ID is distinguished from a session-only candidate.
+Shared-session candidates, uncertain timing and conflicting simultaneous outcomes
+remain unknown. A candidate outcome that conflicts with the latest explicit outcome
+for the same site/device makes the device row unknown with ambiguous association,
+even when the candidate is older or untimed. Matching candidates do not confirm
+deployment. A successful configuration event does not prove device health;
+failed/reverted delivery is likewise separate from an observed outage.
+
+The expected device count is unknown, and coverage is limited to observed receipts.
+Empty evidence is not proof of complete deployment. Collection limits and older
+unnormalized receipts create visible gaps. At the 2,000-receipt cap, collection keeps
+the newest arrivals (receipt ID breaks ties) and reports missing earlier history;
+occurrence time still orders outcomes within the retained set. New receipts are normalized during
+authenticated ingestion in both modes; shadow checkpoints read only the normalized
+fields. Existing report revisions have `deployment: null` and display “not collected.”
+Each new revision preserves its own device list rather than rebuilding it at read
+time. Device identities in this table do not create operational checks or topology
+impact markers. Events arriving after a terminal investigation stay in receipt
+storage and do not restart the hour.
+
+The preview also exposes **Live collection activity**, bounded to 56 attempts on
+the audit root. Budget reservation and journal insertion share one atomic write
+before each request. Completed checks record HTTP status, bytes consumed and parsed
+row counts; raw responses and credentials are not logged. An unfinished reservation
+means outcome unknown and does not prove that Mist received the request. Older
+reservations without journal entries are counted explicitly. A stale worker can
+complete only its own log entry; it still cannot publish a stale assessment.
+
+This live activity may include attempts outside the published report revision,
+including requests whose worker crashed before publication. Its candidate revision
+is not a publication reference. Assessment and deployment evidence remain pinned to
+the published artifact. Journal collection applies only to shadow investigations;
+legacy device monitoring and production notification behavior remain unchanged.
+
+Queries are read-only, limited to four WLAN targets, 56 requests per audit and one
+bounded page per check. Current organization status, credential identity, budget
+and worker lease are verified before each request. Each published revision pins
+its normalized evidence; repeated checkpoints retain separate immutable artifacts.
+The preview follows only the published root pointer, never a losing worker's
+unpublished artifact. Raw MCP transcript archival, retention cleanup, historical report navigation and
+production migration remain future work. The bounded AI loop and metadata journals
+are described below.
+
+Implementation decisions and rollout gates are recorded in
+[impact-implementation-decisions.md](design/impact-implementation-decisions.md).
+
+### Dispatch authorization diagnostics
+
+New denied checks use `state: dispatch_denied` and a nullable enum field,
+`dispatch_denial`, in the investigation preview. The reasons distinguish
+`credentials_unavailable`, `credentials_changed`, `window_expired`, `lease_lost`,
+`budget_exhausted`, `journal_full` and `reservation_rejected` (unknown cause).
+The collection table displays the fixed explanation. Historical
+`budget_exhausted` evidence stays readable without inventing a more precise cause.
+
+Collection stops on the first denial, with no request journal entry or budget
+charge for that check. A rejected atomic reservation can trigger one bounded
+local diagnostic read; this identifies the visible blocker at read time and
+cannot authorize dispatch. Failed or uncertain reservation writes still prevent
+HTTP execution. Any published result still requires the current worker's fence.
+
+The activity table's byte count is consumed response content, not the response's
+advertised size. HTTP errors may have a status but no size because collection
+stopped before reading their body. Unknown sizes and unfinished attempts must not
+be interpreted as measured zero.
+
+### Bounded agent preview
+
+`IMPACT_ENGINE_MODE=agent_shadow` opts into the initial investigator using the
+application's enabled AI provider. Default `legacy` and deterministic `shadow`
+remain available. Both shadow modes suppress the former device-level AI narrator;
+production impact, notifications and counts remain based on the existing assessment
+path until adjudicated acceptance and consumer promotion.
+
+The agent receives immutable WLAN removal/disable semantics plus bounded general
+change context from audit configuration versions: object type, scope, recorded
+operation and top-level attribute presence changes. Values and dynamic keys are
+withheld. Direct changed-device candidates come from validated immutable MAC/site/type
+and can be associated with matching deployment receipt handles. They are context,
+not query permissions or proof of impact; template consumers and physical/service
+dependencies remain unresolved. The projection always assumes changes effective
+when merge or inheritance semantics are unknown.
+
+The operational catalogue contains historical WLAN client-session checks and
+concrete changed switch-port snapshots and source-bound AP inventory verification (described below).
+For other changes the agent can describe missing evidence through a summary and open
+questions, while deterministic impact remains unmapped. It does not yet have general
+Mist MCP access, general inventory discovery, port events, OAS retrieval or arbitrary
+configuration investigation. Rules' required checks still run if the agent omits
+them or cannot produce a valid report. The rule accepts production snapshot type
+`wlans` as well as the earlier `wlan` spelling.
+
+General context includes at most eight objects and six top-level attributes per
+object, with explicit omission counts. Unknown or conflicting immutable versions
+remain gaps. One 200-device audit still owns one agent and its existing model-call
+budget. New requests use prompt version `impact-investigator.v4`; historical v1/v2/v3
+records remain readable. General context alone adds no Mist reads; unsupported audits can spend bounded
+AI calls in `agent_shadow`. Resolved port scopes add checks in both shadow modes.
+
+Each checkpoint allows three model requests; each audit allows 21 requests and
+504,000 reserved input-content bytes. Each request admits at most 24,000 input
+bytes, requests at most 1,500 output tokens and validates bounded JSON actions.
+Actual token usage remains nullable. Existing lower persisted limits are honored.
+Model responses cannot select arbitrary URLs, entities, windows or evidence refs.
+Mist calls retain their separate 56-request audit budget and existing journal.
+
+The preview adds `agent` (published revision) and `model_activity` (live root).
+Hypotheses, their cited evidence, limitations and open questions use one schema.
+The model supplies neither production severity nor confidence. Saved context retains
+its source revision; previous observations are distinguished from current evidence.
+Live model activity contains request metadata, usage, digests and artifact references,
+with unfinished attempts explicitly unknown. Normalized input context and validated
+actions are stored in separate request artifacts and fetched only after clicking
+“Load request context and action.” This is not a raw transcript archive.
+
+Preview API compatibility: `model_activity.records` no longer embeds `input_json`
+or `action`. Use the viewer-protected endpoint
+`GET /organizations/{organization_id}/change-groups/{change_group_id}/investigation/model-requests/{request_id}`
+for one request's bodies. It follows the audit journal's exact artifact references
+and verifies their scope, request identity and content digests. Missing or unverifiable
+bodies stay unavailable. Older embedded payloads remain readable on demand with an
+explicit legacy label; they have no independently recorded content digest. Worker
+and preview reads exclude those old embedded bodies without deleting stored history.
+
+Agent-selected checks and the deterministic required sweep share the same bounded
+capability set and collection cache. Agent participation adds no Mist calls; future
+discovery must preserve that property by extending the shared plan.
+
+
+### Concrete switch-port snapshots
+
+Both shadow modes now resolve up to two concrete changed switch ports per audit
+checkpoint from immutable device configurations. The supported containers are
+`port_config` and `port_config_overwrite`; concrete `ge`, `xe` and `et` interfaces
+are admitted. Removed entries are included. Ranges, aggregate interfaces, dynamic
+selectors, profile/template consumers and cross-incarnation device identities
+remain unresolved. Missing baselines assume effective and allow known current
+concrete entries, with a gap for potentially missing removed entries. This is a
+scope resolver, not a rule declaring impact for every changed port attribute.
+
+Each `switch-port-snapshot.v1` check performs exactly one site port-search request,
+filtered to the validated switch MAC and port. The same menu, cache, dispatch
+journal, credential checks and 56-call audit budget apply to model selections and
+the mandatory sweep. Mixed audits may have eight WLAN checks and two port checks
+per checkpoint; budget exhaustion can stop the investigation before the hour ends.
+An encrypted, source-linked candidate may authorize the bounded AP inventory check below.
+No pagination link is followed.
+
+The endpoint returns current or most recent state, not historical transitions.
+`window` on this check denotes the investigation interval, not a provider history
+query. Missing observation time stays unknown; collection time cannot replace it.
+Zero power draw and false link/PoE state remain distinct from unavailable values.
+Empty, duplicate or truncated responses remain partial, never inferred port-down
+results. Site, device, port and device type must match the requested scope.
+
+Public evidence retains normalized state and an audit/port-bound unverified neighbor handle.
+LLDP does not establish a managed AP or identify which device consumes PoE. Provider
+names, descriptions and raw neighbor MACs are excluded from reports, model inputs and
+activity records. The raw candidate MAC survives only encrypted in a private artifact.
+The public neighbor handle itself grants no checks.
+Port snapshots are pinned to the published revision and shown in the collection
+preview even when the model never requests them; selected snapshots also appear
+under evidence supplied to the agent. They cannot contribute to the WLAN verdict.
+Port-related changes remain unmapped pending historical evidence and evaluation.
+
+Preview compatibility: client counts on agent evidence are nullable for non-client
+checks; `port` holds the separate snapshot. Dispatch `wlan_id` is nullable for port
+checks, which instead require `device_mac` and `port_id`. Existing WLAN records
+remain readable. Impact matching uses registry families; the legacy singular WLAN
+alias is handled centrally, outside rule predicates.
+
+
+Mixed WLAN/port/inventory revisions accept the complete twelve-check set. Plan target limits,
+published evidence capacity and agent observation capacity share one derived bound;
+the 56-request audit budget is unchanged. All compilers examine the same sorted
+64-version prefix, and the port resolver reports its own truncation, removed-device
+and multiple-version gaps.
+
+Port collection checks and agent observations may include `response_error`:
+`scope_mismatch`, `invalid_timestamp` or `invalid_response`. These signify rejected
+provider evidence, not a transport outage. They retain `state=error`, accept no rows,
+and display fixed explanations. HTTP errors and transport timeouts remain separately
+worded failures. Historical records without a code retain their original meaning.
+
+### Source-bound managed AP verification
+
+When a complete port snapshot contains a valid neighbor candidate, collection stores
+its normalized MAC encrypted in the private `impact_neighbor_bindings` collection.
+The artifact authenticates the organization, audit, investigation, generation,
+candidate revision, completed source dispatch/check, immutable switch/port target,
+source timestamps and expiry. Timestamp precision is normalized before encryption
+and hashing so a MongoDB round trip preserves the authenticated identity. The
+private artifact must be written before completing the source dispatch. Uncertain
+writes halt the checkpoint; missing, stale or mismatched bindings grant no request.
+
+Both shadow modes collect port prerequisites first, then add at most two
+`neighbor-ap-inventory.v1` capabilities to the same required menu/cache. Each makes
+one exact MAC/site/type=`ap` search in the configured Mist organization's inventory,
+with a two-row limit, 64 KiB response bound and no pagination or recursive discovery.
+Every request uses the existing lease, fresh service-credential, budget and journal
+reservation guards. Agent participation adds no Mist reads. A model may skip a
+check, but the required sweep still performs it within the available allowance.
+
+Only a unique row matching the exact MAC, organization, site and AP type verifies
+inventory membership. Missing/unassigned/re-homed devices, multiple results and
+virtual-chassis aliases remain unresolved. Switch and gateway neighbor verification
+is deferred. This check establishes membership at collection time, not the truth
+of an LLDP claim, a powered-device relationship, pre-change usage or an outage.
+No downstream AP operational check or impact finding is authorized in this slice.
+
+Public `managed_neighbor` evidence contains an opaque device handle, `kind=ap`,
+`identity=verified_inventory` and `relationship=unverified`. Inventory dispatches
+carry `source_dispatch_id` instead of a raw neighbor identity. Reports and model
+context never expose the private binding, ciphertext or candidate MAC. Existing
+neighbor digests cannot be decoded or backfilled; active checkpoints obtain fresh
+budgeted observations. Private artifacts, including orphan inserts, have a MongoDB
+TTL pinned to the organization's monitoring retention at creation. Later policy
+changes do not rewrite that pinned expiry; comprehensive retention reconciliation
+remains in the queue.
+
+The default 56-call audit allowance remains an independent spending ceiling, shared
+with journal capacity in `impact/limits.py`. A maximal twelve-check plan would need
+84 calls for the ordinary seven-checkpoint schedule. It funds four full checkpoints
+and eight reads at the fifth (ordinarily near +40 minutes), then records a denial
+for the next check. A ten-check plan without inventory still funds five full
+checkpoints and six reads at the sixth. Smaller saved budgets, prior reservations
+and failed attempts can exhaust earlier. The ten-publication cap is a lifecycle
+safety limit. After fenced terminal publication, `next_poll_at` is cleared; the
+normal worker does not keep publishing denial-only revisions.
+
+
+### Scoped port event history and service findings
+
+Validated changed ports now add `switch-port-events.v1` to both shadow modes.
+One bounded site event search covers the hour before the audit through the current
+checkpoint, filtered by switch MAC; only exact-port allowlisted events survive.
+Provider prose and events for other ports cannot contribute. Truncated history is
+partial, and no events is not proof of a healthy link or powered device.
+
+`domain_findings` carries separate port-link and port-power findings. Link loss
+requires prior up evidence. Port-power loss requires actual recent pre-change
+positive power delivery plus a post-change PoE-disable event; merely enabling PoE
+is insufficient. These findings identify the switch port service, not an AP outage.
+They can contribute a provisional critical result with incomplete overall coverage.
+New assessments use `impact-domains.v1`; legacy WLAN-only assessments remain readable.
+
+The maximum checkpoint now has fourteen checks. The 56-call budget funds four
+complete maximal checkpoints, then stops on the next denied check. Smaller plans
+retain more of the hour. The agent sees at most twenty of the two hundred retained
+port events, with explicit omissions; the report's collection evidence keeps the
+full retained set. No producer claims a clean result from an omitted event tail.
+
+
+### WLAN authentication and domain guidance
+
+Authentication changes add one exact-WLAN event-history check. When a change also
+removes/disables the WLAN, the lifecycle session checks remain required. The
+largest combined plan is eighteen checks; the 56-call allowance is unchanged.
+The evaluator pairs client identities across the audit, keeps missing attempts
+unknown, and requires positive evidence for recovery. Serving AP identity does not
+mean AP failure. Scoped authentication success/failure event counts appear in the
+agent evidence view; counts are not rates or unobserved fleet totals.
+
+Four application-owned domain skills are loaded by the worker from a content-verified
+manifest. Their IDs/hashes appear in the report's agent section. Prompt v5 shares
+repeated windows by reference and includes at most four historical observations
+with an omission count; full published evidence is retained separately. Earlier
+prompt versions and reports remain readable. Skills and model output cannot expand
+the server-issued capability menu or alter deterministic ratings.

@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     webauthn_rp_name: str = "Mist Config Guardian"
     webauthn_origin: str = "http://localhost:4200"
 
+    # Shadow runs deterministic audit rules and suppresses the old per-device AI narrator.
+    impact_engine_mode: Literal["legacy", "shadow", "agent_shadow"] = "legacy"
+
     ai_request_timeout_seconds: float = 45.0
     ai_max_response_tokens: int = 1500
 

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 
+from mist_config_guardian_backend.impact.deployment import normalize_deployment
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
 from mist_config_guardian_backend.models.webhook import (
@@ -123,6 +124,8 @@ class WebhookIngestionService:
                 signature_version=signature_version,
                 source_ip=source_ip,
                 status=WebhookProcessingStatus.QUEUED,
+                deployment_normalized=True,
+                deployment=normalize_deployment(topic, event),
             )
             try:
                 await receipt.insert()

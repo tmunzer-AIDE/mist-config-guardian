@@ -158,3 +158,27 @@ async def test_test_connection_reports_rate_limit(httpx_mock: HTTPXMock) -> None
 
     assert ok is False
     assert "429" in detail
+
+
+async def test_completion_response_size_is_bounded(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, content=b"x" * 2048)
+    async with OpenAiCompatibleProvider(
+        base_url=BASE_URL, model="test-model", api_key="", max_response_bytes=1024
+    ) as provider:
+        with pytest.raises(AiProviderError, match="byte limit"):
+            await provider.complete([AiMessage(role="user", content="evidence")])
+
+
+@pytest.mark.parametrize("usage", [-1, True, "123"])
+async def test_invalid_provider_token_counts_remain_unknown(httpx_mock: HTTPXMock, usage) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url=COMPLETIONS_URL,
+        json={
+            "choices": [{"message": {"content": "{}"}}],
+            "usage": {"prompt_tokens": usage, "completion_tokens": usage},
+        },
+    )
+    async with _provider() as provider:
+        result = await provider.complete([AiMessage(role="user", content="evidence")])
+    assert result.request_tokens is result.response_tokens is None

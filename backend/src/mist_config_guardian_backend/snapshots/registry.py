@@ -1,7 +1,13 @@
 """Restorable Mist configuration object registry."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal
+
+
+class ObjectFamily(StrEnum):
+    WLAN = "wlan"
+    DEVICE = "device"
 
 
 @dataclass(frozen=True)
@@ -12,6 +18,7 @@ class ObjectDefinition:
     label: str
     scope: Literal["org", "site"]
     endpoint: str
+    family: ObjectFamily | None = None
     is_list: bool = True
     name_fields: tuple[str, ...] = ("name",)
     request_params: tuple[tuple[str, str], ...] = ()
@@ -120,6 +127,7 @@ ORG_OBJECTS: tuple[ObjectDefinition, ...] = (
     ),
     ObjectDefinition(
         key="wlans",
+        family=ObjectFamily.WLAN,
         label="Organization WLANs",
         scope="org",
         endpoint="/api/v1/orgs/{org_id}/wlans",
@@ -332,6 +340,7 @@ SITE_OBJECTS: tuple[ObjectDefinition, ...] = (
     ),
     ObjectDefinition(
         key="wlans",
+        family=ObjectFamily.WLAN,
         label="Site WLANs",
         scope="site",
         endpoint="/api/v1/sites/{site_id}/wlans",
@@ -339,6 +348,7 @@ SITE_OBJECTS: tuple[ObjectDefinition, ...] = (
     ),
     ObjectDefinition(
         key="devices",
+        family=ObjectFamily.DEVICE,
         label="Devices",
         scope="site",
         endpoint="/api/v1/sites/{site_id}/devices",
@@ -425,3 +435,14 @@ def get_definition(scope: str, object_type: str) -> ObjectDefinition | None:
     """Look up a registry definition by persisted scope and type."""
     definitions = SITE_OBJECTS if scope == "site" else ORG_OBJECTS
     return next((item for item in definitions if item.key == object_type), None)
+
+
+def impact_definition(scope: str, object_type: str) -> ObjectDefinition | None:
+    """Resolve persisted impact vocabulary, including the historical singular alias.
+
+    Impact consumers compare registry families, never duplicate persisted keys.
+    This compatibility alias does not alter snapshot capture or restore routing.
+    """
+    if scope not in {"org", "site"}:
+        return None
+    return get_definition(scope, {"wlan": "wlans"}.get(object_type, object_type))

@@ -17,6 +17,7 @@ celery_app = Celery(
         "mist_config_guardian_backend.tasks.monitoring",
         "mist_config_guardian_backend.tasks.change_groups",
         "mist_config_guardian_backend.tasks.hashes",
+        "mist_config_guardian_backend.tasks.investigation_retention",
     ],
 )
 celery_app.conf.update(
@@ -25,6 +26,7 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     timezone="UTC",
     beat_schedule={
+        "impact-retention": {"task": "impact.maintain_retention", "schedule": 3600.0},
         "poll-active-monitoring": {
             "task": "monitoring.poll_active",
             "schedule": 60.0,

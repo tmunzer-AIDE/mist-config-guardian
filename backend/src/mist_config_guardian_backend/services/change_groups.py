@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from beanie import PydanticObjectId
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
@@ -45,6 +46,8 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupSummaryResponse,
     ChangeMetricResponse,
 )
+from mist_config_guardian_backend.services.audit_impact_reads import AuditImpactReader, PublishedAuditImpactReader
+from mist_config_guardian_backend.services.impact_evidence import evidence_coverage, evidence_rows
 from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, SITE_OBJECTS
 
 # The design prints impact deltas with a typographic minus, not a hyphen. The
@@ -59,7 +62,7 @@ TILE_BAND = -5.0
 WARNING_BAND = -10.0
 CRITICAL_BAND = -25.0
 
-# Polls a session needs before its baseline counts as strong evidence.
+# Usable comparisons required by the legacy baseline-confidence rubric.
 HIGH_CONFIDENCE_SAMPLES = 6
 
 _RANGE_WINDOWS: Mapping[str, timedelta] = {
@@ -186,13 +189,21 @@ def _metric_phrase(metric: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class MetricMovement:
-    """One SLE metric's measured movement across a change group's sessions."""
+    """Worst actual comparison within one metric/scope family, with unique counts.
+
+    ``baseline`` and ``latest`` are the paired values of the single ``scope_id``
+    with the worst delta, never population means. ``sessions`` counts distinct
+    comparable scopes in the family; ``degraded_sessions`` counts affected scopes
+    across that population, not observations belonging to the selected scope.
+    """
 
     metric: str
     baseline: float
     latest: float
     sessions: int
     degraded_sessions: int
+    scope: str = "device"
+    scope_id: str = ""
 
     @property
     def delta(self) -> float:
@@ -584,7 +595,12 @@ def build_metrics(
         ChangeMetricResponse(
             label=_metric_label(movement.metric),
             value=f"{movement.latest:.0f}%",
-            **{"from": f"from {movement.baseline:.0f}%"},
+            **{
+                "from": (
+                    f"from {movement.baseline:.0f}% · worst {movement.scope} {movement.scope_id}; "
+                    f"{movement.degraded_sessions}/{movement.sessions} affected"
+                )
+            },
             severity=movement.severity,
         )
         for movement in banded
@@ -676,9 +692,9 @@ def build_assessment(evidence: GroupEvidenceInput, recovery: RecoveryState) -> s
         return "No monitored metric moved beyond the noise band during the window."
     metric = _metric_phrase(worst.metric).capitalize()
     points = abs(round(worst.delta))
-    noun = evidence.device_noun
     first = (
-        f"{metric} fell {points} points across {worst.degraded_sessions} of {evidence.session_count} monitored {noun}"
+        f"{metric} fell {points} points in the worst measured {worst.scope} scope; "
+        f"{worst.degraded_sessions} of {worst.sessions} measured {worst.scope} scopes degraded"
     )
     if recovery is RecoveryState.UNRECOVERED and evidence.monitored_for is not None:
         first = f"{first} and has not recovered in {format_duration(evidence.monitored_for)}."
@@ -702,10 +718,10 @@ def _competing_clause(evidence: GroupEvidenceInput) -> str:
     site = _site_phrase(evidence.site_labels)
     count = len(evidence.competing_group_ids)
     if not count:
-        return f"no other change group touched {site}, so the regression is attributable to this change group"
+        return f"no competing change was recorded at {site}; timing alone does not establish causation"
     if count == 1:
-        return f"1 other change group touched {site}, so attribution is shared with that change"
-    return f"{count} other change groups touched {site}, so attribution is shared with those changes"
+        return f"1 other change group touched {site}; attribution remains uncertain"
+    return f"{count} other change groups touched {site}; attribution remains uncertain"
 
 
 def _site_phrase(site_labels: Sequence[str]) -> str:
@@ -748,31 +764,45 @@ def build_evidence(
 
 
 def measure_movements(sessions: Sequence[MonitoringSession]) -> tuple[MetricMovement, ...]:
-    """Average each metric's baseline and latest observation across sessions."""
-    totals: dict[str, list[tuple[float, float]]] = {}
+    """Keep actual worst comparisons; never average devices or mix scope families."""
+    scopes: dict[tuple[str, str], dict[str, tuple[float, float]]] = {}
     for session in sessions:
         latest = session.observations[-1] if session.observations else None
         if session.baseline is None or latest is None:
             continue
-        for metric, baseline in session.baseline.values.items():
-            current = latest.values.get(metric)
-            if current is not None:
-                totals.setdefault(metric, []).append((baseline, current))
+        scope = session.baseline.scope
+        scope_id = session.baseline.scope_id or (session.site_id if scope == "site" else session.device_mac)
+        rows = (
+            session.assessment.metrics
+            if session.assessment
+            else evidence_rows(session.baseline, latest, session.relevance_plan)
+        )
+        for row in rows:
+            if not row.selected or not row.comparable or row.baseline is None or row.latest is None:
+                continue
+            entities = scopes.setdefault((row.name, scope), {})
+            pair = (row.baseline, row.latest)
+            previous = entities.get(scope_id)
+            # Repeated site-wide samples must not count once per AP. Conflicting
+            # shared windows retain the worst observation instead of averaging it.
+            if previous is None or pair[1] - pair[0] < previous[1] - previous[0]:
+                entities[scope_id] = pair
     movements = []
-    for metric, pairs in totals.items():
-        baseline = sum(pair[0] for pair in pairs) / len(pairs)
-        current = sum(pair[1] for pair in pairs) / len(pairs)
-        degraded = sum(1 for before, after in pairs if after - before <= TILE_BAND)
+    for (metric, scope), entities in scopes.items():
+        scope_id, (baseline, current) = min(entities.items(), key=lambda item: (item[1][1] - item[1][0], item[0]))
+        degraded = sum(1 for before, after in entities.values() if after - before <= TILE_BAND)
         movements.append(
             MetricMovement(
                 metric=metric,
                 baseline=round(baseline, 2),
                 latest=round(current, 2),
-                sessions=len(pairs),
+                sessions=len(entities),
                 degraded_sessions=degraded,
+                scope=scope,
+                scope_id=scope_id,
             )
         )
-    return tuple(sorted(movements, key=lambda movement: (movement.delta, movement.metric)))
+    return tuple(sorted(movements, key=lambda movement: (movement.delta, movement.metric, movement.scope)))
 
 
 def resolve_recovery_state(
@@ -810,7 +840,24 @@ def resolve_baseline_confidence(sessions: Sequence[MonitoringSession]) -> Baseli
         return BaselineConfidence.NONE
     if len(with_baseline) < len(sessions):
         return BaselineConfidence.LOW
-    if all(len(session.observations) >= HIGH_CONFIDENCE_SAMPLES for session in sessions):
+    usable = [
+        [
+            evidence_coverage(
+                evidence_rows(session.baseline, observation, session.relevance_plan),
+                session.baseline,
+                observation,
+                session.relevance_plan,
+            )
+            == "complete"
+            for observation in session.observations
+        ]
+        for session in sessions
+    ]
+    # Failed polls never earn confidence, and old successes cannot conceal a
+    # currently unavailable comparison. Reuse the evaluator's selection/scope rules.
+    if not all(samples and samples[-1] for samples in usable):
+        return BaselineConfidence.LOW
+    if all(sum(samples) >= HIGH_CONFIDENCE_SAMPLES for samples in usable):
         return BaselineConfidence.HIGH
     return BaselineConfidence.MEDIUM
 
@@ -898,10 +945,18 @@ class ChangeGroupProjector:
         group.occurred_at = _resolve_occurred_at(group, changed_objects, sessions)
 
         movements = measure_movements(sessions)
-        group.impact_severity = worst_severity(session.impact_severity for session in sessions)
+        group.impact_severity = worst_severity(
+            session.assessment.severity if session.assessment else session.impact_severity for session in sessions
+        )
         group.recovery_state = resolve_recovery_state(sessions, movements)
         group.baseline_confidence = resolve_baseline_confidence(sessions)
-        group.degraded_metrics = sorted({metric for session in sessions for metric in session.degraded_metrics})
+        group.degraded_metrics = sorted(
+            {
+                metric
+                for session in sessions
+                for metric in (session.assessment.degraded_metrics if session.assessment else session.degraded_metrics)
+            }
+        )
 
         evidence = await self._collect_evidence(organization_id, group, sessions, movements)
         group.deterministic_assessment = build_assessment(evidence, group.recovery_state)
@@ -1072,8 +1127,9 @@ class ChangeGroupFilters:
 class ChangeGroupService:
     """Read model behind the change-group index and detail endpoints."""
 
-    def __init__(self, store: ChangeGroupStore | None = None) -> None:
+    def __init__(self, store: ChangeGroupStore | None = None, audit_impacts: AuditImpactReader | None = None) -> None:
         self._store = store if store is not None else BeanieChangeGroupStore()
+        self._audit_impacts = audit_impacts if audit_impacts is not None else PublishedAuditImpactReader()
 
     async def list_groups(
         self,
@@ -1122,7 +1178,7 @@ class ChangeGroupService:
         session_ids = [session_id for group in groups for session_id in group.monitoring_session_ids]
         sessions = await self._store.sessions_by_id(organization_id, session_ids)
         by_session = {session.id: session for session in sessions if session.id is not None}
-        return [
+        summaries = [
             _summarize(
                 group,
                 [by_session[key] for key in group.monitoring_session_ids if key in by_session],
@@ -1131,6 +1187,11 @@ class ChangeGroupService:
             )
             for group in groups
         ]
+        if get_settings().impact_engine_mode != "legacy":
+            impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id for group in groups])
+            for summary in summaries:
+                summary.shadow_impact = impacts.get(summary.audit_id)
+        return summaries
 
     async def get_group(
         self,
@@ -1177,6 +1238,9 @@ class ChangeGroupService:
             exclude_audit_id=group.audit_id,
         )
         summary = _summarize(group, sessions, names, viewer_email, historical=historical)
+        if not historical and get_settings().impact_engine_mode != "legacy":
+            impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id])
+            summary.shadow_impact = impacts.get(group.audit_id)
         return ChangeGroupDetailResponse(
             **summary.model_dump(by_alias=True),
             message=group.message,
@@ -1313,5 +1377,6 @@ def _summarize(
         # False says the outcome was withheld, so a client renders "not shown"
         # rather than reading the neutral defaults above as "no impact".
         impact_known=not historical,
+        impact_source=None if historical else "legacy",
         is_mine=actor_matches(group.actor, viewer_email),
     )

@@ -6,12 +6,15 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.models.monitoring import (
+    EvidenceState,
+    ImpactAssessment,
     ImpactSeverity,
     MonitoringSession,
     MonitoringStatus,
     MonitoringTimelineEvent,
 )
 from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateFinding
+from mist_config_guardian_backend.services.impact_evidence import legacy_assessment
 
 
 class SleObservationResponse(BaseModel):
@@ -19,11 +22,15 @@ class SleObservationResponse(BaseModel):
 
     captured_at: datetime
     scope: Literal["site", "device"] = "site"
+    scope_id: str | None = None
     window_start: datetime | None = None
     window_end: datetime | None = None
     values: dict[str, float]
     no_data: list[str] = Field(default_factory=list)
     errors: list[str]
+    requested_metrics: list[str] = Field(default_factory=list)
+    metric_errors: dict[str, str] = Field(default_factory=dict)
+    metric_states: dict[str, EvidenceState] = Field(default_factory=dict)
     # Per-bucket rates spanning the whole window; None marks an unsampled
     # bucket. Bucket instants derive from window_start/window_end and the
     # series length. Absent on sessions stored before the anchored baseline.
@@ -72,6 +79,8 @@ class MonitoringSessionResponse(BaseModel):
     monitoring_started_at: datetime | None
     monitoring_ends_at: datetime | None
     impact_severity: ImpactSeverity
+    assessment: ImpactAssessment | None = None
+    assessment_source: Literal["stored", "legacy"] = "legacy"
     peak_impact_severity: ImpactSeverity = ImpactSeverity.NONE
     deterministic_summary: str | None
     degraded_metrics: list[str]
@@ -90,6 +99,12 @@ class MonitoringSessionResponse(BaseModel):
             msg = "Persisted monitoring session is missing an identifier"
             raise ValueError(msg)
         timeline = sorted(session.timeline, key=lambda item: (item.occurred_at, item.received_at, item.key))
+        assessment = session.assessment or legacy_assessment(
+            session.baseline,
+            session.observations[-1] if session.observations else None,
+            session.impact_severity,
+            session.deterministic_summary,
+        )
         return cls(
             id=str(session.id),
             audit_ids=list(session.audit_ids),
@@ -118,10 +133,12 @@ class MonitoringSessionResponse(BaseModel):
             config_applied_at=session.config_applied_at,
             monitoring_started_at=session.monitoring_started_at,
             monitoring_ends_at=session.monitoring_ends_at,
-            impact_severity=session.impact_severity,
+            impact_severity=assessment.severity,
+            assessment=assessment,
+            assessment_source="stored" if session.assessment else "legacy",
             peak_impact_severity=session.peak_impact_severity,
-            deterministic_summary=session.deterministic_summary,
-            degraded_metrics=list(session.degraded_metrics),
+            deterministic_summary=assessment.summary,
+            degraded_metrics=list(assessment.degraded_metrics),
             ai_assessment=session.ai_assessment,
             ai_assessment_error=session.ai_assessment_error,
             warnings=list(session.warnings),

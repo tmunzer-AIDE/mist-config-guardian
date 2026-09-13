@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from mist_config_guardian_backend.schemas.audit_impact import ShadowFeedCounts
 from mist_config_guardian_backend.schemas.change_group import ChangeGroupSummaryResponse
 
 
@@ -17,6 +18,7 @@ class OverviewCountsResponse(BaseModel):
     unrecovered: int = 0
     pending_approvals: int = 0
     failed_restores: int = 0
+    impact_source: Literal["legacy"] | None = "legacy"
 
 
 class SafetyNetItemResponse(BaseModel):
@@ -65,3 +67,4 @@ class OrganizationOverviewResponse(BaseModel):
     # True when built as of a past instant. The feed and its counts are then
     # historical; the operational sections have no past and are left empty.
     historical: bool = False
+    shadow_feed_counts: ShadowFeedCounts | None = None

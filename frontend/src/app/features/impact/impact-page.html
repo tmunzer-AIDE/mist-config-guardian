@@ -45,7 +45,20 @@
             <p class="state-next">{{ panel.next }}</p>
           </div>
         }
-        @if (hasData()) {
+        @if (selected()?.assessment; as assessment) {
+          <p>Evidence: {{ assessment.coverage.replace('_', ' ') }}</p>
+          @if (assessment.metrics.length) {
+            <div class="metrics"><table>
+              <thead><tr><th scope="col">Metric</th><th scope="col">Baseline</th><th scope="col">Latest</th><th scope="col">Change</th></tr></thead>
+              <tbody>@for (metric of assessment.metrics; track metric.name) {
+                <tr><th scope="row">{{ metric.name }} @if (metric.selected === false) { <small>Context only</small> }</th>
+                  <td>{{ evidenceValue(metric.baseline, metric.baseline_state) }} @if (metric.baseline_error) { <small>{{ metric.baseline_error }}</small> }</td>
+                  <td>{{ evidenceValue(metric.latest, metric.latest_state) }} @if (metric.latest_error) { <small>{{ metric.latest_error }}</small> }</td>
+                  <td>@if (metric.delta !== null) { {{ metric.delta }} pp } @else { No comparable delta }</td></tr>
+              }</tbody>
+            </table></div>
+          }
+        } @else if (hasData()) {
           <div class="metrics">
             <table>
               <thead><tr><th scope="col">Metric</th><th scope="col">Baseline</th><th scope="col">Latest</th><th scope="col">Change</th></tr></thead>

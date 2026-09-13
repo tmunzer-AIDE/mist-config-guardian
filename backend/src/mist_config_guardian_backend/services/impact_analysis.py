@@ -1,27 +1,18 @@
 """Deterministic and provider-neutral impact analysis."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Protocol
 
 from mist_config_guardian_backend.models.monitoring import (
+    ImpactAssessment,
     ImpactSeverity,
     MonitoringIncident,
+    MonitoringSession,
+    RelevancePlan,
     SleObservation,
 )
 from mist_config_guardian_backend.models.telemetry import DeviceStateFinding
-
-
-@dataclass(frozen=True)
-class ImpactAssessment:
-    """Secret-safe deterministic assessment input and result."""
-
-    severity: ImpactSeverity
-    summary: str
-    degraded_metrics: tuple[str, ...]
-    metric_deltas: dict[str, float]
-    incident_types: tuple[str, ...]
-    device_findings: tuple[str, ...] = ()
+from mist_config_guardian_backend.services.impact_evidence import collection_errors, evidence_coverage, evidence_rows
 
 
 class AiImpactProvider(Protocol):
@@ -37,27 +28,33 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
     latest: SleObservation | None,
     incidents: list[MonitoringIncident],
     *,
+    relevance_plan: RelevancePlan | None = None,
     device_findings: Sequence[DeviceStateFinding] = (),
     warning_threshold: float = 10.0,
     critical_threshold: float = 25.0,
 ) -> ImpactAssessment:
     """Classify impact from SLE deltas and unresolved incidents."""
-    deltas: dict[str, float] = {}
-    if baseline is not None and latest is not None and baseline.scope == latest.scope:
-        for metric, baseline_value in baseline.values.items():
-            current = latest.values.get(metric)
-            if current is not None:
-                deltas[metric] = round(current - baseline_value, 2)
+    plan = relevance_plan if relevance_plan is not None else RelevancePlan.legacy_all()
+    rows = evidence_rows(baseline, latest, plan)
+    coverage = evidence_coverage(rows, baseline, latest, plan)
+    deltas = {row.name: row.delta for row in rows if row.selected and row.delta is not None}
+    device_findings = [
+        finding for finding in device_findings if plan.mode == "legacy_all" or finding.kind in plan.finding_kinds
+    ]
 
     degraded = tuple(sorted(metric for metric, delta in deltas.items() if delta <= -warning_threshold))
-    unresolved = [incident for incident in incidents if not incident.resolved]
+    unresolved = [
+        incident
+        for incident in incidents
+        if not incident.resolved and (plan.mode == "legacy_all" or incident.event_type in plan.incident_types)
+    ]
     critical_incident = any(incident.severity is ImpactSeverity.CRITICAL for incident in unresolved)
     critical_metric = any(delta <= -critical_threshold for delta in deltas.values())
     if critical_incident or critical_metric or any(f.severity == "critical" for f in device_findings):
         severity = ImpactSeverity.CRITICAL
     elif unresolved or degraded or device_findings:
         severity = ImpactSeverity.WARNING
-    elif deltas and _complete_sle_comparison(baseline, latest):
+    elif deltas and coverage == "complete":
         severity = ImpactSeverity.NONE
     else:
         severity = ImpactSeverity.INFO
@@ -67,6 +64,10 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
         summary += " Metrics with no sampled traffic were excluded from numeric comparisons."
 
     return ImpactAssessment(
+        plan=plan.model_copy(deep=True),
+        coverage=coverage,
+        metrics=rows,
+        collection_errors=collection_errors(baseline, latest),
         severity=severity,
         summary=summary,
         degraded_metrics=degraded,
@@ -89,13 +90,9 @@ def _summary(severity: ImpactSeverity, findings: Sequence[DeviceStateFinding]) -
     return summary
 
 
-def _complete_sle_comparison(baseline: SleObservation | None, latest: SleObservation | None) -> bool:
-    return bool(
-        baseline
-        and latest
-        and baseline.scope == latest.scope
-        and not baseline.errors
-        and not latest.errors
-        and (set(baseline.values) | set(baseline.no_data))
-        and (set(baseline.values) | set(baseline.no_data)) == (set(latest.values) | set(latest.no_data))
-    )
+def store_assessment(session: MonitoringSession, assessment: ImpactAssessment) -> None:
+    """Write the authoritative result and its backwards-compatible scalar mirrors."""
+    session.assessment = assessment
+    session.impact_severity = assessment.severity
+    session.deterministic_summary = assessment.summary
+    session.degraded_metrics = list(assessment.degraded_metrics)

@@ -5,6 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from mist_config_guardian_backend.models.monitoring import EvidenceCoverage, MetricEvidence
+from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
+
 Health = Literal["ok", "warning", "error", "critical", "unknown"]
 
 
@@ -52,11 +55,8 @@ class SiteTopology(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class ImpactMetric(BaseModel):
-    name: str
-    baseline: float
-    latest: float
-    delta: float
+class ImpactMetric(MetricEvidence):
+    """Public per-metric evidence, including unavailable measurements."""
 
 
 class DeviceImpact(BaseModel):
@@ -76,6 +76,8 @@ class DeviceImpact(BaseModel):
     observation_count: int = 0
     headline: str = "Waiting for comparable evidence"
     metrics: list[ImpactMetric] = Field(default_factory=list)
+    evidence_coverage: EvidenceCoverage = "insufficient"
+    assessment_source: Literal["stored", "legacy", "historical"] = "legacy"
     collection_errors: list[str] = Field(default_factory=list)
     shared_window: bool = False
 
@@ -89,6 +91,7 @@ class SiteChange(BaseModel):
     change_type: str = "Configuration change"
     title: str
     summary: str = ""
+    shadow_impact: AuditImpactSummary | None = None
     impacts: list[DeviceImpact] = Field(default_factory=list)
 
 

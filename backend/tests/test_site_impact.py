@@ -150,7 +150,9 @@ def test_cross_scope_and_future_measurements_cannot_generate_a_healthy_verdict()
         {"captured_at": NOW + timedelta(seconds=1), "scope": "device", "values": {"coverage": 99}},
     ]:
         result = site_impact.impact_from_session(session(observations=[sample]), NOW, historical=False)
-        assert result.metrics == []
+        assert len(result.metrics) == 1
+        assert result.metrics[0].delta is None
+        assert not result.metrics[0].comparable
         assert result.severity == "unknown"
 
 
@@ -285,7 +287,10 @@ def test_all_site_endpoints_require_login(api):
 def test_partial_metric_coverage_cannot_reuse_a_default_none_verdict():
     row = session(baseline={"scope": "device", "values": {"coverage": 99, "capacity": 98}})
     result = site_impact.impact_from_session(row, NOW, historical=False)
-    assert len(result.metrics) == 1
+    assert len(result.metrics) == 2
+    assert result.metrics[0].name == "capacity"
+    assert result.metrics[0].latest is None
+    assert result.metrics[0].latest_state == "missing"
     assert result.severity == "unknown"
 
 

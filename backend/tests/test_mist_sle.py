@@ -54,6 +54,8 @@ async def test_sle_requests_exact_24_hour_baseline_for_the_changed_device(httpx_
     assert result.window_start == start
     assert result.window_end == end
     assert result.values["coverage"] == 98
+    assert result.scope_id == "00000000-0000-0000-1000-aabbccddeeff"
+    assert set(result.requested_metrics) == set(AP_METRICS)
     assert len(httpx_mock.get_requests()) == 8
 
 
@@ -222,6 +224,8 @@ async def test_advertised_stc_new_is_collected_and_404_is_still_an_error(httpx_m
         result = await client.capture(site_id="site-1", device_type=DeviceType.SWITCH, device_mac="aabbccddeeff")
     assert len(result.errors) == 1
     assert result.errors[0].startswith("switch-stc-new: HTTP 404 from the SLE endpoint")
+    assert result.requested_metrics == ["switch-stc-new"]
+    assert result.metric_errors == {"switch-stc-new": result.errors[0]}
     assert "/sle/switch/00000000-0000-0000-1000-aabbccddeeff/metric/switch-stc-new/summary-trend" in result.errors[0]
     assert result.no_data == []
     assert "must-not-be-disclosed" not in result.model_dump_json()

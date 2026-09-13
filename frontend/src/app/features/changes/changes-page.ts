@@ -9,6 +9,8 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { TimeContextService } from '../../core/time-context.service';
 import { Tone, toneInk, toneOf } from '../../core/tone';
 import { UiStateService } from '../../core/ui-state.service';
+import { ShadowInvestigation } from './shadow-investigation';
+import { AuditImpactSummaryComponent } from '../../shared/audit-impact-summary';
 
 /** The table asks for one large page; the design has no paging control. */
 const PAGE_SIZE = 100;
@@ -46,7 +48,7 @@ interface ChangeDay {
 
 @Component({
   selector: 'app-changes-page',
-  imports: [],
+  imports: [ShadowInvestigation, AuditImpactSummaryComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './changes-page.html',
   styleUrl: './changes-page.scss',
@@ -68,6 +70,9 @@ export class ChangesPage {
   readonly actor = input<string>();
 
   protected readonly severity = signal<SeverityFilter>('any');
+  protected readonly hasShadow = computed(() =>
+    !this.time.isHistorical() && this.changeGroups.items().some((group) => !!group.shadow_impact),
+  );
 
   /** Derived rather than mirrored: the URL is the only thing that sets an
    *  actor, and a mirroring effect would fetch once more after correcting
@@ -166,6 +171,7 @@ export class ChangesPage {
     const occurred = new Date(detail.occurred_at);
     return {
       id: detail.id,
+      shadowImpact: detail.shadow_impact,
       tone: toneOf(detail.impact_severity),
       level: detail.impact_label,
       title: detail.title,

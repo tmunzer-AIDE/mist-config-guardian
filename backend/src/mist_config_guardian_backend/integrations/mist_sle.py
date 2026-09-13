@@ -91,7 +91,11 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         metrics, error = await self._discover_metrics(base_path, device_type)
         if error:
             return SleObservation(
-                errors=[error], window_start=start, window_end=end, scope="device" if device_mac else "site"
+                errors=[error],
+                window_start=start,
+                window_end=end,
+                scope="device" if device_mac else "site",
+                scope_id=scope_id,
             )
         tasks = [
             self._fetch_metric(
@@ -117,6 +121,9 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
             if error is None
         )
         return SleObservation(
+            scope_id=scope_id,
+            requested_metrics=[metric for metric, _api_metric in metrics],
+            metric_errors={metric: error for metric, _value, _series, error in anchored if error is not None},
             values=values,
             trend={metric: series for metric, _value, series, error in anchored if error is None and series},
             baseline_window="last-hour" if narrowed else "full-window",

@@ -17,6 +17,17 @@
     </div>
   </header>
 
+  @if (!historical()) {
+    @if (overview.overview()?.shadow_feed_counts; as counts) {
+      <section class="cg-card shadow-counts" aria-label="Shadow assessment feed counts">
+        <strong>Shadow review · {{ counts.total }} {{ counts.total === 1 ? 'change' : 'changes' }} in the loaded feed</strong>
+        <p>{{ counts.possible_disruption }} possible disruptions · {{ counts.no_observed_disconnect }} with no observed disconnect</p>
+        <p>{{ counts.insufficient_evidence }} insufficient evidence · {{ counts.pending }} awaiting evidence · {{ counts.unavailable }} unavailable · {{ counts.not_recorded }} not recorded</p>
+        <p>These results cover WLAN session evidence. Filters, totals and alerts still use the legacy assessment.</p>
+      </section>
+    }
+  }
+
   @if (!hasChanges()) {
     <div class="empty">
       <div class="empty-mark" aria-hidden="true">
@@ -58,6 +69,9 @@
               <span class="card-audit">{{ card.audit }}</span>
             </div>
             <p class="card-summary">{{ card.summary }}</p>
+            @if (!historical() && card.group.shadow_impact) {
+              <app-audit-impact-summary [assessment]="card.group.shadow_impact" />
+            }
 
             @if (card.metrics.length > 0) {
               <div class="metrics">

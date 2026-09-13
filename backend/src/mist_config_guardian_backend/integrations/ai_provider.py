@@ -4,6 +4,7 @@ Only bounded, already-redacted evidence is ever passed to :meth:`complete`;
 the adapter itself never inspects or logs configuration values.
 """
 
+import json
 import time
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
@@ -107,7 +108,7 @@ def _describe_status(status_code: int, *, model: str) -> str:
 class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProvider"]):
     """Chat completion, model discovery, and health checks over one HTTP client."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - provider transport and response bounds
         self,
         *,
         base_url: str,
@@ -115,10 +116,12 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
         api_key: str,
         timeout: float = _DEFAULT_TIMEOUT,
         max_response_tokens: int = _DEFAULT_MAX_TOKENS,
+        max_response_bytes: int = 1_048_576,
     ) -> None:
         self._model = model
         self._timeout = timeout
         self._max_response_tokens = max_response_tokens
+        self._max_response_bytes = max_response_bytes
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
@@ -163,9 +166,15 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
             payload["response_format"] = {"type": "json_object"}
         started = time.perf_counter()
         try:
-            response = await self._client.post("/chat/completions", json=payload)
-            response.raise_for_status()
-            envelope = response.json()
+            async with self._client.stream("POST", "/chat/completions", json=payload) as response:
+                response.raise_for_status()
+                data = bytearray()
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > self._max_response_bytes:
+                        msg = "The provider response exceeded the byte limit."
+                        raise AiProviderError(msg)
+                envelope = json.loads(data)
             content = envelope["choices"][0]["message"]["content"]
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             detail = describe_http_failure(exc, model=self._model, timeout=self._timeout)
@@ -217,7 +226,7 @@ def _usage_value(usage: object, key: str) -> int | None:
     if not isinstance(usage, dict):
         return None
     value = usage.get(key)
-    return value if isinstance(value, int) else None
+    return value if type(value) is int and value >= 0 else None
 
 
 def _parse_model(entry: object) -> AiModel | None:

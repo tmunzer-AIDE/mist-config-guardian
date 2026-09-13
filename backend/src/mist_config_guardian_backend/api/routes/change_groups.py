@@ -2,22 +2,34 @@
 
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from pymongo.errors import DuplicateKeyError
 
-from mist_config_guardian_backend.api.dependencies import require_organization, require_viewer
+from mist_config_guardian_backend.api.dependencies import require_administrator, require_organization, require_viewer
+from mist_config_guardian_backend.impact.acceptance import AcceptanceResult, AdjudicationRequest
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.user import User
+from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupDetailResponse,
     ChangeGroupListResponse,
+)
+from mist_config_guardian_backend.schemas.investigation import (
+    ModelRequestDetails,
+    ReportHistory,
+    ShadowInvestigationResponse,
 )
 from mist_config_guardian_backend.services.change_groups import (
     ChangeGroupFilters,
     ChangeGroupService,
 )
+from mist_config_guardian_backend.services.impact_acceptance import acceptance_status, adjudicate
+from mist_config_guardian_backend.services.investigation_reads import report_history, shadow_investigation
+from mist_config_guardian_backend.services.model_request_reads import model_request_details
 
 router = APIRouter(prefix="/organizations/{organization_id}/change-groups")
 
@@ -110,3 +122,63 @@ async def read_change_group(
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Change group not found")
     return detail
+
+
+@router.get("/{change_group_id}/investigation")
+async def read_shadow_investigation(
+    change_group_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ShadowInvestigationResponse | None:
+    """Read the published revision and separately labelled live activity for the authorized organization."""
+    return await shadow_investigation(_identifier(organization), change_group_id)
+
+
+@router.get("/{change_group_id}/investigation/model-requests/{request_id}")
+async def read_model_request(
+    change_group_id: PydanticObjectId,
+    request_id: UUID,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ModelRequestDetails | None:
+    """Read one authorized journal entry's verified context/action artifacts."""
+    return await model_request_details(_identifier(organization), change_group_id, request_id)
+
+
+@router.get("/{change_group_id}/investigation/history")
+async def read_report_history(
+    change_group_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ReportHistory | None:
+    return await report_history(_identifier(organization), change_group_id)
+
+
+@router.post("/{change_group_id}/investigation/adjudication", status_code=201)
+async def label_investigation(
+    change_group_id: PydanticObjectId,
+    request: AdjudicationRequest,
+    organization: Annotated[Organization, Depends(require_organization)],
+    reviewer: Annotated[User, Depends(require_administrator)],
+) -> dict[str, bool]:
+    if reviewer.id is None:
+        raise HTTPException(status_code=403, detail="A persisted reviewer identity is required")
+    try:
+        recorded = await adjudicate(_identifier(organization), change_group_id, reviewer.id, request)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="This audit already has a label for the current policy") from exc
+    if not recorded:
+        raise HTTPException(status_code=409, detail="The displayed publication is no longer current or available")
+    return {"recorded": True}
+
+
+@router.get("/{change_group_id}/investigation/acceptance")
+async def read_acceptance(
+    change_group_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> AcceptanceResult:
+    org = _identifier(organization)
+    if await AuditChangeGroup.find_one({"_id": change_group_id, "organization_id": org}) is None:
+        raise HTTPException(status_code=404, detail="Change group not found")
+    return await acceptance_status(org)

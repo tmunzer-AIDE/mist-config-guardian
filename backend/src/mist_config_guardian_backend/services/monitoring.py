@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from pymongo.errors import DuplicateKeyError
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.integrations.impact_ai import (
     AiImpactError,
     OpenAiCompatibleImpactProvider,
@@ -37,6 +38,7 @@ from mist_config_guardian_backend.services.device_impact import compare_device_s
 from mist_config_guardian_backend.services.impact_analysis import (
     ImpactAssessment,
     assess_impact,
+    store_assessment,
 )
 from mist_config_guardian_backend.services.service_credentials import service_token
 
@@ -178,6 +180,16 @@ class MonitoringEventService:
             if incident.event_type == _RESOLUTIONS[event_type] and not incident.resolved:
                 incident.resolved = True
                 incident.resolved_at = now
+        store_assessment(
+            session,
+            assess_impact(
+                session.baseline,
+                session.observations[-1] if session.observations else None,
+                session.incidents,
+                relevance_plan=session.relevance_plan,
+                device_findings=session.device_findings,
+            ),
+        )
 
     @staticmethod
     def _record_event(session: MonitoringSession, event: DeviceEvent, receipt: WebhookReceipt) -> None:
@@ -200,12 +212,19 @@ class MonitoringEventService:
     ) -> None:
         severity = ImpactSeverity.CRITICAL if event_type in _FAILED_EVENTS | _REVERT_EVENTS else ImpactSeverity.WARNING
         session.incidents.append(MonitoringIncident(event_type=event_type, severity=severity))
-        session.impact_severity = max_severity(session.impact_severity, severity)
+        assessment = assess_impact(
+            session.baseline,
+            session.observations[-1] if session.observations else None,
+            session.incidents,
+            relevance_plan=session.relevance_plan,
+            device_findings=session.device_findings,
+        )
+        session.peak_impact_severity = max_severity(session.peak_impact_severity, assessment.severity)
         if event_type in _FAILED_EVENTS and session.status is MonitoringStatus.AWAITING_CONFIG:
             session.status = MonitoringStatus.FAILED
             session.active = False
             session.completed_at = utc_now()
-            session.deterministic_summary = "The configuration failed before monitoring could begin."
+            assessment.summary = "The configuration failed before monitoring could begin."
         elif event_type in _REVERT_EVENTS:
             # The reverted configuration is no longer under test. Release the
             # unique active-device slot so a later change gets a fresh baseline.
@@ -213,7 +232,8 @@ class MonitoringEventService:
             session.active = False
             session.completed_at = utc_now()
             session.next_poll_at = None
-            session.deterministic_summary = "The configuration was reverted; monitoring for this change has ended."
+            assessment.summary = "The configuration was reverted; monitoring for this change has ended."
+        store_assessment(session, assessment)
         session.touch()
         await session.save()
 
@@ -262,6 +282,7 @@ class MonitoringEventService:
                 monitoring_ends_at=now + _MONITORING_DURATION,
                 next_poll_at=device_baseline.captured_at + _DEVICE_COMPARISON_DELAY,
             )
+            store_assessment(session, assess_impact(baseline, None, [], relevance_plan=session.relevance_plan))
             try:
                 await session.insert()
             except DuplicateKeyError:
@@ -393,31 +414,45 @@ class MonitoringPollService:
     async def poll_active(self) -> int:
         """Poll every due active session once."""
         now = utc_now()
-        # Collected before the bulk update, because afterwards these sessions no
-        # longer match the query and their change groups would never learn that
-        # monitoring was abandoned.
+        # Capture identities before transitioning each due session so its change
+        # groups learn that monitoring was abandoned, with its own evidence intact.
         timed_out = await MonitoringSession.find(
             MonitoringSession.status == MonitoringStatus.AWAITING_CONFIG,
             {"created_at": {"$lte": now - timedelta(minutes=10)}},
         ).to_list()
-        await MonitoringSession.find(
-            MonitoringSession.status == MonitoringStatus.AWAITING_CONFIG,
-            {"created_at": {"$lte": now - timedelta(minutes=10)}},
-        ).update_many(
-            {
-                "$set": {
-                    "status": MonitoringStatus.FAILED,
-                    "active": False,
-                    "completed_at": now,
-                    "updated_at": now,
-                    "deterministic_summary": ("No configured event was received within 10 minutes."),
-                },
-                "$push": {
-                    "warnings": ("Monitoring was cancelled because the paired configured event was not received.")
-                },
-            }
-        )
         for session in timed_out:
+            assessment = assess_impact(
+                session.baseline,
+                session.observations[-1] if session.observations else None,
+                session.incidents,
+                relevance_plan=session.relevance_plan,
+                device_findings=session.device_findings,
+            )
+            assessment.evaluated_at = now
+            assessment.summary = "No configured event was received within 10 minutes."
+            # Retain each session's metric evidence; a common empty bulk result
+            # would erase the very gaps the timeout needs to explain. The status
+            # predicate avoids overwriting a concurrently configured session.
+            await MonitoringSession.find(
+                {"_id": session.id, "status": MonitoringStatus.AWAITING_CONFIG},
+            ).update_many(
+                {
+                    "$set": {
+                        "status": MonitoringStatus.FAILED,
+                        "active": False,
+                        "next_poll_at": None,
+                        "completed_at": now,
+                        "updated_at": now,
+                        "assessment": assessment.model_dump(mode="python"),
+                        "impact_severity": assessment.severity,
+                        "deterministic_summary": assessment.summary,
+                        "degraded_metrics": list(assessment.degraded_metrics),
+                    },
+                    "$push": {
+                        "warnings": "Monitoring was cancelled because the paired configured event was not received."
+                    },
+                }
+            )
             await self._refresh_change_groups(session)
         sessions = await MonitoringSession.find(
             MonitoringSession.status == MonitoringStatus.MONITORING,
@@ -435,6 +470,13 @@ class MonitoringPollService:
                 session.touch()
                 await session.save()
         return len(sessions)
+
+    @staticmethod
+    def _warn_unidentified_baseline(session: MonitoringSession, observation: SleObservation) -> None:
+        if session.baseline and session.baseline.scope_id is None and observation.scope_id is not None:
+            warning = "Baseline scope identity is unknown; SLE values are retained without comparable deltas."
+            if warning not in session.warnings:
+                session.warnings.append(warning)
 
     async def _poll_session(
         self,
@@ -461,10 +503,16 @@ class MonitoringPollService:
                 end=now,
             )
         await self._compare_due_states(session, organization, token, now)
+        self._warn_unidentified_baseline(session, observation)
         session.observations.append(observation)
         assessment = assess_impact(
-            session.baseline, observation, session.incidents, device_findings=session.device_findings
+            session.baseline,
+            observation,
+            session.incidents,
+            device_findings=session.device_findings,
+            relevance_plan=session.relevance_plan,
         )
+        assessment.evaluated_at = now
         if session.impact_severity != assessment.severity:
             session.timeline.append(
                 MonitoringTimelineEvent(
@@ -477,9 +525,7 @@ class MonitoringPollService:
         session.peak_impact_severity = max_severity(
             session.peak_impact_severity, max_severity(session.impact_severity, assessment.severity)
         )
-        session.impact_severity = assessment.severity
-        session.deterministic_summary = assessment.summary
-        session.degraded_metrics = list(assessment.degraded_metrics)
+        store_assessment(session, assessment)
         if session.monitoring_ends_at is not None and now >= session.monitoring_ends_at:
             try:
                 ai_configuration = await self._application_configuration.impact_ai_runtime()
@@ -563,6 +609,8 @@ class MonitoringPollService:
         assessment: ImpactAssessment,
         configuration: ImpactAiRuntimeConfiguration,
     ) -> None:
+        if get_settings().impact_engine_mode != "legacy":
+            return
         async with OpenAiCompatibleImpactProvider(
             base_url=configuration.base_url,
             model=configuration.model,

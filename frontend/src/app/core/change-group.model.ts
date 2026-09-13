@@ -5,6 +5,8 @@
  * together with every object version it produced and every device it touched.
  */
 
+import { AuditImpactSummary } from './audit-impact.model';
+
 export type ImpactSeverity = 'none' | 'info' | 'warning' | 'critical';
 export type RecoveryState = 'not_applicable' | 'monitoring' | 'recovered' | 'unrecovered' | 'completed';
 export type BaselineConfidence = 'high' | 'medium' | 'low' | 'none';
@@ -68,6 +70,8 @@ export interface ChangeGroupSummary {
    * neutral severity that comes with it means "not shown", not "no impact".
    */
   impact_known?: boolean;
+  impact_source?: 'legacy' | null;
+  shadow_impact?: AuditImpactSummary | null;
   is_mine: boolean;
 }
 

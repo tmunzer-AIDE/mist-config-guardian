@@ -39,6 +39,165 @@
         "title": "AcceptInvitationRequest",
         "type": "object"
       },
+      "AcceptanceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "abstentions": {
+            "default": 0,
+            "title": "Abstentions",
+            "type": "integer"
+          },
+          "activation": {
+            "const": "manual_release_required",
+            "default": "manual_release_required",
+            "title": "Activation",
+            "type": "string"
+          },
+          "critical_misses": {
+            "default": 0,
+            "title": "Critical Misses",
+            "type": "integer"
+          },
+          "eligible": {
+            "default": false,
+            "description": "Diagnostic count criteria passed; not independent validation or production approval.",
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "false_negative": {
+            "default": 0,
+            "title": "False Negative",
+            "type": "integer"
+          },
+          "false_positive": {
+            "default": 0,
+            "title": "False Positive",
+            "type": "integer"
+          },
+          "held_out": {
+            "default": 0,
+            "description": "Compatibility field: count in the public audit-hash subsample, not a blinded held-out set.",
+            "title": "Held Out",
+            "type": "integer"
+          },
+          "policy_hash": {
+            "title": "Policy Hash",
+            "type": "string"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "reasons": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "scope": {
+            "const": "adjudicated_held_out_cases",
+            "default": "adjudicated_held_out_cases",
+            "title": "Scope",
+            "type": "string"
+          },
+          "specificity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specificity"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "true_negative": {
+            "default": 0,
+            "title": "True Negative",
+            "type": "integer"
+          },
+          "true_positive": {
+            "default": 0,
+            "title": "True Positive",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_hash"
+        ],
+        "title": "AcceptanceResult",
+        "type": "object"
+      },
+      "AdjudicationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "human_reviewed": {
+            "const": true,
+            "title": "Human Reviewed",
+            "type": "boolean"
+          },
+          "label": {
+            "enum": [
+              "critical_outage",
+              "benign",
+              "noncritical_outage",
+              "uncertain"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 1500,
+            "minLength": 10,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "report_id": {
+            "pattern": "^[0-9a-f]{24}$",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "report_id",
+          "revision",
+          "label",
+          "rationale",
+          "human_reviewed"
+        ],
+        "title": "AdjudicationRequest",
+        "type": "object"
+      },
       "AffectedDeviceResponse": {
         "description": "One device that received configuration from a change group.",
         "properties": {
@@ -66,6 +225,168 @@
           "device_mac"
         ],
         "title": "AffectedDeviceResponse",
+        "type": "object"
+      },
+      "AgentCheckpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "dispatch_denial": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelDispatchDenial"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentMemory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceView"
+            },
+            "maxItems": 22,
+            "title": "Observations",
+            "type": "array"
+          },
+          "prompt_version": {
+            "default": "impact-investigator.v7",
+            "enum": [
+              "impact-investigator.v1",
+              "impact-investigator.v2",
+              "impact-investigator.v3",
+              "impact-investigator.v4",
+              "impact-investigator.v5",
+              "impact-investigator.v6",
+              "impact-investigator.v7"
+            ],
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Request Ids",
+            "type": "array"
+          },
+          "skills": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SkillReference"
+            },
+            "maxItems": 4,
+            "title": "Skills",
+            "type": "array"
+          },
+          "source": {
+            "const": "model_proposal",
+            "default": "model_proposal",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "complete",
+              "unavailable",
+              "invalid_response",
+              "budget_exhausted",
+              "context_unavailable",
+              "provider_error",
+              "dispatch_denied"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "AgentCheckpoint",
+        "type": "object"
+      },
+      "AgentMemory": {
+        "additionalProperties": false,
+        "properties": {
+          "proposal": {
+            "$ref": "#/components/schemas/AgentProposal"
+          },
+          "source_revision": {
+            "minimum": 1.0,
+            "title": "Source Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_revision",
+          "proposal"
+        ],
+        "title": "AgentMemory",
+        "type": "object"
+      },
+      "AgentProposal": {
+        "additionalProperties": false,
+        "properties": {
+          "hypotheses": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Hypothesis"
+            },
+            "maxItems": 4,
+            "title": "Hypotheses",
+            "type": "array"
+          },
+          "open_questions": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Open Questions",
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "AgentProposal",
         "type": "object"
       },
       "AiAssistCard": {
@@ -452,6 +773,65 @@
         "title": "AiSettingsUpdate",
         "type": "object"
       },
+      "ApAdjacency": {
+        "additionalProperties": false,
+        "properties": {
+          "connected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connected"
+          },
+          "device_failure": {
+            "const": "not_established",
+            "default": "not_established",
+            "title": "Device Failure",
+            "type": "string"
+          },
+          "device_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Device Handle",
+            "type": "string"
+          },
+          "historical_dependency": {
+            "const": "not_established",
+            "default": "not_established",
+            "title": "Historical Dependency",
+            "type": "string"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "relationship": {
+            "default": "unverified",
+            "enum": [
+              "corroborated_recent",
+              "unverified"
+            ],
+            "title": "Relationship",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_handle"
+        ],
+        "title": "ApAdjacency",
+        "type": "object"
+      },
       "ApprovalCreateRequest": {
         "description": "The restore plan a second administrator is asked to review.",
         "properties": {
@@ -640,6 +1020,295 @@
         ],
         "title": "ApprovalStatus",
         "type": "string"
+      },
+      "AttributeDocumentation": {
+        "additionalProperties": false,
+        "properties": {
+          "attribute": {
+            "maxLength": 64,
+            "title": "Attribute",
+            "type": "string"
+          },
+          "corpus_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Corpus Hash",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 240,
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "enum": [
+              "switch.bgp_config",
+              "switch.ospf_config",
+              "wlan.ssid",
+              "wlan.schedule"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "pattern": "^#/components/schemas/[a-zA-Z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "schema_name": {
+            "maxLength": 64,
+            "title": "Schema Name",
+            "type": "string"
+          },
+          "source_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "source_pointer": {
+            "maxLength": 160,
+            "pattern": "^#/components/schemas/[a-zA-Z0-9_]+/properties/[a-zA-Z0-9_]+$",
+            "title": "Source Pointer",
+            "type": "string"
+          },
+          "source_version": {
+            "maxLength": 40,
+            "title": "Source Version",
+            "type": "string"
+          },
+          "value_type": {
+            "maxLength": 32,
+            "title": "Value Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schema_name",
+          "attribute",
+          "value_type",
+          "description",
+          "source_pointer",
+          "corpus_hash",
+          "source_hash",
+          "source_version"
+        ],
+        "title": "AttributeDocumentation",
+        "type": "object"
+      },
+      "AuditImpactSummary": {
+        "description": "An audit's shadow result; never substitutes for production severity.",
+        "properties": {
+          "assessment_source": {
+            "const": "audit_investigation",
+            "default": "audit_investigation",
+            "title": "Assessment Source",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unmapped"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "current_impact": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "none",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Impact"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "gap_count": {
+            "default": 0,
+            "title": "Gap Count",
+            "type": "integer"
+          },
+          "impact": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "none",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impact"
+          },
+          "impacted_devices": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/mist_config_guardian_backend__impact__report__DeviceImpact"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impacted Devices"
+          },
+          "investigation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Id"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "title": "Mode",
+            "type": "string"
+          },
+          "peak_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Revision"
+          },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "result": {
+            "enum": [
+              "not_recorded",
+              "pending",
+              "unavailable",
+              "insufficient_evidence",
+              "no_observed_disconnect",
+              "possible_disruption"
+            ],
+            "title": "Result",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "unmapped_count": {
+            "default": 0,
+            "title": "Unmapped Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "AuditImpactSummary",
+        "type": "object"
       },
       "BaselineConfidence": {
         "description": "Confidence in the pre-change baseline used for impact comparison.",
@@ -881,6 +1550,19 @@
             "$ref": "#/components/schemas/ImpactSeverity",
             "default": "none"
           },
+          "impact_source": {
+            "anyOf": [
+              {
+                "const": "legacy",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy",
+            "title": "Impact Source"
+          },
           "is_mine": {
             "default": false,
             "title": "Is Mine",
@@ -934,6 +1616,16 @@
           "recovery_state": {
             "$ref": "#/components/schemas/RecoveryState",
             "default": "not_applicable"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source": {
             "$ref": "#/components/schemas/ChangeSource",
@@ -1041,6 +1733,19 @@
             "$ref": "#/components/schemas/ImpactSeverity",
             "default": "none"
           },
+          "impact_source": {
+            "anyOf": [
+              {
+                "const": "legacy",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy",
+            "title": "Impact Source"
+          },
           "is_mine": {
             "default": false,
             "title": "Is Mine",
@@ -1072,6 +1777,16 @@
           "recovery_state": {
             "$ref": "#/components/schemas/RecoveryState",
             "default": "not_applicable"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source": {
             "$ref": "#/components/schemas/ChangeSource",
@@ -1235,6 +1950,32 @@
         "title": "ChangedObjectResponse",
         "type": "object"
       },
+      "CollectAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "collect",
+            "title": "Action",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 22,
+            "minItems": 1,
+            "title": "Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "action",
+          "checks"
+        ],
+        "title": "CollectAction",
+        "type": "object"
+      },
       "ComponentHealthResponse": {
         "description": "Health of one runtime component.",
         "properties": {
@@ -1365,171 +2106,258 @@
         "title": "ConfigurationDiff",
         "type": "object"
       },
-      "DeviceImpact": {
+      "DeploymentDevice": {
+        "additionalProperties": false,
         "properties": {
-          "collection_errors": {
+          "correlation": {
+            "enum": [
+              "audit_id",
+              "session_candidate",
+              "ambiguous"
+            ],
+            "title": "Correlation",
+            "type": "string"
+          },
+          "device_mac": {
+            "title": "Device Mac",
+            "type": "string"
+          },
+          "device_type": {
+            "enum": [
+              "ap",
+              "switch",
+              "gateway"
+            ],
+            "title": "Device Type",
+            "type": "string"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "outcome": {
+            "enum": [
+              "pending",
+              "configured",
+              "failed",
+              "reverted",
+              "unknown"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "receipt_ids": {
+            "default": [],
             "items": {
               "type": "string"
             },
-            "title": "Collection Errors",
+            "title": "Receipt Ids",
             "type": "array"
           },
-          "completed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completed At"
-          },
-          "config_state": {
-            "default": "unknown",
-            "enum": [
-              "pending",
-              "applied",
-              "rolled_back",
-              "unknown"
-            ],
-            "title": "Config State",
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
             "type": "string"
-          },
-          "configured_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Configured At"
-          },
-          "detected_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Detected At"
-          },
-          "device_id": {
-            "title": "Device Id",
-            "type": "string"
-          },
-          "device_name": {
-            "title": "Device Name",
-            "type": "string"
-          },
-          "headline": {
-            "default": "Waiting for comparable evidence",
-            "title": "Headline",
-            "type": "string"
-          },
-          "metrics": {
-            "items": {
-              "$ref": "#/components/schemas/ImpactMetric"
-            },
-            "title": "Metrics",
-            "type": "array"
-          },
-          "monitoring_ends_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Monitoring Ends At"
-          },
-          "monitoring_started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Monitoring Started At"
-          },
-          "monitoring_state": {
-            "default": "unknown",
-            "enum": [
-              "not_started",
-              "monitoring",
-              "completed",
-              "stalled",
-              "aborted",
-              "unknown"
-            ],
-            "title": "Monitoring State",
-            "type": "string"
-          },
-          "observation_count": {
-            "default": 0,
-            "title": "Observation Count",
-            "type": "integer"
-          },
-          "progress": {
-            "default": 0,
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Progress",
-            "type": "integer"
-          },
-          "session_id": {
-            "title": "Session Id",
-            "type": "string"
-          },
-          "severity": {
-            "default": "unknown",
-            "enum": [
-              "ok",
-              "warning",
-              "error",
-              "critical",
-              "unknown"
-            ],
-            "title": "Severity",
-            "type": "string"
-          },
-          "shared_window": {
-            "default": false,
-            "title": "Shared Window",
-            "type": "boolean"
-          },
-          "snapshot_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Snapshot At"
           }
         },
         "required": [
-          "device_id",
-          "device_name",
-          "session_id"
+          "device_mac",
+          "site_id",
+          "device_type",
+          "outcome",
+          "correlation"
         ],
-        "title": "DeviceImpact",
+        "title": "DeploymentDevice",
+        "type": "object"
+      },
+      "DeploymentEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "format": "date-time",
+            "title": "Collected At",
+            "type": "string"
+          },
+          "coverage": {
+            "const": "observed_receipts_only",
+            "default": "observed_receipts_only",
+            "title": "Coverage",
+            "type": "string"
+          },
+          "devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentDevice"
+            },
+            "maxItems": 500,
+            "title": "Devices",
+            "type": "array"
+          },
+          "expected_device_count": {
+            "title": "Expected Device Count",
+            "type": "null"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "observations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentObservation"
+            },
+            "maxItems": 2000,
+            "title": "Observations",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "available",
+              "partial",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collected_at",
+          "state"
+        ],
+        "title": "DeploymentEvidence",
+        "type": "object"
+      },
+      "DeploymentObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation": {
+            "enum": [
+              "audit_id",
+              "session_candidate",
+              "outside_window",
+              "time_unknown"
+            ],
+            "title": "Correlation",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "signal": {
+            "$ref": "#/components/schemas/DeploymentSignal"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "received_at",
+          "correlation",
+          "signal"
+        ],
+        "title": "DeploymentObservation",
+        "type": "object"
+      },
+      "DeploymentSignal": {
+        "additionalProperties": false,
+        "properties": {
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "device_type": {
+            "enum": [
+              "ap",
+              "switch",
+              "gateway"
+            ],
+            "title": "Device Type",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome": {
+            "enum": [
+              "pending",
+              "configured",
+              "failed",
+              "reverted",
+              "unknown"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "site_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Id"
+          }
+        },
+        "required": [
+          "event_type",
+          "outcome",
+          "device_type"
+        ],
+        "title": "DeploymentSignal",
         "type": "object"
       },
       "DeviceStateComparison": {
@@ -2010,6 +2838,399 @@
         "title": "DiffVersionRef",
         "type": "object"
       },
+      "DispatchDenial": {
+        "enum": [
+          "credentials_unavailable",
+          "credentials_changed",
+          "window_expired",
+          "lease_lost",
+          "budget_exhausted",
+          "journal_full",
+          "reservation_rejected"
+        ],
+        "title": "DispatchDenial",
+        "type": "string"
+      },
+      "DispatchLog": {
+        "additionalProperties": false,
+        "description": "Current root activity, explicitly separate from a published report revision.",
+        "properties": {
+          "records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DispatchRecord"
+            },
+            "maxItems": 56,
+            "title": "Records",
+            "type": "array"
+          },
+          "source": {
+            "const": "live_investigation_root",
+            "default": "live_investigation_root",
+            "title": "Source",
+            "type": "string"
+          },
+          "unlogged_reservations": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unlogged Reservations",
+            "type": "integer"
+          }
+        },
+        "title": "DispatchLog",
+        "type": "object"
+      },
+      "DispatchRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_revision": {
+            "minimum": 1.0,
+            "title": "Candidate Revision",
+            "type": "integer"
+          },
+          "check_id": {
+            "default": "wlan-client-sessions.v1",
+            "enum": [
+              "wlan-client-sessions.v1",
+              "switch-port-snapshot.v1",
+              "neighbor-ap-inventory.v1",
+              "switch-port-events.v1",
+              "wlan-auth-events.v1",
+              "neighbor-ap-statistics.v1",
+              "mist-docs-attribute.v1"
+            ],
+            "title": "Check Id",
+            "type": "string"
+          },
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "enum": [
+                  "switch.bgp_config",
+                  "switch.ospf_config",
+                  "wlan.ssid",
+                  "wlan.schedule"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "maximum": 599.0,
+                "minimum": 100.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "pattern": "^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "reserved_at": {
+            "format": "date-time",
+            "title": "Reserved At",
+            "type": "string"
+          },
+          "response_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Bytes"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "site_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Id"
+          },
+          "source_dispatch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Dispatch Id"
+          },
+          "state": {
+            "default": "reserved",
+            "enum": [
+              "reserved",
+              "complete",
+              "partial",
+              "error"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          },
+          "wlan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wlan Id"
+          }
+        },
+        "required": [
+          "id",
+          "generation",
+          "candidate_revision",
+          "target_handle",
+          "window",
+          "reserved_at"
+        ],
+        "title": "DispatchRecord",
+        "type": "object"
+      },
+      "DomainFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_clients": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Affected Clients"
+          },
+          "attribution": {
+            "default": "undetermined",
+            "enum": [
+              "plausible",
+              "undetermined"
+            ],
+            "title": "Attribution",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "current_impact": {
+            "enum": [
+              "info",
+              "none",
+              "warning",
+              "critical"
+            ],
+            "title": "Current Impact",
+            "type": "string"
+          },
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "explanation": {
+            "maxLength": 500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "recovered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered At"
+          },
+          "rule_id": {
+            "enum": [
+              "port-availability.v1",
+              "switch-poe.v1",
+              "wlan-authentication.v1"
+            ],
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "service": {
+            "enum": [
+              "port_link",
+              "port_power",
+              "wlan_authentication"
+            ],
+            "title": "Service",
+            "type": "string"
+          },
+          "serving_ap_macs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Serving Ap Macs",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "possible_disruption",
+              "recovered"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "target_handle",
+          "state",
+          "impact",
+          "current_impact",
+          "confidence",
+          "service",
+          "explanation"
+        ],
+        "title": "DomainFinding",
+        "type": "object"
+      },
       "EmailChangeConfirmRequest": {
         "description": "Confirmation of a pending email change.",
         "properties": {
@@ -2088,6 +3309,272 @@
         "title": "EmailChangeResponse",
         "type": "object"
       },
+      "EvidenceDataset": {
+        "additionalProperties": false,
+        "description": "Rows are normalized server values; missing values remain null, never zero.",
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 2,
+            "title": "Columns",
+            "type": "array"
+          },
+          "explanation": {
+            "maxLength": 500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^evidence-[0-9]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "table",
+              "bar",
+              "histogram",
+              "timeline"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "omitted_rows": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "maxItems": 200,
+            "title": "Rows",
+            "type": "array"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "title": "Title",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        },
+        "required": [
+          "id",
+          "check_id",
+          "target_handle",
+          "window",
+          "captured_at",
+          "state",
+          "title",
+          "kind",
+          "columns",
+          "rows",
+          "explanation"
+        ],
+        "title": "EvidenceDataset",
+        "type": "object"
+      },
+      "EvidenceView": {
+        "additionalProperties": false,
+        "properties": {
+          "ap_adjacency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApAdjacency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "auth_failures": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Failures"
+          },
+          "auth_successes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Successes"
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "documentation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttributeDocumentation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gap": {
+            "maxLength": 500,
+            "title": "Gap",
+            "type": "string"
+          },
+          "managed_neighbor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedNeighbor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_disconnects": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Disconnects"
+          },
+          "omitted_events": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted Events",
+            "type": "integer"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port_events": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PortEventRow"
+            },
+            "maxItems": 20,
+            "title": "Port Events",
+            "type": "array"
+          },
+          "ref": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Ref",
+            "type": "string"
+          },
+          "response_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortResponseError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sampled_clients": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampled Clients"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        },
+        "required": [
+          "ref",
+          "target_handle",
+          "window",
+          "state",
+          "gap"
+        ],
+        "title": "EvidenceView",
+        "type": "object"
+      },
       "FailedRestoreResponse": {
         "description": "One restore that stopped part way and may need compensation.",
         "properties": {
@@ -2159,6 +3646,59 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "Hypothesis": {
+        "additionalProperties": false,
+        "properties": {
+          "counterevidence_checks": {
+            "default": [],
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Counterevidence Checks",
+            "type": "array"
+          },
+          "limitations": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "statement": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Statement",
+            "type": "string"
+          },
+          "supporting_checks": {
+            "default": [],
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Supporting Checks",
+            "type": "array"
+          },
+          "target_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_handle",
+          "statement"
+        ],
+        "title": "Hypothesis",
         "type": "object"
       },
       "ImpactAiSettingsResponse": {
@@ -2246,32 +3786,355 @@
         "title": "ImpactAiSettingsUpdate",
         "type": "object"
       },
+      "ImpactAssessment": {
+        "description": "Authoritative evaluated result; legacy scalar fields are projections only.",
+        "properties": {
+          "collection_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collection Errors",
+            "type": "array"
+          },
+          "coverage": {
+            "default": "insufficient",
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "degraded_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Metrics",
+            "type": "array"
+          },
+          "device_findings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Device Findings",
+            "type": "array"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "incident_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Types",
+            "type": "array"
+          },
+          "metric_deltas": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Metric Deltas",
+            "type": "object"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricEvidence"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/RelevancePlan"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ImpactSeverity"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "severity",
+          "summary",
+          "degraded_metrics",
+          "metric_deltas",
+          "incident_types"
+        ],
+        "title": "ImpactAssessment",
+        "type": "object"
+      },
       "ImpactMetric": {
+        "description": "Public per-metric evidence, including unavailable measurements.",
         "properties": {
           "baseline": {
-            "title": "Baseline",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
+          },
+          "baseline_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Error"
+          },
+          "baseline_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Baseline State",
+            "type": "string"
+          },
+          "comparable": {
+            "default": false,
+            "title": "Comparable",
+            "type": "boolean"
           },
           "delta": {
-            "title": "Delta",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
           },
           "latest": {
-            "title": "Latest",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "latest_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Error"
+          },
+          "latest_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Latest State",
+            "type": "string"
           },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "selected": {
+            "default": true,
+            "title": "Selected",
+            "type": "boolean"
           }
         },
         "required": [
-          "name",
-          "baseline",
-          "latest",
-          "delta"
+          "name"
         ],
         "title": "ImpactMetric",
+        "type": "object"
+      },
+      "ImpactReport": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "enum": [
+              "plausible",
+              "undetermined"
+            ],
+            "title": "Attribution",
+            "type": "string"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "unmapped"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "current_impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current Impact",
+            "type": "string"
+          },
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDataset"
+            },
+            "maxItems": 22,
+            "title": "Datasets",
+            "type": "array"
+          },
+          "device_coverage": {
+            "const": "observed_only",
+            "default": "observed_only",
+            "title": "Device Coverage",
+            "type": "string"
+          },
+          "evidence_as_of": {
+            "format": "date-time",
+            "title": "Evidence As Of",
+            "type": "string"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "history_complete": {
+            "title": "History Complete",
+            "type": "boolean"
+          },
+          "impacted_devices": {
+            "items": {
+              "$ref": "#/components/schemas/mist_config_guardian_backend__impact__report__DeviceImpact"
+            },
+            "maxItems": 200,
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "investigation_id": {
+            "title": "Investigation Id",
+            "type": "string"
+          },
+          "omitted_device_impacts": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted Device Impacts",
+            "type": "integer"
+          },
+          "peak_confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Peak Confidence",
+            "type": "string"
+          },
+          "peak_impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak Impact",
+            "type": "string"
+          },
+          "peak_revision": {
+            "minimum": 1.0,
+            "title": "Peak Revision",
+            "type": "integer"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sections": {
+            "$ref": "#/components/schemas/ReportSections"
+          }
+        },
+        "required": [
+          "investigation_id",
+          "audit_id",
+          "revision",
+          "generated_at",
+          "evidence_as_of",
+          "peak_impact",
+          "peak_revision",
+          "peak_confidence",
+          "history_complete",
+          "current_impact",
+          "confidence",
+          "coverage",
+          "attribution",
+          "sections",
+          "datasets",
+          "impacted_devices",
+          "gaps"
+        ],
+        "title": "ImpactReport",
         "type": "object"
       },
       "ImpactSeverity": {
@@ -2466,6 +4329,146 @@
         "title": "LogoutResponse",
         "type": "object"
       },
+      "ManagedNeighbor": {
+        "additionalProperties": false,
+        "properties": {
+          "device_handle": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Device Handle",
+            "type": "string"
+          },
+          "identity": {
+            "const": "verified_inventory",
+            "default": "verified_inventory",
+            "title": "Identity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "ap",
+            "default": "ap",
+            "title": "Kind",
+            "type": "string"
+          },
+          "relationship": {
+            "const": "unverified",
+            "default": "unverified",
+            "title": "Relationship",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_handle"
+        ],
+        "title": "ManagedNeighbor",
+        "type": "object"
+      },
+      "MetricEvidence": {
+        "description": "A metric remains visible even when one or both values are unavailable.",
+        "properties": {
+          "baseline": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
+          },
+          "baseline_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Error"
+          },
+          "baseline_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Baseline State",
+            "type": "string"
+          },
+          "comparable": {
+            "default": false,
+            "title": "Comparable",
+            "type": "boolean"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "latest_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Error"
+          },
+          "latest_state": {
+            "default": "missing",
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Latest State",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "selected": {
+            "default": true,
+            "title": "Selected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "MetricEvidence",
+        "type": "object"
+      },
       "MfaChallengeResponse": {
         "description": "A password that was accepted but still needs a second factor.",
         "properties": {
@@ -2657,6 +4660,288 @@
         "title": "MistLoginRequest",
         "type": "object"
       },
+      "ModelActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "calls_limit": {
+            "default": 21,
+            "title": "Calls Limit",
+            "type": "integer"
+          },
+          "calls_used": {
+            "minimum": 0.0,
+            "title": "Calls Used",
+            "type": "integer"
+          },
+          "input_bytes_limit": {
+            "default": 504000,
+            "title": "Input Bytes Limit",
+            "type": "integer"
+          },
+          "input_bytes_reserved": {
+            "minimum": 0.0,
+            "title": "Input Bytes Reserved",
+            "type": "integer"
+          },
+          "records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ModelRequestRecord"
+            },
+            "maxItems": 21,
+            "title": "Records",
+            "type": "array"
+          },
+          "source": {
+            "const": "live_investigation_root",
+            "default": "live_investigation_root",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calls_used",
+          "input_bytes_reserved"
+        ],
+        "title": "ModelActivity",
+        "type": "object"
+      },
+      "ModelDispatchDenial": {
+        "enum": [
+          "provider_changed",
+          "organization_unavailable",
+          "credential_changed",
+          "window_expired",
+          "reservation_rejected"
+        ],
+        "title": "ModelDispatchDenial",
+        "type": "string"
+      },
+      "ModelRequestDetails": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CollectAction"
+              },
+              {
+                "$ref": "#/components/schemas/ReportAction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "action_state": {
+            "default": "unavailable",
+            "enum": [
+              "available",
+              "legacy",
+              "unavailable",
+              "not_recorded"
+            ],
+            "title": "Action State",
+            "type": "string"
+          },
+          "input_json": {
+            "anyOf": [
+              {
+                "maxLength": 24000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Json"
+          },
+          "input_state": {
+            "default": "unavailable",
+            "enum": [
+              "available",
+              "legacy",
+              "unavailable"
+            ],
+            "title": "Input State",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "ModelRequestDetails",
+        "type": "object"
+      },
+      "ModelRequestRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "action_artifact_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PydanticObjectId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Hash"
+          },
+          "candidate_revision": {
+            "minimum": 1.0,
+            "title": "Candidate Revision",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_artifact_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PydanticObjectId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_bytes": {
+            "maximum": 24000.0,
+            "minimum": 1.0,
+            "title": "Input Bytes",
+            "type": "integer"
+          },
+          "input_context_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Context Hash"
+          },
+          "input_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 255,
+            "title": "Model",
+            "type": "string"
+          },
+          "output_token_limit": {
+            "maximum": 1500.0,
+            "minimum": 1.0,
+            "title": "Output Token Limit",
+            "type": "integer"
+          },
+          "prompt_version": {
+            "default": "impact-investigator.v7",
+            "enum": [
+              "impact-investigator.v1",
+              "impact-investigator.v2",
+              "impact-investigator.v3",
+              "impact-investigator.v4",
+              "impact-investigator.v5",
+              "impact-investigator.v6",
+              "impact-investigator.v7"
+            ],
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "request_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Tokens"
+          },
+          "reserved_at": {
+            "format": "date-time",
+            "title": "Reserved At",
+            "type": "string"
+          },
+          "response_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Tokens"
+          },
+          "state": {
+            "default": "reserved",
+            "enum": [
+              "reserved",
+              "complete",
+              "invalid_response",
+              "provider_error"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "generation",
+          "candidate_revision",
+          "reserved_at",
+          "input_hash",
+          "model",
+          "input_bytes",
+          "output_token_limit"
+        ],
+        "title": "ModelRequestRecord",
+        "type": "object"
+      },
       "MonitoringChangeRef": {
         "properties": {
           "audit_id": {
@@ -2781,6 +5066,25 @@
               }
             ],
             "title": "Ai Assessment Error"
+          },
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assessment_source": {
+            "default": "legacy",
+            "enum": [
+              "stored",
+              "legacy"
+            ],
+            "title": "Assessment Source",
+            "type": "string"
           },
           "audit_ids": {
             "items": {
@@ -3528,6 +5832,16 @@
             },
             "title": "Safety Net",
             "type": "array"
+          },
+          "shadow_feed_counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShadowFeedCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3791,6 +6105,19 @@
             "default": 0,
             "title": "Failed Restores",
             "type": "integer"
+          },
+          "impact_source": {
+            "anyOf": [
+              {
+                "const": "legacy",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy",
+            "title": "Impact Source"
           },
           "impacting": {
             "default": 0,
@@ -4178,6 +6505,113 @@
         "title": "PointInTimeStateResponse",
         "type": "object"
       },
+      "PortEventRow": {
+        "additionalProperties": false,
+        "properties": {
+          "event_type": {
+            "enum": [
+              "SW_PORT_UP",
+              "SW_PORT_DOWN",
+              "SW_POE_PORT_ENABLED",
+              "SW_POE_PORT_DISABLED"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_type",
+          "occurred_at"
+        ],
+        "title": "PortEventRow",
+        "type": "object"
+      },
+      "PortResponseError": {
+        "enum": [
+          "scope_mismatch",
+          "invalid_timestamp",
+          "invalid_response"
+        ],
+        "title": "PortResponseError",
+        "type": "string"
+      },
+      "PortRow": {
+        "additionalProperties": false,
+        "description": "Most recent reported port state, not a transition or a managed peer identity.",
+        "properties": {
+          "neighbor_handle": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbor Handle"
+          },
+          "neighbor_identity": {
+            "const": "unverified",
+            "default": "unverified",
+            "title": "Neighbor Identity",
+            "type": "string"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "poe_on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poe On"
+          },
+          "power_draw": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power Draw"
+          },
+          "up": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up"
+          }
+        },
+        "title": "PortRow",
+        "type": "object"
+      },
       "ProfileResponse": {
         "description": "The parts of an account its owner may edit.",
         "properties": {
@@ -4443,11 +6877,184 @@
         "title": "RecoveryState",
         "type": "string"
       },
+      "RelevancePlan": {
+        "description": "Explicit evidence selection. An empty selected plan selects nothing.",
+        "properties": {
+          "finding_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Finding Kinds",
+            "type": "array"
+          },
+          "incident_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Types",
+            "type": "array"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "mode": {
+            "default": "selected",
+            "enum": [
+              "selected",
+              "legacy_all"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "RelevancePlan",
+        "type": "object"
+      },
+      "ReportAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "report",
+            "title": "Action",
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/AgentProposal"
+          }
+        },
+        "required": [
+          "action",
+          "report"
+        ],
+        "title": "ReportAction",
+        "type": "object"
+      },
+      "ReportHistory": {
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "investigation_id": {
+            "title": "Investigation Id",
+            "type": "string"
+          },
+          "published_revision": {
+            "title": "Published Revision",
+            "type": "integer"
+          },
+          "reports": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ImpactReport"
+            },
+            "maxItems": 10,
+            "title": "Reports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "investigation_id",
+          "published_revision",
+          "complete"
+        ],
+        "title": "ReportHistory",
+        "type": "object"
+      },
+      "ReportSection": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "maxLength": 500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "available",
+              "partial",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "explanation"
+        ],
+        "title": "ReportSection",
+        "type": "object"
+      },
+      "ReportSections": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "findings": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "gaps_and_next_checks": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "timeline": {
+            "$ref": "#/components/schemas/ReportSection"
+          }
+        },
+        "required": [
+          "summary",
+          "change",
+          "scope",
+          "findings",
+          "evidence",
+          "timeline",
+          "context",
+          "gaps_and_next_checks"
+        ],
+        "title": "ReportSections",
+        "type": "object"
+      },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/RestoreActionType"
+          },
+          "baseline_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Version Id"
           },
           "configuration": {
             "additionalProperties": true,
@@ -4594,6 +7201,11 @@
                 "type": "null"
               }
             ]
+          },
+          "use_prepared_credential": {
+            "default": false,
+            "title": "Use Prepared Credential",
+            "type": "boolean"
           }
         },
         "title": "RestoreExecuteRequest",
@@ -4650,6 +7262,17 @@
               }
             ]
           },
+          "baseline_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Snapshot Id"
+          },
           "compensation_available": {
             "default": false,
             "title": "Compensation Available",
@@ -4700,6 +7323,18 @@
             },
             "title": "Preflight Errors",
             "type": "array"
+          },
+          "prepared_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepared Until"
           },
           "requested_version_ids": {
             "items": {
@@ -5250,6 +7885,353 @@
         "title": "SessionRevocationResponse",
         "type": "object"
       },
+      "ShadowCheckResponse": {
+        "properties": {
+          "ap_adjacency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApAdjacency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "device_mac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "dispatch_denial": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DispatchDenial"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "managed_neighbor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedNeighbor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port_events": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PortEventRow"
+            },
+            "maxItems": 200,
+            "title": "Port Events",
+            "type": "array"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "response_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortResponseError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/Window"
+          }
+        },
+        "required": [
+          "check_id",
+          "target_handle",
+          "window",
+          "captured_at",
+          "state",
+          "row_count",
+          "reason"
+        ],
+        "title": "ShadowCheckResponse",
+        "type": "object"
+      },
+      "ShadowFeedCounts": {
+        "description": "Mutually exclusive results for returned feed rows, not the whole time window.",
+        "properties": {
+          "insufficient_evidence": {
+            "default": 0,
+            "title": "Insufficient Evidence",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "title": "Mode",
+            "type": "string"
+          },
+          "no_observed_disconnect": {
+            "default": 0,
+            "title": "No Observed Disconnect",
+            "type": "integer"
+          },
+          "not_recorded": {
+            "default": 0,
+            "title": "Not Recorded",
+            "type": "integer"
+          },
+          "pending": {
+            "default": 0,
+            "title": "Pending",
+            "type": "integer"
+          },
+          "possible_disruption": {
+            "default": 0,
+            "title": "Possible Disruption",
+            "type": "integer"
+          },
+          "scope": {
+            "const": "returned_feed",
+            "default": "returned_feed",
+            "title": "Scope",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unavailable": {
+            "default": 0,
+            "title": "Unavailable",
+            "type": "integer"
+          }
+        },
+        "title": "ShadowFeedCounts",
+        "type": "object"
+      },
+      "ShadowInvestigationResponse": {
+        "description": "Diagnostic preview; never replaces the published production verdict.",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentCheckpoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WlanAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "calls_limit": {
+            "title": "Calls Limit",
+            "type": "integer"
+          },
+          "calls_used": {
+            "title": "Calls Used",
+            "type": "integer"
+          },
+          "changed_at": {
+            "format": "date-time",
+            "title": "Changed At",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ShadowCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch_log": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DispatchLog"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "title": "Mode",
+            "type": "string"
+          },
+          "model_activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ShadowTargetResponse"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "audit_id",
+          "status",
+          "revision",
+          "changed_at",
+          "expires_at",
+          "calls_used",
+          "calls_limit"
+        ],
+        "title": "ShadowInvestigationResponse",
+        "type": "object"
+      },
+      "ShadowTargetResponse": {
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "site_id": {
+            "title": "Site Id",
+            "type": "string"
+          },
+          "wlan_id": {
+            "title": "Wlan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "site_id",
+          "wlan_id"
+        ],
+        "title": "ShadowTargetResponse",
+        "type": "object"
+      },
       "SiteChange": {
         "properties": {
           "actor": {
@@ -5296,7 +8278,7 @@
           },
           "impacts": {
             "items": {
-              "$ref": "#/components/schemas/DeviceImpact"
+              "$ref": "#/components/schemas/mist_config_guardian_backend__schemas__impact__DeviceImpact"
             },
             "title": "Impacts",
             "type": "array"
@@ -5305,6 +8287,16 @@
             "format": "date-time",
             "title": "Occurred At",
             "type": "string"
+          },
+          "shadow_impact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditImpactSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "summary": {
             "default": "",
@@ -5429,6 +8421,27 @@
         "title": "SiteTopology",
         "type": "object"
       },
+      "SkillReference": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content_hash"
+        ],
+        "title": "SkillReference",
+        "type": "object"
+      },
       "SleObservationResponse": {
         "description": "Safe numeric SLE observation.",
         "properties": {
@@ -5453,11 +8466,41 @@
             "title": "Errors",
             "type": "array"
           },
+          "metric_errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metric Errors",
+            "type": "object"
+          },
+          "metric_states": {
+            "additionalProperties": {
+              "enum": [
+                "measured",
+                "no_data",
+                "pending",
+                "missing",
+                "error",
+                "unsupported",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            "title": "Metric States",
+            "type": "object"
+          },
           "no_data": {
             "items": {
               "type": "string"
             },
             "title": "No Data",
+            "type": "array"
+          },
+          "requested_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requested Metrics",
             "type": "array"
           },
           "scope": {
@@ -5468,6 +8511,17 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
           },
           "trend": {
             "additionalProperties": {
@@ -6649,6 +9703,483 @@
           "secret"
         ],
         "title": "WebhookSecretResponse",
+        "type": "object"
+      },
+      "Window": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "Window",
+        "type": "object"
+      },
+      "WlanAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "unmapped"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "domain_findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DomainFinding"
+            },
+            "title": "Domain Findings",
+            "type": "array"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/WlanFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "impact": {
+            "enum": [
+              "info",
+              "none",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "policy_version": {
+            "default": "wlan-removal.v1",
+            "enum": [
+              "wlan-removal.v1",
+              "impact-domains.v1"
+            ],
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "audit_id",
+          "evaluated_at",
+          "impact",
+          "confidence",
+          "coverage",
+          "findings",
+          "gaps"
+        ],
+        "title": "WlanAssessment",
+        "type": "object"
+      },
+      "WlanFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_clients": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Clients"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "disconnected_clients": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disconnected Clients"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "info",
+              "none",
+              "warning"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "serving_ap_macs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Serving Ap Macs",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "no_observed_impact",
+              "possible_disruption"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_handle",
+          "state",
+          "impact",
+          "confidence",
+          "explanation"
+        ],
+        "title": "WlanFinding",
+        "type": "object"
+      },
+      "mist_config_guardian_backend__impact__report__DeviceImpact": {
+        "additionalProperties": false,
+        "description": "A service association, not a claim that the entire device is down.",
+        "properties": {
+          "attribution": {
+            "const": "plausible",
+            "default": "plausible",
+            "title": "Attribution",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "current_impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current Impact",
+            "type": "string"
+          },
+          "device_failure": {
+            "const": "not_established",
+            "default": "not_established",
+            "title": "Device Failure",
+            "type": "string"
+          },
+          "device_mac": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Device Mac",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "role": {
+            "enum": [
+              "affected_switch_port",
+              "serving_affected_clients"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "service": {
+            "enum": [
+              "port_link",
+              "port_power",
+              "wlan_sessions",
+              "wlan_authentication"
+            ],
+            "title": "Service",
+            "type": "string"
+          },
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
+            "type": "string"
+          },
+          "target_handle": {
+            "title": "Target Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_mac",
+          "site_id",
+          "role",
+          "service",
+          "target_handle",
+          "impact",
+          "current_impact",
+          "confidence"
+        ],
+        "title": "DeviceImpact",
+        "type": "object"
+      },
+      "mist_config_guardian_backend__schemas__impact__DeviceImpact": {
+        "properties": {
+          "assessment_source": {
+            "default": "legacy",
+            "enum": [
+              "stored",
+              "legacy",
+              "historical"
+            ],
+            "title": "Assessment Source",
+            "type": "string"
+          },
+          "collection_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collection Errors",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "config_state": {
+            "default": "unknown",
+            "enum": [
+              "pending",
+              "applied",
+              "rolled_back",
+              "unknown"
+            ],
+            "title": "Config State",
+            "type": "string"
+          },
+          "configured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured At"
+          },
+          "detected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected At"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "evidence_coverage": {
+            "default": "insufficient",
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Evidence Coverage",
+            "type": "string"
+          },
+          "headline": {
+            "default": "Waiting for comparable evidence",
+            "title": "Headline",
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactMetric"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "monitoring_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Ends At"
+          },
+          "monitoring_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Started At"
+          },
+          "monitoring_state": {
+            "default": "unknown",
+            "enum": [
+              "not_started",
+              "monitoring",
+              "completed",
+              "stalled",
+              "aborted",
+              "unknown"
+            ],
+            "title": "Monitoring State",
+            "type": "string"
+          },
+          "observation_count": {
+            "default": 0,
+            "title": "Observation Count",
+            "type": "integer"
+          },
+          "progress": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "severity": {
+            "default": "unknown",
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "critical",
+              "unknown"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "shared_window": {
+            "default": false,
+            "title": "Shared Window",
+            "type": "boolean"
+          },
+          "snapshot_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot At"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_name",
+          "session_id"
+        ],
+        "title": "DeviceImpact",
         "type": "object"
       }
     },
@@ -9029,6 +12560,346 @@
         ]
       }
     },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation": {
+      "get": {
+        "description": "Read the published revision and separately labelled live activity for the authorized organization.",
+        "operationId": "read_shadow_investigation_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ShadowInvestigationResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Shadow Investigation Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Shadow Investigation",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/acceptance": {
+      "get": {
+        "operationId": "read_acceptance_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_acceptance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptanceResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Acceptance",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/adjudication": {
+      "post": {
+        "operationId": "label_investigation_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_adjudication_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjudicationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Label Investigation Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Adjudication Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Label Investigation",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/history": {
+      "get": {
+        "operationId": "read_report_history_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReportHistory"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Report History Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation History Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Report History",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/model-requests/{request_id}": {
+      "get": {
+        "description": "Read one authorized journal entry's verified context/action artifacts.",
+        "operationId": "read_model_request_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_model_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ModelRequestDetails"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Model Request Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Model Requests  Request Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Model Request",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
     "/api/v1/organizations/{organization_id}/diff": {
       "get": {
         "description": "Return the deterministic, secret-safe diff between two versions.",
@@ -11263,6 +15134,75 @@
           }
         ],
         "summary": "Execute Restore",
+        "tags": [
+          "Restores"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/restores/{operation_id}/prepare": {
+      "post": {
+        "description": "Back up live state and return a new plan for review; never queue writes.",
+        "operationId": "prepare_restore_api_v1_organizations__organization_id__restores__operation_id__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Prepare Restore",
         "tags": [
           "Restores"
         ]

@@ -1,0 +1,42 @@
+{
+  "entries": {
+    "switch.bgp_config": {
+      "attribute": "bgp_config",
+      "description": "BGP routing configuration for this switch. Property key is the BGP session name",
+      "id": "switch.bgp_config",
+      "reference": null,
+      "schema_name": "device_switch",
+      "source_pointer": "#/components/schemas/device_switch/properties/bgp_config",
+      "value_type": "object"
+    },
+    "switch.ospf_config": {
+      "attribute": "ospf_config",
+      "description": "OSPF routing configuration for this switch",
+      "id": "switch.ospf_config",
+      "reference": "#/components/schemas/switch_ospf_config",
+      "schema_name": "device_switch",
+      "source_pointer": "#/components/schemas/device_switch/properties/ospf_config",
+      "value_type": "unknown"
+    },
+    "wlan.schedule": {
+      "attribute": "schedule",
+      "description": "Operating schedule controlling when this WLAN is active",
+      "id": "wlan.schedule",
+      "reference": "#/components/schemas/wlan_schedule",
+      "schema_name": "wlan",
+      "source_pointer": "#/components/schemas/wlan/properties/schedule",
+      "value_type": "object"
+    },
+    "wlan.ssid": {
+      "attribute": "ssid",
+      "description": "Name of the SSID",
+      "id": "wlan.ssid",
+      "reference": null,
+      "schema_name": "wlan",
+      "source_pointer": "#/components/schemas/wlan/properties/ssid",
+      "value_type": "string"
+    }
+  },
+  "source_hash": "69abef5a2246140a4a03ee137d1acd445954d96f90147191458a3456c452b665",
+  "version": "2609.1.0"
+}

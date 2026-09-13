@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 
+from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.organization import Organization
@@ -17,6 +18,7 @@ from mist_config_guardian_backend.models.webhook import (
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
 from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
+from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
 from mist_config_guardian_backend.services.notifications import NotificationService
 
@@ -89,6 +91,14 @@ class WebhookProcessingService:
         # matter whether the audit event or the device events arrived first, or
         # how many times either was delivered.
         await self.project(receipt, payload, session=session)
+
+        if receipt.topic == "audits" and receipt.audit_id and get_settings().impact_engine_mode != "legacy":
+            await ImpactInvestigationService(self._vault).ensure(
+                receipt.organization_id,
+                receipt.audit_id,
+                changed_at=self._event_time(payload) or receipt.created_at,
+                anchor_known=self._event_time(payload) is not None,
+            )
 
         receipt.status = WebhookProcessingStatus.PROCESSED
         receipt.processed_at = utc_now()

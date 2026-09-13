@@ -119,4 +119,20 @@ describe('OverviewPage under time travel', () => {
     again.flush(overview({ historical: true }));
     await fixture.whenStable();
   });
+  it('labels shadow counts as the loaded feed and keeps unknown separate from no observed disconnect', async () => {
+    fixture.detectChanges();
+    await fixture.whenStable();
+    httpMock.expectOne((candidate) => candidate.url === OVERVIEW_URL).flush(overview({
+      shadow_feed_counts: { mode: 'shadow', scope: 'returned_feed', total: 6,
+        possible_disruption: 1, no_observed_disconnect: 1, insufficient_evidence: 1,
+        pending: 1, unavailable: 1, not_recorded: 1 },
+    }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(text('.shadow-counts')[0]).toContain('6 changes in the loaded feed');
+    expect(text('.shadow-counts')[0]).toContain('1 insufficient evidence');
+    expect(text('.shadow-counts')[0]).toContain('1 with no observed disconnect');
+    expect(text('.shadow-counts')[0]).toContain('totals and alerts still use the legacy assessment');
+  });
+
 });

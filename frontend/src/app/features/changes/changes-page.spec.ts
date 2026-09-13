@@ -328,4 +328,19 @@ describe('ChangesPage', () => {
       'No impact',
     ]);
   });
+  it('shows the shadow projection alongside the production badge without changing its filter', async () => {
+    const request = await load([{ ...MONDAY_CRITICAL, impact_source: 'legacy', shadow_impact: {
+      mode: 'shadow', assessment_source: 'audit_investigation', result: 'insufficient_evidence',
+      investigation_id: 'i1', report_id: 'r3', revision: 3, status: 'monitoring', stop_reason: '',
+      policy_version: 'wlan-removal.v1', evaluated_at: '2026-09-07T09:22:00Z',
+      impact: 'info', confidence: 'low', coverage: 'partial', gap_count: 1, unmapped_count: 2,
+    } }]);
+    expect(text('.cell-impact .cg-badge')).toEqual(['CRITICAL −29']);
+    expect(text('app-audit-impact-summary')[0]).toContain('Shadow · Insufficient evidence');
+    expect(text('app-audit-impact-summary')[0]).toContain('Confidence: low');
+    expect(text('app-audit-impact-summary')[0]).toContain('Revision 3');
+    expect(request.request.params.get('severity')).toBe('any');
+    expect(text('.head-sub').join(' ')).toContain('filters and alerts still use the legacy assessment');
+  });
+
 });

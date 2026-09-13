@@ -1,0 +1,674 @@
+"""Bounded deterministic shadow investigations driven by the existing worker tick."""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from functools import partial
+from hashlib import sha256
+from uuid import UUID, uuid4
+
+from beanie import PydanticObjectId
+from beanie.odm.utils.encoder import Encoder
+from pymongo import ReturnDocument
+from pymongo.errors import PyMongoError
+
+from mist_config_guardian_backend.config import get_settings
+from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
+from mist_config_guardian_backend.impact.contracts import (
+    ApEvidence,
+    AuthEvidence,
+    CandidateReference,
+    DispatchDenial,
+    DocumentationEvidence,
+    InvestigationEvidence,
+    NeighborEvidence,
+    NeighborTarget,
+    PortEvidence,
+    SessionEvidence,
+    WlanRemovalPlan,
+)
+from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
+from mist_config_guardian_backend.impact.domain_evaluation import compose_domains
+from mist_config_guardian_backend.impact.knowledge import describe_attribute, documentation_plan
+from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
+from mist_config_guardian_backend.impact.report import build_report
+from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
+from mist_config_guardian_backend.integrations.mist_ap_evidence import MistScopedEvidenceClient
+from mist_config_guardian_backend.models.base import utc_now
+from mist_config_guardian_backend.models.investigation import (
+    ROOT_METADATA_PROJECTION,
+    ImpactInvestigation,
+    InvestigationRevision,
+)
+from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
+from mist_config_guardian_backend.models.webhook import AuditChangeGroup
+from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.change_groups import BeanieChangeGroupStore
+from mist_config_guardian_backend.services.deployment_evidence import collect_deployment
+from mist_config_guardian_backend.services.impact_agent import ImpactAgent
+from mist_config_guardian_backend.services.neighbor_bindings import NeighborBindingStore
+from mist_config_guardian_backend.services.published_revision import published_revision
+from mist_config_guardian_backend.services.service_credentials import service_token
+
+logger = logging.getLogger(__name__)
+_LEASE = timedelta(minutes=3)
+_INTERVAL = timedelta(minutes=10)
+_DURATION = timedelta(hours=1)
+_MAX_RETENTION_DAYS = 36_500
+
+
+class ImpactInvestigationService:
+    """One root per audit; no provisional investigations and no device-agent fan-out."""
+
+    def __init__(self, vault: CredentialVault) -> None:
+        self._vault = vault
+        self._configurations = BeanieChangeGroupStore()
+
+    async def ensure(
+        self,
+        organization_id: PydanticObjectId,
+        audit_id: str,
+        *,
+        changed_at: datetime,
+        anchor_known: bool,
+    ) -> None:
+        """Persist the audit even before correlation; retries cannot reset budgets.
+
+        Only the authenticated audit receipt path calls this method. An absent
+        group delays evidence collection rather than silently losing the audit.
+        """
+        now = utc_now()
+        organization = await Organization.get(organization_id)
+        retention_days = getattr(organization, "monitoring_retention_days", 90)
+        retained_until = (
+            now + timedelta(days=retention_days)
+            if type(retention_days) is int and 1 <= retention_days <= _MAX_RETENTION_DAYS
+            else None
+        )
+        due = max(now, changed_at) + timedelta(seconds=60)
+        root = ImpactInvestigation(
+            organization_id=organization_id,
+            audit_id=audit_id,
+            changed_at=changed_at,
+            retained_until=retained_until,
+            anchor_known=anchor_known,
+            first_due_at=due,
+            expires_at=changed_at + _DURATION,
+            next_poll_at=due,
+        )
+        await ImpactInvestigation.get_pymongo_collection().update_one(
+            {"organization_id": organization_id, "audit_id": audit_id},
+            {"$setOnInsert": root.model_dump(mode="python", exclude={"id"})},
+            upsert=True,
+        )
+
+    async def poll_due(self) -> int:
+        """Use existing minute ticks; bounded claims, separate from device polling."""
+        completed = 0
+        for _ in range(20):
+            now = utc_now()
+            document = await ImpactInvestigation.get_pymongo_collection().find_one_and_update(
+                {
+                    "next_poll_at": {"$ne": None, "$lte": now},
+                    "$or": [{"lease_until": None}, {"lease_until": {"$lte": now}}],
+                },
+                {"$set": {"lease_until": now + _LEASE}, "$inc": {"generation": 1}},
+                sort=[("next_poll_at", 1)],
+                return_document=ReturnDocument.AFTER,
+                projection=ROOT_METADATA_PROJECTION,
+            )
+            if document is None:
+                break
+            root = ImpactInvestigation.model_validate(document)
+            try:
+                await self._poll(root)
+                completed += 1
+            except Exception:  # bounded lease permits another worker to retry after a crash
+                logger.exception("Shadow impact checkpoint failed for investigation %s", root.id)
+                if utc_now() > root.expires_at + timedelta(minutes=2):
+                    await self._stop(root, "Investigation expired before a checkpoint could be published.")
+        return completed
+
+    @staticmethod
+    def _fence(root: ImpactInvestigation, now: datetime) -> dict[str, object]:
+        return {
+            "_id": root.id,
+            "organization_id": root.organization_id,
+            "generation": root.generation,
+            "lease_until": {"$gt": now},
+        }
+
+    async def _stop(self, root: ImpactInvestigation, reason: str) -> None:
+        await ImpactInvestigation.get_pymongo_collection().update_one(
+            self._fence(root, utc_now()),
+            {
+                "$set": {
+                    "status": "incomplete",
+                    "next_poll_at": None,
+                    "lease_until": None,
+                    "stop_reason": reason,
+                }
+            },
+        )
+
+    async def _plan(self, root: ImpactInvestigation) -> WlanRemovalPlan:
+        group = await AuditChangeGroup.find_one({"organization_id": root.organization_id, "audit_id": root.audit_id})
+        versions = (
+            await self._configurations.versions_for_audit(root.organization_id, root.audit_id)
+            if group is not None
+            else []
+        )
+        # Only terminal versions per object are compiled; conflicting same-audit
+        # chains remain a gap until the expander can establish their net change.
+        versions.sort(key=lambda item: (str(item.logical_object_id), item.version))
+        objects = await self._configurations.logical_objects(
+            root.organization_id, [v.logical_object_id for v in versions]
+        )
+        before = await self._configurations.versions_at(
+            root.organization_id,
+            [(v.logical_object_id, v.version - 1) for v in versions if v.version > 1],
+        )
+        plan = compile_wlan_removal(
+            organization_id=str(root.organization_id),
+            audit_id=root.audit_id,
+            changed_at=root.changed_at,
+            logicals=objects,
+            before=before,
+            after=versions,
+        )
+        if group is None:
+            plan = plan.model_copy(
+                update={"gaps": (*plan.gaps, "Audit change group is not available; awaiting correlation.")}
+            )
+        if not root.anchor_known:
+            plan = plan.model_copy(
+                update={"gaps": (*plan.gaps, "Audit timestamp is missing; receipt time is only an approximate anchor.")}
+            )
+        return documentation_plan(plan)
+
+    async def _poll(self, root: ImpactInvestigation) -> None:  # noqa: C901, PLR0912, PLR0915 - fenced discovery and fallback
+        now = utc_now()
+        # Only a fenced publication advances revision. Lease claims and orphan
+        # artifacts are not completed checkpoints and must not consume this cap.
+        if root.revision >= MAX_PUBLISHED_CHECKPOINTS:
+            await self._stop(root, "Published checkpoint limit reached; evidence is incomplete.")
+            return
+        previous = await published_revision(root)
+        plan = await self._plan(root)
+        organization = await Organization.get(root.organization_id)
+        evidence_as_of = min(now, root.expires_at)
+        evidence = []
+        agent = None
+        deployment = await collect_deployment(root, as_of=now)
+        # Delayed audit delivery cannot turn a historical change into a fresh hour.
+        expired = now > root.expires_at + timedelta(minutes=2)
+        if (
+            (plan.targets or (plan.change_context and plan.change_context.changes))
+            and organization is not None
+            and organization.status is OrganizationStatus.VERIFIED
+            and not expired
+        ):
+            token = await service_token(organization, self._vault)
+            credential = organization.encrypted_service_token
+            neighbor_context = None
+            if plan.port_targets or any(t.auth_changed for t in plan.targets):
+                try:
+                    mist_org_id = UUID(str(getattr(organization, "mist_org_id", "")))
+                    retention = getattr(organization, "monitoring_retention_days", None)
+                    if type(retention) is not int or not 1 <= retention <= _MAX_RETENTION_DAYS:
+                        raise ValueError  # noqa: TRY301 - fail closed on invalid organization policy
+                    neighbor_context = (mist_org_id, retention)
+                    plan = plan.model_copy(update={"port_history": bool(plan.port_targets)})
+                except ValueError:
+                    plan = plan.model_copy(
+                        update={
+                            "gaps": (
+                                *plan.gaps,
+                                "Neighbor verification lacks a validated Mist organization or retention policy.",
+                            )
+                        }
+                    )
+
+            async with (
+                asyncio.timeout(120),
+                MistScopedEvidenceClient(token=token, region=organization.cloud_region) as client,
+            ):
+                collected: dict[str, InvestigationEvidence] = {}
+
+                async def collect(check: CheckCapability) -> InvestigationEvidence:
+                    if check.ref not in collected:
+                        if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
+                            msg = "Evidence collection stopped after dispatch denial"
+                            raise RuntimeError(msg)
+                        reading = await self._collect(
+                            root, plan, check, client, credential, neighbor_context=neighbor_context, sources=evidence
+                        )
+                        collected[check.ref] = reading
+                        evidence.append(reading)
+                    return collected[check.ref]
+
+                # Discovery prerequisites run once before the model in both modes.
+                # Only completed source bindings can extend the shared required menu.
+                if neighbor_context is not None:
+                    for check in capabilities(plan, evidence_as_of):
+                        if check.check_id == "switch-port-snapshot.v1":
+                            if evidence and evidence[-1].state == "dispatch_denied":
+                                break
+                            await collect(check)
+                    neighbors = []
+                    for reading in evidence:
+                        if isinstance(reading, PortEvidence) and reading.candidate_binding is not None:
+                            port = next(t for t in plan.port_targets if t.handle == reading.target_handle)
+                            binding = reading.candidate_binding
+                            handle = sha256(
+                                f"neighbor-inventory.v1:{binding.artifact_id}:{binding.content_hash}".encode()
+                            ).hexdigest()
+                            neighbors.append(
+                                NeighborTarget(
+                                    handle=handle,
+                                    source_port_handle=port.handle,
+                                    site_id=port.site_id,
+                                    mist_org_id=neighbor_context[0],
+                                    binding=binding,
+                                )
+                            )
+                    plan = plan.model_copy(update={"neighbor_targets": tuple(neighbors), "neighbor_statistics": True})
+                if get_settings().impact_engine_mode == "agent_shadow" and not (
+                    evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}
+                ):
+                    agent = await ImpactAgent(self._vault).run(
+                        root,
+                        plan,
+                        evidence_as_of,
+                        collect,
+                        service_credential=credential,
+                        deployment=deployment,
+                        previous=previous,
+                    )
+                # Model failure or omission cannot cancel a rule's required evidence.
+                for check in capabilities(plan, evidence_as_of):
+                    if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
+                        break
+                    await collect(check)
+        assessment = evaluate_wlan_removal(
+            plan, [e for e in evidence if isinstance(e, SessionEvidence)], evidence_as_of=evidence_as_of
+        )
+        assessment = compose_domains(plan, evidence, assessment)
+        if root.id is None:
+            msg = "Persisted investigation has no identity"
+            raise ValueError(msg)
+        artifact = InvestigationRevision(
+            organization_id=root.organization_id,
+            investigation_id=root.id,
+            revision=root.revision + 1,
+            generated_at=utc_now(),
+            previous_report_id=root.report_id,
+            retained_until=root.retained_until,
+            plan=plan,
+            assessment=assessment,
+            evidence=evidence,
+            deployment=deployment,
+            agent=agent,
+        )
+        artifact.report = build_report(
+            investigation_id=str(root.id),
+            revision=artifact.revision,
+            generated_at=artifact.generated_at,
+            plan=plan,
+            assessment=assessment,
+            evidence=evidence,
+            previous=previous.report if previous else None,
+            history_available=previous is not False and (root.revision == 0 or bool(previous and previous.report)),
+        )
+        await artifact.insert()
+        finished = now >= root.expires_at or any(
+            item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
+        )
+        if finished:
+            status = "completed" if assessment.coverage == "complete" else "incomplete"
+            next_poll = None
+        else:
+            status = "monitoring"
+            elapsed = max(0, int((now - root.changed_at) / _INTERVAL))
+            next_poll = min(root.changed_at + (elapsed + 1) * _INTERVAL, root.expires_at)
+        # An obsolete worker may retain its immutable artifact, but never publish
+        # it over a newer generation, and it cannot dispatch after losing its lease.
+        await ImpactInvestigation.get_pymongo_collection().update_one(
+            {**self._fence(root, utc_now()), "revision": root.revision},
+            {
+                "$set": {
+                    "report_id": artifact.id,
+                    "revision": root.revision + 1,
+                    "status": status,
+                    "next_poll_at": next_poll,
+                    "lease_until": None,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+
+    async def _collect(  # noqa: C901, PLR0911, PLR0912, PLR0913 - exact plan and source context at dispatch boundary
+        self,
+        root: ImpactInvestigation,
+        plan: WlanRemovalPlan,
+        check: CheckCapability,
+        client: MistScopedEvidenceClient,
+        credential: str,
+        *,
+        neighbor_context: tuple[UUID, int] | None = None,
+        sources: list[InvestigationEvidence] | None = None,
+    ) -> InvestigationEvidence:
+        if check not in capabilities(plan, max(check.window.end, plan.changed_at + timedelta(microseconds=1))):
+            msg = "Collection requires the exact planned capability"
+            raise ValueError(msg)
+        if check.check_id == "mist-docs-attribute.v1":
+            target = next(t for t in plan.documentation_targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=target.handle,
+                document_id=target.document_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            denial = await self._reserve(root, credential, dispatch)
+            if denial:
+                return DocumentationEvidence(
+                    target_handle=target.handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="dispatch_denied",
+                    dispatch_denial=denial,
+                    reason=denial.explanation,
+                )
+            try:
+                document = describe_attribute(target.document_id)
+                reading = DocumentationEvidence(
+                    target_handle=target.handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="complete",
+                    rows=(document,),
+                    response_bytes=len(document.model_dump_json().encode()),
+                    reason="Pinned attribute documentation only; not evidence of service state or impact.",
+                )
+            except (ValueError, OSError):
+                reading = DocumentationEvidence(
+                    target_handle=target.handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="error",
+                    reason="Pinned documentation is unavailable or failed integrity validation.",
+                )
+            await self._finish_dispatch(root, dispatch, reading)
+            return reading
+        if check.check_id == "wlan-auth-events.v1":
+            if neighbor_context is None:
+                return AuthEvidence(
+                    target_handle=check.target_handle,
+                    window=check.window,
+                    captured_at=utc_now(),
+                    state="error",
+                    reason="Validated organization identity is unavailable; no request was sent.",
+                )
+            target = next(t for t in plan.targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=target.handle,
+                site_id=target.site_id,
+                wlan_id=target.wlan_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            reading = await client.capture_auth(
+                plan=plan,
+                target=target,
+                mist_org_id=neighbor_context[0],
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+            if reading.state != "dispatch_denied":
+                await self._finish_dispatch(root, dispatch, reading)
+            return reading
+        if check.check_id == "switch-port-events.v1":
+            if neighbor_context is None:
+                msg_0 = "Port events require a validated organization"
+                raise ValueError(msg_0)
+            port = next(t for t in plan.port_targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=port.handle,
+                site_id=port.site_id,
+                device_mac=port.device_mac,
+                port_id=port.port_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+            reading = await client.capture_port_history(
+                plan=plan,
+                target=port,
+                mist_org_id=neighbor_context[0],
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+            if reading.state != "dispatch_denied":
+                await self._finish_dispatch(root, dispatch, reading)
+            return reading
+        if check.check_id in {"neighbor-ap-inventory.v1", "neighbor-ap-statistics.v1"}:
+            return await self._collect_neighbor(root, plan, check, client, credential, neighbor_context, sources or [])
+        if check.check_id == "switch-port-snapshot.v1":
+            port = next(t for t in plan.port_targets if t.handle == check.target_handle)
+            dispatch = DispatchRecord(
+                id=uuid4(),
+                generation=root.generation,
+                candidate_revision=root.revision + 1,
+                check_id=check.check_id,
+                target_handle=port.handle,
+                site_id=port.site_id,
+                device_mac=port.device_mac,
+                port_id=port.port_id,
+                window=check.window,
+                reserved_at=utc_now(),
+            )
+
+            async def persist(mac: str, source: PortEvidence) -> CandidateReference:
+                if neighbor_context is None:
+                    raise ValueError
+                store = NeighborBindingStore(self._vault)
+                identity = store.identity(root, port, source, check.ref, dispatch.id, *neighbor_context)
+                return await store.persist(identity, mac)
+
+            reading = await client.capture_port(
+                plan=plan,
+                target_handle=check.target_handle,
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+                persist_candidate=persist if neighbor_context is not None else None,
+            )
+            if reading.state != "dispatch_denied":
+                await self._finish_dispatch(root, dispatch, reading)
+            return reading
+        target = next(t for t in plan.targets if t.handle == check.target_handle)
+        dispatch = DispatchRecord(
+            id=uuid4(),
+            generation=root.generation,
+            candidate_revision=root.revision + 1,
+            target_handle=target.handle,
+            site_id=target.site_id,
+            wlan_id=target.wlan_id,
+            window=check.window,
+            reserved_at=utc_now(),
+        )
+        reading = await client.capture(
+            plan=plan,
+            target_handle=check.target_handle,
+            window=check.window,
+            reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+        )
+        if reading.state not in {"budget_exhausted", "dispatch_denied"}:
+            await self._finish_dispatch(root, dispatch, reading)
+        return reading
+
+    async def _collect_neighbor(  # noqa: PLR0913, PLR0917 - private source and authority must agree
+        self,
+        root: ImpactInvestigation,
+        plan: WlanRemovalPlan,
+        check: CheckCapability,
+        client: MistScopedEvidenceClient,
+        credential: str,
+        neighbor_context: tuple[UUID, int] | None,
+        sources: list[InvestigationEvidence],
+    ) -> NeighborEvidence | ApEvidence:
+        target = next(t for t in plan.neighbor_targets if t.handle == check.target_handle)
+        port = next(t for t in plan.port_targets if t.handle == target.source_port_handle)
+        source = next((e for e in sources if isinstance(e, PortEvidence) and e.target_handle == port.handle), None)
+        store = NeighborBindingStore(self._vault)
+        try:
+            if source is None or source.candidate_binding != target.binding or neighbor_context is None:
+                raise ValueError  # noqa: TRY301 - missing bindings produce an explicit local gap
+            source_check = next(c for c in capabilities(plan, check.window.end) if c.target_handle == port.handle)
+            expected = store.identity(
+                root, port, source, source_check.ref, target.binding.source_dispatch_id, *neighbor_context
+            )
+            candidate = await store.load(root, expected, target.binding, source)
+        except ValueError:
+            evidence_type = ApEvidence if check.check_id == "neighbor-ap-statistics.v1" else NeighborEvidence
+            return evidence_type(
+                target_handle=target.handle,
+                window=check.window,
+                captured_at=utc_now(),
+                state="binding_unavailable",
+                reason="The private source binding could not be verified; no inventory request was authorized.",
+            )
+        dispatch = DispatchRecord(
+            id=uuid4(),
+            generation=root.generation,
+            candidate_revision=root.revision + 1,
+            check_id=check.check_id,
+            target_handle=target.handle,
+            site_id=target.site_id,
+            source_dispatch_id=target.binding.source_dispatch_id,
+            window=check.window,
+            reserved_at=utc_now(),
+        )
+        if check.check_id == "neighbor-ap-statistics.v1":
+            reading = await client.capture_ap(
+                plan=plan,
+                target=target,
+                candidate=candidate,
+                source=source,
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+        else:
+            reading = await client.capture_neighbor(
+                plan=plan,
+                target=target,
+                candidate=candidate,
+                window=check.window,
+                reserve_dispatch=partial(self._reserve, root, credential, dispatch),
+            )
+        if reading.state != "dispatch_denied":
+            await self._finish_dispatch(root, dispatch, reading)
+        return reading
+
+    async def _reserve(
+        self, root: ImpactInvestigation, credential: str, dispatch: DispatchRecord
+    ) -> DispatchDenial | None:
+        fresh = await Organization.get(root.organization_id)
+        now = utc_now()
+        if fresh is None or fresh.status is not OrganizationStatus.VERIFIED:
+            return DispatchDenial.CREDENTIALS_UNAVAILABLE
+        if fresh.encrypted_service_token != credential:
+            return DispatchDenial.CREDENTIALS_CHANGED
+        if now > root.expires_at + timedelta(minutes=2):
+            return DispatchDenial.WINDOW_EXPIRED
+        record = dispatch.model_copy(update={"reserved_at": now})
+        # Budget and journal reservation share one atomic root write. If it fails
+        # or its result is uncertain, capture does not issue the HTTP request.
+        result = await ImpactInvestigation.get_pymongo_collection().update_one(
+            {
+                **self._fence(root, now),
+                "calls_used": {"$lt": root.calls_limit},
+                f"dispatches.{MAX_DISPATCHES - 1}": {"$exists": False},
+            },
+            {"$inc": {"calls_used": 1}, "$push": {"dispatches": Encoder().encode(record)}},
+        )
+        if result.matched_count == 1:
+            return None
+        return await self._reservation_blocker(root)
+
+    @staticmethod
+    async def _reservation_blocker(root: ImpactInvestigation) -> DispatchDenial:
+        # Diagnostic snapshot only: this read cannot authorize a retry or prove
+        # which predicate failed at the earlier atomic write. Never read payloads.
+        try:
+            current = await ImpactInvestigation.get_pymongo_collection().find_one(
+                {"_id": root.id, "organization_id": root.organization_id},
+                {
+                    "generation": 1,
+                    "lease_until": 1,
+                    "calls_used": 1,
+                    "dispatches": {"$slice": [MAX_DISPATCHES - 1, 1]},
+                },
+            )
+        except PyMongoError:
+            return DispatchDenial.RESERVATION_REJECTED
+        if current is None:
+            return DispatchDenial.RESERVATION_REJECTED
+        lease_until = current.get("lease_until")
+        if current.get("generation") != root.generation or lease_until is None or lease_until <= utc_now():
+            return DispatchDenial.LEASE_LOST
+        if current.get("calls_used", 0) >= root.calls_limit:
+            return DispatchDenial.BUDGET_EXHAUSTED
+        if current.get("dispatches"):
+            return DispatchDenial.JOURNAL_FULL
+        return DispatchDenial.RESERVATION_REJECTED
+
+    @staticmethod
+    async def _finish_dispatch(
+        root: ImpactInvestigation, dispatch: DispatchRecord, reading: InvestigationEvidence
+    ) -> None:
+        # An old worker may finish only its own reserved record. This factual log
+        # update cannot publish evidence or alter the current worker's lease.
+        if (reading.check_id, reading.target_handle, reading.window) != (
+            dispatch.check_id,
+            dispatch.target_handle,
+            dispatch.window,
+        ):
+            msg = "Dispatch result identity does not match its reservation."
+            raise ValueError(msg)
+        completed = DispatchRecord.model_validate(
+            {
+                **dispatch.model_dump(),
+                "state": reading.state,
+                "finished_at": utc_now(),
+                "http_status": reading.http_status,
+                "response_bytes": reading.response_bytes,
+                "row_count": len(reading.rows),
+            }
+        )
+        fields = completed.model_dump(include={"state", "finished_at", "http_status", "response_bytes", "row_count"})
+        result = await ImpactInvestigation.get_pymongo_collection().update_one(
+            Encoder().encode(
+                {
+                    "_id": root.id,
+                    "organization_id": root.organization_id,
+                    "dispatches": {
+                        "$elemMatch": {"id": dispatch.id, "generation": dispatch.generation, "state": "reserved"}
+                    },
+                }
+            ),
+            {"$set": {f"dispatches.$.{key}": value for key, value in fields.items()}},
+        )
+        if result.matched_count != 1:
+            msg = "Dispatch result could not be recorded; checkpoint publication stopped."
+            raise RuntimeError(msg)

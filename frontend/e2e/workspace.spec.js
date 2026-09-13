@@ -517,3 +517,192 @@ test('exact-time popover follows its trigger when the toolbar wraps', async ({ p
     await expect(trigger).toBeFocused();
   }
 });
+
+test('WLAN shadow preview keeps evidence gaps and serving APs explicit', async ({ page }, info) => {
+  let modelDetailRequests = 0;
+  await page.route('**/investigation/model-requests/*', (route) => {
+    modelDetailRequests++;
+    return route.fulfill({ json: { request_id: 'model-attempt-1', input_state: 'available',
+      input_json: '{"unmapped_change_count":0}', action_state: 'not_recorded', action: null } });
+  });
+  await page.route('**/change-groups/*/investigation', (route) => route.fulfill({ json: {
+    mode: 'shadow', id: 'i1', audit_id: 'audit0', status: 'monitoring', revision: 1,
+    changed_at: now, expires_at: now, calls_used: 2, calls_limit: 56,
+    assessment: { impact: 'info', confidence: 'low', coverage: 'partial',
+      gaps: ['Historical session collection failed; usage remains unknown.'],
+      findings: [{ target_handle: 'wlan-handle', state: 'unknown', baseline_clients: null,
+        disconnected_clients: null, serving_ap_macs: [], explanation: 'Complete historical evidence is unavailable.' }] },
+    deployment: { schema_version: 1, collected_at: now, state: 'partial', coverage: 'observed_receipts_only', expected_device_count: null,
+      gaps: ['Session association is not proof of audit deployment.'],
+      devices: [{ device_mac: '001122aabbcc', site_id: 'site1', device_type: 'ap', outcome: 'unknown', correlation: 'session_candidate', last_event_at: null, receipt_ids: ['receipt-1'] }],
+      observations: [{ receipt_id: 'receipt-1', received_at: now, correlation: 'session_candidate',
+        signal: { event_type: 'AP_CONFIGURED', outcome: 'configured', device_mac: '001122aabbcc', site_id: 'site1', occurred_at: now, gaps: [] } }],
+    },
+    targets: [{ handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222' }],
+    checks: [{ check_id: 'wlan-client-sessions.v1', target_handle: 'wlan-handle', captured_at: now,
+      window: { start: now, end: now }, state: 'error', row_count: 0, reason: 'Mist returned HTTP 500.' },
+      { check_id: 'switch-port-snapshot.v1', target_handle: 'port-handle', captured_at: now,
+        device_mac: 'aabbccddee01', port_id: 'ge-0/0/1', window: { start: now, end: now },
+        state: 'complete', row_count: 1, reason: 'Most recent state only; no transition established.',
+        port: { up: false, poe_on: null, power_draw: 0, observed_at: null, neighbor_handle: 'unverified-neighbor', neighbor_identity: 'unverified' } },
+      { check_id: 'neighbor-ap-inventory.v1', target_handle: 'inventory-handle', captured_at: now,
+        window: { start: now, end: now }, state: 'complete', row_count: 1,
+        reason: 'Exact AP membership verified; physical relationship remains unresolved.',
+        managed_neighbor: { device_handle: 'managed-ap-handle', kind: 'ap', identity: 'verified_inventory', relationship: 'unverified' } }],
+    agent: { source: 'model_proposal', state: 'complete', reason: '',
+      proposal: { summary: 'The available history cannot establish the effect of this change.',
+        hypotheses: [{ target_handle: 'wlan-handle', statement: 'Previously connected clients may have been affected.',
+          supporting_checks: [], counterevidence_checks: [], limitations: ['Missing session history prevents attribution.'] }],
+        open_questions: ['Failed joins require an additional evidence capability.'] },
+      memory: null, observations: [] },
+    model_activity: { source: 'live_investigation_root', calls_used: 1, calls_limit: 21,
+      input_bytes_reserved: 1200, input_bytes_limit: 504000,
+      records: [{ id: 'model-attempt-1', candidate_revision: 2, model: 'test-model', state: 'reserved',
+        reserved_at: now, finished_at: null, request_tokens: null, response_tokens: null,
+        input_hash: 'bounded-context-hash' }] },
+    dispatch_log: { source: 'live_investigation_root', unlogged_reservations: 1,
+      records: [{ id: 'attempt-1', generation: 2, candidate_revision: 2, check_id: 'wlan-client-sessions.v1',
+        target_handle: 'wlan-handle', site_id: 'site1', wlan_id: '22222222-2222-4222-8222-222222222222',
+        window: { start: now, end: now }, reserved_at: now, state: 'reserved', finished_at: null,
+        http_status: null, response_bytes: null, row_count: null }] },
+  } }));
+  await page.goto('/changes');
+  await page.locator('.row--group').first().click();
+  await page.getByRole('button', { name: 'Review shadow evidence' }).click();
+  const preview = page.getByRole('region', { name: 'Shadow investigation evidence' });
+  await expect(preview).toContainText('Impact: Insufficient evidence');
+  await expect(preview).toContainText('Confidence: low');
+  await expect(preview).toContainText('A serving AP entry does not mean that the AP failed.');
+  await expect(preview).toContainText('Expected device count: unknown');
+  await expect(preview).toContainText('Session candidate only');
+  await expect(preview).toContainText('They do not identify impacted devices');
+  await preview.getByText('Deployment event receipts', { exact: false }).click();
+  await expect(preview).toContainText('AP_CONFIGURED');
+  await page.screenshot({ path: info.outputPath('deployment-evidence.png'), fullPage: true });
+  await preview.getByText('Collection checks', { exact: false }).click();
+  await expect(preview).toContainText('Mist returned HTTP 500.');
+  await expect(preview).toContainText('Link: Off');
+  await expect(preview).toContainText('PoE: Unknown');
+  await expect(preview).toContainText('Time unavailable');
+  await expect(preview).toContainText('Unverified neighbor');
+  await preview.locator('app-port-snapshot').filter({ hasText: 'Most recent port state' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('port-snapshot.png'), fullPage: true });
+  await expect(preview).toContainText('Managed AP inventory match: managed-ap-handle');
+  await expect(preview).toContainText('physical link, PoE dependency and impact remain unverified');
+  await preview.locator('app-managed-neighbor').filter({ hasText: 'Managed AP inventory match' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('managed-neighbor.png'), fullPage: true });
+  await page.screenshot({ path: info.outputPath('wlan-shadow-preview.png'), fullPage: true });
+  await preview.getByText('Live collection activity', { exact: true }).click();
+  await expect(preview).toContainText('Outcome unknown');
+  await expect(preview).toContainText('1 earlier budget reservations have no journal entry');
+  await expect(preview).toContainText('may not have reached Mist');
+  await page.locator('app-dispatch-log table').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('dispatch-journal.png'), fullPage: true });
+  const agentPreview = page.getByRole('region', { name: 'Agent investigation proposal' });
+  await agentPreview.scrollIntoViewIfNeeded();
+  await expect(agentPreview).toContainText('hypotheses for review');
+  await expect(agentPreview).toContainText('Missing session history prevents attribution');
+  await page.getByText('Live model activity', { exact: false }).click();
+  await page.getByText('test-model · Outcome unknown', { exact: false }).click();
+  await expect(page.locator('app-agent-investigation')).toContainText('input Unknown');
+  expect(modelDetailRequests).toBe(0);
+  await page.getByRole('button', { name: 'Load request context and action' }).click();
+  await page.getByText('Bounded input context · available', { exact: true }).click();
+  await expect(page.locator('app-model-request-details')).toContainText('"unmapped_change_count":0');
+  expect(modelDetailRequests).toBe(1);
+  await page.screenshot({ path: info.outputPath('agent-investigation.png'), fullPage: true });
+
+});
+
+test('shared shadow projection stays distinct from production in Changes and Overview', async ({ page }, info) => {
+  const projection = {
+    mode: 'shadow', assessment_source: 'audit_investigation', result: 'insufficient_evidence',
+    investigation_id: 'i1', report_id: 'r3', revision: 3, status: 'monitoring', stop_reason: '',
+    policy_version: 'wlan-removal.v1', evaluated_at: now, impact: 'info', confidence: 'low',
+    coverage: 'partial', gap_count: 1, unmapped_count: 2,
+  };
+  const row = { ...groups[0], impact_source: 'legacy', shadow_impact: projection };
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/change-groups')) {
+      await route.fulfill({ json: { items: [row], total: 1 } });
+    } else if (path.endsWith('/overview')) {
+      await route.fulfill({ json: {
+        generated_at: now, range_start: now, range_end: now,
+        counts: { change_groups: 70, impacting: 5, mine: 1, unrecovered: 1, pending_approvals: 0, failed_restores: 0, impact_source: 'legacy' },
+        change_groups: [row], safety_net: [], pending_approvals: [], failed_restores: [],
+        latest_snapshot_at: now, latest_snapshot_objects: 100,
+        shadow_feed_counts: { mode: 'shadow', scope: 'returned_feed', total: 1,
+          possible_disruption: 0, no_observed_disconnect: 0, insufficient_evidence: 1,
+          pending: 0, unavailable: 0, not_recorded: 0 },
+      } });
+    } else await route.fallback();
+  });
+  await page.goto('/changes');
+  const rowView = page.locator('.row--group').first();
+  await expect(rowView).toContainText(row.impact_label);
+  await expect(rowView).toContainText('Shadow · Insufficient evidence');
+  await expect(rowView).toContainText('Revision 3');
+  await page.screenshot({ path: info.outputPath('shadow-changes.png'), fullPage: true });
+  await page.goto('/overview');
+  await expect(page.getByRole('region', { name: 'Shadow assessment feed counts' })).toContainText('1 change in the loaded feed');
+  await expect(page.locator('.card').first()).toContainText('Shadow · Insufficient evidence');
+  await expect(page.locator('.card').first()).toContainText(row.impact_label);
+  await page.screenshot({ path: info.outputPath('shadow-overview.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('shadow-overview-mobile.png'), fullPage: true });
+});
+
+test('structured impact report keeps historical peak, source values and human gate distinct', async ({ page }, info) => {
+  const section = { state: 'partial', explanation: 'Only bounded evidence is available.' };
+  const report = { schema_version: 1, investigation_id: 'i1', audit_id: 'audit0', revision: 2,
+    generated_at: now, evidence_as_of: now, peak_impact: 'critical', peak_revision: 1, peak_confidence: 'medium',
+    current_impact: 'info', confidence: 'low', history_complete: true, coverage: 'partial', attribution: 'plausible',
+    sections: Object.fromEntries(['summary','change','scope','findings','evidence','timeline','context','gaps_and_next_checks'].map(key => [key, section])),
+    impacted_devices: [{ device_mac: '001122aabbcc', site_id: 'site1', role: 'serving_affected_clients', service: 'wlan_sessions',
+      target_handle: 'target', port_id: null, impact: 'warning', current_impact: 'info', confidence: 'low', attribution: 'plausible', device_failure: 'not_established' }],
+    omitted_device_impacts: 0, device_coverage: 'observed_only', gaps: ['Current collection failed. Earlier observed impact remains recorded.'],
+    datasets: [{ id: 'evidence-0', check_id: 'wlan-client-sessions.v1', target_handle: 'target',
+      window: { start: now, end: now }, captured_at: now, state: 'partial', title: 'Observed client sample', kind: 'bar',
+      columns: ['Serving AP', 'Clients'], rows: [['001122aabbcc', 3], ['001122aabbdd', 0]], omitted_rows: 0,
+      explanation: 'Counts describe observed clients, not the expected fleet.' }],
+  };
+  const previous = { ...report, revision: 1, current_impact: 'critical' };
+  await page.route('**/investigation/history', route => route.fulfill({ json: {
+    investigation_id: 'i1', published_revision: 2, complete: true, reports: [report, previous], gaps: [],
+  } }));
+  await page.route('**/investigation/acceptance', route => route.fulfill({ json: {
+    eligible: false, total: 0, held_out: 0, true_positive: 0, false_negative: 0, false_positive: 0, true_negative: 0,
+    critical_misses: 0, abstentions: 0, recall: null, precision: null, specificity: null,
+    reasons: ['Adjudicate 20 to 50 historical changes before promotion.'],
+  } }));
+  await page.route('**/change-groups/*/investigation', route => route.fulfill({ json: {
+    mode: 'shadow', id: 'i1', audit_id: 'audit0', status: 'completed', revision: 2,
+    changed_at: now, expires_at: now, calls_used: 4, calls_limit: 56, targets: [], checks: [],
+    assessment: { impact: 'info', confidence: 'low', coverage: 'partial', gaps: [], findings: [] },
+    shadow_impact: { result: 'possible_disruption', report_id: 'aaaaaaaaaaaaaaaaaaaaaaaa', revision: 2, impact: 'critical' },
+    report,
+  } }));
+  await page.goto('/changes');
+  await page.locator('.row--group').first().click();
+  await page.getByRole('button', { name: 'Review shadow evidence' }).click();
+  const structured = page.getByRole('region', { name: 'Structured impact report' });
+  await expect(structured).toContainText('Peak impact: critical');
+  await expect(structured).toContainText('Current impact: Unknown');
+  await expect(structured).toContainText('Served affected clients');
+  await structured.getByText('Observed client sample · partial', { exact: true }).click();
+  await structured.getByRole('img').scrollIntoViewIfNeeded();
+  await expect(structured.getByRole('table').last()).toContainText('001122aabbdd');
+  await page.screenshot({ path: info.outputPath('structured-report.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Review checkpoint history' }).click();
+  await page.getByRole('button', { name: 'Revision 1 ·', exact: false }).click();
+  await expect(structured).toContainText('Current impact: critical');
+  await expect(page.getByText('Current checkpoint details · revision 2')).toBeVisible();
+  await page.getByText('Human review and release readiness', { exact: true }).click();
+  await page.getByRole('button', { name: 'Check acceptance counts' }).click();
+  await expect(page.locator('app-impact-adjudication')).toContainText('Promotion blocked');
+  await expect(page.getByRole('button', { name: 'Record review' })).toBeDisabled();
+  await page.locator('app-impact-adjudication').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('human-acceptance.png'), fullPage: true });
+});

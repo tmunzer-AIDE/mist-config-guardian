@@ -123,3 +123,30 @@ async def test_same_endpoint_cursor_collects_all_pages(httpx_mock: HTTPXMock) ->
         state = await client.capture(site_id="site-a", device_mac=MAC, device_type=DeviceType.AP)
     assert "wlans" in state.available
     assert [item["id"] for item in state.wlans] == ["a", "b"]
+
+
+async def test_selected_port_capture_does_not_fetch_device_clients_or_routing(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url=f"https://api.mist.com{BASE}/stats/ports/search?mac={MAC}&limit=1000",
+        json={"results": [{"port_id": "ge-0/0/0", "poe_on": False}], "total": 1},
+    )
+    async with MistTelemetryClient(token="read-token", region=MistCloudRegion.GLOBAL_01) as client:
+        state = await client.capture(
+            site_id="site-a", device_mac=MAC, device_type=DeviceType.SWITCH, sources=frozenset({"ports"})
+        )
+    assert state.available == ["ports"]
+    assert not state.errors
+    assert state.ports[0]["poe_on"] is False
+    assert len(httpx_mock.get_requests()) == 1
+
+
+async def test_empty_selection_performs_no_requests_and_unsupported_source_stays_visible(httpx_mock: HTTPXMock) -> None:
+    async with MistTelemetryClient(token="read-token", region=MistCloudRegion.GLOBAL_01) as client:
+        empty = await client.capture(site_id="site-a", device_mac=MAC, device_type=DeviceType.AP, sources=frozenset())
+        unsupported = await client.capture(
+            site_id="site-a", device_mac=MAC, device_type=DeviceType.AP, sources=frozenset({"bgp"})
+        )
+    assert empty.available == []
+    assert not empty.errors
+    assert "bgp" in unsupported.errors
+    assert httpx_mock.get_requests() == []
