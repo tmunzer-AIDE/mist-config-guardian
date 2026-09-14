@@ -1,5 +1,7 @@
 # Audit impact engine: review handoff
 
+> **Superseded agent boundary:** The fixed-menu/spend-neutral agent design below is historical. [MCP-led investigations](mcp-agent-investigation.md) defines the current agent runtime, optional rule evidence, budgets and remaining production-promotion gate.
+
 Status: bounded v1 implemented and locally verified on 2026-09-13. Production remains
 `legacy`; no setting, deployment or external notification was changed. This is ready
 for source review and a controlled shadow evaluation, not a claim of calibrated accuracy.

@@ -1,3 +1,4 @@
+import { McpCheckpoint, McpDispatch, McpInvestigationComponent } from '../../shared/mcp-investigation';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
@@ -52,6 +53,8 @@ export interface ShadowReport {
   deployment?: DeploymentEvidence | null;
   dispatch_log?: DispatchLog | null;
   agent?: AgentCheckpoint | null;
+  mcp?: McpCheckpoint | null;
+  mcp_dispatches?: McpDispatch[];
   model_activity?: ModelActivity | null;
   targets: { handle: string; site_id: string; wlan_id: string }[];
   checks: {
@@ -75,7 +78,7 @@ export interface ShadowReport {
 
 @Component({
   selector: 'app-shadow-investigation',
-  imports: [ApAdjacencyComponent, ImpactAdjudicationComponent, ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
+  imports: [McpInvestigationComponent, ApAdjacencyComponent, ImpactAdjudicationComponent, ImpactReportComponent, DomainFindingsComponent, PortEventsComponent, ManagedNeighborComponent, PortSnapshotComponent, DeploymentEvidenceComponent, DispatchLogComponent, AgentInvestigationComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button class="cg-btn" type="button" (click)="load()" [disabled]="pending()">Review shadow evidence</button>
@@ -103,7 +106,7 @@ export interface ShadowReport {
         @if (report.report) { <h4>Current checkpoint details · revision {{ report.revision }}</h4> }
         @if (report.assessment; as assessment) {
           <p class="ratings"><strong>Impact: {{ impactLabel() }}</strong> · <strong>Confidence: {{ assessment.confidence }}</strong></p>
-          <p>Session-evidence coverage: {{ assessment.coverage }}. Failed joins and unrecorded sessions are not covered.</p>
+          <p>Evidence coverage: {{ assessment.coverage }}. See the investigated scope and gaps below.</p>
           @for (finding of assessment.findings; track finding.target_handle) {
             <article>
               <h4>WLAN {{ wlan(finding.target_handle) }}</h4>
@@ -141,6 +144,7 @@ export interface ShadowReport {
           [reportId]="report.shadow_impact?.report_id" [revision]="report.revision"
           [terminal]="report.status === 'completed' || report.status === 'incomplete'" />
         <app-dispatch-log [log]="report.dispatch_log" />
+        <app-mcp-investigation [organizationId]="organizationId()" [groupId]="groupId()" [checkpoint]="report.mcp" [dispatches]="report.mcp_dispatches ?? []" />
         <app-agent-investigation [checkpoint]="report.agent" [activity]="report.model_activity"
           [organizationId]="organizationId()" [groupId]="groupId()" />
       </section>

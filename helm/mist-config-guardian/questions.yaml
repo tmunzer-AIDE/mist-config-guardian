@@ -3,6 +3,12 @@ categories:
   - Security
 
 questions:
+  - variable: config.mistMcpUrl
+    default: https://mcp.ai.juniper.net/mcp/mist
+    type: string
+    label: Mist MCP endpoint
+    description: Worker read endpoint. Uses the organization service token and Mist cloud region.
+    group: Workloads
   - variable: config.impactEngineMode
     default: legacy
     type: enum

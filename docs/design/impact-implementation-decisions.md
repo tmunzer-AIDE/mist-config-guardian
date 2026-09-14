@@ -1120,3 +1120,13 @@ are summarized in that handoff, rather than implied by historical “next” lis
   model fallback, extra tool, live replay or deployed code override is introduced.
   This improves the empty-menu prompt and diagnosis, not a guarantee that every model
   obeys its schema. A normal image release is required to apply the change in k3s.
+
+## 2026-09-13 — MCP-led investigation replaces the fixed-menu agent
+
+The agent now investigates any meaningful configuration diff using the existing Mist MCP.
+Rule coverage is optional context, not a prerequisite or a verdict ceiling. One audit
+continues to own one investigation. The chosen authentication, reuse, budget, report,
+history, journal and deployment behavior is recorded in
+[MCP-led impact investigations](mcp-agent-investigation.md). This supersedes earlier
+requirements that agent participation be spend-neutral or use only resolver-issued
+deterministic checks. Production promotion still requires reviewed agent evidence.

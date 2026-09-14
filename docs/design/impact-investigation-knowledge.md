@@ -1,5 +1,7 @@
 # Investigation skills and attribute documentation
 
+> **Superseded agent boundary:** The fixed-menu/spend-neutral agent design below is historical. [MCP-led investigations](mcp-agent-investigation.md) defines the current agent runtime, optional rule evidence, budgets and remaining production-promotion gate.
+
 Status: proposed addition to the hybrid design, 2026-09-12. This document does not
 install skills or implement/start an MCP server. The investigator runtime remains
 unimplemented. Mist tools were unavailable during the initial draft; a subsequent

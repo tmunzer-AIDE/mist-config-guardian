@@ -29,6 +29,7 @@ from mist_config_guardian_backend.services.change_groups import (
 )
 from mist_config_guardian_backend.services.impact_acceptance import acceptance_status, adjudicate
 from mist_config_guardian_backend.services.investigation_reads import report_history, shadow_investigation
+from mist_config_guardian_backend.services.mcp_request_reads import mcp_request_details
 from mist_config_guardian_backend.services.model_request_reads import model_request_details
 
 router = APIRouter(prefix="/organizations/{organization_id}/change-groups")
@@ -143,6 +144,17 @@ async def read_model_request(
 ) -> ModelRequestDetails | None:
     """Read one authorized journal entry's verified context/action artifacts."""
     return await model_request_details(_identifier(organization), change_group_id, request_id)
+
+
+@router.get("/{change_group_id}/investigation/mcp-requests/{request_id}")
+async def read_mcp_request(
+    change_group_id: PydanticObjectId,
+    request_id: UUID,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> ModelRequestDetails | None:
+    """Read sanitized MCP artifacts through exact authorized journal pointers."""
+    return await mcp_request_details(_identifier(organization), change_group_id, request_id)
 
 
 @router.get("/{change_group_id}/investigation/history")

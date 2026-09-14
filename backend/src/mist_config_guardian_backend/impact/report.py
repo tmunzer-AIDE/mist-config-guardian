@@ -52,7 +52,7 @@ class EvidenceDataset(Contract):
     id: str = Field(pattern=r"^evidence-[0-9]+$")
     check_id: str
     target_handle: str
-    window: Window
+    window: Window | None
     captured_at: datetime
     state: str
     title: Text
@@ -75,8 +75,8 @@ class DeviceImpact(Contract):
 
     device_mac: str = Field(pattern=r"^[0-9a-f]{12}$")
     site_id: UUID
-    role: Literal["affected_switch_port", "serving_affected_clients"]
-    service: Literal["port_link", "port_power", "wlan_sessions", "wlan_authentication"]
+    role: Literal["affected_switch_port", "serving_affected_clients", "agent_observed_service"]
+    service: Text
     target_handle: str
     port_id: str | None = None
     impact: Band
@@ -87,6 +87,7 @@ class DeviceImpact(Contract):
 
 
 class ImpactReport(Contract):
+    source: Literal["deterministic", "mcp_agent"] = "deterministic"
     schema_version: Literal[1] = 1
     investigation_id: str
     audit_id: str

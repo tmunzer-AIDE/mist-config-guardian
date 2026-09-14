@@ -9,6 +9,8 @@ import { formatInstant } from '../core/format';
     @if (report(); as report) {
       <section aria-label="Structured impact report">
         <h3>Impact report · revision {{ report.revision }}</h3>
+        <p>{{ report.source === "mcp_agent" ? "AI investigation using Mist MCP · provisional assessment" : "Deterministic assessment" }}</p>
+        <p>{{ report.sections.summary.explanation }}</p>
         <p class="ratings"><strong>Peak impact: {{ band(report.peak_impact) }}</strong>
           · Confidence: {{ report.peak_confidence }} · source revision {{ report.peak_revision }}</p>
         <p><strong>Current impact: {{ band(report.current_impact) }}</strong> · Confidence: {{ report.confidence }}
@@ -28,7 +30,7 @@ import { formatInstant } from '../core/format';
             <thead><tr><th>Device</th><th>Service / role</th><th>Peak / current</th><th>Confidence</th></tr></thead>
             <tbody>@for (device of report.impacted_devices; track $index) {
               <tr><td>{{ device.device_mac }} {{ device.port_id }}</td>
-                <td>{{ device.service }} · {{ device.role === 'serving_affected_clients' ? 'Served affected clients' : 'Affected switch port' }}</td>
+                <td>{{ device.service }} · {{ device.role === 'serving_affected_clients' ? 'Served affected clients' : device.role === 'agent_observed_service' ? 'Agent-observed service impact' : 'Affected switch port' }}</td>
                 <td>{{ band(device.impact) }} / {{ band(device.current_impact) }}</td><td>{{ device.confidence }} · attribution provisional</td></tr>
             }</tbody>
           </table></div>
@@ -38,7 +40,8 @@ import { formatInstant } from '../core/format';
         @for (dataset of report.datasets; track dataset.id) {
           <details><summary>{{ dataset.title }} · {{ dataset.state }}</summary>
             <p>{{ dataset.explanation }}</p>
-            <p>{{ at(dataset.window.start) }}–{{ at(dataset.window.end) }} · collected {{ at(dataset.captured_at) }}</p>
+            <p>@if (dataset.window; as window) { {{ at(window.start) }}–{{ at(window.end) }} · }
+              @else { Snapshot; no historical measurement interval · }collected {{ at(dataset.captured_at) }}</p>
             @if (dataset.kind === 'bar' || dataset.kind === 'histogram') {
               <div class="bars" role="img" [attr.aria-label]="dataset.title + '. Values are listed in the table below.'">
                 @for (row of dataset.rows; track $index) {

@@ -20,6 +20,13 @@ from mist_config_guardian_backend.impact.contracts import (
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import DispatchLog
 from mist_config_guardian_backend.impact.limits import MAX_PORT_EVENTS
+from mist_config_guardian_backend.impact.mcp_contracts import (
+    McpCheckpoint,
+    McpDescribeAction,
+    McpDispatch,
+    McpReportAction,
+    McpToolAction,
+)
 from mist_config_guardian_backend.impact.report import ImpactReport
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 
@@ -43,11 +50,13 @@ class ShadowCheckResponse(BaseModel):
 
 
 class ModelRequestDetails(BaseModel):
+    response_json: str | None = Field(default=None, max_length=24_000)
+    response_state: Literal["available", "unavailable", "not_recorded"] = "not_recorded"
     request_id: UUID
     input_state: Literal["available", "legacy", "unavailable"] = "unavailable"
     input_json: str | None = Field(default=None, max_length=24_000)
     action_state: Literal["available", "legacy", "unavailable", "not_recorded"] = "unavailable"
-    action: CollectAction | ReportAction | None = None
+    action: CollectAction | ReportAction | McpToolAction | McpDescribeAction | McpReportAction | None = None
 
 
 class ShadowTargetResponse(BaseModel):
@@ -75,6 +84,8 @@ class ShadowInvestigationResponse(BaseModel):
     deployment: DeploymentEvidence | None = None
     dispatch_log: DispatchLog | None = None
     agent: AgentCheckpoint | None = None
+    mcp: McpCheckpoint | None = None
+    mcp_dispatches: tuple[McpDispatch, ...] = ()
     model_activity: ModelActivity | None = None
     targets: list[ShadowTargetResponse] = Field(default_factory=list)
     checks: list[ShadowCheckResponse] = Field(default_factory=list)

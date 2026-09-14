@@ -4,10 +4,12 @@ The query proves observed WLAN usage and disconnects, not intent, causation or
 failed joins. No aggregate infrastructure health can contribute to its verdict.
 """
 
+from __future__ import annotations
+
 from collections import Counter
-from collections.abc import Sequence
 from datetime import datetime, timedelta
 from hashlib import sha256
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from mist_config_guardian_backend.impact.change_context import compile_change_context
@@ -21,8 +23,12 @@ from mist_config_guardian_backend.impact.contracts import (
 )
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_VERSIONS, MAX_WLAN_TARGETS
 from mist_config_guardian_backend.impact.port_scope import compile_port_targets
-from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 
 _MAX_UNMAPPED = 128
 AUTH_FIELDS = frozenset(

@@ -18,6 +18,7 @@ from mist_config_guardian_backend.impact.contracts import InvestigationEvidence,
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_CALLS, MAX_CHECKPOINT_EVIDENCE
+from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint, McpDispatch
 from mist_config_guardian_backend.impact.report import ImpactReport
 from mist_config_guardian_backend.models.base import TimestampedModel
 
@@ -34,7 +35,7 @@ class ModelRequestArtifact(Document):
     request_id: UUID
     generation: int
     candidate_revision: int
-    kind: Literal["input", "action"]
+    kind: Literal["input", "action", "mcp_input", "mcp_result"]
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_json: str = Field(max_length=24_000)
     created_at: datetime
@@ -66,6 +67,7 @@ class ImpactInvestigation(TimestampedModel, Document):
     revision: int = 0  # Number of successfully published checkpoints.
     report_id: PydanticObjectId | None = None
     dispatches: list[DispatchRecord] = Field(default_factory=list, max_length=MAX_DISPATCHES)
+    mcp_dispatches: list[McpDispatch] = Field(default_factory=list, max_length=MAX_DISPATCHES)
     model_calls_used: int = 0
     model_calls_limit: int = MAX_MODEL_CALLS
     model_input_bytes_reserved: int = 0
@@ -95,6 +97,8 @@ class InvestigationRevision(Document):
     evidence: list[InvestigationEvidence] = Field(default_factory=list, max_length=MAX_CHECKPOINT_EVIDENCE)
     deployment: DeploymentEvidence | None = None
     agent: AgentCheckpoint | None = None
+    mcp: McpCheckpoint | None = None
+    deterministic_assessment: WlanAssessment | None = None
     report: ImpactReport | None = None  # Legacy revisions remain readable without fabricated history.
 
     class Settings:

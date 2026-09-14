@@ -30,7 +30,9 @@ from mist_config_guardian_backend.impact.contracts import (
 from mist_config_guardian_backend.impact.dispatch import MAX_DISPATCHES, DispatchRecord
 from mist_config_guardian_backend.impact.domain_evaluation import compose_domains
 from mist_config_guardian_backend.impact.knowledge import describe_attribute, documentation_plan
-from mist_config_guardian_backend.impact.limits import MAX_PUBLISHED_CHECKPOINTS
+from mist_config_guardian_backend.impact.limits import MAX_OPTIONAL_RULE_CHECKS, MAX_PUBLISHED_CHECKPOINTS
+from mist_config_guardian_backend.impact.mcp_context import configuration_context
+from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, mcp_assessment
 from mist_config_guardian_backend.impact.report import build_report
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_ap_evidence import MistScopedEvidenceClient
@@ -45,13 +47,13 @@ from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.change_groups import BeanieChangeGroupStore
 from mist_config_guardian_backend.services.deployment_evidence import collect_deployment
-from mist_config_guardian_backend.services.impact_agent import ImpactAgent
+from mist_config_guardian_backend.services.mcp_impact_agent import McpImpactAgent
 from mist_config_guardian_backend.services.neighbor_bindings import NeighborBindingStore
 from mist_config_guardian_backend.services.published_revision import published_revision
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 logger = logging.getLogger(__name__)
-_LEASE = timedelta(minutes=3)
+_LEASE = timedelta(minutes=5)
 _INTERVAL = timedelta(minutes=10)
 _DURATION = timedelta(hours=1)
 _MAX_RETENTION_DAYS = 36_500
@@ -184,6 +186,9 @@ class ImpactInvestigationService:
             plan = plan.model_copy(
                 update={"gaps": (*plan.gaps, "Audit timestamp is missing; receipt time is only an approximate anchor.")}
             )
+        plan = plan.model_copy(
+            update={"mcp_context": configuration_context(str(root.organization_id), objects, before, versions)}
+        )
         return documentation_plan(plan)
 
     async def _poll(self, root: ImpactInvestigation) -> None:  # noqa: C901, PLR0912, PLR0915 - fenced discovery and fallback
@@ -198,12 +203,14 @@ class ImpactInvestigationService:
         organization = await Organization.get(root.organization_id)
         evidence_as_of = min(now, root.expires_at)
         evidence = []
+        mcp_mode = get_settings().impact_engine_mode == "agent_shadow"
         agent = None
+        mcp = None
         deployment = await collect_deployment(root, as_of=now)
         # Delayed audit delivery cannot turn a historical change into a fresh hour.
         expired = now > root.expires_at + timedelta(minutes=2)
         if (
-            (plan.targets or (plan.change_context and plan.change_context.changes))
+            (plan.targets or plan.mcp_context.get("changes") or (plan.change_context and plan.change_context.changes))
             and organization is not None
             and organization.status is OrganizationStatus.VERIFIED
             and not expired
@@ -273,20 +280,10 @@ class ImpactInvestigationService:
                                 )
                             )
                     plan = plan.model_copy(update={"neighbor_targets": tuple(neighbors), "neighbor_statistics": True})
-                if get_settings().impact_engine_mode == "agent_shadow" and not (
-                    evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}
-                ):
-                    agent = await ImpactAgent(self._vault).run(
-                        root,
-                        plan,
-                        evidence_as_of,
-                        collect,
-                        service_credential=credential,
-                        deployment=deployment,
-                        previous=previous,
-                    )
-                # Model failure or omission cannot cancel a rule's required evidence.
+                # Rule evidence is optional in MCP mode and cannot consume the entire audit budget.
                 for check in capabilities(plan, evidence_as_of):
+                    if mcp_mode and len(evidence) >= MAX_OPTIONAL_RULE_CHECKS:
+                        break
                     if evidence and evidence[-1].state in {"budget_exhausted", "dispatch_denied"}:
                         break
                     await collect(check)
@@ -294,6 +291,30 @@ class ImpactInvestigationService:
             plan, [e for e in evidence if isinstance(e, SessionEvidence)], evidence_as_of=evidence_as_of
         )
         assessment = compose_domains(plan, evidence, assessment)
+        deterministic_assessment = assessment
+        if (
+            get_settings().impact_engine_mode == "agent_shadow"
+            and not expired
+            and organization is not None
+            and organization.status is OrganizationStatus.VERIFIED
+            and plan.mcp_context.get("changes")
+        ):
+            token = await service_token(organization, self._vault)
+            async with asyncio.timeout(150):
+                mcp = await McpImpactAgent(self._vault).run_mcp(
+                    root,
+                    organization=organization,
+                    token=token,
+                    context=plan.mcp_context,
+                    as_of=evidence_as_of,
+                    deterministic={
+                        "assessment": assessment.model_dump(mode="json"),
+                        "evidence": [e.model_dump(mode="json") for e in evidence],
+                    },
+                    deployment=deployment.model_dump(mode="json") if deployment else {},
+                    previous=previous,
+                )
+            assessment = mcp_assessment(root.audit_id, evidence_as_of, mcp)
         if root.id is None:
             msg = "Persisted investigation has no identity"
             raise ValueError(msg)
@@ -309,6 +330,8 @@ class ImpactInvestigationService:
             evidence=evidence,
             deployment=deployment,
             agent=agent,
+            mcp=mcp,
+            deterministic_assessment=deterministic_assessment if mcp else None,
         )
         artifact.report = build_report(
             investigation_id=str(root.id),
@@ -320,6 +343,8 @@ class ImpactInvestigationService:
             previous=previous.report if previous else None,
             history_available=previous is not False and (root.revision == 0 or bool(previous and previous.report)),
         )
+        if mcp is not None:
+            artifact.report = build_mcp_report(artifact.report, mcp)
         await artifact.insert()
         finished = now >= root.expires_at or any(
             item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence

@@ -1,5 +1,7 @@
 # Configuration library and impact monitoring
 
+> **MCP-led agent update:** `agent_shadow` investigates meaningful changes through the existing Mist MCP, with optional deterministic evidence. See [current runtime and deployment decisions](design/mcp-agent-investigation.md). Production verdicts remain legacy during shadow evaluation.
+
 The **Objects & versions** navigation entry opens a searchable catalogue, with type,
 site and scope filters computed from the entire organization catalogue. Open an
 object to see its versions. Choose Before and After to compare any two versions,

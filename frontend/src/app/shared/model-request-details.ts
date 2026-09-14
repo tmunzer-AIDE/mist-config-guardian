@@ -5,6 +5,8 @@ import { orgPath } from '../core/api';
 
 export interface ModelRequestDetails {
   request_id: string;
+  response_json?: string | null;
+  response_state?: string;
   input_state: 'available' | 'legacy' | 'unavailable';
   input_json: string | null;
   action_state: 'available' | 'legacy' | 'unavailable' | 'not_recorded';
@@ -16,7 +18,7 @@ export interface ModelRequestDetails {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <button type="button" class="cg-btn" (click)="load()" [disabled]="pending() || !organizationId() || !groupId()">
-      {{ pending() ? 'Loading request details…' : 'Load request context and action' }}
+      {{ pending() ? 'Loading request details…' : requestKind() === 'mcp-requests' ? 'Load MCP request and response' : 'Load request context and action' }}
     </button>
     @if (message()) { <p role="status">{{ message() }}</p> }
     @if (details(); as details) {
@@ -25,8 +27,13 @@ export interface ModelRequestDetails {
       }
       <details><summary>Bounded input context · {{ details.input_state }}</summary>
         <pre>{{ details.input_json ?? 'Input context is unavailable or could not be verified.' }}</pre></details>
+      @if (requestKind() === "mcp-requests") {
+        <details><summary>MCP response · {{ details.response_state }}</summary>
+          <pre>{{ details.response_json ?? "No verified response was recorded." }}</pre></details>
+      } @else {
       <details><summary>Validated model action · {{ details.action_state }}</summary>
         <pre>{{ details.action ? json(details.action) : 'No verified action is available.' }}</pre></details>
+      }
     }
   `,
   styles: `:host { display: block; } button, details { margin-top: .5rem; }
@@ -36,6 +43,7 @@ export class ModelRequestDetailsComponent {
   readonly organizationId = input<string>();
   readonly groupId = input<string>();
   readonly requestId = input.required<string>();
+  readonly requestKind = input<"model-requests" | "mcp-requests">("model-requests");
   private readonly http = inject(HttpClient);
   private generation = 0;
   protected readonly pending = signal(false);
@@ -45,7 +53,7 @@ export class ModelRequestDetailsComponent {
 
   constructor() {
     effect(() => {
-      this.organizationId(); this.groupId(); this.requestId();
+      this.organizationId(); this.groupId(); this.requestId(); this.requestKind();
       this.generation++;
       this.pending.set(false); this.message.set(''); this.details.set(null);
     });
@@ -58,7 +66,7 @@ export class ModelRequestDetailsComponent {
     this.pending.set(true); this.message.set(''); this.details.set(null);
     try {
       const details = await firstValueFrom(this.http.get<ModelRequestDetails | null>(orgPath(organization,
-        `/change-groups/${encodeURIComponent(group)}/investigation/model-requests/${encodeURIComponent(request)}`)));
+        `/change-groups/${encodeURIComponent(group)}/investigation/${this.requestKind()}/${encodeURIComponent(request)}`)));
       if (generation !== this.generation) return;
       if (details?.request_id === request) this.details.set(details);
       else this.message.set('Request details are not available.');

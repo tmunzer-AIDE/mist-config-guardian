@@ -3396,7 +3396,14 @@
             "type": "string"
           },
           "window": {
-            "$ref": "#/components/schemas/Window"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Window"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4114,6 +4121,15 @@
           },
           "sections": {
             "$ref": "#/components/schemas/ReportSections"
+          },
+          "source": {
+            "default": "deterministic",
+            "enum": [
+              "deterministic",
+              "mcp_agent"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -4183,6 +4199,7 @@
         "title": "ImpactSiteList",
         "type": "object"
       },
+      "JsonValue": {},
       "LandingPage": {
         "description": "Page the application opens after sign-in.",
         "enum": [
@@ -4361,6 +4378,614 @@
           "device_handle"
         ],
         "title": "ManagedNeighbor",
+        "type": "object"
+      },
+      "McpCheckpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "catalogue_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogue Hash"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpConclusion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deterministic_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpEvidence"
+            },
+            "maxItems": 8,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_ids": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Request Ids",
+            "type": "array"
+          },
+          "source": {
+            "const": "mcp_agent",
+            "default": "mcp_agent",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "complete",
+              "unavailable",
+              "budget_exhausted",
+              "invalid_response",
+              "provider_error",
+              "dispatch_denied"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "McpCheckpoint",
+        "type": "object"
+      },
+      "McpConclusion": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 16,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpFinding"
+            },
+            "maxItems": 8,
+            "title": "Findings",
+            "type": "array"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 12,
+            "title": "Gaps",
+            "type": "array"
+          },
+          "impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "impacted_devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpDeviceImpact"
+            },
+            "maxItems": 50,
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "scope": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Scope",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "views": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpView"
+            },
+            "maxItems": 4,
+            "title": "Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "summary",
+          "scope",
+          "impact",
+          "confidence",
+          "coverage"
+        ],
+        "title": "McpConclusion",
+        "type": "object"
+      },
+      "McpDescribeAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "describe",
+            "title": "Action",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "enum": [
+                "find_mist_entity",
+                "get_mist_config",
+                "get_mist_constants",
+                "get_mist_insights",
+                "get_mist_stats",
+                "search_mist_data"
+              ],
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "action",
+          "tools"
+        ],
+        "title": "McpDescribeAction",
+        "type": "object"
+      },
+      "McpDeviceImpact": {
+        "additionalProperties": false,
+        "properties": {
+          "device_mac": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Device Mac",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "explanation": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "impact": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Impact",
+            "type": "string"
+          },
+          "service": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Service",
+            "type": "string"
+          },
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_mac",
+          "site_id",
+          "service",
+          "impact",
+          "evidence",
+          "explanation"
+        ],
+        "title": "McpDeviceImpact",
+        "type": "object"
+      },
+      "McpDispatch": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments_hash": {
+            "title": "Arguments Hash",
+            "type": "string"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "candidate_revision": {
+            "title": "Candidate Revision",
+            "type": "integer"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "transport",
+                  "invalid_response",
+                  "tool_error",
+                  "response_limit"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Artifact Id"
+          },
+          "reserved_at": {
+            "format": "date-time",
+            "title": "Reserved At",
+            "type": "string"
+          },
+          "state": {
+            "default": "reserved",
+            "enum": [
+              "reserved",
+              "complete",
+              "partial",
+              "error"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tool": {
+            "maxLength": 80,
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "generation",
+          "candidate_revision",
+          "tool",
+          "arguments_hash",
+          "reserved_at"
+        ],
+        "title": "McpDispatch",
+        "type": "object"
+      },
+      "McpEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Arguments",
+            "type": "object"
+          },
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "transport",
+                  "invalid_response",
+                  "tool_error",
+                  "response_limit"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "schema_hash": {
+            "title": "Schema Hash",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "complete",
+              "partial",
+              "error"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tool": {
+            "maxLength": 80,
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tool",
+          "arguments",
+          "data",
+          "state",
+          "captured_at",
+          "schema_hash"
+        ],
+        "title": "McpEvidence",
+        "type": "object"
+      },
+      "McpFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "limitations": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "statement": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Statement",
+            "type": "string"
+          }
+        },
+        "required": [
+          "statement",
+          "evidence"
+        ],
+        "title": "McpFinding",
+        "type": "object"
+      },
+      "McpReportAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "report",
+            "title": "Action",
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/McpConclusion"
+          }
+        },
+        "required": [
+          "action",
+          "report"
+        ],
+        "title": "McpReportAction",
+        "type": "object"
+      },
+      "McpToolAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "tool",
+            "title": "Action",
+            "type": "string"
+          },
+          "arguments": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Arguments",
+            "type": "object"
+          },
+          "purpose": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Purpose",
+            "type": "string"
+          },
+          "tool": {
+            "enum": [
+              "find_mist_entity",
+              "get_mist_config",
+              "get_mist_constants",
+              "get_mist_insights",
+              "get_mist_stats",
+              "search_mist_data"
+            ],
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "tool",
+          "arguments",
+          "purpose"
+        ],
+        "title": "McpToolAction",
+        "type": "object"
+      },
+      "McpView": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "format": "uuid",
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "table",
+              "bar",
+              "histogram",
+              "timeline"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label_key": {
+            "maxLength": 80,
+            "title": "Label Key",
+            "type": "string"
+          },
+          "rows_path": {
+            "default": [],
+            "items": {
+              "maxLength": 80,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Rows Path",
+            "type": "array"
+          },
+          "value_key": {
+            "maxLength": 80,
+            "title": "Value Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "kind",
+          "label_key",
+          "value_key"
+        ],
+        "title": "McpView",
         "type": "object"
       },
       "MetricEvidence": {
@@ -4729,6 +5354,15 @@
                 "$ref": "#/components/schemas/ReportAction"
               },
               {
+                "$ref": "#/components/schemas/McpToolAction"
+              },
+              {
+                "$ref": "#/components/schemas/McpDescribeAction"
+              },
+              {
+                "$ref": "#/components/schemas/McpReportAction"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -4770,6 +5404,28 @@
           "request_id": {
             "format": "uuid",
             "title": "Request Id",
+            "type": "string"
+          },
+          "response_json": {
+            "anyOf": [
+              {
+                "maxLength": 24000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Json"
+          },
+          "response_state": {
+            "default": "not_recorded",
+            "enum": [
+              "available",
+              "unavailable",
+              "not_recorded"
+            ],
+            "title": "Response State",
             "type": "string"
           }
         },
@@ -4885,7 +5541,8 @@
               "impact-investigator.v5",
               "impact-investigator.v6",
               "impact-investigator.v7",
-              "impact-investigator.v8"
+              "impact-investigator.v8",
+              "impact-mcp.v1"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -8163,6 +8820,24 @@
             "title": "Id",
             "type": "string"
           },
+          "mcp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpCheckpoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mcp_dispatches": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpDispatch"
+            },
+            "title": "Mcp Dispatches",
+            "type": "array"
+          },
           "mode": {
             "const": "shadow",
             "default": "shadow",
@@ -9815,7 +10490,8 @@
             "default": "wlan-removal.v1",
             "enum": [
               "wlan-removal.v1",
-              "impact-domains.v1"
+              "impact-domains.v1",
+              "mcp-agent.v1"
             ],
             "title": "Policy Version",
             "type": "string"
@@ -9980,18 +10656,14 @@
           "role": {
             "enum": [
               "affected_switch_port",
-              "serving_affected_clients"
+              "serving_affected_clients",
+              "agent_observed_service"
             ],
             "title": "Role",
             "type": "string"
           },
           "service": {
-            "enum": [
-              "port_link",
-              "port_power",
-              "wlan_sessions",
-              "wlan_authentication"
-            ],
+            "maxLength": 500,
             "title": "Service",
             "type": "string"
           },
@@ -12842,6 +13514,83 @@
           }
         ],
         "summary": "Read Report History",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/investigation/mcp-requests/{request_id}": {
+      "get": {
+        "description": "Read sanitized MCP artifacts through exact authorized journal pointers.",
+        "operationId": "read_mcp_request_api_v1_organizations__organization_id__change_groups__change_group_id__investigation_mcp_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ModelRequestDetails"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Mcp Request Api V1 Organizations  Organization Id  Change Groups  Change Group Id  Investigation Mcp Requests  Request Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Mcp Request",
         "tags": [
           "Change Groups"
         ]

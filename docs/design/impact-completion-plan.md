@@ -1,5 +1,7 @@
 # Remaining impact engine implementation
 
+> **Superseded agent boundary:** The fixed-menu/spend-neutral agent design below is historical. [MCP-led investigations](mcp-agent-investigation.md) defines the current agent runtime, optional rule evidence, budgets and remaining production-promotion gate.
+
 Owner: autonomous implementation following the 2026-09-13 instruction to finish the queue before review.
 
 Completion means the bounded v1 runtime, report/UI, diagnostics, retention and acceptance tooling are implemented and verified. Production activation requires genuine operator adjudication; synthetic labels must never satisfy that gate. No release, deployment or live configuration mutation is part of this work.

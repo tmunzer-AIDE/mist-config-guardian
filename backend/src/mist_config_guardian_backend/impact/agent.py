@@ -365,6 +365,7 @@ class ModelRequestRecord(Contract):
         "impact-investigator.v6",
         "impact-investigator.v7",
         "impact-investigator.v8",
+        "impact-mcp.v1",
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)
