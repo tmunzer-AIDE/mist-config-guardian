@@ -2,9 +2,11 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Self
+from unittest.mock import AsyncMock
 
 import pytest
 from beanie import PydanticObjectId
+from beanie.odm.fields import ExpressionField
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.organization import (
@@ -20,6 +22,12 @@ from mist_config_guardian_backend.models.restore import (
     RestoreOperation,
     RestoreStatus,
 )
+from mist_config_guardian_backend.models.snapshot import (
+    LogicalObject,
+    ObjectReference,
+    ObjectVersion,
+    VersionEvent,
+)
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutionError, RestoreExecutor
 from mist_config_guardian_backend.services.restore_planner import (
@@ -27,7 +35,10 @@ from mist_config_guardian_backend.services.restore_planner import (
     RestoreVerificationResult,
     VerificationCheck,
 )
-from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
+from mist_config_guardian_backend.services.restore_verification import (
+    RestoreVerificationService,
+    find_stale_references,
+)
 
 ORGANIZATION_ID = PydanticObjectId()
 OPERATION_ID = PydanticObjectId()
@@ -202,6 +213,69 @@ class _StubVerifier:
 
 
 # ---------------------------------------------------------------- verification
+
+
+@pytest.mark.parametrize(
+    ("field_path", "expected"),
+    [("tag_uuid", []), ("map_id", ["Switch"])],
+)
+async def test_stale_reference_check_ignores_inventory_tags(
+    monkeypatch: pytest.MonkeyPatch,
+    field_path: str,
+    expected: list[str],
+) -> None:
+    logical_id = PydanticObjectId()
+    version = ObjectVersion.model_construct(
+        id=PydanticObjectId(),
+        organization_id=ORGANIZATION_ID,
+        logical_object_id=logical_id,
+        incarnation_id=PydanticObjectId(),
+        version=1,
+        event=VersionEvent.UPDATED,
+        configuration={},
+        configuration_hash="hash",
+        references=[ObjectReference(target_mist_id="replaced-id", field_path=field_path)],
+        is_deleted=False,
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    logical = LogicalObject.model_construct(
+        id=logical_id,
+        organization_id=ORGANIZATION_ID,
+        scope="site",
+        object_type="devices",
+        source_key="device-1",
+        current_mist_id="device-1",
+        site_mist_id="site-1",
+        name="Switch",
+        is_deleted=False,
+        current_version=1,
+    )
+
+    class MatchingQuery:
+        async def to_list(self) -> list[ObjectVersion]:
+            return [version]
+
+    monkeypatch.setattr(ObjectVersion, "find", lambda *_args, **_kwargs: MatchingQuery())
+    monkeypatch.setattr(
+        ObjectVersion,
+        "organization_id",
+        ExpressionField("organization_id"),
+        raising=False,
+    )
+    latest = AsyncMock(return_value=version)
+    get_logical = AsyncMock(return_value=logical)
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_verification.latest_version",
+        latest,
+    )
+    monkeypatch.setattr(LogicalObject, "get", get_logical)
+
+    stale = await find_stale_references(ORGANIZATION_ID, {"replaced-id"})
+
+    assert stale == expected
+    if field_path == "tag_uuid":
+        latest.assert_not_awaited()
+        get_logical.assert_not_awaited()
 
 
 async def test_read_after_write_compares_only_the_fields_the_restore_wrote() -> None:

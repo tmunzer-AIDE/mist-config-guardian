@@ -35,6 +35,7 @@ from mist_config_guardian_backend.services.approvals import (
     compute_plan_hash,
     evaluate_approval_policy,
 )
+from mist_config_guardian_backend.snapshots.references import is_restore_reference
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     find_unavailable_secrets,
@@ -351,6 +352,7 @@ class PlanningContext:
 
     organization_id: PydanticObjectId
     selected: dict[PydanticObjectId, ObjectVersion]
+    requested_logical_ids: frozenset[PydanticObjectId]
     logical_objects: dict[PydanticObjectId, LogicalObject]
     force_delete: set[PydanticObjectId]
     target_at: datetime
@@ -417,6 +419,7 @@ class RestorePlanner:
                 PlanningContext(
                     organization_id=organization_id,
                     selected=selected,
+                    requested_logical_ids=frozenset(selected),
                     logical_objects=logical_objects,
                     force_delete=force_delete,
                     target_at=target_at,
@@ -472,6 +475,7 @@ class RestorePlanner:
                 context.organization_id,
                 logical,
                 version,
+                include_contained=version.logical_object_id in context.requested_logical_ids,
             )
             for related_logical in related:
                 if related_logical.id is None or related_logical.id in context.selected:
@@ -507,19 +511,27 @@ class RestorePlanner:
         organization_id: PydanticObjectId,
         logical: LogicalObject,
         version: ObjectVersion,
+        *,
+        include_contained: bool,
     ) -> list[LogicalObject]:
         related: dict[PydanticObjectId, LogicalObject] = {}
-        if logical.object_type == "data":
-            candidates = await LogicalObject.find(LogicalObject.organization_id == organization_id).to_list()
-            related.update({item.id: item for item in candidates if item.id is not None})
-        elif logical.object_type == "sites":
-            candidates = await LogicalObject.find(
-                LogicalObject.organization_id == organization_id,
-                LogicalObject.site_mist_id == logical.current_mist_id,
-            ).to_list()
-            related.update({item.id: item for item in candidates if item.id is not None})
+        if include_contained:
+            if logical.object_type == "data":
+                candidates = await LogicalObject.find(LogicalObject.organization_id == organization_id).to_list()
+                related.update({item.id: item for item in candidates if item.id is not None})
+            elif logical.object_type == "sites":
+                candidates = await LogicalObject.find(
+                    LogicalObject.organization_id == organization_id,
+                    LogicalObject.site_mist_id == logical.current_mist_id,
+                ).to_list()
+                related.update({item.id: item for item in candidates if item.id is not None})
 
         for reference in version.references:
+            # Snapshots written before ``tag_uuid`` was excluded may retain an
+            # inventory-tag UUID that happens to match a restorable object.
+            # It is metadata, not a restore dependency, at any nesting depth.
+            if not is_restore_reference(reference):
+                continue
             incarnation = await ObjectIncarnation.find_one(
                 ObjectIncarnation.organization_id == organization_id,
                 ObjectIncarnation.mist_object_id == reference.target_mist_id,
@@ -543,6 +555,11 @@ class RestorePlanner:
         dependents: list[tuple[LogicalObject, ObjectVersion]] = []
         seen: set[PydanticObjectId] = set()
         for candidate in candidates:
+            if not any(
+                reference.target_mist_id == logical.current_mist_id and is_restore_reference(reference)
+                for reference in candidate.references
+            ):
+                continue
             if candidate.logical_object_id in seen:
                 continue
             current = await self._latest_version(candidate.logical_object_id)
@@ -650,6 +667,8 @@ class RestorePlanner:
         dependencies: set[PydanticObjectId] = set()
         if action_type is not RestoreActionType.DELETE:
             for reference in target.references:
+                if not is_restore_reference(reference):
+                    continue
                 incarnation = await ObjectIncarnation.find_one(
                     ObjectIncarnation.organization_id == organization_id,
                     ObjectIncarnation.mist_object_id == reference.target_mist_id,
