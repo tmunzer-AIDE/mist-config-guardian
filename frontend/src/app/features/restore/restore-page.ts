@@ -39,15 +39,14 @@ import {
 } from './restore.model';
 import { RestoreService } from './restore.service';
 
-export type RestoreStepName = 'targets' | 'plan' | 'authorize' | 'execute';
+export type RestoreStepName = 'targets' | 'plan' | 'execute';
 
-const STEP_ORDER: readonly RestoreStepName[] = ['targets', 'plan', 'authorize', 'execute'];
+const STEP_ORDER: readonly RestoreStepName[] = ['targets', 'plan', 'execute'];
 
 const STEP_LABELS: Record<RestoreStepName, string> = {
   targets: '1 · Select targets',
-  plan: '2 · Review plan',
-  authorize: '3 · Authorize',
-  execute: '4 · Execute',
+  plan: '2 · Review & authorize',
+  execute: '3 · Execute',
 };
 
 /** Poll cadence while the worker owns the operation. */
@@ -80,12 +79,13 @@ function fromQuery(value: string | undefined): string {
 }
 
 /**
- * The four-step restore flow.
+ * The three-step restore flow.
  *
- * Planning is side-effect free: nothing is written until step 3 exchanges a
- * separate administrator token for an execution. The token lives in the
- * authorize step's own signal, is passed straight to the request, and is never
- * held here, in a service, in storage, or in the URL.
+ * Planning is side-effect free: nothing is written until step 2 exchanges a
+ * separate administrator token for a fresh baseline and, after that baseline
+ * is reviewed in place, an execution. The credential lives in the authorize
+ * component's own signal, is passed straight to the request, and is never held
+ * here, in a service, in storage, or in the URL.
  */
 @Component({
   selector: 'app-restore-page',
@@ -778,18 +778,11 @@ export class RestorePage {
     this.canonicalize(organizationId, operation.id, true);
   }
 
-  protected goToAuthorize(): void {
-    if (this.blockedByPreflight() || !this.activeOperation()) {
-      return;
-    }
-    this.currentStep.set('authorize');
-  }
-
   protected backToTargets(): void {
     this.currentStep.set('targets');
   }
 
-  // ---- step 3 -------------------------------------------------------------
+  // ---- step 2 authorization ----------------------------------------------
 
   protected async execute(token: RestoreCredential): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
@@ -878,7 +871,7 @@ export class RestorePage {
     }
   }
 
-  // ---- step 4 -------------------------------------------------------------
+  // ---- step 3 -------------------------------------------------------------
 
   private startPolling(): void {
     const operation = this.activeOperation();
@@ -1101,11 +1094,6 @@ export class RestorePage {
     }
     if (name === 'plan') {
       return true;
-    }
-    if (name === 'authorize') {
-      // An empty plan has nothing to authorize, and a preflight error means the
-      // plan no longer describes the organization it was computed against.
-      return this.preflightErrors().length === 0 && (operation.actions ?? []).length > 0;
     }
     return operation.status !== 'planned';
   }

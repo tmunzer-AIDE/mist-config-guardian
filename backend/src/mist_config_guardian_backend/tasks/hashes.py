@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 
 from beanie import PydanticObjectId
 
@@ -19,7 +19,7 @@ from mist_config_guardian_backend.snapshots.canonical import (
     is_legacy_hash,
     legacy_configuration_hash,
 )
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS, get_definition
 from mist_config_guardian_backend.snapshots.secrets import reveal_configuration
 from mist_config_guardian_backend.worker import celery_app
 
@@ -44,10 +44,10 @@ async def _backfill_configuration_hashes() -> int:
 
     Comparison tolerates both generations, so nothing breaks while this runs;
     the migration is what stops the old digests from being kept indefinitely.
-    Each rewrite is proved before it is made — the unkeyed digest of the stored
-    configuration must reproduce exactly what is on the row — so a version whose
-    definition has since changed shape is reported and left alone rather than
-    stamped with a digest that describes something else.
+    Each rewrite is proved before it is made: the unkeyed digest must reproduce
+    under either the current field policy or the known policy from before
+    type-specific response fields were introduced. Unknown policies are reported
+    and left alone rather than stamped with a digest that describes something else.
     """
     settings = get_settings()
     database = DatabaseManager(settings)
@@ -62,7 +62,12 @@ async def _backfill_configuration_hashes() -> int:
             if fields is None:
                 fields = await _ignored_fields(version.logical_object_id)
                 ignored[version.logical_object_id] = fields
-            if await _migrate_one(version, vault, ignored_fields=fields):
+            if await _migrate_one(
+                version,
+                vault,
+                ignored_fields=fields,
+                compatible_ignored_fields=(DEFAULT_IGNORED_FIELDS,),
+            ):
                 migrated += 1
         return migrated
     finally:
@@ -83,18 +88,21 @@ def upgraded_hash(
     stored: str,
     *,
     ignored_fields: Collection[str] = (),
+    compatible_ignored_fields: Iterable[Collection[str]] = (),
 ) -> str | None:
     """The keyed digest that replaces `stored`, or None if it must not be replaced.
 
     A migration that rewrites a digest it cannot reproduce is not migrating
     anything, it is inventing: the new value would claim to describe a
     configuration nobody checked. So the unkeyed digest of the stored
-    configuration has to come back exactly equal to what is on the row before
-    that row is touched.
+    configuration has to come back exactly equal to what is on the row under the
+    current or an explicitly supplied compatible field policy before that row is
+    touched. The replacement always uses the current policy.
     """
     if not is_legacy_hash(stored):
         return None
-    if legacy_configuration_hash(plaintext, ignored_fields=ignored_fields) != stored:
+    field_sets = (ignored_fields, *compatible_ignored_fields)
+    if not any(legacy_configuration_hash(plaintext, ignored_fields=fields) == stored for fields in field_sets):
         return None
     return configuration_hash(plaintext, ignored_fields=ignored_fields)
 
@@ -104,6 +112,7 @@ async def _migrate_one(
     vault: CredentialVault,
     *,
     ignored_fields: frozenset[str],
+    compatible_ignored_fields: Iterable[Collection[str]] = (),
 ) -> bool:
     """Rewrite one row's digest, or leave it as it is and say why."""
     if version.id is None:
@@ -114,7 +123,12 @@ async def _migrate_one(
     except CredentialDecryptionError:
         logger.warning("Cannot re-hash object version %s: its secrets do not decrypt", version.id)
         return False
-    replacement = upgraded_hash(plaintext, previous, ignored_fields=ignored_fields)
+    replacement = upgraded_hash(
+        plaintext,
+        previous,
+        ignored_fields=ignored_fields,
+        compatible_ignored_fields=compatible_ignored_fields,
+    )
     if replacement is None:
         logger.warning(
             "Leaving object version %s alone: its stored digest does not describe its configuration",

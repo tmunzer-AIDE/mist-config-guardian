@@ -4,6 +4,35 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+# Mist's OpenAPI contract marks these URL fields as read-only for the matching
+# configuration resources.  Keep them scoped by object type: a bare ``url`` is
+# generated metadata on maps, but it is writable configuration on webhooks and
+# virtual beacons.
+READ_ONLY_URL_FIELDS: dict[tuple[str, str], frozenset[str]] = {
+    ("org", "data"): frozenset({"msp_logo_url"}),
+    ("org", "settings"): frozenset({"blacklist_url"}),
+    ("org", "wlans"): frozenset({"portal_sso_url", "portal_template_url"}),
+    (
+        "org",
+        "nacportals",
+    ): frozenset({"portal_authorize_url", "portal_sso_url", "thumbnail_url", "ui_url"}),
+    ("site", "settings"): frozenset({"blacklist_url", "watched_station_url", "whitelist_url"}),
+    ("site", "wlans"): frozenset({"portal_sso_url", "portal_template_url"}),
+    ("site", "maps"): frozenset({"thumbnail_url", "url"}),
+}
+
+# Device image URLs are also regenerated between reads in the live Mist API.
+# They are not annotated readOnly in the OpenAPI schema, so keep this behavioral
+# exception separate from the contract-derived inventory above.
+GENERATED_DEVICE_IMAGE_FIELDS = frozenset({"image1_url", "image2_url", "image3_url"})
+
+DEFAULT_IGNORED_FIELDS = frozenset({"created_time", "modified_time", "last_seen"})
+DEFAULT_RESTORE_EXCLUDED_FIELDS = frozenset({"created_time", "id", "modified_time", "org_id", "site_id"})
+
+
+def _read_only_urls(scope: str, object_type: str) -> frozenset[str]:
+    return READ_ONLY_URL_FIELDS.get((scope, object_type), frozenset())
+
 
 class ObjectFamily(StrEnum):
     WLAN = "wlan"
@@ -26,13 +55,9 @@ class ObjectDefinition:
     create_supported: bool = True
     update_supported: bool = True
     delete_supported: bool = True
-    ignored_fields: frozenset[str] = frozenset(
-        {
-            "created_time",
-            "modified_time",
-            "last_seen",
-        }
-    )
+    read_only_fields: frozenset[str] = frozenset()
+    ignored_fields: frozenset[str] = DEFAULT_IGNORED_FIELDS
+
     sensitive_fields: frozenset[str] = frozenset(
         {
             "api_secret",
@@ -45,15 +70,17 @@ class ObjectDefinition:
             "secret",
         }
     )
-    restore_excluded_fields: frozenset[str] = frozenset(
-        {
-            "created_time",
-            "id",
-            "modified_time",
-            "org_id",
-            "site_id",
-        }
-    )
+
+    restore_excluded_fields: frozenset[str] = DEFAULT_RESTORE_EXCLUDED_FIELDS
+
+    def __post_init__(self) -> None:
+        """Apply response-only fields consistently to hashes and writes."""
+        object.__setattr__(self, "ignored_fields", self.ignored_fields | self.read_only_fields)
+        object.__setattr__(
+            self,
+            "restore_excluded_fields",
+            self.restore_excluded_fields | self.read_only_fields,
+        )
 
     def path(self, *, org_id: str, site_id: str | None = None) -> str:
         """Render the Mist API path for this definition."""
@@ -91,6 +118,7 @@ ORG_OBJECTS: tuple[ObjectDefinition, ...] = (
         is_list=False,
         create_supported=False,
         delete_supported=False,
+        read_only_fields=_read_only_urls("org", "data"),
     ),
     ObjectDefinition(
         key="settings",
@@ -100,6 +128,7 @@ ORG_OBJECTS: tuple[ObjectDefinition, ...] = (
         is_list=False,
         create_supported=False,
         delete_supported=False,
+        read_only_fields=_read_only_urls("org", "settings"),
     ),
     ObjectDefinition(
         key="sites",
@@ -132,6 +161,7 @@ ORG_OBJECTS: tuple[ObjectDefinition, ...] = (
         scope="org",
         endpoint="/api/v1/orgs/{org_id}/wlans",
         name_fields=("ssid", "name"),
+        read_only_fields=_read_only_urls("org", "wlans"),
     ),
     ObjectDefinition(
         key="networks",
@@ -219,6 +249,7 @@ ORG_OBJECTS: tuple[ObjectDefinition, ...] = (
         label="NAC Portals",
         scope="org",
         endpoint="/api/v1/orgs/{org_id}/nacportals",
+        read_only_fields=_read_only_urls("org", "nacportals"),
     ),
     ObjectDefinition(
         key="services",
@@ -337,6 +368,7 @@ SITE_OBJECTS: tuple[ObjectDefinition, ...] = (
         is_list=False,
         create_supported=False,
         delete_supported=False,
+        read_only_fields=_read_only_urls("site", "settings"),
     ),
     ObjectDefinition(
         key="wlans",
@@ -345,6 +377,7 @@ SITE_OBJECTS: tuple[ObjectDefinition, ...] = (
         scope="site",
         endpoint="/api/v1/sites/{site_id}/wlans",
         name_fields=("ssid", "name"),
+        read_only_fields=_read_only_urls("site", "wlans"),
     ),
     ObjectDefinition(
         key="devices",
@@ -356,12 +389,14 @@ SITE_OBJECTS: tuple[ObjectDefinition, ...] = (
         request_params=(("type", "all"),),
         create_supported=False,
         delete_supported=False,
+        read_only_fields=GENERATED_DEVICE_IMAGE_FIELDS,
     ),
     ObjectDefinition(
         key="maps",
         label="Maps",
         scope="site",
         endpoint="/api/v1/sites/{site_id}/maps",
+        read_only_fields=_read_only_urls("site", "maps"),
     ),
     ObjectDefinition(
         key="zones",

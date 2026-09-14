@@ -428,6 +428,8 @@ test('other workspaces retain bounded tables, immediately visible details and mo
 test('embedded restore plans have a reachable vertical scrollport', async ({ page }) => {
   await page.goto('/history?restore=1&operation=op-scroll');
   await expect(page.getByRole('heading', { name: 'Plan · 40 actions' })).toBeVisible();
+  await expect(page.locator('.step-button')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Capture backup and review new plan' })).toBeAttached();
 
   const scrollport = page.locator('.restore-inline > app-restore-page');
   expect(

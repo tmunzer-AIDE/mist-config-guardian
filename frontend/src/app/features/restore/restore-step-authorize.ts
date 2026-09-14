@@ -45,7 +45,7 @@ const METHODS: CredentialMethod[] = [
 ];
 
 /**
- * Step 3 — exchange a separate write credential for an execution.
+ * Step 2 — exchange a separate write credential for an execution beneath the plan.
  *
  * The token lives only in this component's signal: it is handed straight to the
  * request and cleared the moment it is submitted. It is never written to

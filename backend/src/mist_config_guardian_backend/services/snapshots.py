@@ -23,10 +23,10 @@ from mist_config_guardian_backend.models.snapshot import (
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.service_credentials import service_token
 from mist_config_guardian_backend.snapshots.canonical import (
+    canonicalize,
     changed_top_level_fields,
     configuration_hash,
     configuration_hash_matches,
-    is_legacy_hash,
 )
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
@@ -279,13 +279,24 @@ class SnapshotService:
             await _upgrade_stored_hash(latest, canonical_hash)
             return False
 
+        previous_configuration = None if latest is None else reveal_configuration(latest.configuration, self._vault)
+        if latest is not None and previous_configuration is not None:
+            ignored = definition.ignored_fields
+            if canonicalize(previous_configuration, ignored_fields=ignored) == canonicalize(
+                configuration,
+                ignored_fields=ignored,
+            ):
+                # The configuration is unchanged under the current registry
+                # policy, but its digest was written under an older policy.
+                await _upgrade_stored_hash(latest, canonical_hash)
+                return False
+
         version_number = 1 if latest is None else latest.version + 1
         persisted_configuration = protect_configuration(
             configuration,
             self._vault,
             sensitive_fields=definition.sensitive_fields,
         )
-        previous_configuration = None if latest is None else reveal_configuration(latest.configuration, self._vault)
         version = ObjectVersion(
             organization_id=organization_id,
             logical_object_id=logical.id,
@@ -345,14 +356,14 @@ class SnapshotService:
 
 
 async def _upgrade_stored_hash(version: ObjectVersion, canonical_hash: str) -> None:
-    """Rewrite one version's digest in the keyed generation, if it is older.
+    """Rewrite one version's digest when its generation or field policy is older.
 
     The write is conditional on the digest still being the one that was read,
     so two workers finding the same unchanged object cannot fight over it, and
     a version rewritten by the backfill in between is left alone.
     """
     previous = version.configuration_hash
-    if version.id is None or not is_legacy_hash(previous):
+    if version.id is None or previous == canonical_hash:
         return
     await ObjectVersion.find_one(
         ObjectVersion.id == version.id,
