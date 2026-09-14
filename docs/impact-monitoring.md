@@ -23,6 +23,12 @@ fields remain visible at every depth, including webhook destinations. This appli
 structured comparisons, comparison JSON and patches. Original stored snapshots
 and restore payloads retain those fields.
 
+Restore planning additionally follows the object registry's type-specific read-only
+URL rules from Mist's OpenAPI contract. Generated organization branding, blacklist,
+portal, map and watched-station URLs are excluded from live-state hashes and write
+payloads. Writable URLs remain configuration: in particular, webhook and virtual
+beacon destinations are still compared and restored.
+
 The raw JSON comparison aligns matching lines and keeps each version's original
 line numbers. Removed text appears in red with a minus marker; added text appears
 in green with a plus marker. Replacements show both. The taller, resizable viewer

@@ -239,22 +239,38 @@ async def test_a_changed_live_object_aborts_before_any_write(monkeypatch: pytest
         await capture_safety_snapshot(client, _organization(), operation, _vault())
 
 
-def test_a_rotated_mist_device_image_url_does_not_invalidate_the_plan() -> None:
-    definition = get_definition("site", "devices")
+@pytest.mark.parametrize(
+    ("scope", "object_type", "field"),
+    [
+        ("site", "devices", "image1_url"),
+        ("site", "maps", "url"),
+        ("site", "settings", "watched_station_url"),
+        ("site", "wlans", "portal_template_url"),
+        ("org", "data", "msp_logo_url"),
+        ("org", "nacportals", "portal_authorize_url"),
+    ],
+)
+def test_a_rotated_mist_read_only_url_does_not_invalidate_the_plan(
+    scope: str,
+    object_type: str,
+    field: str,
+) -> None:
+    definition = get_definition(scope, object_type)
     assert definition is not None
-    captured = {"id": "device-1", "name": "Switch", "image1_url": "https://signed.example/first"}
-    live = {**captured, "image1_url": "https://signed.example/second"}
+    captured = {"id": "object-1", "name": "Configuration", field: "https://generated.example/first"}
+    live = {**captured, field: "https://generated.example/second"}
     action = _action(
         0,
         RestoreActionType.UPDATE,
         expected_current_hash=configuration_hash(captured, ignored_fields=definition.ignored_fields),
     )
-    action.object_type = "devices"
+    action.scope = scope
+    action.object_type = object_type
 
     _validate_live_state(action, live, relaxed=False)
 
     with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
-        _validate_live_state(action, {**live, "name": "Different switch"}, relaxed=False)
+        _validate_live_state(action, {**live, "name": "Different configuration"}, relaxed=False)
 
 
 async def test_preflight_debug_reports_fields_without_values(monkeypatch, caplog):

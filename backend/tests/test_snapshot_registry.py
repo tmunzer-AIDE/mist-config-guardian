@@ -4,6 +4,7 @@ import pytest
 
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
+    READ_ONLY_URL_FIELDS,
     SITE_OBJECTS,
     get_definition,
     object_name,
@@ -61,3 +62,32 @@ def test_mist_image_urls_are_neither_configuration_nor_restore_payload_fields() 
     image_fields = {"image1_url", "image2_url", "image3_url", "thumbnail_url"}
     assert image_fields <= devices.ignored_fields
     assert image_fields <= devices.restore_excluded_fields
+
+
+@pytest.mark.parametrize(
+    ("scope", "object_type", "fields"),
+    [(scope, object_type, fields) for (scope, object_type), fields in READ_ONLY_URL_FIELDS.items()],
+)
+def test_mist_read_only_urls_are_neither_configuration_nor_restore_payload_fields(
+    scope: str,
+    object_type: str,
+    fields: frozenset[str],
+) -> None:
+    definition = get_definition(scope, object_type)
+
+    assert definition is not None
+    assert fields <= definition.ignored_fields
+    assert fields <= definition.restore_excluded_fields
+
+
+def test_writable_urls_remain_part_of_configuration_and_restore_payloads() -> None:
+    org_webhook = get_definition("org", "webhooks")
+    site_webhook = get_definition("site", "webhooks")
+    virtual_beacon = get_definition("site", "vbeacons")
+
+    assert org_webhook is not None
+    assert site_webhook is not None
+    assert virtual_beacon is not None
+    for definition in (org_webhook, site_webhook, virtual_beacon):
+        assert "url" not in definition.ignored_fields
+        assert "url" not in definition.restore_excluded_fields
