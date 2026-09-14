@@ -527,7 +527,12 @@ class RestorePlanner:
             if incarnation is None:
                 continue
             referenced = await LogicalObject.get(incarnation.logical_object_id)
-            if referenced is not None and referenced.id is not None:
+            # The org-level ``data`` singleton is a restore root, not a child
+            # dependency. Legacy snapshots may carry arbitrary UUID references
+            # (notably device ``tag_uuid`` values) that happen to resolve to
+            # this object. Following one would make its containment rule add
+            # every object in the organization to an otherwise narrow plan.
+            if referenced is not None and referenced.id is not None and referenced.object_type != "data":
                 related[referenced.id] = referenced
         return list(related.values())
 

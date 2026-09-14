@@ -314,6 +314,11 @@ The plan lists:
 - Whether policy requires approval.
 - Compensating actions for each write.
 
+Inventory metadata such as a device's `tag_uuid` is not a restore dependency.
+The organization singleton expands to its contained objects only when that
+restore scope is selected; an incidental UUID match must not widen an
+individual-object restore.
+
 Any live-state change after plan generation makes the plan stale. Execution
 requires regeneration or an explicit revalidation that produces the same plan
 hash.
