@@ -1,7 +1,7 @@
 """Restore dependency expansion stays within explicitly selected containers."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from beanie import PydanticObjectId
@@ -167,6 +167,46 @@ async def test_configuration_references_still_include_the_target(
     )
 
     assert related == [target]
+
+
+@pytest.mark.parametrize("container_type", ["data", "sites"])
+async def test_unselected_container_does_not_query_or_include_its_contents(
+    monkeypatch: pytest.MonkeyPatch,
+    container_type: str,
+) -> None:
+    organization_id = PydanticObjectId()
+    container = _logical(organization_id, object_type=container_type, mist_id="container-1")
+    child = _logical(organization_id, object_type="wlans", mist_id="wlan-1")
+    version = _version(organization_id, container)
+
+    class ContainedQuery:
+        async def to_list(self) -> list[LogicalObject]:
+            return [child]
+
+    find = MagicMock(return_value=ContainedQuery())
+    monkeypatch.setattr(LogicalObject, "find", find)
+    monkeypatch.setattr(
+        LogicalObject,
+        "organization_id",
+        ExpressionField("organization_id"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        LogicalObject,
+        "site_mist_id",
+        ExpressionField("site_mist_id"),
+        raising=False,
+    )
+
+    related = await _planner()._related_logical_objects(  # noqa: SLF001
+        organization_id,
+        container,
+        version,
+        include_contained=False,
+    )
+
+    assert related == []
+    find.assert_not_called()
 
 
 @pytest.mark.parametrize("container_type", ["data", "sites"])

@@ -28,7 +28,6 @@ from mist_config_guardian_backend.models.restore import (
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
     ObjectIncarnation,
-    ObjectReference,
     ObjectVersion,
 )
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
@@ -36,6 +35,7 @@ from mist_config_guardian_backend.services.approvals import (
     compute_plan_hash,
     evaluate_approval_policy,
 )
+from mist_config_guardian_backend.snapshots.references import is_restore_reference
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     find_unavailable_secrets,
@@ -45,11 +45,6 @@ from mist_config_guardian_backend.snapshots.secrets import (
 )
 
 VerificationStatus = Literal["ok", "failed", "skipped"]
-
-
-def _is_restore_reference(reference: ObjectReference) -> bool:
-    """Return whether a stored UUID reference participates in restore planning."""
-    return "tag_uuid" not in reference.field_path.split(".")
 
 
 class RestorePlanningError(ValueError):
@@ -535,7 +530,7 @@ class RestorePlanner:
             # Snapshots written before ``tag_uuid`` was excluded may retain an
             # inventory-tag UUID that happens to match a restorable object.
             # It is metadata, not a restore dependency, at any nesting depth.
-            if not _is_restore_reference(reference):
+            if not is_restore_reference(reference):
                 continue
             incarnation = await ObjectIncarnation.find_one(
                 ObjectIncarnation.organization_id == organization_id,
@@ -561,7 +556,7 @@ class RestorePlanner:
         seen: set[PydanticObjectId] = set()
         for candidate in candidates:
             if not any(
-                reference.target_mist_id == logical.current_mist_id and _is_restore_reference(reference)
+                reference.target_mist_id == logical.current_mist_id and is_restore_reference(reference)
                 for reference in candidate.references
             ):
                 continue
@@ -672,7 +667,7 @@ class RestorePlanner:
         dependencies: set[PydanticObjectId] = set()
         if action_type is not RestoreActionType.DELETE:
             for reference in target.references:
-                if not _is_restore_reference(reference):
+                if not is_restore_reference(reference):
                     continue
                 incarnation = await ObjectIncarnation.find_one(
                     ObjectIncarnation.organization_id == organization_id,

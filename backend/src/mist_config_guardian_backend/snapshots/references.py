@@ -12,6 +12,11 @@ _UUID_PATTERN = re.compile(
 _NON_REFERENCE_FIELDS = {"id", "org_id", "site_id", "tag_uuid"}
 
 
+def is_restore_reference(reference: ObjectReference) -> bool:
+    """Return whether a stored UUID reference participates in restore behavior."""
+    return "tag_uuid" not in reference.field_path.split(".")
+
+
 def extract_uuid_references(configuration: Mapping[str, object]) -> list[ObjectReference]:
     """Find UUID values that may identify restorable configuration objects.
 

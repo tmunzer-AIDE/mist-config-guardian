@@ -1,6 +1,25 @@
 """UUID reference discovery keeps restore dependencies narrowly scoped."""
 
-from mist_config_guardian_backend.snapshots.references import extract_uuid_references
+import pytest
+
+from mist_config_guardian_backend.models.snapshot import ObjectReference
+from mist_config_guardian_backend.snapshots.references import extract_uuid_references, is_restore_reference
+
+
+@pytest.mark.parametrize(
+    ("field_path", "expected"),
+    [
+        ("tag_uuid", False),
+        ("site.tag_uuid", False),
+        ("tag_uuid.0", False),
+        ("device_tag_uuid", True),
+        ("applies.site_ids.0", True),
+    ],
+)
+def test_restore_reference_classification(field_path: str, expected) -> None:
+    reference = ObjectReference(target_mist_id="target", field_path=field_path)
+
+    assert is_restore_reference(reference) is expected
 
 
 def test_inventory_tag_uuid_is_not_a_restore_dependency() -> None:

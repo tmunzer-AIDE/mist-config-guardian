@@ -36,6 +36,7 @@ from mist_config_guardian_backend.services.restore_planner import (
     load_or_build_state,
 )
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.references import is_restore_reference
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.worker import celery_app
 
@@ -62,6 +63,11 @@ async def find_stale_references(
     ).to_list()
     stale: set[str] = set()
     for version in versions:
+        if not any(
+            reference.target_mist_id in replaced_ids and is_restore_reference(reference)
+            for reference in version.references
+        ):
+            continue
         current = await latest_version(version.logical_object_id)
         if current is None or current.id != version.id or current.is_deleted:
             continue
