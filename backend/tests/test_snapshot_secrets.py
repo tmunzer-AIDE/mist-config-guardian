@@ -85,6 +85,13 @@ def test_masked_nested_secrets_are_rejected() -> None:
     assert missing == {("auth", "password")}
 
 
+def test_a_single_asterisk_is_an_unavailable_secret_mask() -> None:
+    assert find_unavailable_secrets(
+        {"auth": {"password": "*"}},
+        frozenset({"password"}),
+    ) == {("auth", "password")}
+
+
 def test_missing_empty_and_null_secrets_are_not_masks() -> None:
     assert not find_unavailable_secrets(
         {

@@ -480,6 +480,26 @@ async def test_compensation_keeps_a_secret_mist_did_return(
     assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == "rotated-since"
 
 
+@pytest.mark.parametrize("unset_secret", [None, ""])
+async def test_compensation_keeps_an_explicitly_unset_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    unset_secret: str | None,
+) -> None:
+    """Null and empty are live values, not masks an older version may replace."""
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    stored = _stored_version(
+        protect_configuration(CORP_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(CORP_WLAN, ignored_fields=IGNORED),
+    )
+    entry = _entry({**CORP_WLAN, "psk": unset_secret}, stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == unset_secret
+
+
 # An object can carry the same secret field in more than one place.
 NESTED_WLAN: dict[str, object] = {
     "name": "Corp",

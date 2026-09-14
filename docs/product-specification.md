@@ -381,6 +381,11 @@ Mist does not provide transactional multi-object writes. The executor therefore:
    organization policy pre-authorizes automatic compensation.
 9. Marks the execution as succeeded, partially applied, compensated, or failed.
 
+Compensation substitutes a stored secret only where the live safety snapshot
+contains an all-asterisk mask. Missing, null, and empty sensitive values remain
+part of the live-state comparison and are retained instead of being replaced by
+an older stored value.
+
 The UI never reports success while verification or required reference rewrites
 remain incomplete.
 
