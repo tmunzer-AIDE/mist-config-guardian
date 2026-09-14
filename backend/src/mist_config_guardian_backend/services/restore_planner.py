@@ -309,12 +309,11 @@ def unavailable_secret_errors(
 ) -> list[str]:
     """Return one preflight error per action carrying a secret Mist never returned.
 
-    Mist masks values such as a RADIUS shared secret on read, so the snapshot
-    holds the mask and not the secret. The executor writes a version back
-    verbatim, which would replace a working credential with asterisks, so such
-    an action cannot run. Naming it here rather than at authorization is the
-    point: the reviewer sees it beside the plan, before an administrator
-    credential has been entered for a restore that was never going to run.
+    Mist masks unavailable values such as a RADIUS shared secret with one or
+    more asterisks. The snapshot then holds the mask and not the secret, so
+    replaying it cannot restore the selected version. Missing, null, and empty
+    sensitive fields are ordinary configuration values and do not indicate a
+    masked secret.
     """
     errors: list[str] = []
     for action in actions:

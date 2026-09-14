@@ -125,9 +125,7 @@ def find_unavailable_secrets(
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = (*path, str(key))
-            if str(key).lower() in sensitive_fields and (
-                child is None or child == "" or (isinstance(child, str) and set(child) == {"*"})
-            ):
+            if str(key).lower() in sensitive_fields and isinstance(child, str) and bool(child) and set(child) == {"*"}:
                 missing.add(child_path)
             else:
                 missing.update(

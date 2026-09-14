@@ -161,6 +161,39 @@ const changes = [
     ],
   },
 ];
+const restoreOperation = {
+  id: 'op-scroll',
+  mode: 'non_destructive',
+  include_dependencies: true,
+  requested_version_ids: ['v0'],
+  target_at: now,
+  status: 'planned',
+  actions: Array.from({ length: 40 }, (_, i) => ({
+    logical_object_id: `restore-object-${i}`,
+    source_version_id: `restore-version-${i}`,
+    order: i,
+    action: 'update',
+    scope: 'org',
+    object_type: 'wlans',
+    object_name: `Restore WLAN ${i}`,
+    current_mist_id: `mist-wlan-${i}`,
+    site_mist_id: null,
+    configuration: {},
+    depends_on: [],
+    status: 'pending',
+    resulting_mist_id: null,
+    error: null,
+  })),
+  warnings: [],
+  preflight_errors: [],
+  credential_actor: null,
+  started_at: null,
+  completed_at: null,
+  created_at: now,
+  task_id: null,
+  approval: null,
+  compensation_available: false,
+};
 test.beforeEach(async ({ page }) => {
   page.on('console', (message) => {
     if (message.type() === 'error') console.error('BROWSER:', message.text());
@@ -249,6 +282,10 @@ test.beforeEach(async ({ page }) => {
         sites: [{ id: 'site1', name: 'Paris lab', count: 100 }],
       };
     else if (path.endsWith('/objects')) json = { items: objects, total: 100 };
+    else if (path.endsWith('/restores/targets'))
+      json = { items: [], total: 0, types: [], sites: [] };
+    else if (path.endsWith('/restores/op-scroll')) json = restoreOperation;
+    else if (path.endsWith('/restores')) json = { items: [], total: 0 };
     else if (path.endsWith('/change-groups')) json = { items: groups, total: 70 };
     else if (path.includes('/change-groups/'))
       json = {
@@ -386,6 +423,20 @@ test('other workspaces retain bounded tables, immediately visible details and mo
     await page.setViewportSize({ width: 1600, height: 1000 });
   }
   expect(errors).toEqual([]);
+});
+
+test('embedded restore plans have a reachable vertical scrollport', async ({ page }) => {
+  await page.goto('/history?restore=1&operation=op-scroll');
+  await expect(page.getByRole('heading', { name: 'Plan · 40 actions' })).toBeVisible();
+
+  const scrollport = page.locator('.restore-inline > app-restore-page');
+  expect(
+    await scrollport.evaluate((element) => element.scrollHeight > element.clientHeight),
+  ).toBe(true);
+  await scrollport.hover();
+  await page.mouse.wheel(0, 1200);
+  await expect.poll(() => scrollport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByRole('button', { name: 'Back to targets' })).toBeVisible();
 });
 
 test('failed discovery stays unknown and can be retried without reloading the page', async ({

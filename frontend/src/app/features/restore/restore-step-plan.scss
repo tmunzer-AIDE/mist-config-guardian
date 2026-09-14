@@ -70,7 +70,10 @@ $sunken: rgba(251, 250, 247, 0.55);
 
 // ---------------------------------------------------------------- action list
 .table-card {
-  overflow: hidden;
+  // Preserve the rounded-edge clipping without creating a non-scrollable
+  // overflow container that consumes wheel gestures meant for the embedded
+  // restore page.
+  overflow: clip;
 }
 
 .table-head {

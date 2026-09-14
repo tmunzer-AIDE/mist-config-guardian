@@ -480,6 +480,26 @@ async def test_compensation_keeps_a_secret_mist_did_return(
     assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == "rotated-since"
 
 
+@pytest.mark.parametrize("unset_secret", [None, ""])
+async def test_compensation_keeps_an_explicitly_unset_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    unset_secret: str | None,
+) -> None:
+    """Null and empty are live values, not masks an older version may replace."""
+    vault = _vault()
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    stored = _stored_version(
+        protect_configuration(CORP_WLAN, vault, sensitive_fields=definition.sensitive_fields),
+        configuration_hash(CORP_WLAN, ignored_fields=IGNORED),
+    )
+    entry = _entry({**CORP_WLAN, "psk": unset_secret}, stored, vault)
+
+    inverse = await _inverse_of(entry, stored, monkeypatch, vault)
+
+    assert reveal_configuration(inverse.protected_configuration, vault)["psk"] == unset_secret
+
+
 # An object can carry the same secret field in more than one place.
 NESTED_WLAN: dict[str, object] = {
     "name": "Corp",
@@ -767,14 +787,7 @@ async def test_compensation_replays_the_captured_configuration(monkeypatch: pyte
 async def test_compensation_names_a_masked_secret_in_its_own_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A compensation plan is reviewed like any other, so it must fail there too.
-
-    Compensation keeps the live snapshot when no stored version can supply a
-    secret Mist masked — mask and all, deliberately, so the plan is refused
-    rather than quietly dropping a credential. Refusing it only at
-    authorization means an administrator enters a token for a plan that was
-    never going to run.
-    """
+    """A compensation plan cannot restore a value represented only by a mask."""
     operation, store = await _applied_plan(
         monkeypatch,
         live={

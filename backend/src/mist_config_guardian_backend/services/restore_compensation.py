@@ -259,9 +259,10 @@ def _at_path(value: object, path: SecretPath) -> object:
 def _usable_secret(value: object) -> bool:
     """Whether a value is a secret that could actually be written back.
 
-    The same three things :func:`find_unavailable_secrets` calls unusable —
-    absent, empty, or all asterisks — plus the one it cannot see, a field that
-    is not there at all.
+    :func:`find_unavailable_secrets` reports only all-asterisk masks. To replace
+    one of those masks during compensation, a stored version must provide a
+    concrete, nonempty value; missing, null, empty, or masked values cannot
+    supply the secret.
     """
     if value is _MISSING or value is None or value == "":
         return False

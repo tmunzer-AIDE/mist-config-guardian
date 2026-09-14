@@ -121,8 +121,20 @@
 }
 .restore-inline {
   flex: 1;
-  overflow: auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// Keep the title in place and give the embedded restore an explicit viewport.
+// Relying on the section's overflow left the custom element unconstrained in
+// some browsers, so its lower plan rows could be clipped by the page shell.
+.restore-inline > app-restore-page {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .restore-inline-head {
   display: flex;
@@ -131,6 +143,7 @@
   flex-wrap: wrap;
   gap: 12px;
   padding: 14px 20px;
+  flex: none;
 }
 .restore-inline-head h2 {
   font-size: 18px;

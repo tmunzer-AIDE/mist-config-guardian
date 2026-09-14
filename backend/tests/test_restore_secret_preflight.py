@@ -1,12 +1,4 @@
-"""Secrets Mist never returns are named while the plan is still being reviewed.
-
-Mist masks values such as a RADIUS shared secret on read, so a snapshot holds
-the mask rather than the secret. Writing that mask back would replace a working
-credential with asterisks, so a plan carrying one cannot be executed. The point
-of these tests is *when* that is decided: at planning, where the reviewer can
-still act on it, and not at authorization, after an administrator credential
-has already been entered.
-"""
+"""Only all-asterisk secret placeholders block a restore plan."""
 
 from beanie import PydanticObjectId
 
@@ -73,6 +65,23 @@ def test_every_masked_location_is_named_once_in_a_stable_order() -> None:
 
 def test_a_secret_that_survived_capture_is_not_an_error() -> None:
     action = _action({"radius_config": {"auth_servers": [{"secret": "a-real-shared-secret"}]}})
+
+    assert unavailable_secret_errors([action], VAULT) == []
+
+
+def test_missing_empty_and_null_sensitive_fields_are_not_unavailable() -> None:
+    action = _action(
+        {
+            "radius_config": {
+                "auth_servers": [
+                    {"host": "10.0.0.1"},
+                    {"host": "10.0.0.2", "secret": ""},
+                    {"host": "10.0.0.3", "secret": None},
+                ]
+            },
+            "switch_mgmt": {"root_password": ""},
+        }
+    )
 
     assert unavailable_secret_errors([action], VAULT) == []
 

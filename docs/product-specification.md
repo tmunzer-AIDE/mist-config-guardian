@@ -238,9 +238,10 @@ single-organization and UUID-only assumptions in the source application.
 Canonicalization removes only registry-declared volatile fields, sorts
 order-insensitive structures, and preserves order-sensitive structures.
 
-Secrets returned by Mist are encrypted at rest. Values that Mist never returns
-cannot be restored and must be identified in preflight as required administrator
-input. API responses and logs redact secrets by default.
+Secrets returned by Mist are encrypted at rest. Values that Mist replaces with
+an all-asterisk placeholder cannot be restored and must be identified in preflight
+as required administrator input. Missing, null, and empty sensitive fields remain
+valid configuration values. API responses and logs redact secrets by default.
 
 ### 7.6 Retention
 
@@ -379,6 +380,11 @@ Mist does not provide transactional multi-object writes. The executor therefore:
 8. Requires explicit administrator confirmation before compensation unless the
    organization policy pre-authorizes automatic compensation.
 9. Marks the execution as succeeded, partially applied, compensated, or failed.
+
+Compensation substitutes a stored secret only where the live safety snapshot
+contains an all-asterisk mask. Missing, null, and empty sensitive values remain
+part of the live-state comparison and are retained instead of being replaced by
+an older stored value.
 
 The UI never reports success while verification or required reference rewrites
 remain incomplete.
