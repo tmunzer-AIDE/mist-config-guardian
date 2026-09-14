@@ -82,7 +82,18 @@ def test_masked_nested_secrets_are_rejected() -> None:
 
     # Steps, not a dotted string: a key may contain a dot, and a mapping key
     # may look like a list index, so only the steps identify a location.
-    assert missing == {("auth", "password"), ("rules", 1, "psk")}
+    assert missing == {("auth", "password")}
+
+
+def test_missing_empty_and_null_secrets_are_not_masks() -> None:
+    assert not find_unavailable_secrets(
+        {
+            "missing": {},
+            "empty": {"password": ""},
+            "null": {"password": None},
+        },
+        frozenset({"password"}),
+    )
 
 
 def test_non_secret_masked_values_are_allowed() -> None:

@@ -767,14 +767,7 @@ async def test_compensation_replays_the_captured_configuration(monkeypatch: pyte
 async def test_compensation_names_a_masked_secret_in_its_own_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A compensation plan is reviewed like any other, so it must fail there too.
-
-    Compensation keeps the live snapshot when no stored version can supply a
-    secret Mist masked — mask and all, deliberately, so the plan is refused
-    rather than quietly dropping a credential. Refusing it only at
-    authorization means an administrator enters a token for a plan that was
-    never going to run.
-    """
+    """A compensation plan cannot restore a value represented only by a mask."""
     operation, store = await _applied_plan(
         monkeypatch,
         live={

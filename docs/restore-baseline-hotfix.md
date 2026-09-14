@@ -4,7 +4,7 @@ The restore workflow now captures the selected objects and dependencies using a 
 
 The reviewer can compare each captured version with its target from the plan table. Execution uses the same encrypted, short-lived credential. Only the administrator who prepared the plan can use that retained credential; queue reservation is atomic and does not extend its expiry. Expiry cleanup also revokes sessions waiting for review. Execution still reads live state and refuses drift before making any configuration writes.
 
-If live object existence differs from recorded history, preparation requires a history refresh instead of silently changing create/delete behavior. If the administrator response contains an unavailable secret, preparation refuses to call it a recoverable backup. `root_password` is now included in field encryption and secret preflight checks. Failed capture may leave a failed snapshot with successfully captured immutable versions, but does not queue a restore.
+If live object existence differs from recorded history, preparation requires a history refresh instead of silently changing create/delete behavior. If the administrator response contains an all-asterisk unavailable secret, preparation refuses to call it a recoverable backup. Missing, null, and empty sensitive fields remain valid. `root_password` is included in field encryption and secret preflight checks. Failed capture may leave a failed snapshot with successfully captured immutable versions, but does not queue a restore.
 
 ## Deployment
 

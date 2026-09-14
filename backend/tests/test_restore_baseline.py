@@ -102,6 +102,16 @@ async def test_masked_backup_is_rejected_before_version_is_saved(capture):
     assert versions == []
 
 
+@pytest.mark.parametrize("value", [None, ""])
+async def test_empty_backup_secret_is_a_valid_configuration_value(capture, value):
+    service, client, org, objects, manifest, versions, _vault = capture
+    client.get_current.return_value["switch_mgmt"]["root_password"] = value
+
+    await service._capture(client, org, objects, manifest, "admin")
+
+    assert len(versions) == 1
+
+
 async def test_deleted_object_requires_history_refresh(capture):
     service, client, org, objects, manifest, versions, _vault = capture
     client.get_current.return_value = None
