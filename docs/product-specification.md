@@ -315,9 +315,10 @@ The plan lists:
 - Compensating actions for each write.
 
 Inventory metadata such as a device's `tag_uuid` is not a restore dependency.
-The organization singleton expands to its contained objects only when that
-restore scope is selected; an incidental UUID match must not widen an
-individual-object restore.
+Organization and site containers expand to their contained objects only when
+the container was explicitly selected. A container reached through a forward
+reference or reverse dependency may itself join the plan, but must not widen a
+narrow restore to all objects in that organization or site.
 
 Any live-state change after plan generation makes the plan stale. Execution
 requires regeneration or an explicit revalidation that produces the same plan

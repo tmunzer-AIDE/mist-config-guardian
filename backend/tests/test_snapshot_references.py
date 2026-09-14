@@ -12,6 +12,9 @@ def test_inventory_tag_uuid_is_not_a_restore_dependency() -> None:
             "org_id": "8aa21779-1178-4357-b3e0-42c02b93b870",
             "site_id": "d6fb4f96-3ba4-4cf5-8af2-a8d7b85087ac",
             "tag_uuid": "8aa21779-1178-4357-b3e0-42c02b93b870",
+            "inventory": {
+                "tag_uuid": ["aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"],
+            },
             "map_id": map_id,
         }
     )

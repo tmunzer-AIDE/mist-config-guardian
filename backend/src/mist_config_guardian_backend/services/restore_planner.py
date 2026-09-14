@@ -28,6 +28,7 @@ from mist_config_guardian_backend.models.restore import (
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
     ObjectIncarnation,
+    ObjectReference,
     ObjectVersion,
 )
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
@@ -44,6 +45,11 @@ from mist_config_guardian_backend.snapshots.secrets import (
 )
 
 VerificationStatus = Literal["ok", "failed", "skipped"]
+
+
+def _is_restore_reference(reference: ObjectReference) -> bool:
+    """Return whether a stored UUID reference participates in restore planning."""
+    return "tag_uuid" not in reference.field_path.split(".")
 
 
 class RestorePlanningError(ValueError):
@@ -351,6 +357,7 @@ class PlanningContext:
 
     organization_id: PydanticObjectId
     selected: dict[PydanticObjectId, ObjectVersion]
+    requested_logical_ids: frozenset[PydanticObjectId]
     logical_objects: dict[PydanticObjectId, LogicalObject]
     force_delete: set[PydanticObjectId]
     target_at: datetime
@@ -417,6 +424,7 @@ class RestorePlanner:
                 PlanningContext(
                     organization_id=organization_id,
                     selected=selected,
+                    requested_logical_ids=frozenset(selected),
                     logical_objects=logical_objects,
                     force_delete=force_delete,
                     target_at=target_at,
@@ -472,6 +480,7 @@ class RestorePlanner:
                 context.organization_id,
                 logical,
                 version,
+                include_contained=version.logical_object_id in context.requested_logical_ids,
             )
             for related_logical in related:
                 if related_logical.id is None or related_logical.id in context.selected:
@@ -507,19 +516,27 @@ class RestorePlanner:
         organization_id: PydanticObjectId,
         logical: LogicalObject,
         version: ObjectVersion,
+        *,
+        include_contained: bool,
     ) -> list[LogicalObject]:
         related: dict[PydanticObjectId, LogicalObject] = {}
-        if logical.object_type == "data":
-            candidates = await LogicalObject.find(LogicalObject.organization_id == organization_id).to_list()
-            related.update({item.id: item for item in candidates if item.id is not None})
-        elif logical.object_type == "sites":
-            candidates = await LogicalObject.find(
-                LogicalObject.organization_id == organization_id,
-                LogicalObject.site_mist_id == logical.current_mist_id,
-            ).to_list()
-            related.update({item.id: item for item in candidates if item.id is not None})
+        if include_contained:
+            if logical.object_type == "data":
+                candidates = await LogicalObject.find(LogicalObject.organization_id == organization_id).to_list()
+                related.update({item.id: item for item in candidates if item.id is not None})
+            elif logical.object_type == "sites":
+                candidates = await LogicalObject.find(
+                    LogicalObject.organization_id == organization_id,
+                    LogicalObject.site_mist_id == logical.current_mist_id,
+                ).to_list()
+                related.update({item.id: item for item in candidates if item.id is not None})
 
         for reference in version.references:
+            # Snapshots written before ``tag_uuid`` was excluded may retain an
+            # inventory-tag UUID that happens to match a restorable object.
+            # It is metadata, not a restore dependency, at any nesting depth.
+            if not _is_restore_reference(reference):
+                continue
             incarnation = await ObjectIncarnation.find_one(
                 ObjectIncarnation.organization_id == organization_id,
                 ObjectIncarnation.mist_object_id == reference.target_mist_id,
@@ -527,12 +544,7 @@ class RestorePlanner:
             if incarnation is None:
                 continue
             referenced = await LogicalObject.get(incarnation.logical_object_id)
-            # The org-level ``data`` singleton is a restore root, not a child
-            # dependency. Legacy snapshots may carry arbitrary UUID references
-            # (notably device ``tag_uuid`` values) that happen to resolve to
-            # this object. Following one would make its containment rule add
-            # every object in the organization to an otherwise narrow plan.
-            if referenced is not None and referenced.id is not None and referenced.object_type != "data":
+            if referenced is not None and referenced.id is not None:
                 related[referenced.id] = referenced
         return list(related.values())
 
@@ -548,6 +560,11 @@ class RestorePlanner:
         dependents: list[tuple[LogicalObject, ObjectVersion]] = []
         seen: set[PydanticObjectId] = set()
         for candidate in candidates:
+            if not any(
+                reference.target_mist_id == logical.current_mist_id and _is_restore_reference(reference)
+                for reference in candidate.references
+            ):
+                continue
             if candidate.logical_object_id in seen:
                 continue
             current = await self._latest_version(candidate.logical_object_id)
@@ -655,6 +672,8 @@ class RestorePlanner:
         dependencies: set[PydanticObjectId] = set()
         if action_type is not RestoreActionType.DELETE:
             for reference in target.references:
+                if not _is_restore_reference(reference):
+                    continue
                 incarnation = await ObjectIncarnation.find_one(
                     ObjectIncarnation.organization_id == organization_id,
                     ObjectIncarnation.mist_object_id == reference.target_mist_id,
