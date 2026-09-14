@@ -85,14 +85,6 @@
   }
 
   <section class="cg-card foot">
-    <button
-      class="cg-btn cg-btn--primary cg-btn--lg"
-      type="button"
-      [disabled]="!canContinue()"
-      (click)="authorizeRequested.emit()"
-    >
-      Continue to authorize
-    </button>
     <button class="cg-btn cg-btn--lg" type="button" (click)="backRequested.emit()">
       Back to targets
     </button>
@@ -103,11 +95,11 @@
       } @else if (readOnly()) {
         {{ readOnlyNote() }}
       } @else if (count() === 0) {
-        There is nothing to authorize. Every object here already holds the version that was
+        There is nothing to restore. Every object here already holds the version that was
         selected, so choose an earlier one to change anything.
       } @else {
-        Nothing has been written. The next step asks for a fresh administrator token and verifies its
-        write scope before the first action.
+        Nothing has been written. Review the actions, then authorize below with a fresh administrator
+        credential. The refreshed plan remains on this page for final review.
       }
     </p>
   </section>

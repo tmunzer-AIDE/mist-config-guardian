@@ -236,7 +236,7 @@ export function actionKindTone(kind: RestoreActionKind): Tone {
  *
  * A pending action reads `PLANNED` while nothing has been authorized and
  * `QUEUED` once the worker owns the operation, which is the distinction the
- * design draws between step 2 and step 4.
+ * design draws between review and execution.
  */
 export function actionStatusLabel(
   action: RestoreAction,

@@ -15,7 +15,7 @@ import {
   shortOperationId,
 } from './restore.model';
 
-/** One row of the ordered action list, shared by step 2 and step 4. */
+/** One row of the ordered action list, shared by review and execution. */
 export interface ActionRow {
   key: string;
   index: string;
@@ -78,10 +78,10 @@ function kindOf(action: RestoreAction): string {
 }
 
 /**
- * Step 2 — review the ordered plan.
+ * Step 2 — review the ordered plan above the in-place authorization panel.
  *
  * Nothing here writes. Preflight errors are the one thing that stops the flow:
- * they are rendered above the action list and hold step 3 closed until the plan
+ * they are rendered above the action list and hold authorization closed until the plan
  * is rebuilt without them.
  */
 @Component({
@@ -97,7 +97,6 @@ export class RestoreStepPlan {
   readonly readOnlyNote = input.required<string>();
   readonly busy = input.required<boolean>();
 
-  readonly authorizeRequested = output<void>();
   readonly backRequested = output<void>();
 
   protected readonly columns = ['#', 'OP', 'OBJECT', 'TYPE', 'STATUS'];
@@ -126,7 +125,4 @@ export class RestoreStepPlan {
   protected readonly warnings = computed(() => this.operation().warnings ?? []);
   protected readonly preflightErrors = computed(() => this.operation().preflight_errors ?? []);
   protected readonly blocked = computed(() => this.preflightErrors().length > 0);
-  protected readonly canContinue = computed(
-    () => !this.blocked() && !this.readOnly() && !this.busy() && this.count() > 0,
-  );
 }

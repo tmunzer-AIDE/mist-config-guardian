@@ -29,8 +29,12 @@ class ObjectDefinition:
     ignored_fields: frozenset[str] = frozenset(
         {
             "created_time",
+            "image1_url",
+            "image2_url",
+            "image3_url",
             "modified_time",
             "last_seen",
+            "thumbnail_url",
         }
     )
     sensitive_fields: frozenset[str] = frozenset(
@@ -49,9 +53,13 @@ class ObjectDefinition:
         {
             "created_time",
             "id",
+            "image1_url",
+            "image2_url",
+            "image3_url",
             "modified_time",
             "org_id",
             "site_id",
+            "thumbnail_url",
         }
     )
 

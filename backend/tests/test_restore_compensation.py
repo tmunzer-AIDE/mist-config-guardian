@@ -41,6 +41,7 @@ from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
     _switch_management_differences,
+    _validate_live_state,
     capture_safety_snapshot,
 )
 from mist_config_guardian_backend.services.restore_planner import (
@@ -236,6 +237,24 @@ async def test_a_changed_live_object_aborts_before_any_write(monkeypatch: pytest
 
     with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
         await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+
+def test_a_rotated_mist_device_image_url_does_not_invalidate_the_plan() -> None:
+    definition = get_definition("site", "devices")
+    assert definition is not None
+    captured = {"id": "device-1", "name": "Switch", "image1_url": "https://signed.example/first"}
+    live = {**captured, "image1_url": "https://signed.example/second"}
+    action = _action(
+        0,
+        RestoreActionType.UPDATE,
+        expected_current_hash=configuration_hash(captured, ignored_fields=definition.ignored_fields),
+    )
+    action.object_type = "devices"
+
+    _validate_live_state(action, live, relaxed=False)
+
+    with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
+        _validate_live_state(action, {**live, "name": "Different switch"}, relaxed=False)
 
 
 async def test_preflight_debug_reports_fields_without_values(monkeypatch, caplog):

@@ -103,29 +103,25 @@
           [readOnly]="readOnly()"
           [readOnlyNote]="readOnlyNote()"
           [busy]="busy()"
-          (authorizeRequested)="goToAuthorize()"
           (backRequested)="backToTargets()"
         />
-      }
-    }
-
-    @case ('authorize') {
-      @if (activeOperation(); as operation) {
-        <app-restore-step-authorize
-          [operation]="operation"
-          [mode]="mode()"
-          [canAuthorize]="canAuthorize()"
-          [authorizeNote]="authorizeNote()"
-          [readOnly]="readOnly()"
-          [busy]="busy()"
-          [approval]="approval()"
-          [blockedByApproval]="blockedByApproval()"
-          (authorized)="execute($event)"
-          (cancelled)="backToTargets()"
-          (modePicked)="setMode($event)"
-          (approvalRequested)="requestApproval()"
-          (approvalRefreshed)="refreshApproval()"
-        />
+        @if (!blockedByPreflight() && operation.actions.length > 0) {
+          <app-restore-step-authorize
+            [operation]="operation"
+            [mode]="mode()"
+            [canAuthorize]="canAuthorize()"
+            [authorizeNote]="authorizeNote()"
+            [readOnly]="readOnly()"
+            [busy]="busy()"
+            [approval]="approval()"
+            [blockedByApproval]="blockedByApproval()"
+            (authorized)="execute($event)"
+            (cancelled)="backToTargets()"
+            (modePicked)="setMode($event)"
+            (approvalRequested)="requestApproval()"
+            (approvalRefreshed)="refreshApproval()"
+          />
+        }
       }
     }
 

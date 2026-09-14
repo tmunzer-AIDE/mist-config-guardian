@@ -433,7 +433,7 @@ describe('RestorePage', () => {
     expect(request.request.body.version_ids).toEqual(['v-rf']);
     request.flush(operation({ requested_version_ids: ['v-rf'] }));
     await settle();
-    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review & authorize');
     httpMock.expectNone((request) => request.method === 'POST');
   });
 
@@ -479,7 +479,7 @@ describe('RestorePage', () => {
     await boot();
     httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'planned' }));
     await settle();
-    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review & authorize');
     httpMock.expectNone((request) => request.method === 'POST');
   });
 
@@ -570,7 +570,7 @@ describe('RestorePage', () => {
       ],
     });
 
-    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review & authorize');
     // Sorted by `order`, not by the order the API listed them in.
     expect(all('.object-name').map((node) => node.textContent)).toEqual(['corp-voice', 'NW-Corp']);
     expect(all('.cell-index').map((node) => node.textContent)).toEqual(['01', '02']);
@@ -579,25 +579,24 @@ describe('RestorePage', () => {
     expect(text()).toContain('after 1 dependency');
     expect(text()).toContain('PLAN WARNINGS');
     expect(text()).toContain('Objects created after the target moment are left untouched');
-    expect(button('Continue to authorize')!.disabled).toBe(false);
+    expect(button('Capture backup and review new plan')!.disabled).toBe(true);
   });
 
-  it('blocks step 3 while the plan carries preflight errors', async () => {
+  it('hides authorization and blocks execution while the plan carries preflight errors', async () => {
     await plan({
       preflight_errors: ['NW-Corp changed in Mist since the plan was built.'],
     });
 
     expect(all('.preflight').length).toBe(1);
     expect(text()).toContain('NW-Corp changed in Mist since the plan was built.');
-    expect(button('Continue to authorize')!.disabled).toBe(true);
+    expect(all('app-restore-step-authorize').length).toBe(0);
 
-    // The step indicator refuses the jump as well, and clicking changes nothing.
-    const authorizeStep = all('.step-button')[2] as HTMLButtonElement;
-    expect(authorizeStep.disabled).toBe(true);
-    authorizeStep.click();
-    button('Continue to authorize')!.click();
+    // The execution indicator refuses the jump as well, and clicking changes nothing.
+    const executeStep = all('.step-button')[2] as HTMLButtonElement;
+    expect(executeStep.disabled).toBe(true);
+    executeStep.click();
     await settle();
-    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review & authorize');
     expect(all('app-restore-step-authorize').length).toBe(0);
   });
 
@@ -606,16 +605,14 @@ describe('RestorePage', () => {
 
     expect(text()).toContain('Plan · 0 actions');
     expect(text()).toContain('This plan contains no actions');
-    expect(button('Continue to authorize')!.disabled).toBe(true);
+    expect(all('app-restore-step-authorize').length).toBe(0);
     expect((all('.step-button')[2] as HTMLButtonElement).disabled).toBe(true);
   });
 
-  // ---- step 3: authorize --------------------------------------------------
+  // ---- step 2: authorize in place ----------------------------------------
 
   it('submits the token once, clears the field, and never keeps it', async () => {
     await plan();
-    button('Continue to authorize')!.click();
-    await settle();
 
     const token = element().querySelector<HTMLInputElement>('.token-input')!;
     expect(token.type).toBe('password');
@@ -645,10 +642,8 @@ describe('RestorePage', () => {
     expect(element().innerHTML).not.toContain('a-fresh-administrator-token');
     expect(element().querySelector('.token-input')).toBeNull();
     expect(JSON.stringify(navigations)).not.toContain('a-fresh-administrator-token');
-    expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+    expect(all('.step-button--on')[0].textContent).toContain('2 · Review & authorize');
     httpMock.expectNone(`${OPERATIONS_URL}/op-2/execute`);
-    button('Continue to authorize')!.click();
-    await settle();
     expect(element().querySelector('.token-input')).toBeNull();
     button('Execute reviewed plan')!.click();
     await tick();
@@ -661,14 +656,12 @@ describe('RestorePage', () => {
       { commands: ['/history'], extras: { queryParams: { restore: '1', operation: 'op-1', versions: null, changeGroup: null, step: null, compensate: null }, queryParamsHandling: 'merge', replaceUrl: true } },
       { commands: ['/history'], extras: { queryParams: { restore: '1', operation: 'op-2', versions: null, changeGroup: null, step: null, compensate: null }, queryParamsHandling: 'merge', replaceUrl: true } },
     ]);
-    expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
+    expect(all('.step-button--on')[0].textContent).toContain('3 · Execute');
   });
 
   it('returns to fresh backup preparation when the review session expires while open', async () => {
     const now = Date.now();
     await plan({ baseline_snapshot_id: 'backup-1', prepared_until: new Date(now + 60_000).toISOString() });
-    button('Continue to authorize')!.click();
-    await settle();
     expect(button('Execute reviewed plan')).toBeTruthy();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001);
     try {
@@ -687,7 +680,7 @@ describe('RestorePage', () => {
       expect(request.request.body).toEqual({ administrator_token: 'a-fresh-administrator-token' });
       request.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-2', prepared_until: new Date(now + 120_000).toISOString() }));
       await settle();
-      expect(all('.step-button--on')[0].textContent).toContain('2 · Review plan');
+      expect(all('.step-button--on')[0].textContent).toContain('2 · Review & authorize');
     } finally {
       clock.mockRestore();
     }
@@ -715,9 +708,6 @@ describe('RestorePage', () => {
         created_at: '2026-09-07T14:22:00Z',
       },
     });
-    button('Continue to authorize')!.click();
-    await settle();
-
     expect(text()).toContain('SECOND ADMINISTRATOR');
     expect(text()).toContain('PENDING');
     expect(text()).toContain('Organization-scoped objects — NW-Corp is organization-scoped.');
@@ -751,8 +741,6 @@ describe('RestorePage', () => {
   it('submits Mist login without a region and clears the credential fields', async () => {
     const element = fixture.nativeElement as HTMLElement;
     await plan();
-    button('Continue to authorize')!.click();
-    await settle();
 
     const methods = all('.method');
     expect(methods.length).toBe(2);
@@ -788,7 +776,7 @@ describe('RestorePage', () => {
     await settle();
   });
 
-  // ---- step 4: polling ----------------------------------------------------
+  // ---- step 3: polling ----------------------------------------------------
 
   /** Open a running operation straight from the `?operation=` deep link. */
   async function openRunning(status: RestoreStatus = 'running'): Promise<void> {
@@ -807,7 +795,7 @@ describe('RestorePage', () => {
   it('polls every two seconds while running and stops on a terminal status', async () => {
     await openRunning();
 
-    expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
+    expect(all('.step-button--on')[0].textContent).toContain('3 · Execute');
     expect(text()).toContain('RUNNING');
     expect(all('.cg-spinner').length).toBe(1);
 
@@ -1102,8 +1090,6 @@ describe('RestorePage', () => {
     await settle();
     expect(all('.step-button--on')[0].textContent).toContain('2 ·');
 
-    all<HTMLButtonElement>('.step-button')[2].click();
-    await settle();
     const exact = element().querySelector<HTMLInputElement>('input[name="authorize-mode"][value="exact"]')!;
     exact.checked = true;
     exact.dispatchEvent(new Event('change'));
@@ -1134,8 +1120,6 @@ describe('RestorePage', () => {
     httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ status: 'planned', mode: 'exact' }));
     await settle();
 
-    all<HTMLButtonElement>('.step-button')[2].click();
-    await settle();
     const nonDestructive = element().querySelector<HTMLInputElement>(
       'input[name="authorize-mode"][value="non_destructive"]',
     )!;
@@ -1170,8 +1154,6 @@ describe('RestorePage', () => {
       .flush(operation({ status: 'planned', mode: 'exact', requested_version_ids: [] }));
     await settle();
 
-    all<HTMLButtonElement>('.step-button')[2].click();
-    await settle();
     const nonDestructive = element().querySelector<HTMLInputElement>(
       'input[name="authorize-mode"][value="non_destructive"]',
     )!;
@@ -1180,7 +1162,7 @@ describe('RestorePage', () => {
     await tick();
 
     httpMock.expectNone((request) => request.url === PLANS_URL);
-    expect(all('.step-button--on')[0].textContent).toContain('3 ·');
+    expect(all('.step-button--on')[0].textContent).toContain('2 ·');
     // The bound state, not the radio the test itself flipped: the mode is still exact.
     const marked = all('.mode--on').map((label) => label.querySelector('input')?.getAttribute('value'));
     expect(marked).toEqual(['exact']);
@@ -1448,10 +1430,6 @@ describe('RestorePage', () => {
     role = 'operator';
     await plan();
 
-    expect(button('Continue to authorize')!.disabled).toBe(false);
-    button('Continue to authorize')!.click();
-    await settle();
-
     const token = element().querySelector<HTMLInputElement>('.token-input')!;
     expect(token.disabled).toBe(true);
     expect(button('Capture backup and review new plan')!.disabled).toBe(true);
@@ -1472,6 +1450,6 @@ describe('RestorePage', () => {
     httpMock.expectOne(`${OPERATIONS_URL}/op-9`).flush(operation({ id: 'op-9', status: 'failed' }));
     await settle();
 
-    expect(all('.step-button--on')[0].textContent).toContain('4 · Execute');
+    expect(all('.step-button--on')[0].textContent).toContain('3 · Execute');
   });
 });

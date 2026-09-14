@@ -52,3 +52,12 @@ def test_singletons_and_devices_have_fail_closed_restore_capabilities() -> None:
     assert not site.supports_restore_action("create")
     assert devices is not None
     assert not devices.supports_restore_action("delete")
+
+
+def test_mist_image_urls_are_neither_configuration_nor_restore_payload_fields() -> None:
+    devices = get_definition("site", "devices")
+
+    assert devices is not None
+    image_fields = {"image1_url", "image2_url", "image3_url", "thumbnail_url"}
+    assert image_fields <= devices.ignored_fields
+    assert image_fields <= devices.restore_excluded_fields
