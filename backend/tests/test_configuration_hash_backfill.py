@@ -16,7 +16,8 @@ from mist_config_guardian_backend.snapshots.canonical import (
     is_legacy_hash,
     legacy_configuration_hash,
 )
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS, get_definition
+from mist_config_guardian_backend.tasks import hashes as hash_tasks
 from mist_config_guardian_backend.tasks.hashes import upgraded_hash
 
 WLAN = {"name": "NW-Corp", "psk": "super-secret", "vlan": 12, "modified_time": 1757000000}
@@ -59,6 +60,63 @@ def test_a_legacy_digest_using_the_previous_field_policy_migrates_to_the_current
     )
 
     assert replacement == configuration_hash(configuration, ignored_fields=current_fields)
+
+
+async def test_backfill_task_supplies_the_previous_default_field_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The production task must wire compatibility into each row migration."""
+    definition = get_definition("site", "maps")
+    assert definition is not None
+    configuration = {"id": "map-1", "name": "Office", "url": "https://generated.example/map"}
+    version = ObjectVersion.model_construct(
+        id=PydanticObjectId(),
+        logical_object_id=PydanticObjectId(),
+        configuration=configuration,
+        configuration_hash=legacy_configuration_hash(
+            configuration,
+            ignored_fields=DEFAULT_IGNORED_FIELDS,
+        ),
+    )
+
+    class _PendingVersions:
+        def limit(self, size: int) -> "_PendingVersions":
+            assert size == hash_tasks.BACKFILL_BATCH_SIZE
+            return self
+
+        async def to_list(self) -> list[ObjectVersion]:
+            return [version]
+
+    database = SimpleNamespace(connect=AsyncMock(), close=AsyncMock())
+    update = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+    expression = object()
+    monkeypatch.setattr(hash_tasks, "get_settings", lambda: Settings(environment="test"))
+    monkeypatch.setattr(hash_tasks, "DatabaseManager", lambda _settings: database)
+    monkeypatch.setattr(
+        hash_tasks,
+        "ObjectVersion",
+        SimpleNamespace(
+            id=expression,
+            configuration_hash=expression,
+            find=lambda _selector: _PendingVersions(),
+            find_one=lambda *_args: SimpleNamespace(update=update),
+        ),
+    )
+    monkeypatch.setattr(hash_tasks, "_ignored_fields", AsyncMock(return_value=definition.ignored_fields))
+
+    migrated = await hash_tasks._backfill_configuration_hashes()  # noqa: SLF001
+
+    assert migrated == 1
+    update.assert_awaited_once_with(
+        {
+            "$set": {
+                "configuration_hash": configuration_hash(
+                    configuration,
+                    ignored_fields=definition.ignored_fields,
+                )
+            }
+        }
+    )
+    database.connect.assert_awaited_once_with()
+    database.close.assert_awaited_once_with()
 
 
 def test_an_already_migrated_digest_is_left_alone() -> None:
