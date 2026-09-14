@@ -21,13 +21,19 @@ Comparison normalization omits `created_time`, `modified_time`, `image1_url`,
 `image2_url`, `image3_url` and `thumbnail_url` recursively. Functional `url`
 fields remain visible at every depth, including webhook destinations. This applies to
 structured comparisons, comparison JSON and patches. Original stored snapshots
-and restore payloads retain those fields.
+retain those fields.
 
 Restore planning additionally follows the object registry's type-specific read-only
 URL rules from Mist's OpenAPI contract. Generated organization branding, blacklist,
 portal, map and watched-station URLs are excluded from live-state hashes and write
 payloads. Writable URLs remain configuration: in particular, webhook and virtual
 beacon destinations are still compared and restored.
+
+When the registry's ignored-field policy changes, the next snapshot compares the
+stored plaintext under the current policy and refreshes its digest in place rather
+than recording an empty phantom version. The legacy digest backfill recognizes the
+previous default policy as well. Restore plans staged under an older policy remain
+fail-closed and must be rebuilt after deployment.
 
 The raw JSON comparison aligns matching lines and keeps each version's original
 line numbers. Removed text appears in red with a minus marker; added text appears

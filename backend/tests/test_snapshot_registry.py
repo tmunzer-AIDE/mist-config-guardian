@@ -4,6 +4,7 @@ import pytest
 
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
+    GENERATED_DEVICE_IMAGE_FIELDS,
     READ_ONLY_URL_FIELDS,
     SITE_OBJECTS,
     get_definition,
@@ -59,9 +60,8 @@ def test_mist_image_urls_are_neither_configuration_nor_restore_payload_fields() 
     devices = get_definition("site", "devices")
 
     assert devices is not None
-    image_fields = {"image1_url", "image2_url", "image3_url", "thumbnail_url"}
-    assert image_fields <= devices.ignored_fields
-    assert image_fields <= devices.restore_excluded_fields
+    assert devices.ignored_fields >= GENERATED_DEVICE_IMAGE_FIELDS
+    assert devices.restore_excluded_fields >= GENERATED_DEVICE_IMAGE_FIELDS
 
 
 @pytest.mark.parametrize(
@@ -84,10 +84,14 @@ def test_writable_urls_remain_part_of_configuration_and_restore_payloads() -> No
     org_webhook = get_definition("org", "webhooks")
     site_webhook = get_definition("site", "webhooks")
     virtual_beacon = get_definition("site", "vbeacons")
+    psk_portal = get_definition("org", "pskportals")
 
     assert org_webhook is not None
     assert site_webhook is not None
     assert virtual_beacon is not None
+    assert psk_portal is not None
     for definition in (org_webhook, site_webhook, virtual_beacon):
         assert "url" not in definition.ignored_fields
         assert "url" not in definition.restore_excluded_fields
+    assert "thumbnail_url" not in psk_portal.ignored_fields
+    assert "thumbnail_url" not in psk_portal.restore_excluded_fields
