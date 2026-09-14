@@ -7,9 +7,11 @@ from uuid import UUID
 
 from beanie import PydanticObjectId
 from beanie.odm.utils.encoder import Encoder
+from pydantic import TypeAdapter
 from pymongo.errors import PyMongoError
 
 from mist_config_guardian_backend.impact.agent import ACTION_ADAPTER, MAX_INPUT_BYTES, ModelRequestRecord
+from mist_config_guardian_backend.impact.mcp_contracts import McpAction
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, ModelRequestArtifact
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.investigation import ModelRequestDetails
@@ -54,7 +56,8 @@ async def _details(  # noqa: C901 - current artifacts and bounded legacy payload
     if record.action_artifact_id is not None:
         body = await _artifact(organization_id, root["_id"], record, "action")
         if body is not None:
-            result.action, result.action_state = ACTION_ADAPTER.validate_json(body), "available"
+            adapter = TypeAdapter(McpAction) if record.prompt_version == "impact-mcp.v1" else ACTION_ADAPTER
+            result.action, result.action_state = adapter.validate_json(body), "available"
     elif raw.get("action") is not None:
         result.action, result.action_state = ACTION_ADAPTER.validate_python(raw["action"]), "legacy"
     elif record.state != "complete":

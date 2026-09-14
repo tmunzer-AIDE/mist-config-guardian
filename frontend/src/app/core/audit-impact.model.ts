@@ -32,6 +32,6 @@ export const SHADOW_LABELS: Record<ShadowResult, string> = {
   pending: 'Awaiting evidence',
   unavailable: 'Assessment unavailable',
   insufficient_evidence: 'Insufficient evidence',
-  no_observed_disconnect: 'No observed disconnect',
+  no_observed_disconnect: 'No observed impact',
   possible_disruption: 'Possible disruption',
 };

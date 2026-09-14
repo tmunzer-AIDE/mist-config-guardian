@@ -37,6 +37,7 @@ from mist_config_guardian_backend.impact.agent import (
 from mist_config_guardian_backend.impact.change_context import device_context_handle
 from mist_config_guardian_backend.impact.contracts import InvestigationEvidence, WlanRemovalPlan
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
+from mist_config_guardian_backend.impact.mcp_contracts import McpAction
 from mist_config_guardian_backend.impact.skills import DomainSkill, SkillReference, selected_skills
 from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
 from mist_config_guardian_backend.models.base import utc_now
@@ -155,11 +156,152 @@ def _evidence_context(
     }
 
 
-class ImpactAgent:
-    """One checkpoint loop under the audit's existing worker lease."""
+class ModelRequestJournal:
+    """Shared fenced model journal; independent of either conversation protocol."""
 
     def __init__(self, vault: CredentialVault) -> None:
         self._configuration = ApplicationConfigurationService(vault)
+
+    async def _reserve(
+        self,
+        root: ImpactInvestigation,
+        runtime: AiRuntimeConfiguration,
+        record: ModelRequestRecord,
+        service_credential: str,
+    ) -> ModelDispatchDenial | None:
+        try:
+            fresh = await self._configuration.ai_runtime()
+        except ApplicationConfigurationError:
+            return ModelDispatchDenial.PROVIDER_CHANGED
+        organization = await Organization.get(root.organization_id)
+        now = utc_now()
+        if fresh != runtime:
+            return ModelDispatchDenial.PROVIDER_CHANGED
+        if organization is None or organization.status is not OrganizationStatus.VERIFIED:
+            return ModelDispatchDenial.ORGANIZATION_UNAVAILABLE
+        if organization.encrypted_service_token != service_credential:
+            return ModelDispatchDenial.CREDENTIAL_CHANGED
+        if now > root.expires_at + timedelta(minutes=2):
+            return ModelDispatchDenial.WINDOW_EXPIRED
+        result = await ImpactInvestigation.get_pymongo_collection().update_one(
+            {
+                "_id": root.id,
+                "organization_id": root.organization_id,
+                "generation": root.generation,
+                "lease_until": {"$gt": now},
+                "$expr": {
+                    "$and": [
+                        {"$lt": [{"$ifNull": ["$model_calls_used", 0]}, min(root.model_calls_limit, MAX_MODEL_CALLS)]},
+                        {
+                            "$lte": [
+                                {"$ifNull": ["$model_input_bytes_reserved", 0]},
+                                min(root.model_input_bytes_limit, MAX_INPUT_BYTES_TOTAL) - record.input_bytes,
+                            ]
+                        },
+                    ]
+                },
+                f"model_requests.{MAX_MODEL_CALLS - 1}": {"$exists": False},
+            },
+            {
+                "$inc": {"model_calls_used": 1, "model_input_bytes_reserved": record.input_bytes},
+                "$push": {"model_requests": Encoder().encode(record.model_copy(update={"reserved_at": now}))},
+                # Persist the initial policy bounds for older roots on first use.
+                # Later releases must not silently enlarge an existing audit's budget.
+                "$set": {
+                    "model_calls_limit": min(root.model_calls_limit, MAX_MODEL_CALLS),
+                    "model_input_bytes_limit": min(root.model_input_bytes_limit, MAX_INPUT_BYTES_TOTAL),
+                },
+            },
+        )
+        return None if result.matched_count == 1 else ModelDispatchDenial.RESERVATION_REJECTED
+
+    @staticmethod
+    async def _finish(  # noqa: PLR0913 - fixed journal completion fields
+        root: ImpactInvestigation,
+        record: ModelRequestRecord,
+        state: str,
+        action: AgentAction | McpAction | None = None,
+        *,
+        response_error: ModelResponseError | None = None,
+        request_tokens: int | None = None,
+        response_tokens: int | None = None,
+    ) -> None:
+        action_artifact_id = None
+        action_hash = None
+        if action is not None:
+            encoded_action = action.model_dump_json()
+            action_hash = sha256(encoded_action.encode()).hexdigest()
+            action_artifact_id = PydanticObjectId()
+            await ModelRequestJournal._artifact(root, record, "action", encoded_action, action_artifact_id)
+        finished = ModelRequestRecord.model_validate(
+            {
+                **record.model_dump(),
+                "state": state,
+                "response_error": response_error,
+                "finished_at": utc_now(),
+                "action_artifact_id": action_artifact_id,
+                "action_hash": action_hash,
+                "request_tokens": request_tokens,
+                "response_tokens": response_tokens,
+            }
+        )
+        fields = Encoder().encode(
+            finished.model_dump(
+                include={
+                    "state",
+                    "finished_at",
+                    "response_error",
+                    "action_artifact_id",
+                    "action_hash",
+                    "request_tokens",
+                    "response_tokens",
+                }
+            )
+        )
+        result = await ImpactInvestigation.get_pymongo_collection().update_one(
+            Encoder().encode(
+                {
+                    "_id": root.id,
+                    "organization_id": root.organization_id,
+                    "model_requests": {
+                        "$elemMatch": {"id": record.id, "generation": record.generation, "state": "reserved"}
+                    },
+                }
+            ),
+            {"$set": {f"model_requests.$.{key}": value for key, value in fields.items()}},
+        )
+        if result.matched_count != 1:
+            msg = "Model result could not be journalled; publication stopped"
+            raise RuntimeError(msg)
+
+    @staticmethod
+    async def _artifact(
+        root: ImpactInvestigation,
+        record: ModelRequestRecord,
+        kind: Literal["input", "action"],
+        content: str,
+        identifier: PydanticObjectId | None,
+    ) -> None:
+        if root.id is None or identifier is None:
+            msg = "Persisted model request identity is required"
+            raise ValueError(msg)
+        await ModelRequestArtifact(
+            id=identifier,
+            organization_id=root.organization_id,
+            investigation_id=root.id,
+            request_id=record.id,
+            generation=record.generation,
+            candidate_revision=record.candidate_revision,
+            kind=kind,
+            content_hash=sha256(content.encode()).hexdigest(),
+            content_json=content,
+            retained_until=root.retained_until,
+            created_at=utc_now(),
+        ).insert()
+
+
+class ImpactAgent(ModelRequestJournal):
+    """One checkpoint loop under the audit's existing worker lease."""
 
     async def run(  # noqa: PLR0913 - retain the bounded investigator interface
         self,
@@ -455,140 +597,3 @@ class ImpactAgent:
     @staticmethod
     async def _previous(root: ImpactInvestigation) -> InvestigationRevision | Literal[False] | None:
         return await published_revision(root)
-
-    async def _reserve(
-        self,
-        root: ImpactInvestigation,
-        runtime: AiRuntimeConfiguration,
-        record: ModelRequestRecord,
-        service_credential: str,
-    ) -> ModelDispatchDenial | None:
-        try:
-            fresh = await self._configuration.ai_runtime()
-        except ApplicationConfigurationError:
-            return ModelDispatchDenial.PROVIDER_CHANGED
-        organization = await Organization.get(root.organization_id)
-        now = utc_now()
-        if fresh != runtime:
-            return ModelDispatchDenial.PROVIDER_CHANGED
-        if organization is None or organization.status is not OrganizationStatus.VERIFIED:
-            return ModelDispatchDenial.ORGANIZATION_UNAVAILABLE
-        if organization.encrypted_service_token != service_credential:
-            return ModelDispatchDenial.CREDENTIAL_CHANGED
-        if now > root.expires_at + timedelta(minutes=2):
-            return ModelDispatchDenial.WINDOW_EXPIRED
-        result = await ImpactInvestigation.get_pymongo_collection().update_one(
-            {
-                "_id": root.id,
-                "organization_id": root.organization_id,
-                "generation": root.generation,
-                "lease_until": {"$gt": now},
-                "$expr": {
-                    "$and": [
-                        {"$lt": [{"$ifNull": ["$model_calls_used", 0]}, min(root.model_calls_limit, MAX_MODEL_CALLS)]},
-                        {
-                            "$lte": [
-                                {"$ifNull": ["$model_input_bytes_reserved", 0]},
-                                min(root.model_input_bytes_limit, MAX_INPUT_BYTES_TOTAL) - record.input_bytes,
-                            ]
-                        },
-                    ]
-                },
-                f"model_requests.{MAX_MODEL_CALLS - 1}": {"$exists": False},
-            },
-            {
-                "$inc": {"model_calls_used": 1, "model_input_bytes_reserved": record.input_bytes},
-                "$push": {"model_requests": Encoder().encode(record.model_copy(update={"reserved_at": now}))},
-                # Persist the initial policy bounds for older roots on first use.
-                # Later releases must not silently enlarge an existing audit's budget.
-                "$set": {
-                    "model_calls_limit": min(root.model_calls_limit, MAX_MODEL_CALLS),
-                    "model_input_bytes_limit": min(root.model_input_bytes_limit, MAX_INPUT_BYTES_TOTAL),
-                },
-            },
-        )
-        return None if result.matched_count == 1 else ModelDispatchDenial.RESERVATION_REJECTED
-
-    @staticmethod
-    async def _finish(  # noqa: PLR0913 - fixed journal completion fields
-        root: ImpactInvestigation,
-        record: ModelRequestRecord,
-        state: str,
-        action: AgentAction | None = None,
-        *,
-        response_error: ModelResponseError | None = None,
-        request_tokens: int | None = None,
-        response_tokens: int | None = None,
-    ) -> None:
-        action_artifact_id = None
-        action_hash = None
-        if action is not None:
-            encoded_action = action.model_dump_json()
-            action_hash = sha256(encoded_action.encode()).hexdigest()
-            action_artifact_id = PydanticObjectId()
-            await ImpactAgent._artifact(root, record, "action", encoded_action, action_artifact_id)
-        finished = ModelRequestRecord.model_validate(
-            {
-                **record.model_dump(),
-                "state": state,
-                "response_error": response_error,
-                "finished_at": utc_now(),
-                "action_artifact_id": action_artifact_id,
-                "action_hash": action_hash,
-                "request_tokens": request_tokens,
-                "response_tokens": response_tokens,
-            }
-        )
-        fields = Encoder().encode(
-            finished.model_dump(
-                include={
-                    "state",
-                    "finished_at",
-                    "response_error",
-                    "action_artifact_id",
-                    "action_hash",
-                    "request_tokens",
-                    "response_tokens",
-                }
-            )
-        )
-        result = await ImpactInvestigation.get_pymongo_collection().update_one(
-            Encoder().encode(
-                {
-                    "_id": root.id,
-                    "organization_id": root.organization_id,
-                    "model_requests": {
-                        "$elemMatch": {"id": record.id, "generation": record.generation, "state": "reserved"}
-                    },
-                }
-            ),
-            {"$set": {f"model_requests.$.{key}": value for key, value in fields.items()}},
-        )
-        if result.matched_count != 1:
-            msg = "Model result could not be journalled; publication stopped"
-            raise RuntimeError(msg)
-
-    @staticmethod
-    async def _artifact(
-        root: ImpactInvestigation,
-        record: ModelRequestRecord,
-        kind: Literal["input", "action"],
-        content: str,
-        identifier: PydanticObjectId | None,
-    ) -> None:
-        if root.id is None or identifier is None:
-            msg = "Persisted model request identity is required"
-            raise ValueError(msg)
-        await ModelRequestArtifact(
-            id=identifier,
-            organization_id=root.organization_id,
-            investigation_id=root.id,
-            request_id=record.id,
-            generation=record.generation,
-            candidate_revision=record.candidate_revision,
-            kind=kind,
-            content_hash=sha256(content.encode()).hexdigest(),
-            content_json=content,
-            retained_until=root.retained_until,
-            created_at=utc_now(),
-        ).insert()

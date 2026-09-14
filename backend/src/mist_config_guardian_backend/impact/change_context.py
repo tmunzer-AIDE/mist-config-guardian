@@ -4,18 +4,23 @@ This is a presentation vocabulary, not an attribute-to-impact rule catalogue.
 Unrecognized keys stay masked; broadening the vocabulary never authorizes a check.
 """
 
+from __future__ import annotations
+
 import re
 from collections import Counter
-from collections.abc import Sequence
 from hashlib import sha256
-from typing import Annotated, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_VERSIONS
-from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion, VersionEvent
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 
 MAX_CONTEXT_OBJECTS = 8
 MAX_CONTEXT_FIELDS = 6
@@ -122,6 +127,9 @@ def compile_change_context(  # noqa: C901 - explicit baseline and identity class
     before: Sequence[ObjectVersion],
     after: Sequence[ObjectVersion],
 ) -> ChangeContext:
+    # Loading document registration during contract imports creates a startup cycle.
+    from mist_config_guardian_backend.models.snapshot import VersionEvent  # noqa: PLC0415
+
     objects = {str(o.id): o for o in logicals if str(o.organization_id) == organization_id}
     priors = {(str(v.logical_object_id), v.version): v for v in before if str(v.organization_id) == organization_id}
     counts = Counter(str(v.logical_object_id) for v in after)

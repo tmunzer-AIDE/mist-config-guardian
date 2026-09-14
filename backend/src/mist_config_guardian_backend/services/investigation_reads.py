@@ -57,6 +57,8 @@ async def shadow_investigation(
         report=artifact.report if artifact else None,
         deployment=artifact.deployment if artifact else None,
         agent=artifact.agent if artifact else None,
+        mcp=artifact.mcp if artifact else None,
+        mcp_dispatches=tuple(root.mcp_dispatches),
         model_activity=ModelActivity(
             calls_used=root.model_calls_used,
             calls_limit=root.model_calls_limit,
@@ -68,7 +70,7 @@ async def shadow_investigation(
         else None,
         dispatch_log=DispatchLog(
             records=tuple(root.dispatches),
-            unlogged_reservations=max(0, root.calls_used - len(root.dispatches)),
+            unlogged_reservations=max(0, root.calls_used - len(root.dispatches) - len(root.mcp_dispatches)),
         ),
         shadow_impact=project_published_impact(
             {**root.model_dump(), "_id": root.id},

@@ -1,5 +1,7 @@
 # Hybrid configuration impact analysis
 
+> **Superseded agent boundary:** The fixed-menu/spend-neutral agent design below is historical. [MCP-led investigations](mcp-agent-investigation.md) defines the current agent runtime, optional rule evidence, budgets and remaining production-promotion gate.
+
 Status: revised design, 2026-09-12. Delivery steps 1–2 are implemented in the
 working tree: explicit relevance-plan seam, per-metric evidence states and one
 persisted assessment with legacy compatibility projection. New monitoring still

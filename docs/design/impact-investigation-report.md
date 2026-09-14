@@ -1,5 +1,7 @@
 # Structured investigation reports and evidence views
 
+> **Superseded agent boundary:** The fixed-menu/spend-neutral agent design below is historical. [MCP-led investigations](mcp-agent-investigation.md) defines the current agent runtime, optional rule evidence, budgets and remaining production-promotion gate.
+
 Status: proposed, 2026-09-12. This defines the report/UI work required by the
 [hybrid impact design](rule-driven-impact-analysis.md); it does not implement a
 report API, renderer or investigator. Existing device assessment views remain in

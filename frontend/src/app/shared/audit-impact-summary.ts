@@ -19,7 +19,7 @@ import { formatInstant } from '../core/format';
         }
         @if (!compact() && value.evaluated_at) { <span>Evidence as of {{ at(value.evaluated_at) }} · {{ value.status }}</span> }
         @if (!compact() && (value.gap_count || value.unmapped_count)) {
-          <span>{{ value.gap_count }} {{ value.gap_count === 1 ? 'gap' : 'gaps' }} · {{ value.unmapped_count }} unmapped attributes</span>
+          <span>{{ value.gap_count }} {{ value.gap_count === 1 ? 'gap' : 'gaps' }} · {{ value.unmapped_count }} {{ value.policy_version === "mcp-agent.v1" ? "attributes without deterministic rules" : "unmapped attributes" }}</span>
         }
         @if (value.stop_reason) { <span>{{ value.stop_reason }}</span> }
       </div>

@@ -13,6 +13,7 @@ data:
   APP_VERSION: {{ .Chart.AppVersion | quote }}
   ENVIRONMENT: {{ .Values.config.environment | quote }}
   IMPACT_ENGINE_MODE: {{ $impactEngineMode | quote }}
+  MIST_MCP_URL: {{ default "https://mcp.ai.juniper.net/mcp/mist" .Values.config.mistMcpUrl | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
   WEBAUTHN_ORIGIN: {{ include "mist-config-guardian.webauthnOrigin" . | quote }}

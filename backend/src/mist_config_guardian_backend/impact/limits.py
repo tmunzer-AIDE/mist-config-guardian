@@ -16,3 +16,7 @@ MAX_PUBLISHED_CHECKPOINTS = 10  # Lifecycle safety cap; ordinary scheduling has 
 
 MAX_PORT_EVENTS = 200
 MAX_AGENT_PORT_EVENTS = 20
+
+# In MCP-led mode, optional rules must leave room for investigation. Four checks
+# per normal checkpoint use at most 28 of the 56 audit slots across one hour.
+MAX_OPTIONAL_RULE_CHECKS = 4

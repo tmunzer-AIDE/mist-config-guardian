@@ -13,6 +13,7 @@ from bson import BSON
 from bson.codec_options import CodecOptions
 from pymongo.errors import ConnectionFailure
 
+from legacy_agent_fixture import LegacyAgentFixture
 from mist_config_guardian_backend.impact.agent import MAX_INPUT_BYTES_TOTAL, MAX_MODEL_CALLS, ModelRequestRecord
 from mist_config_guardian_backend.services import impact_agent as agent_module
 from mist_config_guardian_backend.services import impact_investigations as runtime
@@ -26,6 +27,7 @@ AI_URL = "https://ai.example.test/v1/chat/completions"
 
 def agent_runtime(monkeypatch):
     service, root, collection, artifacts, stored = journal_runtime(monkeypatch)
+    service.__class__ = LegacyAgentFixture
     stored.update(model_requests=[], model_calls_used=0, model_input_bytes_reserved=0, model_artifacts=[])
     monkeypatch.setattr(agent_module.ModelRequestArtifact, "get_pymongo_collection", lambda *_: collection)
 

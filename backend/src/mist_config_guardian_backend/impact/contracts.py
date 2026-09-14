@@ -103,6 +103,7 @@ class WlanRemovalPlan(Contract):
     schema_version: Literal[1] = 1
     rule_id: Literal["wlan-removal.v1"] = "wlan-removal.v1"
     change_context: ChangeContext | None = None
+    mcp_context: dict = Field(default_factory=dict)
     organization_id: str
     audit_id: str
     changed_at: AwareDatetime
@@ -315,7 +316,7 @@ class DomainFinding(Contract):
 
 class WlanAssessment(Contract):
     schema_version: Literal[1] = 1
-    policy_version: Literal["wlan-removal.v1", "impact-domains.v1"] = "wlan-removal.v1"
+    policy_version: Literal["wlan-removal.v1", "impact-domains.v1", "mcp-agent.v1"] = "wlan-removal.v1"
     audit_id: str
     evaluated_at: datetime
     impact: Literal["info", "none", "warning", "critical"]

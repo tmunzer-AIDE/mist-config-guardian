@@ -1,16 +1,21 @@
 """Resolve concrete changed ports without interpreting inheritance or provider prose."""
 
+from __future__ import annotations
+
 import re
 from collections import Counter
-from collections.abc import Sequence
 from hashlib import sha256
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from mist_config_guardian_backend.impact.change_context import device_context_handle, immutable_device_identity
 from mist_config_guardian_backend.impact.contracts import PortTarget
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_VERSIONS, MAX_PORT_TARGETS
-from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.snapshots.registry import ObjectFamily, impact_definition
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 
 _PORT = re.compile(r"^(ge|xe|et)-[0-9]{1,3}/[0-9]{1,3}/[0-9]{1,3}$")
 _CONTAINERS = ("port_config", "port_config_overwrite")

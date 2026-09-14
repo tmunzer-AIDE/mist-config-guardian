@@ -32,6 +32,9 @@ async def replay_chain(head: InvestigationRevision) -> tuple[str, Band] | None:
     order = {"none": 0, "info": 1, "warning": 2, "critical": 3}
     artifact = head
     for _ in range(MAX_PUBLISHED_CHECKPOINTS):
+        if artifact.mcp is not None or artifact.assessment.policy_version == "mcp-agent.v1":
+            # A deterministic replay cannot validate an agent-authored conclusion.
+            return None
         digest.update(
             artifact.model_dump_json(
                 include={"id", "previous_report_id", "revision", "plan", "evidence", "assessment"}
