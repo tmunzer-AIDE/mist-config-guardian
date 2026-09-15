@@ -1,5 +1,6 @@
 """Fresh Mist administrator authorization for restore execution."""
 
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -17,6 +18,7 @@ from mist_config_guardian_backend.models.restore import RestoreOperation, Restor
 from mist_config_guardian_backend.schemas.mist_login import MistLoginCredentials
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_baseline import RestoreBaselineService
+from mist_config_guardian_backend.services.restore_lease import ANOTHER_RESTORE_RUNNING, has_active_restore
 from mist_config_guardian_backend.services.restore_planner import RestoreStateStore, unavailable_secret_errors
 from mist_config_guardian_backend.services.throttling import get_throttle_service, reserve_or_raise
 
@@ -27,6 +29,14 @@ class RestoreAuthorizationError(ValueError):
     """Raised when a restore cannot be authorized."""
 
 
+class RestoreConcurrencyError(RestoreAuthorizationError):
+    """Raised while another restore of the organization is queued or running.
+
+    A conflict rather than an invalid request: the same request succeeds once
+    the other restore finishes, so the API answers it with 409.
+    """
+
+
 class RestoreAuthorizationService:
     """Verify and temporarily hold a delegated Mist credential."""
 
@@ -35,10 +45,22 @@ class RestoreAuthorizationService:
         settings: Settings,
         vault: CredentialVault,
         mist: MistVerificationService,
+        *,
+        active_restores: Callable[[PydanticObjectId, PydanticObjectId], Awaitable[bool]] | None = None,
     ) -> None:
         self._settings = settings
         self._vault = vault
         self._mist = mist
+        self._active_restores = active_restores or has_active_restore
+
+    async def _refuse_concurrent(self, organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> None:
+        """Refuse before any Mist login, so a request that cannot run never opens a session.
+
+        The executor's organization lease is the actual guard; this check only
+        spares an administrator a queued restore that would fail on arrival.
+        """
+        if await self._active_restores(organization_id, operation_id):
+            raise RestoreConcurrencyError(ANOTHER_RESTORE_RUNNING)
 
     async def authorize(
         self,
@@ -65,6 +87,7 @@ class RestoreAuthorizationService:
         if operation.id is None:
             msg = "Persisted restore operation is missing an identifier"
             raise RestoreAuthorizationError(msg)
+        await self._refuse_concurrent(organization_id, operation.id)
 
         self._validate_action_secrets(operation)
 
@@ -176,6 +199,9 @@ class RestoreAuthorizationService:
         if operation.status not in {RestoreStatus.PLANNED, RestoreStatus.FAILED}:
             msg = "This restore cannot be prepared while it is running or already applied"
             raise RestoreAuthorizationError(msg)
+        if operation.id is not None:
+            # A baseline read while another restore writes would pin a half-restored state.
+            await self._refuse_concurrent(operation.organization_id, operation.id)
         if isinstance(credential, MistLoginCredentials):
             throttle = get_throttle_service(self._settings)
             account = throttle.account(str(credential.email))

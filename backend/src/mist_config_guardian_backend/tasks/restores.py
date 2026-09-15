@@ -1,6 +1,7 @@
 """Celery restore execution tasks."""
 
 import asyncio
+from datetime import timedelta
 
 from beanie import PydanticObjectId
 
@@ -28,7 +29,13 @@ async def _execute_restore(operation_id: str) -> None:
     database = DatabaseManager(settings)
     await database.connect()
     try:
-        await RestoreExecutor(CredentialVault(settings)).execute(PydanticObjectId(operation_id))
+        # The lease lapses exactly when the janitor would close a silent run, so
+        # neither a live worker nor the janitor can see the other's state as free.
+        executor = RestoreExecutor(
+            CredentialVault(settings),
+            lease_ttl=timedelta(minutes=settings.restore_worker_heartbeat_timeout_minutes),
+        )
+        await executor.execute(PydanticObjectId(operation_id))
     finally:
         await database.close()
 

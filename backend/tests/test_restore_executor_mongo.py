@@ -20,6 +20,7 @@ from mist_config_guardian_backend.models.restore import (
     RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
+    RestoreLease,
     RestoreMode,
     RestoreOperation,
     RestoreStatus,
@@ -53,7 +54,8 @@ async def database() -> None:
     await client.drop_database(DATABASE)
     await init_beanie(
         database=client[DATABASE],
-        document_models=[LogicalObject, ObjectIncarnation, ObjectVersion, RestoreOperation],
+        # The executor holds the real organization lease while it runs.
+        document_models=[LogicalObject, ObjectIncarnation, ObjectVersion, RestoreLease, RestoreOperation],
     )
     yield
     await client.drop_database(DATABASE)
@@ -574,6 +576,7 @@ async def test_a_deleted_site_restored_with_its_settings_is_verified_rekeyed_and
 
     assert notifications.failed == []
     assert result.status is RestoreStatus.COMPLETED
+    assert await RestoreLease.get_pymongo_collection().count_documents({"organization_id": organization_id}) == 0
     ran = await RestoreOperation.get(identifier)
     assert ran is not None
     assert ran.status is RestoreStatus.COMPLETED

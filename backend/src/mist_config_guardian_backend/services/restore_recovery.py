@@ -16,6 +16,7 @@ from mist_config_guardian_backend.models.restore import RestoreOperation, Restor
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.notifications import NotificationService
 from mist_config_guardian_backend.services.restore_authorization import RestoreAuthorizationService
+from mist_config_guardian_backend.services.restore_lease import MongoRestoreLeaseStore, RestoreLeaseStore
 from mist_config_guardian_backend.services.restore_outcome import mark_unconfirmed, terminal_failure_status
 
 logger = logging.getLogger(__name__)
@@ -33,10 +34,12 @@ class RestoreRecoveryService:
         *,
         notifications: NotificationService | None = None,
         authorization: RestoreAuthorizationService | None = None,
+        leases: RestoreLeaseStore | None = None,
     ) -> None:
         self._settings = settings
         self._notifications = notifications or NotificationService()
         self._authorization = authorization or RestoreAuthorizationService(settings, vault, MistVerificationService())
+        self._leases = leases or MongoRestoreLeaseStore()
 
     async def recover_interrupted(self, *, now: datetime | None = None) -> int:
         """Close every running restore whose last progress write is older than the timeout."""
@@ -87,8 +90,19 @@ class RestoreRecoveryService:
         if result is None or result.modified_count != 1:
             return False
         logger.warning("restore_interrupted operation=%s status=%s", operation.id, status)
-        # The close is committed, so neither follow-up may stop the other or
-        # escape: an escaping error would lose this notification for good.
+        # The close is committed, so no follow-up may stop another or escape:
+        # an escaping error would lose this notification for good.
+        try:
+            # Hand the organization back now rather than when the lease lapses.
+            # The release only matches this operation's lease, so one another
+            # restore already took over is left alone.
+            await self._leases.release(operation.organization_id, operation.id)
+        except Exception as exc:  # noqa: BLE001 - an unreleased lease lapses on its own; logout and alert must still run
+            logger.error(  # noqa: TRY400 - a traceback could carry request content
+                "restore_interrupt_lease_release_failed operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
         try:
             await self._authorization.logout_unused_credential(
                 {

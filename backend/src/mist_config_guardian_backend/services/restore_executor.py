@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
@@ -31,6 +32,12 @@ from mist_config_guardian_backend.security.credentials import CredentialDecrypti
 from mist_config_guardian_backend.services.notifications import NotificationService
 from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot, recreated_site_ids
 from mist_config_guardian_backend.services.restore_identity import rekey_logical_object
+from mist_config_guardian_backend.services.restore_lease import (
+    ANOTHER_RESTORE_RUNNING,
+    MongoRestoreLeaseStore,
+    RestoreLeaseLostError,
+    RestoreLeaseStore,
+)
 from mist_config_guardian_backend.services.restore_outcome import mark_unconfirmed, terminal_failure_status
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
@@ -56,9 +63,13 @@ logger = logging.getLogger(__name__)
 
 _MAX_REPORTED_CHECKS = 3
 _RECORD_ATTEMPTS = 3
-# Far inside the janitor's timeout, so a healthy run never looks silent.
+# Far inside the janitor's timeout and the lease, so a healthy run never looks
+# silent and never loses its organization between two beats.
 _HEARTBEAT_INTERVAL_SECONDS = 60.0
+# Matches the janitor's default timeout; the worker task passes the configured one.
+_LEASE_TTL = timedelta(minutes=15)
 _OWNERSHIP_LOST = "Restore operation was closed by another writer"
+_LEASE_LOST = "The organization restore lease was lost; no further writes were attempted"
 
 
 class RestoreExecutionError(ValueError):
@@ -100,19 +111,36 @@ class _RunContext:
 class _Ownership:
     """The status this worker last wrote for an operation, which every later write must still find.
 
+    ``claimed`` is set by the first guarded write that matches. Only one
+    delivery of an operation can achieve that, so only the claimer may clear
+    the operation's credential or release its organization lease: a delivery
+    that lost the race would otherwise take them from the run that won.
+    ``leasing`` marks that the claimer tried to take the lease, which it then
+    releases on every exit. ``lost`` names why the worker must stop writing.
+
     The lock keeps the background heartbeat and the run's own writes from
     interleaving, so a beat never mistakes the worker's own close for a loss.
     """
 
     status: RestoreStatus
-    lost: bool = False
+    claimed: bool = False
+    leasing: bool = False
+    lost: type[RestoreOwnershipLostError | RestoreLeaseLostError] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _stop_if_lost(ownership: _Ownership) -> None:
+    """Refuse every write once the worker learned the run or its organization is no longer its own."""
+    if ownership.lost is RestoreLeaseLostError:
+        raise RestoreLeaseLostError(_LEASE_LOST)
+    if ownership.lost is not None:
+        raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
 
 
 class RestoreExecutor:
     """Execute one plan in persisted dependency order."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - each collaborator and timing is injected separately by tests and the worker task
         self,
         vault: CredentialVault,
         *,
@@ -120,37 +148,49 @@ class RestoreExecutor:
         notifications: NotificationService | None = None,
         verifier: RestoreVerificationService | None = None,
         heartbeat_interval_seconds: float = _HEARTBEAT_INTERVAL_SECONDS,
+        leases: RestoreLeaseStore | None = None,
+        lease_ttl: timedelta = _LEASE_TTL,
     ) -> None:
         self._vault = vault
         self._store = store or get_restore_state_store()
         self._notifications = notifications or NotificationService()
         self._verifier = verifier or RestoreVerificationService(self._store)
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._leases = leases or MongoRestoreLeaseStore()
+        self._lease_ttl = lease_ttl
         self._owned: dict[PydanticObjectId | None, _Ownership] = {}
 
     async def execute(self, operation_id: PydanticObjectId) -> RestoreOperation:
         """Execute pending actions once using the delegated Mist identity.
 
         Every exit leaves a terminal status, a failure notification when it did
-        not complete, and no delegated credential: a worker that stops halfway
-        must never leave an operation running with a live session attached.
+        not complete, no delegated credential and no organization lease: a
+        worker that stops halfway must never leave an operation running with a
+        live session attached, or its organization closed to the next restore.
 
-        The one exception is a redelivered task that finds the operation no
-        longer queued: another delivery owns it, so it is refused untouched. A
-        precondition that fails after that check is closed like any other
-        failure and then re-raised as ``RestoreExecutionError``, so the task
-        still records that the restore never started.
+        The one exception is a delivery that finds the operation claimed by
+        another delivery, whether it is no longer queued when loaded or its
+        first guarded write is refused: the other delivery owns the run, its
+        lease and its credential, so this one leaves all of them untouched. A
+        precondition that fails after the queued check is closed like any
+        other failure and then re-raised as ``RestoreExecutionError``, so the
+        task still records that the restore never started.
 
         A run that finds its operation closed by another writer, normally the
-        janitor after this worker went silent, stops where it is: the closer
-        already recorded the terminal state and notified, and one more write
-        would undo that.
+        janitor after this worker went silent, or its organization lease gone,
+        stops where it is: the closer recorded the terminal state and notified,
+        or the janitor will once the run is silent, and one more write from
+        this worker could undo that or interleave with the restore now running.
         """
         operation = await self._load_queued(operation_id)
-        self._owned[operation.id] = _Ownership(status=operation.status)
+        ownership = _Ownership(status=operation.status)
+        self._owned[operation.id] = ownership
         try:
             organization, token = await self._prepare(operation)
             return await self._run(operation, organization, token)
+        except RestoreLeaseLostError as exc:
+            logger.warning("restore_lease_lost operation=%s error_type=%s", operation.id, type(exc).__name__)
+            return operation
         except RestoreOwnershipLostError as exc:
             logger.warning("restore_ownership_lost operation=%s error_type=%s", operation.id, type(exc).__name__)
             return operation
@@ -161,21 +201,32 @@ class RestoreExecutor:
             await self._fail_unexpectedly(operation, exc)
             return operation
         finally:
-            await self._clear_delegated_credential(operation)
+            if ownership.claimed:
+                await self._clear_delegated_credential(operation)
+            if ownership.leasing:
+                await self._release_lease(operation)
             self._owned.pop(operation.id, None)
 
     async def _run(self, operation: RestoreOperation, organization: Organization, token: str) -> RestoreOperation:
-        """Claim the queued operation, then keep it visibly alive for as long as the run lasts.
+        """Claim the queued operation, take its organization, then keep both alive for as long as the run lasts.
+
+        The claim comes before the lease, so a delivery that loses the claim
+        never touches the lease the winner holds. Nothing reads or writes Mist
+        until the lease is held, so two restores of one organization never
+        overlap: a claimed run that finds another one ahead of it closes itself.
 
         The background beat covers phases with no write of their own, such as a
         safety snapshot or a verification over many objects, which could
-        otherwise outlast the janitor's timeout on a perfectly healthy run.
+        otherwise outlast the janitor's timeout and the lease on a healthy run.
         """
         state = await load_or_build_state(self._store, operation)
         operation.status = RestoreStatus.RUNNING
         operation.started_at = utc_now()
         operation.touch()
         await self._persist(operation)
+        if not await self._acquire_lease(operation):
+            await self._refuse_busy_organization(operation, organization, token)
+            return operation
         beat = asyncio.create_task(self._beat_until_cancelled(operation))
         try:
             return await self._run_owned(operation, organization, token, state)
@@ -256,53 +307,61 @@ class RestoreExecutor:
         if operation.id is None:
             # Nothing addressable, so nothing another writer could have closed.
             await operation.save()
+            self._ownership_of(operation).claimed = True
             return
         ownership = self._ownership_of(operation)
         async with ownership.lock:
-            if ownership.lost:
-                raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
+            _stop_if_lost(ownership)
             result = await RestoreOperation.find_one(
                 RestoreOperation.id == operation.id,
                 RestoreOperation.status == ownership.status,
             ).update({"$set": operation.model_dump(exclude={"id", "revision_id"})})
             if result is None or result.matched_count == 0:
-                ownership.lost = True
+                ownership.lost = RestoreOwnershipLostError
                 raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
             ownership.status = operation.status
+            ownership.claimed = True
 
     async def _heartbeat(self, operation: RestoreOperation) -> None:
-        """Record that this worker is still alive, so the janitor leaves it alone.
+        """Renew the organization lease and record that this worker is still alive.
 
+        The lease is renewed first: a worker that lost it must stop, and must
+        not refresh the timestamp that lets the janitor close its silent run.
         Only the timestamp is written, and only while the stored run is still
         running: a heartbeat must neither overwrite what other writers set nor
-        revive a run the janitor already closed. Task 9 renews the lease here.
+        revive a run the janitor already closed.
         """
         ownership = self._ownership_of(operation)
         async with ownership.lock:
-            if ownership.lost:
-                raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
+            _stop_if_lost(ownership)
             if ownership.status is not RestoreStatus.RUNNING or operation.id is None:
                 return
+            if not await self._leases.renew(operation.organization_id, operation.id, ttl=self._lease_ttl):
+                ownership.lost = RestoreLeaseLostError
+                raise RestoreLeaseLostError(_LEASE_LOST)
             now = utc_now()
             result = await RestoreOperation.find_one(
                 RestoreOperation.id == operation.id,
                 RestoreOperation.status == RestoreStatus.RUNNING,
             ).update({"$set": {"updated_at": now}})
             if result is None or result.matched_count == 0:
-                ownership.lost = True
+                ownership.lost = RestoreOwnershipLostError
                 raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
             operation.updated_at = now
 
     async def _beat_until_cancelled(self, operation: RestoreOperation) -> None:
         """Heartbeat on a fixed interval until the run ends or the operation is no longer this worker's.
 
-        A lost operation is only recorded here: the run's next write refuses,
-        and ``execute`` stops it without touching what the closer stored.
+        A lost operation or lease is only recorded here: the run's next write
+        refuses, and ``execute`` stops it without touching what others store.
         """
         while True:
             await asyncio.sleep(self._heartbeat_interval_seconds)
             try:
                 await self._heartbeat(operation)
+            except RestoreLeaseLostError:
+                logger.warning("restore_heartbeat_lease_lost operation=%s", operation.id)
+                return
             except RestoreOwnershipLostError:
                 logger.warning("restore_heartbeat_ownership_lost operation=%s", operation.id)
                 return
@@ -469,9 +528,10 @@ class RestoreExecutor:
     async def _close_failed(self, operation: RestoreOperation, reason: str) -> None:
         """Record a terminal failure and notify exactly once, even while storage or notifications fail.
 
-        Shared by failed preconditions and unexpected errors, so every exit that
-        nothing more specific handled leaves the same terminal, credential-free
-        state; ``execute`` still clears the credential with its own write.
+        Shared by failed preconditions, a busy organization and unexpected
+        errors, so every exit that nothing more specific handled leaves the
+        same terminal, credential-free state; ``execute`` still clears the
+        credential with its own write.
         """
         first = mark_unconfirmed(operation.actions, reason)
         if first is not None:
@@ -484,6 +544,10 @@ class RestoreExecutor:
         operation.touch()
         try:
             await self._persist(operation)
+        except RestoreLeaseLostError:
+            # Another restore holds the organization; the janitor closes this silent run and notifies.
+            logger.warning("restore_lease_lost operation=%s", operation.id)
+            return
         except RestoreOwnershipLostError:
             # Another writer closed the run and notified; a second close would overwrite it.
             logger.warning("restore_ownership_lost operation=%s", operation.id)
@@ -517,6 +581,61 @@ class RestoreExecutor:
         except Exception as exc:  # noqa: BLE001 - the janitor and expiry job retry the clear
             logger.error(  # noqa: TRY400 - a traceback could carry the credential write
                 "restore_credential_clear_failed operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
+
+    async def _acquire_lease(self, operation: RestoreOperation) -> bool:
+        """Take the organization for the claimed run; ``execute`` releases it on every exit from here on.
+
+        The attempt is recorded before the call, so a lease the store granted
+        just before an error is still released. Releasing is safe even then:
+        only the claimer of this operation ever holds a lease in its name.
+        """
+        if operation.id is None:
+            msg = "Persisted restore operation is missing an identifier"
+            raise RestoreExecutionError(msg)
+        self._ownership_of(operation).leasing = True
+        return await self._leases.acquire(operation.organization_id, operation.id, ttl=self._lease_ttl)
+
+    async def _release_lease(self, operation: RestoreOperation) -> None:
+        """Hand the organization back whatever else failed; an unreleased lease lapses on its own.
+
+        The release matches only this operation's lease, so a worker whose
+        lease another restore took over removes nothing.
+        """
+        if operation.id is None:
+            return
+        try:
+            await self._leases.release(operation.organization_id, operation.id)
+        except Exception as exc:  # noqa: BLE001 - the TTL index removes a lease nobody released
+            logger.error(  # noqa: TRY400 - a traceback could carry request content
+                "restore_lease_release_failed operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
+
+    async def _refuse_busy_organization(
+        self,
+        operation: RestoreOperation,
+        organization: Organization,
+        token: str,
+    ) -> None:
+        """Close a claimed run that another restore of the organization is ahead of, before any Mist call.
+
+        This worker owns the run, so it records and announces the failure like
+        any other, then logs out the session it will never use.
+        """
+        await self._close_failed(operation, ANOTHER_RESTORE_RUNNING)
+        if self._ownership_of(operation).lost is not None:
+            return
+        try:
+            # Leaving the client logs a session credential out of Mist.
+            async with MistMutationClient(token=token, region=organization.cloud_region):
+                pass
+        except Exception as exc:  # noqa: BLE001 - the session expires on its own; the close is recorded
+            logger.error(  # noqa: TRY400 - a traceback could carry the credential or request content
+                "restore_refused_logout_failed operation=%s error_type=%s",
                 operation.id,
                 type(exc).__name__,
             )

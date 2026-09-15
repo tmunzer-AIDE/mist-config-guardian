@@ -27,6 +27,7 @@ from mist_config_guardian_backend.services.restore_executor import (
     RestoreOwnershipLostError,
     _RunContext,
 )
+from mist_config_guardian_backend.services.restore_lease import MemoryRestoreLeaseStore, RestoreLeaseLostError
 from mist_config_guardian_backend.services.restore_planner import RestoreOperationState, SafetySnapshotEntry
 from mist_config_guardian_backend.services.restore_recovery import INTERRUPTED_REASON, RestoreRecoveryService
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
@@ -103,9 +104,12 @@ async def _running(*, minutes_ago: int, actions: list[RestoreAction]) -> Restore
     return operation
 
 
-def _service(notifications: _Notifications) -> RestoreRecoveryService:
+def _service(notifications: _Notifications, leases: MemoryRestoreLeaseStore) -> RestoreRecoveryService:
     settings = _settings()
-    return RestoreRecoveryService(settings, CredentialVault(settings), notifications=notifications)
+    return RestoreRecoveryService(settings, CredentialVault(settings), notifications=notifications, leases=leases)
+
+
+_LEASE_TTL = timedelta(minutes=15)
 
 
 async def test_a_stale_run_with_a_write_in_flight_becomes_compensable() -> None:
@@ -120,8 +124,14 @@ async def test_a_stale_run_with_a_write_in_flight_becomes_compensable() -> None:
     )
     fresh = await _running(minutes_ago=1, actions=[_action(0, RestoreActionStatus.EXECUTING)])
     notifications = _Notifications()
+    leases = MemoryRestoreLeaseStore()
+    await leases.acquire(stale.organization_id, stale.id, ttl=_LEASE_TTL)
+    await leases.acquire(fresh.organization_id, fresh.id, ttl=_LEASE_TTL)
 
-    assert await _service(notifications).recover_interrupted() == 1
+    assert await _service(notifications, leases).recover_interrupted() == 1
+
+    assert await leases.acquire(stale.organization_id, PydanticObjectId(), ttl=_LEASE_TTL) is True
+    assert await leases.acquire(fresh.organization_id, PydanticObjectId(), ttl=_LEASE_TTL) is False
 
     closed = await RestoreOperation.get(stale.id)
     assert closed is not None
@@ -144,7 +154,7 @@ async def test_a_stale_run_that_never_wrote_fails() -> None:
     await RestoreOperation.get_pymongo_collection().delete_many({})
     stale = await _running(minutes_ago=30, actions=[_action(0, RestoreActionStatus.PENDING)])
 
-    assert await _service(_Notifications()).recover_interrupted() == 1
+    assert await _service(_Notifications(), MemoryRestoreLeaseStore()).recover_interrupted() == 1
 
     closed = await RestoreOperation.get(stale.id)
     assert closed is not None
@@ -161,7 +171,8 @@ async def test_a_run_that_heartbeats_before_the_janitor_writes_is_left_alone() -
     )
     notifications = _Notifications()
 
-    assert await _service(notifications)._interrupt(observed, datetime.now(UTC)) is False  # noqa: SLF001
+    service = _service(notifications, MemoryRestoreLeaseStore())
+    assert await service._interrupt(observed, datetime.now(UTC)) is False  # noqa: SLF001
 
     alive = await RestoreOperation.get(stale.id)
     assert alive is not None
@@ -230,14 +241,18 @@ def _organization() -> Organization:
     )
 
 
-def _executor() -> RestoreExecutor:
+def _executor(leases: MemoryRestoreLeaseStore) -> RestoreExecutor:
     settings = _settings()
-    return RestoreExecutor(CredentialVault(settings), store=object(), notifications=_Notifications(), verifier=object())
+    return RestoreExecutor(
+        CredentialVault(settings), store=object(), notifications=_Notifications(), verifier=object(), leases=leases
+    )
 
 
-async def _janitor_closes_every_run() -> None:
+async def _janitor_closes_every_run(leases: MemoryRestoreLeaseStore | None = None) -> None:
     # Far enough ahead that every stored heartbeat is past the timeout.
-    await _service(_Notifications()).recover_interrupted(now=datetime.now(UTC) + timedelta(hours=1))
+    await _service(_Notifications(), leases or MemoryRestoreLeaseStore()).recover_interrupted(
+        now=datetime.now(UTC) + timedelta(hours=1)
+    )
 
 
 async def _still_closed(operation_id: PydanticObjectId) -> RestoreOperation:
@@ -250,20 +265,26 @@ async def _still_closed(operation_id: PydanticObjectId) -> RestoreOperation:
     return stored
 
 
-async def test_a_worker_heartbeat_cannot_reopen_a_run_the_janitor_closed() -> None:
+@pytest.mark.parametrize("janitor_lease", ["released", "kept"])
+async def test_a_worker_heartbeat_cannot_reopen_a_run_the_janitor_closed(janitor_lease: str) -> None:
+    janitor_released_the_lease = janitor_lease == "released"
     await RestoreOperation.get_pymongo_collection().delete_many({})
     running = await _running(minutes_ago=1, actions=[_action(0, RestoreActionStatus.PENDING)])
     worker = await RestoreOperation.get(running.id)
     assert worker is not None
-    executor = _executor()
+    leases = MemoryRestoreLeaseStore()
+    await leases.acquire(running.organization_id, running.id, ttl=_LEASE_TTL)
+    executor = _executor(leases)
 
     await executor._heartbeat(worker)  # noqa: SLF001
     beating = await RestoreOperation.get(running.id)
     assert beating is not None
     assert beating.updated_at > running.updated_at
-    await _janitor_closes_every_run()
+    await _janitor_closes_every_run(leases if janitor_released_the_lease else None)
 
-    with pytest.raises(RestoreOwnershipLostError):
+    # Released with the close, the lease is gone; still held, the status guard refuses the beat.
+    expected = RestoreLeaseLostError if janitor_released_the_lease else RestoreOwnershipLostError
+    with pytest.raises(expected):
         await executor._heartbeat(worker)  # noqa: SLF001
 
     closed = await _still_closed(running.id)
@@ -279,7 +300,9 @@ async def test_a_worker_cannot_start_a_write_on_a_run_the_janitor_closed() -> No
     client = _Client()
 
     with pytest.raises(RestoreOwnershipLostError):
-        await _executor()._execute_action(client, _organization(), worker, 0, {}, _context(worker))  # noqa: SLF001
+        await _executor(MemoryRestoreLeaseStore())._execute_action(  # noqa: SLF001
+            client, _organization(), worker, 0, {}, _context(worker)
+        )
 
     assert client.writes == []
     closed = await _still_closed(running.id)
@@ -294,7 +317,9 @@ async def test_a_write_mist_applied_after_the_janitor_closed_the_run_stays_uncon
     client = _Client(during_write=_janitor_closes_every_run)
 
     with pytest.raises(RestoreOwnershipLostError):
-        await _executor()._execute_action(client, _organization(), worker, 0, {}, _context(worker))  # noqa: SLF001
+        await _executor(MemoryRestoreLeaseStore())._execute_action(  # noqa: SLF001
+            client, _organization(), worker, 0, {}, _context(worker)
+        )
 
     assert client.writes == ["mist-0"]
     closed = await _still_closed(running.id)

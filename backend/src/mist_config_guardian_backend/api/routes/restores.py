@@ -43,6 +43,7 @@ from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 from mist_config_guardian_backend.services.restore_authorization import (
     RestoreAuthorizationError,
     RestoreAuthorizationService,
+    RestoreConcurrencyError,
 )
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
@@ -248,6 +249,8 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         plan = await authorization.prepare(organization, operation, administrator.id, credential, store)
     except MistMfaRequiredError as exc:
         raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
+    except RestoreConcurrencyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RestoreAuthorizationError, RestorePlanningError, MistVerificationError, MistMutationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DuplicateKeyError as exc:
@@ -404,6 +407,8 @@ async def _authorize_and_queue(
         )
     except MistMfaRequiredError as exc:
         raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
+    except RestoreConcurrencyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RestoreAuthorizationError, MistVerificationError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if reserved.id is None:

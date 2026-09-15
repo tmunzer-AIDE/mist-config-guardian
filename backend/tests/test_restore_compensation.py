@@ -37,6 +37,7 @@ from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
+from mist_config_guardian_backend.services.restore_authorization import RestoreConcurrencyError
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
@@ -44,6 +45,7 @@ from mist_config_guardian_backend.services.restore_compensation import (
     _validate_live_state,
     capture_safety_snapshot,
 )
+from mist_config_guardian_backend.services.restore_lease import ANOTHER_RESTORE_RUNNING
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     SafetySnapshotEntry,
@@ -1436,3 +1438,50 @@ async def test_compensation_execution_refuses_a_plan_that_was_never_created() ->
 
     assert response.status_code == 409
     assert authorization.credentials == []
+
+
+class _BusyAuthorization(_RecordingAuthorization):
+    """Another restore of the organization holds the queue."""
+
+    async def authorize(self, organization_id, operation_id, credential, task_id, **_kwargs):  # noqa: ARG002
+        self.credentials.append(credential)
+        raise RestoreConcurrencyError(ANOTHER_RESTORE_RUNNING)
+
+    async def prepare(self, organization, operation, requested_by, credential, store):  # noqa: ARG002
+        self.credentials.append(credential)
+        raise RestoreConcurrencyError(ANOTHER_RESTORE_RUNNING)
+
+
+async def test_compensation_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
+    plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
+    transport = httpx.ASGITransport(app=_app(_StubCompensation(plan), _BusyAuthorization()))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/compensation/execute",
+            json={"administrator_token": "fresh-admin-token"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ANOTHER_RESTORE_RUNNING
+    assert routed == []
+
+
+@pytest.mark.parametrize("route", ["execute", "prepare"])
+async def test_execution_and_preparation_are_refused_with_a_conflict_while_another_restore_runs(
+    routed: list[str],
+    route: str,
+) -> None:
+    authorization = _BusyAuthorization()
+    transport = httpx.ASGITransport(app=_app(_StubCompensation(None), authorization))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/{route}",
+            json={"administrator_token": "fresh-admin-token"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ANOTHER_RESTORE_RUNNING
+    assert authorization.credentials == ["fresh-admin-token"]
+    assert routed == []

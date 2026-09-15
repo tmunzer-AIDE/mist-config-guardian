@@ -161,3 +161,24 @@ class RestoreOperation(TimestampedModel, Document):
             IndexModel([("organization_id", 1), ("status", 1)]),
             IndexModel([("requested_by", 1), ("created_at", -1)]),
         ]
+
+
+class RestoreLease(Document):
+    """The one restore allowed to write to an organization at a time (spec §9.5.1).
+
+    Its holder renews it with every heartbeat. A worker that dies stops
+    renewing, so the lease lapses on its own and MongoDB removes the document;
+    the unique organization index is what refuses a second live holder.
+    """
+
+    organization_id: PydanticObjectId
+    holder_operation_id: PydanticObjectId
+    acquired_at: datetime
+    expires_at: datetime
+
+    class Settings:
+        name = "restore_leases"
+        indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("organization_id", 1)], unique=True, name="restore_lease_organization_unique"),
+            IndexModel([("expires_at", 1)], expireAfterSeconds=0, name="restore_lease_expiry"),
+        ]

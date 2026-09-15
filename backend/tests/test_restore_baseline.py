@@ -19,6 +19,7 @@ from mist_config_guardian_backend.services import restore_baseline as baseline_m
 from mist_config_guardian_backend.services.restore_authorization import (
     RestoreAuthorizationError,
     RestoreAuthorizationService,
+    RestoreConcurrencyError,
 )
 from mist_config_guardian_backend.services.restore_baseline import RestoreBaselineService
 from mist_config_guardian_backend.services.restore_planner import RestorePlanningError
@@ -178,7 +179,12 @@ def authorization(monkeypatch):
     monkeypatch.setattr(RestoreOperation, "find_one", MagicMock(side_effect=[load(), query]))
     mist = AsyncMock()
     mist.verify_write_token.return_value = SimpleNamespace(actor="admin")
-    return RestoreAuthorizationService(settings, vault, mist), operation, query, mist
+    return (
+        RestoreAuthorizationService(settings, vault, mist, active_restores=AsyncMock(return_value=False)),
+        operation,
+        query,
+        mist,
+    )
 
 
 async def test_execution_reuses_credential_without_extending_expiry(authorization):
@@ -206,6 +212,41 @@ async def test_duplicate_prepared_execution_cannot_reserve_twice(authorization):
     query.update.return_value.modified_count = 0
     with pytest.raises(RestoreAuthorizationError, match="another request"):
         await service.authorize(operation.organization_id, operation.id, None, "task")
+
+
+async def test_authorization_refuses_while_another_restore_is_queued_or_running(authorization):
+    service, operation, query, mist = authorization
+    service._active_restores = AsyncMock(return_value=True)
+
+    with pytest.raises(RestoreConcurrencyError, match="Another restore is running"):
+        await service.authorize(operation.organization_id, operation.id, None, "task")
+
+    service._active_restores.assert_awaited_once_with(operation.organization_id, operation.id)
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_preparation_refuses_while_another_restore_is_queued_or_running():
+    settings = Settings(environment="test")
+    mist = AsyncMock()
+    active = AsyncMock(return_value=True)
+    service = RestoreAuthorizationService(settings, CredentialVault(settings), mist, active_restores=active)
+    operation = RestoreOperation.model_construct(
+        id=PydanticObjectId(), organization_id=PydanticObjectId(), status=RestoreStatus.FAILED
+    )
+
+    with pytest.raises(RestoreConcurrencyError, match="Another restore is running"):
+        await service.prepare(
+            SimpleNamespace(cloud_region=MistCloudRegion.GLOBAL_02),
+            operation,
+            PydanticObjectId(),
+            "admin-token",
+            AsyncMock(),
+        )
+
+    active.assert_awaited_once_with(operation.organization_id, operation.id)
+    mist.login.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
 
 
 async def test_plan_uses_pinned_backup_even_if_background_history_changes(monkeypatch):

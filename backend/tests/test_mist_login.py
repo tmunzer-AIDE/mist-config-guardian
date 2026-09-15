@@ -229,7 +229,9 @@ async def test_restore_authorization_uses_saved_region_and_encrypts_only_session
     mist.login.return_value = ("mist-session:opaque", {"email": EMAIL})
     mist.verify_write_token.return_value = SimpleNamespace(actor=EMAIL)
     vault.encrypt_for_context.return_value = "encrypted-session"
-    service = module.RestoreAuthorizationService(Settings(environment="test"), vault, mist)
+    service = module.RestoreAuthorizationService(
+        Settings(environment="test"), vault, mist, active_restores=AsyncMock(return_value=False)
+    )
     supplied = credentials()
     await service.authorize(organization_id, operation_id, supplied, "task")
     mist.login.assert_awaited_once_with(supplied, MistCloudRegion.EMEA_01, retain_session=True)

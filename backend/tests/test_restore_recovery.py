@@ -263,6 +263,64 @@ async def test_a_failed_logout_still_notifies_without_logging_its_message(caplog
     assert _DRIVER_MESSAGE not in caplog.text
 
 
+class _Leases:
+    """Records lease releases, optionally failing them."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.released: list[tuple[PydanticObjectId, PydanticObjectId]] = []
+        self.error = error
+
+    async def release(self, organization_id, operation_id) -> None:
+        self.released.append((organization_id, operation_id))
+        if self.error is not None:
+            raise self.error
+
+
+@pytest.mark.parametrize("modified", [1, 0])
+async def test_the_janitor_releases_the_lease_only_of_a_run_it_closed(
+    conditional_writes: _ConditionalWrites,
+    modified: int,
+) -> None:
+    conditional_writes.modified = modified
+    leases = _Leases()
+    service = RestoreRecoveryService(
+        _settings(),
+        CredentialVault(_settings()),
+        notifications=_Notifications(),
+        authorization=_Authorization(),
+        leases=leases,
+    )
+
+    closed = await service._interrupt(_running([_action(0, RestoreActionStatus.EXECUTING)]), OBSERVED_AT)  # noqa: SLF001
+
+    assert closed is bool(modified)
+    assert leases.released == ([(ORGANIZATION_ID, OPERATION_ID)] if modified else [])
+
+
+@pytest.mark.usefixtures("conditional_writes")
+async def test_a_failed_lease_release_still_logs_out_and_notifies_without_logging_its_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    notifications = _Notifications()
+    authorization = _Authorization()
+    service = RestoreRecoveryService(
+        _settings(),
+        CredentialVault(_settings()),
+        notifications=notifications,
+        authorization=authorization,
+        leases=_Leases(error=RuntimeError(_DRIVER_MESSAGE)),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
+        closed = await service._interrupt(_running([_action(0, RestoreActionStatus.EXECUTING)]), OBSERVED_AT)  # noqa: SLF001
+
+    assert closed is True
+    assert len(authorization.logged_out) == 1
+    assert notifications.failed == [INTERRUPTED_REASON]
+    assert f"restore_interrupt_lease_release_failed operation={OPERATION_ID} error_type=RuntimeError" in caplog.text
+    assert _DRIVER_MESSAGE not in caplog.text
+
+
 async def test_one_close_that_fails_does_not_stop_the_others(
     monkeypatch: pytest.MonkeyPatch,
     conditional_writes: _ConditionalWrites,

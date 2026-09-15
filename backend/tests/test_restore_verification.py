@@ -37,6 +37,7 @@ from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutionError, RestoreExecutor
 from mist_config_guardian_backend.services.restore_identity import RestoreIdentityConflictError
+from mist_config_guardian_backend.services.restore_lease import ANOTHER_RESTORE_RUNNING, MemoryRestoreLeaseStore
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     RestoreVerificationResult,
@@ -684,6 +685,7 @@ def _run(  # noqa: PLR0913 - every fake the executor accepts is optional here
     store: _MemoryStateStore | None = None,
     client: _FakeClient | None = None,
     heartbeat_interval_seconds: float = 60.0,
+    leases: MemoryRestoreLeaseStore | None = None,
 ) -> tuple[RestoreExecutor, _StubNotifications, _StubVerifier, _FakeClient]:
     client = client or _FakeClient()
     for action in operation.actions:
@@ -706,6 +708,7 @@ def _run(  # noqa: PLR0913 - every fake the executor accepts is optional here
         notifications=notifications,
         verifier=verifier,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
+        leases=leases or MemoryRestoreLeaseStore(),
     )
     return executor, notifications, verifier, client
 
@@ -1639,3 +1642,211 @@ async def test_a_failing_background_heartbeat_is_logged_by_type_and_keeps_beatin
     assert caplog.text.count("restore_heartbeat_failed") >= 2
     assert "error_type=RuntimeError" in caplog.text
     assert "configuration content" not in caplog.text
+
+
+# ----------------------------------------------------------------------- lease
+
+_LEASE_TTL = timedelta(minutes=15)
+
+
+class _RecordingLeases(MemoryRestoreLeaseStore):
+    """Records each lease call with the stored status it found, so its order against the claim is visible."""
+
+    def __init__(self, stored: _StoredOperation | None = None) -> None:
+        super().__init__()
+        self.stored = stored
+        self.calls: list[tuple[str, RestoreStatus | None]] = []
+
+    def _record(self, name: str) -> None:
+        self.calls.append((name, None if self.stored is None else self.stored.status))
+
+    async def acquire(self, organization_id, operation_id, *, ttl):
+        self._record("acquire")
+        return await super().acquire(organization_id, operation_id, ttl=ttl)
+
+    async def renew(self, organization_id, operation_id, *, ttl):
+        self._record("renew")
+        return await super().renew(organization_id, operation_id, ttl=ttl)
+
+    async def release(self, organization_id, operation_id):
+        self._record("release")
+        await super().release(organization_id, operation_id)
+
+
+class _LostLeases(MemoryRestoreLeaseStore):
+    """Another restore took the organization over: no renewal succeeds."""
+
+    async def renew(self, organization_id, operation_id, *, ttl):  # noqa: ARG002
+        return False
+
+
+class _SessionClient(_FakeClient):
+    """Counts closes, which is when a session credential is logged out of Mist."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = 0
+
+    async def __aexit__(self, *_args: object) -> None:
+        self.closed += 1
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_second_restore_for_the_organization_fails_without_writing(monkeypatch: pytest.MonkeyPatch) -> None:
+    leases = MemoryRestoreLeaseStore()
+    running = PydanticObjectId()
+    await leases.acquire(ORGANIZATION_ID, running, ttl=_LEASE_TTL)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    client = _SessionClient()
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, leases=leases, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert result.status is RestoreStatus.FAILED
+    assert ANOTHER_RESTORE_RUNNING in result.preflight_errors
+    assert result.encrypted_delegated_credential is None
+    assert notifications.failed == [ANOTHER_RESTORE_RUNNING]
+    # The refused credential is logged out, and the running restore keeps its lease.
+    assert client.closed == 1
+    assert await leases.renew(ORGANIZATION_ID, running, ttl=_LEASE_TTL) is True
+
+
+@pytest.mark.parametrize("outcome", [RestoreStatus.COMPLETED, RestoreStatus.COMPENSATION_AVAILABLE])
+@pytest.mark.usefixtures("executed")
+async def test_the_lease_is_released_when_the_run_ends(monkeypatch: pytest.MonkeyPatch, outcome: RestoreStatus) -> None:
+    leases = MemoryRestoreLeaseStore()
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    client = (
+        _FakeClient()
+        if outcome is RestoreStatus.COMPLETED
+        else _FailingClient(MistMutationTransportError("Unable to reach Mist to update wlans", outcome_unknown=True))
+    )
+    executor, _, _, _ = _run(monkeypatch, operation, verified=True, leases=leases, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.status is outcome
+    assert await leases.acquire(ORGANIZATION_ID, PydanticObjectId(), ttl=_LEASE_TTL) is True
+
+
+@pytest.mark.usefixtures("executed")
+async def test_the_lease_is_taken_after_the_claim_renewed_by_every_heartbeat_and_released_last(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+) -> None:
+    leases = _RecordingLeases(stored)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, _, _ = _run(monkeypatch, operation, verified=True, leases=leases)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.status is RestoreStatus.COMPLETED
+    assert len(stored.heartbeats()) == 3
+    assert leases.calls == [
+        ("acquire", RestoreStatus.RUNNING),
+        ("renew", RestoreStatus.RUNNING),
+        ("renew", RestoreStatus.RUNNING),
+        ("renew", RestoreStatus.RUNNING),
+        ("release", RestoreStatus.COMPLETED),
+    ]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_lost_lease_stops_before_the_next_write_and_leaves_the_close_to_the_janitor(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True, leases=_LostLeases())
+
+    with caplog.at_level(logging.WARNING, logger=_EXECUTOR_LOGGER):
+        result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    # No terminal write and no alert: the janitor, or the restore now holding
+    # the organization, owns this run's close.
+    assert result.status is RestoreStatus.RUNNING
+    assert {entry[0] for entry in stored.saves} == {RestoreStatus.RUNNING}
+    assert stored.status is RestoreStatus.RUNNING
+    # The failed renewal does not refresh the run, so the janitor closes it on schedule.
+    assert stored.heartbeats() == []
+    assert notifications.failed == []
+    assert notifications.completed == []
+    assert stored.clears == [([{"id": OPERATION_ID}], _CREDENTIAL_CLEARED)]
+    assert "restore_lease_lost" in caplog.text
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_lease_taken_over_during_a_long_phase_stops_the_run_and_spares_the_new_holder(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    leases = MemoryRestoreLeaseStore()
+    successor = PydanticObjectId()
+    beats_while_held = 0
+
+    async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
+        nonlocal beats_while_held
+        await asyncio.sleep(0.05)
+        beats_while_held = len(stored.heartbeats())
+        # The lease lapsed while this worker was silent, and the next restore took it.
+        await leases.release(ORGANIZATION_ID, OPERATION_ID)
+        await leases.acquire(ORGANIZATION_ID, successor, ttl=_LEASE_TTL)
+        await asyncio.sleep(0.05)
+        return _snapshot_entries(client, operation)
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(
+        monkeypatch, operation, verified=True, leases=leases, heartbeat_interval_seconds=0.01
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_EXECUTOR_LOGGER):
+        await executor.execute(OPERATION_ID)
+
+    assert beats_while_held >= 2
+    # The beat that finds the lease gone writes nothing and stops; the flow's next write refuses.
+    assert len(stored.heartbeats()) == beats_while_held
+    assert "restore_heartbeat_lease_lost" in caplog.text
+    assert client.writes == []
+    assert notifications.failed == []
+    assert {entry[0] for entry in stored.saves} == {RestoreStatus.RUNNING}
+    assert await leases.renew(ORGANIZATION_ID, successor, ttl=_LEASE_TTL) is True
+
+
+@pytest.mark.parametrize("lost_at", ["claim", "preparation"])
+async def test_a_delivery_another_delivery_beat_to_the_operation_touches_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    stored: _StoredOperation,
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+    lost_at: str,
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    if lost_at == "preparation":
+        # This delivery ran just past the credential's expiry; the other claimed the run just before it.
+        operation.delegated_credential_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    leases = _RecordingLeases()
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True, leases=leases)
+    # Both deliveries loaded the operation while it was queued; the other one claimed it first.
+    stored.status = RestoreStatus.RUNNING
+
+    if lost_at == "claim":
+        await executor.execute(OPERATION_ID)
+    else:
+        with pytest.raises(RestoreExecutionError, match="expired before execution"):
+            await executor.execute(OPERATION_ID)
+
+    # The winner's run, lease, credential and alerts are all left to the winner.
+    assert client.writes == []
+    assert persisted == []
+    assert credential_clears == []
+    assert leases.calls == []
+    assert notifications.failed == []
+    assert notifications.completed == []
+    assert stored.status is RestoreStatus.RUNNING
