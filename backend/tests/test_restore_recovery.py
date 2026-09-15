@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
+from pydantic import ValidationError
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.integrations.mist_mutation import MAX_ATTEMPTS, RETRY_AFTER_CAP_SECONDS
@@ -43,6 +44,19 @@ def test_the_heartbeat_timeout_outlasts_the_slowest_mist_call() -> None:
     slowest = MAX_ATTEMPTS * _REQUEST_TIMEOUT_SECONDS + (MAX_ATTEMPTS - 1) * RETRY_AFTER_CAP_SECONDS
 
     assert Settings(environment="test").restore_worker_heartbeat_timeout_minutes * 60 > slowest
+
+
+@pytest.mark.parametrize("minutes", [-1, 0, 1, 4])
+def test_a_heartbeat_timeout_near_the_heartbeat_interval_is_refused(minutes: int) -> None:
+    """A healthy worker beats once a minute, so a timeout that close would let the janitor close it."""
+    with pytest.raises(ValidationError, match="RESTORE_WORKER_HEARTBEAT_TIMEOUT_MINUTES must be at least 5"):
+        Settings(environment="test", restore_worker_heartbeat_timeout_minutes=minutes)
+
+
+def test_the_shortest_allowed_heartbeat_timeout_is_accepted() -> None:
+    settings = Settings(environment="test", restore_worker_heartbeat_timeout_minutes=5)
+
+    assert settings.restore_worker_heartbeat_timeout_minutes == 5
 
 
 # ------------------------------------------------------------ conditional close
