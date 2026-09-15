@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock
 import pytest
 from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
+from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.config import Settings
+from mist_config_guardian_backend.integrations.mist_mutation import MistMutationStatusError, MistMutationTransportError
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
@@ -169,6 +171,18 @@ class _FakeClient:
 
     async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
         return self.readback.get(object_id)
+
+
+class _FailingClient(_FakeClient):
+    """Fails every update with a chosen Mist error."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    async def update(self, definition, object_id, configuration, *, org_id, site_id):  # noqa: ARG002
+        self.writes.append(("update", object_id))
+        raise self.error
 
 
 class _StubNotifications:
@@ -430,6 +444,13 @@ def executed(monkeypatch: pytest.MonkeyPatch) -> list[tuple[RestoreStatus, tuple
         return
 
     monkeypatch.setattr(RestoreExecutor, "_record_result", _no_record_result)
+    monkeypatch.setattr(RestoreOperation, "id", ExpressionField("id"), raising=False)
+
+    class _Cleared:
+        async def update(self, change, *_args, **_kwargs) -> None:
+            assert change == {"$set": {"encrypted_delegated_credential": None, "delegated_credential_expires_at": None}}
+
+    monkeypatch.setattr(RestoreOperation, "find_one", lambda *_args, **_kwargs: _Cleared())
 
     async def _snapshot(*_args, **_kwargs):
         return []
@@ -447,8 +468,9 @@ def _run(
     *,
     verified: bool,
     store: _MemoryStateStore | None = None,
+    client: _FakeClient | None = None,
 ) -> tuple[RestoreExecutor, _StubNotifications, _StubVerifier, _FakeClient]:
-    client = _FakeClient()
+    client = client or _FakeClient()
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_executor.MistMutationClient",
         lambda **_kwargs: client,
@@ -533,19 +555,148 @@ async def test_a_redelivered_task_refuses_to_apply_the_plan_twice(monkeypatch: p
 
 
 @pytest.mark.usefixtures("executed")
-async def test_a_completed_action_is_not_applied_again_on_resume(monkeypatch: pytest.MonkeyPatch) -> None:
-    operation = _operation(
-        [
-            _action(0, RestoreActionType.CREATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="new-uuid"),
-            _action(1, RestoreActionType.UPDATE),
-        ]
+async def test_an_unconfirmed_write_leaves_the_restore_compensable(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    client = _FailingClient(MistMutationTransportError("Unable to reach Mist to update wlans", outcome_unknown=True))
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert result.actions[0].status is RestoreActionStatus.FAILED
+    assert result.actions[0].outcome_unknown is True
+    assert result.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_rejected_first_write_fails_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    client = _FailingClient(MistMutationStatusError("Mist failed to update wlans (400)", status_code=400))
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.status is RestoreStatus.FAILED
+    assert result.actions[0].outcome_unknown is False
+    assert result.encrypted_delegated_credential is None
+    assert notifications.failed == ["wlan-0: Mist failed to update wlans (400)"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_unexpected_error_after_a_write_still_ends_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _database_gone(*_args, **_kwargs) -> None:
+        msg = "connection reset"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(RestoreExecutor, "_record_result", _database_gone)
+    operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-0")]
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert result.completed_at is not None
+    assert result.encrypted_delegated_credential is None
+    assert notifications.failed == ["Restore worker error (RuntimeError)"]
+    assert "connection reset" not in " ".join(result.preflight_errors)
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_error_before_any_write_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _broken_snapshot(*_args, **_kwargs):
+        msg = "store unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot",
+        _broken_snapshot,
     )
-    executor, _, verifier, client = _run(monkeypatch, operation, verified=True)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
 
-    await executor.execute(OPERATION_ID)
+    result = await executor.execute(OPERATION_ID)
 
-    assert client.writes == [("update", "mist-1")]
-    assert verifier.id_map == {"mist-0": "new-uuid"}
+    assert client.writes == []
+    assert result.status is RestoreStatus.FAILED
+    assert result.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_credential_that_will_not_decrypt_fails_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    operation.encrypted_delegated_credential = "broken"
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    with pytest.raises(RestoreExecutionError, match="could not be decrypted"):
+        await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert operation.status is RestoreStatus.FAILED
+    assert operation.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_mist_error_during_preflight_fails_and_notifies_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _unreachable_snapshot(*_args, **_kwargs):
+        msg = "Unable to reach Mist to read wlans"
+        raise MistMutationTransportError(msg)
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot",
+        _unreachable_snapshot,
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert result.status is RestoreStatus.FAILED
+    assert result.encrypted_delegated_credential is None
+    assert notifications.failed == ["Unable to reach Mist to read wlans"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_expired_credential_fails_and_notifies(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    operation.delegated_credential_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    with pytest.raises(RestoreExecutionError, match="has expired"):
+        await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert operation.status is RestoreStatus.FAILED
+    assert operation.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
+
+
+async def test_a_version_number_that_stays_taken_is_given_up_after_bounded_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookups = 0
+
+    async def _latest(_logical_id):
+        nonlocal lookups
+        lookups += 1
+        return ObjectVersion.model_construct(version=lookups + 1)
+
+    class _AlwaysTaken:
+        async def insert(self) -> None:
+            msg = "E11000 duplicate key"
+            raise DuplicateKeyError(msg)
+
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.latest_version", _latest)
+
+    with pytest.raises(DuplicateKeyError):
+        await RestoreExecutor._insert_next_version(PydanticObjectId(), lambda _latest: _AlwaysTaken())  # noqa: SLF001
+
+    assert lookups == 3
 
 
 @pytest.mark.usefixtures("executed")

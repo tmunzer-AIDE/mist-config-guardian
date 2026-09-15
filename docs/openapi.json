@@ -7780,6 +7780,11 @@
             "title": "Order",
             "type": "integer"
           },
+          "outcome_unknown": {
+            "default": false,
+            "title": "Outcome Unknown",
+            "type": "boolean"
+          },
           "resulting_mist_id": {
             "anyOf": [
               {

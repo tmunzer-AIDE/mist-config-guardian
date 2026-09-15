@@ -78,6 +78,7 @@ class RestoreActionResponse(BaseModel):
     status: RestoreActionStatus
     resulting_mist_id: str | None
     error: str | None
+    outcome_unknown: bool = False
 
     @classmethod
     def from_model(cls, action: RestoreAction) -> "RestoreActionResponse":
@@ -98,6 +99,7 @@ class RestoreActionResponse(BaseModel):
             status=action.status,
             resulting_mist_id=action.resulting_mist_id,
             error=action.error,
+            outcome_unknown=action.outcome_unknown,
         )
 
 

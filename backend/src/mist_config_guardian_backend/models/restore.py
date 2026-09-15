@@ -67,6 +67,10 @@ class RestoreAction(BaseModel):
     status: RestoreActionStatus = RestoreActionStatus.PENDING
     resulting_mist_id: str | None = None
     error: str | None = None
+    # The write was in flight when Mist stopped answering, so it may have been
+    # applied. Such an action is FAILED, and compensation treats it as possibly
+    # applied rather than as never attempted.
+    outcome_unknown: bool = False
 
 
 class RestoreOperationStateRecord(TimestampedModel, Document):

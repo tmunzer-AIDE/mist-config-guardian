@@ -43,7 +43,7 @@ export function actionRows(operation: RestoreOperation): ActionRow[] {
     detail: detailOf(action),
     kind: kindOf(action),
     status: actionStatusLabel(action, operation.status),
-    statusTone: actionStatusTone(action.status),
+    statusTone: actionStatusTone(action.status, action.outcome_unknown === true),
     error: action.error,
     running: action.status === 'executing',
     failed: action.status === 'failed',

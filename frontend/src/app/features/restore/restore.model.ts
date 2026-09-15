@@ -33,6 +33,7 @@ export interface RestoreAction {
   status: RestoreActionStatus;
   resulting_mist_id: string | null;
   error: string | null;
+  outcome_unknown?: boolean;
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'invalidated';
@@ -248,7 +249,7 @@ export function actionStatusLabel(
     case 'executing':
       return 'RUNNING';
     case 'failed':
-      return 'FAILED';
+      return action.outcome_unknown ? 'UNCONFIRMED' : 'FAILED';
     case 'skipped':
       return 'SKIPPED';
     default:
@@ -256,12 +257,12 @@ export function actionStatusLabel(
   }
 }
 
-export function actionStatusTone(status: RestoreActionStatus): Tone {
+export function actionStatusTone(status: RestoreActionStatus, outcomeUnknown = false): Tone {
   switch (status) {
     case 'completed':
       return 'ok';
     case 'failed':
-      return 'crit';
+      return outcomeUnknown ? 'warn' : 'crit';
     case 'executing':
       return 'info';
     default:
