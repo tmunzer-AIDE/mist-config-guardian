@@ -1,5 +1,6 @@
 """Fail-closed execution of reviewed restore plans."""
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ from mist_config_guardian_backend.services.notifications import NotificationServ
 from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot
 from mist_config_guardian_backend.services.restore_outcome import mark_unconfirmed, terminal_failure_status
 from mist_config_guardian_backend.services.restore_planner import (
+    RestoreOperationState,
     RestoreStateStore,
     RestoreVerificationResult,
     SafetySnapshotEntry,
@@ -51,10 +53,21 @@ logger = logging.getLogger(__name__)
 
 _MAX_REPORTED_CHECKS = 3
 _RECORD_ATTEMPTS = 3
+# Far inside the janitor's timeout, so a healthy run never looks silent.
+_HEARTBEAT_INTERVAL_SECONDS = 60.0
+_OWNERSHIP_LOST = "Restore operation was closed by another writer"
 
 
 class RestoreExecutionError(ValueError):
     """Raised when a plan cannot safely begin execution."""
+
+
+class RestoreOwnershipLostError(Exception):
+    """Raised when the stored operation is no longer in the state this worker last wrote.
+
+    Deliberately not a ``MistMutationError``: the janitor (or another writer)
+    already closed the run, so nothing may record a failure over it.
+    """
 
 
 @dataclass
@@ -64,6 +77,19 @@ class _RunOutcome:
     succeeded: bool = True
     id_map: dict[str, str] = field(default_factory=dict)
     applied: dict[int, dict[str, object]] = field(default_factory=dict)
+
+
+@dataclass
+class _Ownership:
+    """The status this worker last wrote for an operation, which every later write must still find.
+
+    The lock keeps the background heartbeat and the run's own writes from
+    interleaving, so a beat never mistakes the worker's own close for a loss.
+    """
+
+    status: RestoreStatus
+    lost: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class RestoreExecutor:
@@ -76,11 +102,14 @@ class RestoreExecutor:
         store: RestoreStateStore | None = None,
         notifications: NotificationService | None = None,
         verifier: RestoreVerificationService | None = None,
+        heartbeat_interval_seconds: float = _HEARTBEAT_INTERVAL_SECONDS,
     ) -> None:
         self._vault = vault
         self._store = store or get_restore_state_store()
         self._notifications = notifications or NotificationService()
         self._verifier = verifier or RestoreVerificationService(self._store)
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._owned: dict[PydanticObjectId | None, _Ownership] = {}
 
     async def execute(self, operation_id: PydanticObjectId) -> RestoreOperation:
         """Execute pending actions once using the delegated Mist identity.
@@ -94,11 +123,20 @@ class RestoreExecutor:
         precondition that fails after that check is closed like any other
         failure and then re-raised as ``RestoreExecutionError``, so the task
         still records that the restore never started.
+
+        A run that finds its operation closed by another writer, normally the
+        janitor after this worker went silent, stops where it is: the closer
+        already recorded the terminal state and notified, and one more write
+        would undo that.
         """
         operation = await self._load_queued(operation_id)
+        self._owned[operation.id] = _Ownership(status=operation.status)
         try:
             organization, token = await self._prepare(operation)
             return await self._run(operation, organization, token)
+        except RestoreOwnershipLostError as exc:
+            logger.warning("restore_ownership_lost operation=%s error_type=%s", operation.id, type(exc).__name__)
+            return operation
         except RestoreExecutionError as exc:
             await self._close_failed(operation, str(exc))
             raise
@@ -107,16 +145,36 @@ class RestoreExecutor:
             return operation
         finally:
             await self._clear_delegated_credential(operation)
+            self._owned.pop(operation.id, None)
 
     async def _run(self, operation: RestoreOperation, organization: Organization, token: str) -> RestoreOperation:
-        """The execution itself; ``execute`` owns the guarantees around it."""
+        """Claim the queued operation, then keep it visibly alive for as long as the run lasts.
+
+        The background beat covers phases with no write of their own, such as a
+        safety snapshot or a verification over many objects, which could
+        otherwise outlast the janitor's timeout on a perfectly healthy run.
+        """
         state = await load_or_build_state(self._store, operation)
-        compensating = state.compensates_operation_id is not None
         operation.status = RestoreStatus.RUNNING
         operation.started_at = utc_now()
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
+        beat = asyncio.create_task(self._beat_until_cancelled(operation))
+        try:
+            return await self._run_owned(operation, organization, token, state)
+        finally:
+            beat.cancel()
+            await asyncio.gather(beat, return_exceptions=True)
 
+    async def _run_owned(
+        self,
+        operation: RestoreOperation,
+        organization: Organization,
+        token: str,
+        state: RestoreOperationState,
+    ) -> RestoreOperation:
+        """The execution itself; ``execute`` owns the guarantees around it."""
+        compensating = state.compensates_operation_id is not None
         async with MistMutationClient(
             token=token,
             region=organization.cloud_region,
@@ -162,14 +220,80 @@ class RestoreExecutor:
             return operation
         operation.status = RestoreStatus.COMPENSATED if compensating else RestoreStatus.COMPLETED
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
         await self._announce_success(operation, state.compensates_operation_id)
         return operation
 
+    def _ownership_of(self, operation: RestoreOperation) -> _Ownership:
+        """What this worker last wrote; an operation it never claimed is taken to be running."""
+        return self._owned.setdefault(operation.id, _Ownership(status=RestoreStatus.RUNNING))
+
+    async def _persist(self, operation: RestoreOperation) -> None:
+        """Write the worker's copy, but only over the state this worker last wrote.
+
+        A whole-document save would silently undo the janitor closing this run:
+        the status would read running again and the credential would return.
+        Matching the last written status turns that into a refused write.
+        """
+        if operation.id is None:
+            # Nothing addressable, so nothing another writer could have closed.
+            await operation.save()
+            return
+        ownership = self._ownership_of(operation)
+        async with ownership.lock:
+            if ownership.lost:
+                raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
+            result = await RestoreOperation.find_one(
+                RestoreOperation.id == operation.id,
+                RestoreOperation.status == ownership.status,
+            ).update({"$set": operation.model_dump(exclude={"id", "revision_id"})})
+            if result is None or result.matched_count == 0:
+                ownership.lost = True
+                raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
+            ownership.status = operation.status
+
     async def _heartbeat(self, operation: RestoreOperation) -> None:
-        """Record that this worker is still alive, so the janitor leaves it alone."""
-        operation.touch()
-        await operation.save()
+        """Record that this worker is still alive, so the janitor leaves it alone.
+
+        Only the timestamp is written, and only while the stored run is still
+        running: a heartbeat must neither overwrite what other writers set nor
+        revive a run the janitor already closed. Task 9 renews the lease here.
+        """
+        ownership = self._ownership_of(operation)
+        async with ownership.lock:
+            if ownership.lost:
+                raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
+            if ownership.status is not RestoreStatus.RUNNING or operation.id is None:
+                return
+            now = utc_now()
+            result = await RestoreOperation.find_one(
+                RestoreOperation.id == operation.id,
+                RestoreOperation.status == RestoreStatus.RUNNING,
+            ).update({"$set": {"updated_at": now}})
+            if result is None or result.matched_count == 0:
+                ownership.lost = True
+                raise RestoreOwnershipLostError(_OWNERSHIP_LOST)
+            operation.updated_at = now
+
+    async def _beat_until_cancelled(self, operation: RestoreOperation) -> None:
+        """Heartbeat on a fixed interval until the run ends or the operation is no longer this worker's.
+
+        A lost operation is only recorded here: the run's next write refuses,
+        and ``execute`` stops it without touching what the closer stored.
+        """
+        while True:
+            await asyncio.sleep(self._heartbeat_interval_seconds)
+            try:
+                await self._heartbeat(operation)
+            except RestoreOwnershipLostError:
+                logger.warning("restore_heartbeat_ownership_lost operation=%s", operation.id)
+                return
+            except Exception as exc:  # noqa: BLE001 - a failed beat is retried on the next interval
+                logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                    "restore_heartbeat_failed operation=%s error_type=%s",
+                    operation.id,
+                    type(exc).__name__,
+                )
 
     async def _announce_success(
         self,
@@ -311,7 +435,7 @@ class RestoreExecutor:
         operation.status = terminal_failure_status(operation.actions)
         operation.preflight_errors.append(reason)
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
         await self._notify_failure(operation, reason)
 
     async def _fail_unexpectedly(self, operation: RestoreOperation, exc: Exception) -> None:
@@ -342,7 +466,11 @@ class RestoreExecutor:
         operation.delegated_credential_expires_at = None
         operation.touch()
         try:
-            await operation.save()
+            await self._persist(operation)
+        except RestoreOwnershipLostError:
+            # Another writer closed the run and notified; a second close would overwrite it.
+            logger.warning("restore_ownership_lost operation=%s", operation.id)
+            return
         except Exception as save_error:  # noqa: BLE001 - the janitor recovers an unsaved terminal state
             logger.error(  # noqa: TRY400 - a traceback could carry configuration content
                 "restore_terminal_state_unsaved operation=%s error_type=%s",
@@ -393,8 +521,8 @@ class RestoreExecutor:
             }
         )
 
-    @staticmethod
     async def _fail_preflight(
+        self,
         operation: RestoreOperation,
         error: str,
     ) -> None:
@@ -404,7 +532,7 @@ class RestoreExecutor:
         operation.delegated_credential_expires_at = None
         operation.completed_at = utc_now()
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
 
     async def _execute_action(  # noqa: PLR0913 - the pre-write snapshot decides whether a write is still needed
         self,
@@ -432,13 +560,14 @@ class RestoreExecutor:
             action.status = RestoreActionStatus.SKIPPED
             operation.actions[index] = action
             operation.touch()
-            await operation.save()
+            await self._persist(operation)
             return None
 
+        # Guarded, so an operation the janitor closed never reaches Mist again.
         action.status = RestoreActionStatus.EXECUTING
         operation.actions[index] = action
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
 
         site_id = rewrite_identifier(action.site_mist_id, id_map)
         object_id = rewrite_identifier(action.current_mist_id, id_map)
@@ -483,11 +612,13 @@ class RestoreExecutor:
             )
 
         # The write has happened in Mist: persist that fact before any local
-        # bookkeeping can fail, so compensation knows what was applied.
+        # bookkeeping can fail, so compensation knows what was applied. If the
+        # janitor closed the run meanwhile, this is refused and its FAILED,
+        # unconfirmed record of the write stands, which is still compensable.
         action.status = RestoreActionStatus.COMPLETED
         operation.actions[index] = action
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
 
         await self._record_result(
             operation,
@@ -592,8 +723,8 @@ class RestoreExecutor:
         logical.touch()
         await logical.save()
 
-    @staticmethod
     async def _fail_operation(
+        self,
         operation: RestoreOperation,
         action_index: int,
         message: str,
@@ -613,7 +744,7 @@ class RestoreExecutor:
         operation.encrypted_delegated_credential = None
         operation.delegated_credential_expires_at = None
         operation.touch()
-        await operation.save()
+        await self._persist(operation)
 
 
 def _failure_reason(operation: RestoreOperation) -> str:

@@ -1,8 +1,9 @@
 """Post-restore verification and the execution progress it gates."""
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Self
+from typing import TYPE_CHECKING, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -43,6 +44,9 @@ from mist_config_guardian_backend.services.restore_verification import (
     RestoreVerificationService,
     find_stale_references,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 ORGANIZATION_ID = PydanticObjectId()
 OPERATION_ID = PydanticObjectId()
@@ -429,44 +433,106 @@ def _build_verifier(
 # ------------------------------------------------------------------- execution
 
 
-@pytest.fixture
-def credential_clears(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[dict[str, object]], dict[str, object]]]:
-    """Record every field-scoped write, filter and payload.
+class _UpdateResult:
+    def __init__(self, matched_count: int) -> None:
+        self.matched_count = matched_count
+        self.modified_count = matched_count
 
-    Recorded rather than asserted inside the fake: the executor swallows any
-    error raised by that write, so an assertion there could never fail a test.
+
+class _StoredOperation:
+    """The stored restore operation as the executor's field-scoped writes see it.
+
+    Writes are recorded rather than asserted inside the fake: the executor
+    swallows some write errors, so an assertion there could never fail a test.
+    A write filtered on a status matches only while the stored status equals
+    it, so setting ``status`` mid-run is how a test lets the janitor close a run.
     """
-    calls: list[tuple[list[dict[str, object]], dict[str, object]]] = []
 
-    class _Recorded:
+    def __init__(self) -> None:
+        self.status: RestoreStatus | None = None
+        self.writes: list[tuple[list[dict[str, object]], dict[str, object]]] = []
+        self.saves: list[tuple[RestoreStatus, tuple, tuple]] = []
+        self.documents: list[dict[str, object]] = []
+        self.clears: list[tuple[list[dict[str, object]], dict[str, object]]] = []
+        self.fault: Callable[[dict[str, object]], Exception | None] | None = None
+
+    def heartbeats(self) -> list[tuple[list[dict[str, object]], dict[str, object]]]:
+        return [(filters, change) for filters, change in self.writes if list(change["$set"]) == ["updated_at"]]
+
+    def update(self, filters: list[dict[str, object]], change: dict[str, object]) -> _UpdateResult:
+        self.writes.append((filters, change))
+        if self.fault is not None and (error := self.fault(change)) is not None:
+            raise error
+        expected = next((criterion["status"] for criterion in filters if "status" in criterion), None)
+        if expected is None:
+            if len(filters) == 1:
+                self.clears.append((filters, change))
+            return _UpdateResult(1)
+        if self.status is None:
+            # The first guarded write finds the status the executor loaded.
+            self.status = expected
+        if self.status is not expected:
+            return _UpdateResult(0)
+        document = change["$set"]
+        if "status" in document:
+            self.status = document["status"]
+            self.remember(document)
+        return _UpdateResult(1)
+
+    def remember(self, document: dict[str, object]) -> None:
+        actions = document["actions"]
+        self.saves.append(
+            (
+                document["status"],
+                tuple(action["status"] for action in actions),
+                tuple(action["resulting_mist_id"] for action in actions),
+            )
+        )
+        self.documents.append(
+            {
+                "status": document["status"],
+                "encrypted_delegated_credential": document["encrypted_delegated_credential"],
+                "delegated_credential_expires_at": document["delegated_credential_expires_at"],
+                "preflight_errors": list(document["preflight_errors"]),
+            }
+        )
+
+
+@pytest.fixture
+def stored(monkeypatch: pytest.MonkeyPatch) -> _StoredOperation:
+    """Replace the operation collection with a recorder that honours status filters."""
+    operation = _StoredOperation()
+
+    class _Query:
         def __init__(self, filters: tuple) -> None:
-            self.filters = filters
+            self.filters = [criterion.query for criterion in filters]
 
-        async def update(self, change, *_args, **_kwargs) -> None:
-            calls.append(([criterion.query for criterion in self.filters], change))
+        async def update(self, change, *_args, **_kwargs) -> _UpdateResult:
+            return operation.update(self.filters, change)
 
-    monkeypatch.setattr(RestoreOperation, "find_one", lambda *filters, **_kwargs: _Recorded(filters))
-    return calls
+    async def _save(self) -> None:
+        # Only an operation without an id is still saved whole.
+        operation.remember(self.model_dump())
+
+    for name in ("id", "status"):
+        monkeypatch.setattr(RestoreOperation, name, ExpressionField(name), raising=False)
+    monkeypatch.setattr(RestoreOperation, "find_one", lambda *filters, **_kwargs: _Query(filters))
+    monkeypatch.setattr(RestoreOperation, "save", _save)
+    return operation
+
+
+@pytest.fixture
+def credential_clears(stored: _StoredOperation) -> list[tuple[list[dict[str, object]], dict[str, object]]]:
+    """Every write addressed by id alone, which is the credential clear."""
+    return stored.clears
 
 
 @pytest.fixture
 def executed(
     monkeypatch: pytest.MonkeyPatch,
-    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],  # noqa: ARG001 - installs the write recorder
+    stored: _StoredOperation,
 ) -> list[tuple[RestoreStatus, tuple, tuple]]:
     """Run the executor against fakes and record every persisted state."""
-    saves: list[tuple[RestoreStatus, tuple, tuple]] = []
-
-    async def _record(self) -> None:
-        saves.append(
-            (
-                self.status,
-                tuple(action.status for action in self.actions),
-                tuple(action.resulting_mist_id for action in self.actions),
-            )
-        )
-
-    monkeypatch.setattr(RestoreOperation, "save", _record)
 
     async def _organization_get(_document_id, *_args, **_kwargs):
         return _organization()
@@ -477,7 +543,6 @@ def executed(
         return
 
     monkeypatch.setattr(RestoreExecutor, "_record_result", _no_record_result)
-    monkeypatch.setattr(RestoreOperation, "id", ExpressionField("id"), raising=False)
 
     async def _snapshot(*_args, **_kwargs):
         return []
@@ -486,29 +551,16 @@ def executed(
         "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot",
         _snapshot,
     )
-    return saves
+    return stored.saves
 
 
 @pytest.fixture
 def persisted(
-    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
     executed: list[tuple[RestoreStatus, tuple, tuple]],  # noqa: ARG001 - installs the fakes this recorder refines
 ) -> list[dict[str, object]]:
-    """Record what every document save would persist, the credential fields included."""
-    documents: list[dict[str, object]] = []
-
-    async def _record(self) -> None:
-        documents.append(
-            {
-                "status": self.status,
-                "encrypted_delegated_credential": self.encrypted_delegated_credential,
-                "delegated_credential_expires_at": self.delegated_credential_expires_at,
-                "preflight_errors": list(self.preflight_errors),
-            }
-        )
-
-    monkeypatch.setattr(RestoreOperation, "save", _record)
-    return documents
+    """Record what every accepted document write persisted, the credential fields included."""
+    return stored.documents
 
 
 _CREDENTIAL_CLEARED = {"$set": {"encrypted_delegated_credential": None, "delegated_credential_expires_at": None}}
@@ -539,13 +591,14 @@ def _assert_failed_before_running(
     }
 
 
-def _run(
+def _run(  # noqa: PLR0913 - every fake the executor accepts is optional here
     monkeypatch: pytest.MonkeyPatch,
     operation: RestoreOperation,
     *,
     verified: bool,
     store: _MemoryStateStore | None = None,
     client: _FakeClient | None = None,
+    heartbeat_interval_seconds: float = 60.0,
 ) -> tuple[RestoreExecutor, _StubNotifications, _StubVerifier, _FakeClient]:
     client = client or _FakeClient()
     monkeypatch.setattr(
@@ -564,6 +617,7 @@ def _run(
         store=store or _MemoryStateStore(),
         notifications=notifications,
         verifier=verifier,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
     )
     return executor, notifications, verifier, client
 
@@ -1148,6 +1202,7 @@ async def test_the_worker_heartbeats_around_every_phase(monkeypatch: pytest.Monk
 @pytest.mark.usefixtures("executed")
 async def test_the_credential_is_cleared_in_the_database_when_the_terminal_state_is_not_saved(
     monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
     credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1155,14 +1210,14 @@ async def test_the_credential_is_cleared_in_the_database_when_the_terminal_state
         msg = "connection reset"
         raise RuntimeError(msg)
 
-    async def _save_until_terminal(self) -> None:
-        # Progress writes succeed; the terminal write in _fail_unexpectedly is lost.
-        if self.completed_at is not None:
-            msg = "primary stepped down"
-            raise RuntimeError(msg)
+    def _terminal_write_lost(change: dict[str, object]) -> Exception | None:
+        # Progress writes succeed; the terminal write in _close_failed is lost.
+        if change["$set"].get("completed_at") is not None:
+            return RuntimeError("primary stepped down")
+        return None
 
     monkeypatch.setattr(RestoreExecutor, "_record_result", _database_gone)
-    monkeypatch.setattr(RestoreOperation, "save", _save_until_terminal)
+    stored.fault = _terminal_write_lost
     operation = _operation([_action(0, RestoreActionType.UPDATE)])
     executor, notifications, _, _ = _run(monkeypatch, operation, verified=True)
 
@@ -1177,3 +1232,157 @@ async def test_the_credential_is_cleared_in_the_database_when_the_terminal_state
         )
     ]
     assert notifications.failed == ["Restore worker error (RuntimeError)"]
+
+
+# ------------------------------------------------------------------- ownership
+
+_EXECUTOR_LOGGER = "mist_config_guardian_backend.services.restore_executor"
+
+
+class _ClosingClient(_FakeClient):
+    """Applies the write while the janitor closes the run, as a slow Mist call allows."""
+
+    def __init__(self, stored: _StoredOperation) -> None:
+        super().__init__()
+        self.stored = stored
+
+    async def update(self, definition, object_id, configuration, *, org_id, site_id):
+        self.stored.status = RestoreStatus.COMPENSATION_AVAILABLE
+        return await super().update(definition, object_id, configuration, org_id=org_id, site_id=site_id)
+
+
+@pytest.mark.usefixtures("executed")
+async def test_the_heartbeat_writes_only_the_timestamp_of_a_run_it_still_owns(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, _, _ = _run(monkeypatch, operation, verified=True)
+
+    await executor.execute(OPERATION_ID)
+
+    beats = stored.heartbeats()
+    assert len(beats) == 3
+    for filters, change in beats:
+        assert filters == [{"id": OPERATION_ID}, {"status": RestoreStatus.RUNNING}]
+        assert isinstance(change["$set"]["updated_at"], datetime)
+
+
+@pytest.mark.parametrize("closed_during", ["snapshot", "write"])
+async def test_a_run_the_janitor_closed_stops_without_another_mist_write_or_notification(
+    monkeypatch: pytest.MonkeyPatch,
+    executed: list[tuple[RestoreStatus, tuple, tuple]],
+    stored: _StoredOperation,
+    caplog: pytest.LogCaptureFixture,
+    closed_during: str,
+) -> None:
+    async def _snapshot(*_args, **_kwargs):
+        if closed_during == "snapshot":
+            stored.status = RestoreStatus.COMPENSATION_AVAILABLE
+        return []
+
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
+    operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
+    client = _ClosingClient(stored) if closed_during == "write" else _FakeClient()
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, client=client)
+
+    with caplog.at_level(logging.WARNING, logger=_EXECUTOR_LOGGER):
+        await executor.execute(OPERATION_ID)
+
+    assert client.writes == ([] if closed_during == "snapshot" else [("update", "mist-0")])
+    assert notifications.failed == []
+    assert notifications.completed == []
+    # Nothing after the close was accepted: every accepted write is still a running one.
+    assert executed
+    assert {entry[0] for entry in executed} == {RestoreStatus.RUNNING}
+    assert stored.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert stored.clears == [([{"id": OPERATION_ID}], _CREDENTIAL_CLEARED)]
+    assert "restore_ownership_lost" in caplog.text
+
+
+@pytest.mark.usefixtures("executed")
+async def test_the_background_heartbeat_keeps_a_long_phase_alive_until_ownership_is_lost(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    beats_while_owned = 0
+
+    async def _long_snapshot(*_args, **_kwargs):
+        nonlocal beats_while_owned
+        await asyncio.sleep(0.05)
+        beats_while_owned = len(stored.heartbeats())
+        stored.status = RestoreStatus.COMPENSATION_AVAILABLE
+        await asyncio.sleep(0.05)
+        return []
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True, heartbeat_interval_seconds=0.01)
+
+    with caplog.at_level(logging.WARNING, logger=_EXECUTOR_LOGGER):
+        await executor.execute(OPERATION_ID)
+
+    assert beats_while_owned >= 2
+    # One beat finds the run closed and the beating stops; the flow's next write refuses without writing.
+    assert len(stored.heartbeats()) == beats_while_owned + 1
+    assert "restore_heartbeat_ownership_lost" in caplog.text
+    assert client.writes == []
+    assert notifications.failed == []
+
+
+@pytest.mark.usefixtures("executed")
+async def test_the_background_heartbeat_ends_with_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+) -> None:
+    async def _long_snapshot(*_args, **_kwargs):
+        await asyncio.sleep(0.03)
+        return []
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, _, _ = _run(monkeypatch, operation, verified=True, heartbeat_interval_seconds=0.01)
+
+    result = await executor.execute(OPERATION_ID)
+    after_run = len(stored.writes)
+    await asyncio.sleep(0.05)
+
+    assert result.status is RestoreStatus.COMPLETED
+    assert len(stored.writes) == after_run
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_failing_background_heartbeat_is_logged_by_type_and_keeps_beating(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def _heartbeat_write_fails(change: dict[str, object]) -> Exception | None:
+        if list(change["$set"]) == ["updated_at"]:
+            return RuntimeError("configuration content in a driver message")
+        return None
+
+    async def _long_snapshot(*_args, **_kwargs):
+        stored.fault = _heartbeat_write_fails
+        await asyncio.sleep(0.05)
+        stored.fault = None
+        return []
+
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, _, _ = _run(monkeypatch, operation, verified=True, heartbeat_interval_seconds=0.01)
+
+    with caplog.at_level(logging.ERROR, logger=_EXECUTOR_LOGGER):
+        result = await executor.execute(OPERATION_ID)
+
+    assert result.status is RestoreStatus.COMPLETED
+    assert caplog.text.count("restore_heartbeat_failed") >= 2
+    assert "error_type=RuntimeError" in caplog.text
+    assert "configuration content" not in caplog.text
