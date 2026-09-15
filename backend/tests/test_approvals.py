@@ -683,10 +683,15 @@ async def test_a_plan_without_a_reviewed_record_is_not_current() -> None:
 
 
 class _PreparingAuthorization:
-    def __init__(self, prepared: RestoreOperation) -> None:
+    def __init__(self, prepared: RestoreOperation, *, superseded_by: PydanticObjectId | None = None) -> None:
         self.prepared = prepared
+        self.superseded_by = superseded_by
 
     async def prepare(self, organization, operation, requested_by, credential, store):  # noqa: ARG002
+        # As a real preparation leaves the draft: retired in favour of its
+        # replacement, or of another plan when that preparation got there first.
+        operation.status = RestoreStatus.SUPERSEDED
+        operation.superseded_by = self.superseded_by or self.prepared.id
         return self.prepared
 
 
@@ -725,11 +730,19 @@ async def test_preparing_an_approved_draft_carries_its_approval_over_the_api() -
     assert APPROVAL_NOT_CARRIED not in body["warnings"]
 
 
-def _preparing_app(service: ApprovalService, draft: RestoreOperation, prepared: RestoreOperation):
+def _preparing_app(
+    service: ApprovalService,
+    draft: RestoreOperation,
+    prepared: RestoreOperation,
+    *,
+    superseded_by: PydanticObjectId | None = None,
+):
     """The prepare route with a fresh backup that returns ``prepared`` and no reviewed-state record."""
     administrator = _user(UserRole.ADMINISTRATOR, identifier=APPROVER_ID, email="approver@example.com")
     app = _app(service, administrator)
-    app.dependency_overrides[get_restore_authorization_service] = lambda: _PreparingAuthorization(prepared)
+    app.dependency_overrides[get_restore_authorization_service] = lambda: _PreparingAuthorization(
+        prepared, superseded_by=superseded_by
+    )
     app.dependency_overrides[get_restore_plans] = lambda: _Plans(draft)
     app.dependency_overrides[get_plan_state_store] = _NoStates
     return app
@@ -780,6 +793,58 @@ async def test_a_carry_that_fails_still_returns_the_prepared_plan(monkeypatch: p
     # The approval stayed on the draft, and the response says so rather than guessing.
     assert body["approval"] is None
     assert approval.restore_operation_id == OPERATION_ID
+    assert logs == [
+        {
+            "event": "restore_approval_carry_failed",
+            "log_level": "warning",
+            "operation_id": str(PREPARED_ID),
+            "error_type": "RuntimeError",
+        }
+    ]
+
+
+async def test_an_approval_stays_on_a_draft_another_preparation_superseded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The plan that retired the draft is where its approval belongs, not a plan that lost the race."""
+    draft, service, store, approval = await _approved_draft(ApprovalPolicy(), [_action()])
+    prepared = _prepared_from(draft)
+    store.operations[PREPARED_ID] = prepared
+    saved = AsyncMock()
+    monkeypatch.setattr(RestoreOperation, "save", saved)
+
+    with capture_logs() as logs:
+        response = await _post_prepare(_preparing_app(service, draft, prepared, superseded_by=PydanticObjectId()))
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == str(PREPARED_ID)
+    assert body["approval"] is None
+    assert APPROVAL_NOT_CARRIED not in body["warnings"]
+    assert approval.restore_operation_id == OPERATION_ID
+    assert approval.status is ApprovalStatus.APPROVED
+    saved.assert_not_awaited()
+    assert logs == [
+        {
+            "event": "restore_approval_carry_skipped",
+            "log_level": "info",
+            "operation_id": str(OPERATION_ID),
+            "prepared_id": str(PREPARED_ID),
+        }
+    ]
+
+
+async def test_a_not_carried_warning_that_cannot_be_saved_still_returns_the_prepared_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft, service, store, _approval = await _approved_draft(ApprovalPolicy(), [_action()])
+    prepared = _prepared_from(draft, actions=[*draft.actions, _action(order=1, action=RestoreActionType.DELETE)])
+    store.operations[PREPARED_ID] = prepared
+    monkeypatch.setattr(RestoreOperation, "save", AsyncMock(side_effect=RuntimeError("database detail")))
+
+    with capture_logs() as logs:
+        response = await _post_prepare(_preparing_app(service, draft, prepared))
+
+    assert response.status_code == 201
+    assert response.json()["id"] == str(PREPARED_ID)
     assert logs == [
         {
             "event": "restore_approval_carry_failed",

@@ -273,28 +273,41 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail="Mist is unavailable; no restore was queued") from exc
-    await _carry_approval(approvals, operation, plan)
+    await _carry_approval(approvals, plans, operation, plan)
     return await _operation_response(plan, approvals, organization)
 
 
-async def _carry_approval(approvals: ApprovalService, draft: RestoreOperation, plan: RestoreOperation) -> None:
+async def _carry_approval(
+    approvals: ApprovalService,
+    plans: RestorePlanRepository,
+    draft: RestoreOperation,
+    plan: RestoreOperation,
+) -> None:
     """Move the draft's approval to its prepared plan, or say on the plan why it did not follow.
 
     The approval was asked for before this backup existed; it follows the new
-    plan only when the backup left what would be done unchanged. A failure here
-    must not fail the request: the prepared plan and its session already exist.
+    plan only when the backup left what would be done unchanged, and only when
+    this plan is the one the stored draft names as its replacement. Two
+    preparations of one draft can both finish, and the approval belongs with
+    the plan that actually retired the draft, not with the one that lost.
+
+    A failure anywhere here must not fail the request: the prepared plan and
+    its session already exist. Logs carry ids and the error type only.
     """
     try:
-        carried = await approvals.carry_to_prepared(draft, plan)
+        stored = None if draft.id is None else await plans.load(draft.organization_id, draft.id)
+        if stored is None or stored.superseded_by != plan.id:
+            logger.info("restore_approval_carry_skipped", operation_id=str(draft.id), prepared_id=str(plan.id))
+            return
+        carried = await approvals.carry_to_prepared(stored, plan)
+        if carried == "not_carried":
+            plan.warnings.append(APPROVAL_NOT_CARRIED)
+            await plan.save()
     except Exception as exc:  # noqa: BLE001 - the prepared plan and its session already exist and must be returned
         # The response reads the approval from the store, so it shows wherever
         # the approval actually is. Only the type is logged: the message could
         # hold database detail.
         logger.warning("restore_approval_carry_failed", operation_id=str(plan.id), error_type=type(exc).__name__)
-        return
-    if carried == "not_carried":
-        plan.warnings.append(APPROVAL_NOT_CARRIED)
-        await plan.save()
 
 
 @router.post("/{operation_id}/compensation", status_code=status.HTTP_201_CREATED)
