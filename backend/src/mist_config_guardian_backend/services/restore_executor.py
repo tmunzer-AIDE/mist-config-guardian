@@ -503,11 +503,25 @@ class RestoreExecutor:
         return outcome
 
     async def _notify_failure(self, operation: RestoreOperation, reason: str) -> None:
-        await self._notifications.notify_restore_failed(
-            organization_id=operation.organization_id,
-            restore_id=str(operation.id),
-            reason=reason,
-        )
+        """Announce a failure every caller has already saved, whatever the notification service does.
+
+        An error escaping here would reach ``execute``'s last-resort close,
+        whose guard matches the terminal status just saved: it would record a
+        second reason and send a second notification for the same run. Only
+        the error type is logged.
+        """
+        try:
+            await self._notifications.notify_restore_failed(
+                organization_id=operation.organization_id,
+                restore_id=str(operation.id),
+                reason=reason,
+            )
+        except Exception as notify_error:  # noqa: BLE001 - a lost notification must not reopen a recorded failure
+            logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                "restore_failure_notification_lost operation=%s error_type=%s",
+                operation.id,
+                type(notify_error).__name__,
+            )
 
     async def _fail_verification(
         self,
@@ -578,14 +592,7 @@ class RestoreExecutor:
                 operation.id,
                 type(save_error).__name__,
             )
-        try:
-            await self._notify_failure(operation, reason)
-        except Exception as notify_error:  # noqa: BLE001 - a lost notification must not mask the failure
-            logger.error(  # noqa: TRY400 - a traceback could carry configuration content
-                "restore_failure_notification_lost operation=%s error_type=%s",
-                operation.id,
-                type(notify_error).__name__,
-            )
+        await self._notify_failure(operation, reason)
 
     @staticmethod
     async def _clear_delegated_credential(operation: RestoreOperation) -> None:
@@ -739,18 +746,21 @@ class RestoreExecutor:
             await self._persist(operation)
             return None
 
-        # Guarded, so an operation the janitor closed never reaches Mist again.
-        action.status = RestoreActionStatus.EXECUTING
-        operation.actions[index] = action
-        operation.touch()
-        await self._persist(operation)
-
+        # Decrypted before the action is marked in flight: a payload that cannot
+        # be read never reached Mist, and must not be closed as possibly applied,
+        # which would let its reversal run without a drift check.
         configuration = reveal_configuration(action.protected_configuration, self._vault)
         payload = prepare_restore_payload(
             configuration,
             excluded_fields=definition.restore_excluded_fields,
             id_map=id_map,
         )
+
+        # Guarded, so an operation the janitor closed never reaches Mist again.
+        action.status = RestoreActionStatus.EXECUTING
+        operation.actions[index] = action
+        operation.touch()
+        await self._persist(operation)
 
         result: dict[str, object] | None = None
         if action.action is RestoreActionType.CREATE:

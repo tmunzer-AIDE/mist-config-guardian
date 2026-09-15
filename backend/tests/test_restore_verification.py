@@ -1389,6 +1389,58 @@ async def test_a_compensation_stopped_by_an_unexpected_error_after_a_write_fails
     assert notifications.failed == ["Restore worker error (RuntimeError)"]
 
 
+class _UnreachableNotifications(_StubNotifications):
+    """Records each failure notification, then fails to deliver it."""
+
+    async def notify_restore_failed(self, *, organization_id, restore_id, reason, user_id=None):  # noqa: ARG002
+        self.failed.append(reason)
+        msg = "smtp relay detail"
+        raise RuntimeError(msg)
+
+
+@pytest.mark.usefixtures("executed")
+@pytest.mark.parametrize("stop", ["snapshot", "action", "verification"])
+async def test_a_failure_notification_that_cannot_be_sent_after_the_close_neither_closes_nor_notifies_again(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    caplog: pytest.LogCaptureFixture,
+    stop: str,
+) -> None:
+    reason = {
+        "snapshot": "Unable to reach Mist to read wlans",
+        "action": "wlan-0: Mist failed to update wlans (400)",
+        "verification": "Post-restore verification failed: Mist stored different values for enabled",
+    }[stop]
+    if stop == "snapshot":
+
+        async def _unreachable(*_args, **_kwargs):
+            raise MistMutationTransportError(reason)
+
+        monkeypatch.setattr(
+            "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _unreachable
+        )
+    client = (
+        _FailingClient(MistMutationStatusError("Mist failed to update wlans (400)", status_code=400))
+        if stop == "action"
+        else None
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, _, _ = _run(monkeypatch, operation, verified=stop != "verification", client=client)
+    notifications = _UnreachableNotifications()
+    executor._notifications = notifications  # noqa: SLF001 - the one collaborator this test makes fail
+
+    with caplog.at_level(logging.ERROR, logger=_EXECUTOR_LOGGER):
+        result = await executor.execute(OPERATION_ID)
+
+    assert result.status in {RestoreStatus.FAILED, RestoreStatus.COMPENSATION_AVAILABLE}
+    assert notifications.failed == [reason]
+    assert not any("Restore worker error" in error for error in result.preflight_errors)
+    assert not any("Restore worker error" in str(document["preflight_errors"]) for document in persisted)
+    assert "restore_execution_aborted" not in caplog.text
+    assert f"restore_failure_notification_lost operation={OPERATION_ID} error_type=RuntimeError" in caplog.text
+    assert "smtp relay detail" not in caplog.text
+
+
 @pytest.mark.usefixtures("executed")
 async def test_a_compensation_that_fails_verification_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     operation = _operation([_reversal(0, RestoreActionType.UPDATE)])
@@ -1456,6 +1508,26 @@ async def test_a_reversal_already_back_in_its_earlier_state_is_skipped_and_never
     assert verifier.applied == {}
     assert notifications.completed == [0]
     assert result.status is RestoreStatus.COMPENSATED
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_payload_that_cannot_be_decrypted_stops_the_run_before_its_write_is_marked_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+    stored: _StoredOperation,
+) -> None:
+    """Nothing reached Mist, so nothing may be recorded as possibly applied or reversed without a drift check."""
+    undecryptable = {"name": "wlan-0", "psk": {"$encrypted": "v1:not-for-this-key"}}
+    operation = _operation([_action(0, RestoreActionType.UPDATE, configuration=undecryptable)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert result.actions[0].status is RestoreActionStatus.PENDING
+    assert result.actions[0].outcome_unknown is False
+    assert result.status is RestoreStatus.FAILED
+    assert all(RestoreActionStatus.EXECUTING not in statuses for _, statuses, _ in stored.saves)
+    assert notifications.failed == ["Restore worker error (CredentialDecryptionError)"]
 
 
 class _StickyDeleteClient(_FakeClient):
