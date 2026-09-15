@@ -37,6 +37,7 @@ from mist_config_guardian_backend.services.snapshots import CaptureContext, Snap
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.secrets import reveal_configuration
 
 MONGO_URL = os.environ.get("MONGO_TEST_URL")
 DATABASE = "restore_executor_records"
@@ -307,11 +308,12 @@ async def _assert_folded(logical: LogicalObject, duplicate: LogicalObject) -> No
     assert await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == duplicate.id).count() == 0
     assert await ObjectVersion.find(ObjectVersion.logical_object_id == duplicate.id).count() == 0
     versions = await ObjectVersion.find(ObjectVersion.logical_object_id == logical.id).sort("version").to_list()
+    # The capture is folded in first, so what the restore wrote is the latest version.
     assert [(version.version, version.event) for version in versions] == [
         (1, VersionEvent.INITIAL),
         (2, VersionEvent.DELETED),
-        (3, VersionEvent.RESTORED),
-        (4, VersionEvent.CREATED),
+        (3, VersionEvent.CREATED),
+        (4, VersionEvent.RESTORED),
     ]
     assert versions[3].incarnation_id == versions[2].incarnation_id
     stored = await LogicalObject.get(logical.id)
@@ -387,6 +389,84 @@ async def test_an_identity_older_than_the_restore_is_never_merged() -> None:
     assert "new-network" not in str(raised.value)
     assert await LogicalObject.get(duplicate.id) is not None
     assert await ObjectVersion.find(ObjectVersion.logical_object_id == duplicate.id).count() == 1
+    # Refused before anything was recorded: no restored version on a still-deleted object, no new incarnation.
+    versions = await ObjectVersion.find(ObjectVersion.logical_object_id == logical.id).sort("version").to_list()
+    assert [version.event for version in versions] == [VersionEvent.INITIAL, VersionEvent.DELETED]
+    assert await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == logical.id).count() == 1
+    stored = await LogicalObject.get(logical.id)
+    assert stored is not None
+    assert stored.is_deleted is True
+    assert stored.source_key == logical.source_key
+    assert stored.current_version == 2
+
+
+async def test_defaults_captured_before_the_settings_restore_stay_older_than_the_restored_version() -> None:
+    """Mist creates default settings with the site; a backup can record them before the settings are restored."""
+    settings = await _deleted_object(
+        object_type="settings",
+        scope="site",
+        mist_id="site-old:settings",
+        site_mist_id="site-old",
+        configuration={"vlan": 5},
+    )
+    operation, action = _operation_for(
+        settings, action_type=RestoreActionType.UPDATE, resulting_mist_id="site-old:settings"
+    )
+    definition = get_definition("site", "settings")
+    assert definition is not None
+    snapshots = SnapshotService(_vault())
+    at_new_site = CaptureContext(snapshot_id=None, site_id="site-new")
+    defaults = {"site_id": "site-new", "org_id": "org-1"}
+    assert await snapshots.capture_configuration(settings.organization_id, definition, defaults, at_new_site) is True
+    readback = {"vlan": 5, "site_id": "site-new", "org_id": "org-1"}
+
+    await RestoreExecutor(_vault())._record_result(  # noqa: SLF001
+        operation, action, definition, {"vlan": 5}, readback=readback, site_id="site-new"
+    )
+
+    versions = await ObjectVersion.find(ObjectVersion.logical_object_id == settings.id).sort("version").to_list()
+    assert [(version.version, version.event) for version in versions] == [
+        (1, VersionEvent.INITIAL),
+        (2, VersionEvent.DELETED),
+        (3, VersionEvent.INITIAL),
+        (4, VersionEvent.RESTORED),
+    ]
+    stored = await LogicalObject.get(settings.id)
+    assert stored is not None
+    assert stored.current_version == 4
+    assert await LogicalObject.find(LogicalObject.organization_id == settings.organization_id).count() == 1
+    # The next backup of the restored settings finds exactly what the restore recorded.
+    assert (
+        await snapshots.capture_configuration(settings.organization_id, definition, dict(readback), at_new_site)
+        is False
+    )
+
+
+async def test_an_update_restore_reuses_a_legacy_incarnation_recorded_without_its_site() -> None:
+    """The collector matches an incarnation by object id alone, so a site-less legacy record is the same incarnation."""
+    wlan = await _deleted_object(object_type="wlans", scope="site", mist_id="wlan-1", site_mist_id="site-a")
+    await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == wlan.id).update(
+        {"$set": {"site_mist_id": None}}
+    )
+    operation, action = _operation_for(wlan, action_type=RestoreActionType.UPDATE, resulting_mist_id="wlan-1")
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+
+    await RestoreExecutor(_vault())._record_result(  # noqa: SLF001
+        operation,
+        action,
+        definition,
+        {"ssid": "Corp"},
+        readback={"id": "wlan-1", "site_id": "site-a", "ssid": "Corp"},
+        site_id="site-a",
+    )
+
+    incarnations = await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == wlan.id).to_list()
+    assert len(incarnations) == 1
+    restored = await ObjectVersion.find(ObjectVersion.logical_object_id == wlan.id).sort("-version").first_or_none()
+    assert restored is not None
+    assert restored.event is VersionEvent.RESTORED
+    assert restored.incarnation_id == incarnations[0].id
 
 
 # ---------------------------------------------------- a site and its settings
@@ -614,14 +694,30 @@ async def test_a_deleted_site_restored_with_its_settings_is_verified_rekeyed_and
     settings_definition = get_definition("site", "settings")
     assert sites_definition is not None
     assert settings_definition is not None
-    await snapshots.capture_configuration(
-        organization_id, sites_definition, client.sites[new_site], CaptureContext(snapshot_id=None, site_id=None)
+    for action in ran.actions:
+        restored = (
+            await ObjectVersion.find(ObjectVersion.logical_object_id == action.logical_object_id)
+            .sort("-version")
+            .first_or_none()
+        )
+        assert restored is not None
+        assert restored.event is VersionEvent.RESTORED
+        # History and compensation hold the same digest of what the restore left in Mist.
+        assert restored.configuration_hash == action.applied_hash
+    assert (
+        await snapshots.capture_configuration(
+            organization_id, sites_definition, client.sites[new_site], CaptureContext(snapshot_id=None, site_id=None)
+        )
+        is False
     )
-    await snapshots.capture_configuration(
-        organization_id,
-        settings_definition,
-        client.settings[new_site],
-        CaptureContext(snapshot_id=None, site_id=new_site),
+    assert (
+        await snapshots.capture_configuration(
+            organization_id,
+            settings_definition,
+            client.settings[new_site],
+            CaptureContext(snapshot_id=None, site_id=new_site),
+        )
+        is False
     )
     assert await LogicalObject.find(LogicalObject.organization_id == organization_id).count() == 2
 
@@ -786,3 +882,85 @@ async def test_a_wlan_chosen_with_the_network_it_references_ends_on_the_recreate
     checks = {check.label: check.status for check in state.verification.checks}
     assert checks["Replaced UUID references"] == "ok"
     assert state.verification.verified is True
+
+
+# ------------------------------------------- restored versions and the next backup
+
+
+async def test_a_restored_version_is_what_the_next_backup_would_record() -> None:
+    logical = await _deleted_object()
+    operation, action = _operation_for(logical)
+    definition = get_definition("org", "networks")
+    assert definition is not None
+    readback = {"id": "new-network", "org_id": "org-1", "name": "Corp", "created_time": 1, "modified_time": 1}
+
+    await RestoreExecutor(_vault())._record_result(  # noqa: SLF001
+        operation, action, definition, {"name": "Corp"}, readback=readback, site_id=None
+    )
+    restored = await ObjectVersion.find(ObjectVersion.logical_object_id == logical.id).sort("-version").first_or_none()
+    created = await SnapshotService(_vault()).capture_configuration(
+        logical.organization_id,
+        definition,
+        {**readback, "modified_time": 99},
+        CaptureContext(snapshot_id=None, site_id=None),
+    )
+
+    assert restored is not None
+    assert restored.event is VersionEvent.RESTORED
+    assert created is False
+    assert await ObjectVersion.find(ObjectVersion.logical_object_id == logical.id).count() == restored.version
+
+
+async def test_a_site_object_restored_version_matches_its_site_scoped_capture() -> None:
+    wlan = await _deleted_object(object_type="wlans", scope="site", mist_id="wlan-old", site_mist_id="site-a")
+    operation, action = _operation_for(wlan, resulting_mist_id="wlan-new")
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    readback = {"id": "wlan-new", "org_id": "org-1", "site_id": "site-a", "ssid": "Corp", "modified_time": 1}
+
+    await RestoreExecutor(_vault())._record_result(  # noqa: SLF001
+        operation, action, definition, {"ssid": "Corp"}, readback=readback, site_id="site-a"
+    )
+
+    assert (
+        await SnapshotService(_vault()).capture_configuration(
+            wlan.organization_id,
+            definition,
+            {**readback, "modified_time": 2},
+            CaptureContext(snapshot_id=None, site_id="site-a"),
+        )
+        is False
+    )
+
+
+async def test_a_restored_version_keeps_the_secret_mist_masked_on_read_back() -> None:
+    """The digest is of the masked read-back the next backup sees; the stored configuration keeps the secret."""
+    wlan = await _deleted_object(object_type="wlans", scope="site", mist_id="wlan-old", site_mist_id="site-a")
+    operation, action = _operation_for(wlan, resulting_mist_id="wlan-new")
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    readback = {"id": "wlan-new", "site_id": "site-a", "ssid": "Corp", "auth": {"psk": "********"}}
+
+    await RestoreExecutor(_vault())._record_result(  # noqa: SLF001
+        operation,
+        action,
+        definition,
+        {"ssid": "Corp", "auth": {"psk": "correct-horse"}},
+        readback=readback,
+        site_id="site-a",
+    )
+
+    restored = await ObjectVersion.find(ObjectVersion.logical_object_id == wlan.id).sort("-version").first_or_none()
+    assert restored is not None
+    assert reveal_configuration(restored.configuration, _vault()) == {
+        "id": "wlan-new",
+        "site_id": "site-a",
+        "ssid": "Corp",
+        "auth": {"psk": "correct-horse"},
+    }
+    assert (
+        await SnapshotService(_vault()).capture_configuration(
+            wlan.organization_id, definition, dict(readback), CaptureContext(snapshot_id=None, site_id="site-a")
+        )
+        is False
+    )

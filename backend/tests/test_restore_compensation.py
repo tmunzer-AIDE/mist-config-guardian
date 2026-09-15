@@ -1584,6 +1584,29 @@ def test_a_reversal_without_a_record_of_what_the_restore_wrote_is_never_taken_as
     assert "Guest" not in str(error.value)
 
 
+def _reverting_to_corp() -> RestoreAction:
+    """A reversal back to CORP_WLAN, stored protected, whose restore left something else behind."""
+    revert = _reversal(0, RestoreActionType.UPDATE, expected="applied-hash-of-what-the-restore-wrote")
+    revert.protected_configuration = protect_configuration(CORP_WLAN, _vault(), sensitive_fields=frozenset({"psk"}))
+    return revert
+
+
+def test_a_reversal_whose_object_only_masks_the_secret_it_would_write_is_already_reversed() -> None:
+    """Mist returns the secret it holds as a mask, so the mask alone is not a change made since."""
+    live = {**CORP_WLAN, "psk": "********", "modified_time": 7}
+
+    assert assess_live_state(_reverting_to_corp(), live, _vault()) == "already_reversed"
+
+
+def test_a_reversal_behind_a_masked_secret_still_sees_a_real_change() -> None:
+    live = {**CORP_WLAN, "psk": "********", "enabled": False}
+
+    with pytest.raises(RestoreDriftError, match="wlan-0 changed after this plan was reviewed") as error:
+        assess_live_state(_reverting_to_corp(), live, _vault())
+
+    assert "super-secret" not in str(error.value)
+
+
 @pytest.mark.usefixtures("offline_documents")
 async def test_only_the_reversal_of_an_unconfirmed_update_goes_without_an_expected_state(
     monkeypatch: pytest.MonkeyPatch,

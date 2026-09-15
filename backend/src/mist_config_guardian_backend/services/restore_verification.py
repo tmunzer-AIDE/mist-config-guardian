@@ -35,9 +35,9 @@ from mist_config_guardian_backend.services.restore_planner import (
     latest_version,
     load_or_build_state,
 )
-from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.fingerprint import differing_fields
 from mist_config_guardian_backend.snapshots.references import is_restore_reference
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
 from mist_config_guardian_backend.worker import celery_app
 
 StaleReferenceFinder = Callable[[PydanticObjectId, set[str]], Awaitable[list[str]]]
@@ -254,11 +254,14 @@ class RestoreVerificationService:
                     )
                 )
                 continue
-            checks.append(self._compare(action.object_name, action.action, current, applied.get(action.order)))
+            checks.append(
+                self._compare(definition, action.object_name, action.action, current, applied.get(action.order))
+            )
         return checks
 
     @staticmethod
     def _compare(
+        definition: ObjectDefinition,
         object_name: str,
         action_type: RestoreActionType,
         current: dict[str, object] | None,
@@ -275,12 +278,12 @@ class RestoreVerificationService:
             return VerificationCheck(label=label, status="failed", detail="The object was not found after the write")
         if expected is None:
             return VerificationCheck(label=label, status="skipped", detail="No submitted payload was recorded")
-        # Mist echoes server-managed fields the plan never sent, so the hash is
-        # taken over exactly the fields this restore wrote.
-        written = {key: value for key, value in current.items() if key in expected}
-        if configuration_hash(written) == configuration_hash(expected):
+        # Mist echoes server-managed fields the plan never sent and masks some
+        # secrets it stores, so only the written fields are compared, under the
+        # same policy the collector hashes with. Only field names are reported.
+        differing = differing_fields(definition, expected, current, fields=expected.keys())
+        if not differing:
             return VerificationCheck(label=label, status="ok", detail=f"{len(expected)} written fields match")
-        differing = sorted(key for key in expected if written.get(key) != expected[key])
         listed = ", ".join(differing[:_MAX_REPORTED_FIELDS])
         if len(differing) > _MAX_REPORTED_FIELDS:
             listed = f"{listed}, +{len(differing) - _MAX_REPORTED_FIELDS} more"

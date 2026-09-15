@@ -6,6 +6,7 @@ site gives its children a new site id), so the restore must move the key with
 it, or the next capture starts a second identity for the same object.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from beanie import PydanticObjectId
@@ -32,7 +33,7 @@ async def rekey_logical_object(
     *,
     source_key: str,
     restore_started_at: datetime | None,
-    incarnation_id: PydanticObjectId,
+    incarnation: Callable[[], Awaitable[PydanticObjectId]],
 ) -> None:
     """Move ``logical`` to ``source_key``, adopting a capture of the same object that raced the restore.
 
@@ -42,6 +43,11 @@ async def rekey_logical_object(
     identity that nothing here can safely merge, so the restore stops for a
     person to look. The unique source index is the final arbiter: a capture
     that lands between the lookup and the write is found on the retry.
+
+    Runs before the restored version is recorded, so an adopted capture sits
+    beneath it. ``incarnation`` opens the incarnation the restore writes under
+    and is only called once there is a capture to move onto it, so a refused
+    re-key has recorded nothing at all.
     """
     for attempt in range(1, _REKEY_ATTEMPTS + 1):
         holder = await LogicalObject.find_one(
@@ -54,7 +60,7 @@ async def rekey_logical_object(
             if restore_started_at is None or holder.created_at < restore_started_at:
                 msg = f"{logical.name}: another recorded identity already owns this object; history needs manual review"
                 raise RestoreIdentityConflictError(msg)
-            await _adopt(logical, holder, incarnation_id)
+            await _adopt(logical, holder, await incarnation())
         try:
             await LogicalObject.find_one(LogicalObject.id == logical.id).update({"$set": {"source_key": source_key}})
         except DuplicateKeyError as exc:
@@ -67,11 +73,11 @@ async def rekey_logical_object(
 
 
 async def _adopt(restored: LogicalObject, duplicate: LogicalObject, incarnation_id: PydanticObjectId) -> None:
-    """Fold a same-object capture into the restored identity, after its restored version.
+    """Fold a same-object capture into the restored identity, beneath the version the restore records next.
 
     The capture recorded the same Mist object under the same incarnation the
-    restore just opened, so its versions are renumbered onto the restored
-    history rather than copied, and the duplicate identity is removed.
+    restore opens, so its versions are renumbered onto the restored history
+    rather than copied, and the duplicate identity is removed.
     """
     if restored.id is None or duplicate.id is None:
         return

@@ -229,6 +229,26 @@ async def test_a_reversal_skips_an_object_already_back_in_its_earlier_state() ->
     assert check.skip is True
 
 
+async def test_a_reversal_skips_an_object_back_in_its_earlier_state_behind_a_masked_secret() -> None:
+    """Mist masks the secret the reversal would write, so only the mask differs from its payload."""
+    earlier = {"name": "Corp", "enabled": False, "psk": "correct-horse"}
+    live = {**earlier, "psk": "********", "modified_time": 4}
+    action = _reversal(RestoreActionType.UPDATE, expected="applied-hash", payload=earlier)
+
+    check = await _check(_Client({"mist-0": live}), action, entry=_entry(action, live), compensating=True)
+
+    assert check.skip is True
+
+
+async def test_a_reversal_behind_a_masked_secret_still_refuses_a_real_change() -> None:
+    earlier = {"name": "Corp", "enabled": False, "psk": "correct-horse"}
+    live = {**earlier, "psk": "********", "enabled": True}
+    action = _reversal(RestoreActionType.UPDATE, expected="applied-hash", payload=earlier)
+
+    with pytest.raises(RestoreDriftError, match="changed after this plan was reviewed"):
+        await _check(_Client({"mist-0": live}), action, entry=_entry(action, live), compensating=True)
+
+
 async def test_a_reversal_skips_deleting_an_object_that_is_already_gone() -> None:
     action = _reversal(RestoreActionType.DELETE, expected="applied-hash", payload={})
 

@@ -18,7 +18,7 @@ from mist_config_guardian_backend.services.restore_compensation import (
     build_snapshot_entry,
 )
 from mist_config_guardian_backend.services.restore_planner import SafetySnapshotEntry
-from mist_config_guardian_backend.snapshots.canonical import configuration_hash_matches
+from mist_config_guardian_backend.snapshots.fingerprint import fingerprint_matches
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition
 
 
@@ -77,6 +77,8 @@ async def check_before_write(  # noqa: PLR0913 - every argument is a distinct fa
             compensating=compensating,
         )
     live = await client.get_current(definition, object_id, org_id=organization.mist_org_id, site_id=site_id)
+    # A reversal compares the live read with what it would write; the mask Mist
+    # returns for a secret it holds is not a difference (``assess_live_state``).
     if compensating and assess_live_state(action, live, vault) == "already_reversed":
         observed = entry or await build_snapshot_entry(
             action, definition, vault, live, mist_object_id=object_id, site_mist_id=site_id
@@ -90,7 +92,7 @@ async def check_before_write(  # noqa: PLR0913 - every argument is a distinct fa
             action, definition, vault, live, mist_object_id=object_id, site_mist_id=site_id
         )
         return WriteCheck(entry=observed, recorded=True)
-    if not configuration_hash_matches(entry.configuration_hash, live, ignored_fields=definition.ignored_fields):
+    if not fingerprint_matches(definition, entry.configuration_hash, live):
         msg = f"{action.object_name} changed in Mist after the pre-restore safety snapshot"
         raise RestoreDriftError(msg)
     return WriteCheck(entry=entry, recorded=False)

@@ -22,12 +22,8 @@ from mist_config_guardian_backend.models.snapshot import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.service_credentials import service_token
-from mist_config_guardian_backend.snapshots.canonical import (
-    canonicalize,
-    changed_top_level_fields,
-    configuration_hash,
-    configuration_hash_matches,
-)
+from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.fingerprint import fingerprint, fingerprint_matches, normalize
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
     ORG_OBJECTS,
@@ -261,10 +257,7 @@ class SnapshotService:
             msg = "Persisted object incarnation is missing an identifier"
             raise RuntimeError(msg)
 
-        canonical_hash = configuration_hash(
-            configuration,
-            ignored_fields=definition.ignored_fields,
-        )
+        canonical_hash = fingerprint(definition, configuration)
         latest = (
             await ObjectVersion.find(
                 ObjectVersion.organization_id == organization_id,
@@ -273,11 +266,7 @@ class SnapshotService:
             .sort(-ObjectVersion.version)
             .first_or_none()
         )
-        if latest is not None and configuration_hash_matches(
-            latest.configuration_hash,
-            configuration,
-            ignored_fields=definition.ignored_fields,
-        ):
+        if latest is not None and fingerprint_matches(definition, latest.configuration_hash, configuration):
             # Unchanged, and the only moment the plaintext behind an older
             # digest is in hand: rewrite it in the keyed generation now rather
             # than leave the object waiting on the periodic backfill.
@@ -285,16 +274,15 @@ class SnapshotService:
             return False
 
         previous_configuration = None if latest is None else reveal_configuration(latest.configuration, self._vault)
-        if latest is not None and previous_configuration is not None:
-            ignored = definition.ignored_fields
-            if canonicalize(previous_configuration, ignored_fields=ignored) == canonicalize(
-                configuration,
-                ignored_fields=ignored,
-            ):
-                # The configuration is unchanged under the current registry
-                # policy, but its digest was written under an older policy.
-                await _upgrade_stored_hash(latest, canonical_hash)
-                return False
+        if (
+            latest is not None
+            and previous_configuration is not None
+            and normalize(definition, previous_configuration) == normalize(definition, configuration)
+        ):
+            # The configuration is unchanged under the current registry
+            # policy, but its digest was written under an older policy.
+            await _upgrade_stored_hash(latest, canonical_hash)
+            return False
 
         version_number = 1 if latest is None else latest.version + 1
         persisted_configuration = protect_configuration(

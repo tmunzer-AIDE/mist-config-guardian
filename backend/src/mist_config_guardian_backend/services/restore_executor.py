@@ -51,7 +51,7 @@ from mist_config_guardian_backend.services.restore_planner import (
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.services.restore_write_guard import check_before_write
 from mist_config_guardian_backend.services.snapshots import SnapshotService
-from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.fingerprint import fingerprint, restored_configuration
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
@@ -795,14 +795,16 @@ class RestoreExecutor:
         await self._persist(operation)
 
         readback = await self._read_back(client, organization, action, definition, object_id=object_id, site_id=site_id)
-        action.applied_hash = (
-            None if readback is None else configuration_hash(readback, ignored_fields=definition.ignored_fields)
-        )
+        # The digest the collector will store for this same response, so the
+        # reversal's expected state and the restored version agree with it.
+        action.applied_hash = None if readback is None else fingerprint(definition, readback)
         operation.actions[index] = action
         operation.touch()
         await self._persist(operation)
 
-        await self._record_result(operation, action, definition, result or payload, readback=readback, site_id=site_id)
+        # The payload, not Mist's answer: it holds the real value of any secret
+        # the read-back masks.
+        await self._record_result(operation, action, definition, payload, readback=readback, site_id=site_id)
         return payload
 
     @staticmethod
@@ -877,6 +879,15 @@ class RestoreExecutor:
         derives it from the same response, and the source key moves with it:
         otherwise a recreated object, or anything written under a recreated
         site, would start a second history on the next backup.
+
+        The version records what the next capture of the same response would:
+        its digest is the collector's digest of the read-back, masks included,
+        and its configuration is the read-back with each masked secret filled
+        from ``written``, so it stays replayable.
+
+        The identity moves first. A capture that raced the restore is folded in
+        beneath the restored version, which stays the latest, and a key another
+        identity owns stops the restore before anything is recorded.
         """
         logical = await LogicalObject.get(action.logical_object_id)
         if logical is None or logical.id is None:
@@ -884,16 +895,40 @@ class RestoreExecutor:
             raise MistMutationError(msg)
         logical_id = logical.id
         deleted = action.action is RestoreActionType.DELETE
+        if not deleted and readback is None:
+            msg = f"{action.object_name} has no read-back to record"
+            raise MistMutationError(msg)
         object_id = action.resulting_mist_id or action.current_mist_id
         if readback is not None:
             object_id = SnapshotService.object_id(readback, definition, site_id)
-        incarnation_id = await self._incarnation_for(
-            operation, logical_id, action, object_id=object_id, site_id=site_id
-        )
+        opened: list[PydanticObjectId] = []
 
-        restored_configuration = dict(written)
-        if not deleted and definition.is_list:
-            restored_configuration["id"] = object_id
+        async def incarnation() -> PydanticObjectId:
+            if not opened:
+                opened.append(
+                    await self._incarnation_for(operation, logical_id, action, object_id=object_id, site_id=site_id)
+                )
+            return opened[0]
+
+        if not deleted:
+            source_key = SnapshotService.source_key(definition, site_id, object_id)
+            if source_key != logical.source_key:
+                await rekey_logical_object(
+                    logical,
+                    source_key=source_key,
+                    restore_started_at=operation.started_at,
+                    incarnation=incarnation,
+                )
+        incarnation_id = await incarnation()
+        protected = (
+            None
+            if readback is None
+            else protect_configuration(
+                restored_configuration(definition, readback, written),
+                self._vault,
+                sensitive_fields=definition.sensitive_fields,
+            )
+        )
 
         def build(latest: ObjectVersion) -> ObjectVersion:
             return ObjectVersion(
@@ -902,32 +937,17 @@ class RestoreExecutor:
                 incarnation_id=incarnation_id,
                 version=latest.version + 1,
                 event=VersionEvent.RESTORED,
-                configuration=(
-                    latest.configuration
-                    if deleted
-                    else protect_configuration(
-                        restored_configuration, self._vault, sensitive_fields=definition.sensitive_fields
-                    )
-                ),
+                configuration=latest.configuration if protected is None else protected,
                 configuration_hash=(
-                    latest.configuration_hash if deleted else configuration_hash(restored_configuration)
+                    latest.configuration_hash if readback is None else fingerprint(definition, readback)
                 ),
                 changed_fields=[],
-                references=latest.references if deleted else extract_uuid_references(restored_configuration),
+                references=latest.references if readback is None else extract_uuid_references(readback),
                 is_deleted=deleted,
                 actor=operation.credential_actor,
             )
 
         version = await self._insert_next_version(logical_id, build)
-        if not deleted:
-            source_key = SnapshotService.source_key(definition, site_id, object_id)
-            if source_key != logical.source_key:
-                await rekey_logical_object(
-                    logical,
-                    source_key=source_key,
-                    restore_started_at=operation.started_at,
-                    incarnation_id=incarnation_id,
-                )
         logical.current_mist_id = object_id
         logical.site_mist_id = site_id
         logical.current_version = max(logical.current_version, version.version)
@@ -944,19 +964,31 @@ class RestoreExecutor:
         object_id: str,
         site_id: str | None,
     ) -> PydanticObjectId:
-        """Reuse the current incarnation unless the object came back under a new id or site."""
+        """Reuse the incarnation the collector would match, opening one only for an object back under a new id.
+
+        The collector matches an incarnation by logical object and Mist id,
+        never by site, so an update does too: incarnations recorded before the
+        site was stored carry none, and comparing it would open a duplicate on
+        every restore. A delete ends the current incarnation.
+        """
         current = (
             await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == logical_id)
             .sort("-ordinal")
             .first_or_none()
         )
-        unchanged = current is not None and current.mist_object_id == object_id and current.site_mist_id == site_id
-        if (
-            current is not None
-            and current.id is not None
-            and (action.action is RestoreActionType.DELETE or (action.action is RestoreActionType.UPDATE and unchanged))
-        ):
+        if action.action is RestoreActionType.DELETE and current is not None and current.id is not None:
             return current.id
+        if action.action is RestoreActionType.UPDATE:
+            matching = (
+                await ObjectIncarnation.find(
+                    ObjectIncarnation.logical_object_id == logical_id,
+                    ObjectIncarnation.mist_object_id == object_id,
+                )
+                .sort("-ordinal")
+                .first_or_none()
+            )
+            if matching is not None and matching.id is not None:
+                return matching.id
         incarnation = ObjectIncarnation(
             organization_id=operation.organization_id,
             logical_object_id=logical_id,

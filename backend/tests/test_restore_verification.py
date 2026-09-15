@@ -408,6 +408,46 @@ async def test_read_after_write_fails_when_mist_stored_something_else() -> None:
     assert "enabled" in (result.checks[0].detail or "")
 
 
+async def test_read_after_write_accepts_a_secret_mist_returns_masked() -> None:
+    operation = _operation(
+        [_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="mist-0")]
+    )
+    client = _FakeClient({"mist-0": {"name": "wlan-0", "psk": "********", "modified_time": 9}})
+
+    result = await _build_verifier().verify(
+        client, _organization(), operation, id_map={}, applied={0: {"name": "wlan-0", "psk": "correct-horse"}}
+    )
+
+    assert result.checks[0].status == "ok"
+
+
+async def test_read_after_write_ignores_server_fields_mist_adds_inside_a_written_value() -> None:
+    operation = _operation(
+        [_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="mist-0")]
+    )
+    client = _FakeClient({"mist-0": {"name": "wlan-0", "schedule": {"enabled": True, "modified_time": 9}}})
+
+    result = await _build_verifier().verify(
+        client, _organization(), operation, id_map={}, applied={0: {"name": "wlan-0", "schedule": {"enabled": True}}}
+    )
+
+    assert result.checks[0].status == "ok"
+
+
+async def test_read_after_write_still_fails_on_a_secret_mist_stored_differently() -> None:
+    operation = _operation(
+        [_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="mist-0")]
+    )
+    client = _FakeClient({"mist-0": {"name": "wlan-0", "psk": "battery-staple"}})
+
+    result = await _build_verifier().verify(
+        client, _organization(), operation, id_map={}, applied={0: {"name": "wlan-0", "psk": "correct-horse"}}
+    )
+
+    assert result.checks[0].status == "failed"
+    assert result.checks[0].detail == "Mist stored different values for psk"
+
+
 async def test_a_delete_is_verified_by_absence() -> None:
     service = _build_verifier()
     operation = _operation([_action(0, RestoreActionType.DELETE, status=RestoreActionStatus.COMPLETED)])

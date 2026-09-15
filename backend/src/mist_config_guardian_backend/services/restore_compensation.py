@@ -10,7 +10,7 @@ inverse of every planned write is known.
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from beanie import PydanticObjectId
 
@@ -46,14 +46,18 @@ from mist_config_guardian_backend.services.restore_planner import (
     unavailable_secret_errors,
     validate_action_capabilities,
 )
-from mist_config_guardian_backend.snapshots.canonical import (
-    canonicalize,
-    configuration_hash,
-    configuration_hash_matches,
+from mist_config_guardian_backend.snapshots.canonical import canonicalize, configuration_hash_matches
+from mist_config_guardian_backend.snapshots.fingerprint import (
+    MISSING,
+    at_path,
+    equivalent,
+    fingerprint,
+    fingerprint_matches,
+    normalize,
+    without_paths,
 )
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, explicit_name, get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
-    SecretPath,
     find_unavailable_secrets,
     format_secret_path,
     protect_configuration,
@@ -116,9 +120,7 @@ async def build_snapshot_entry(  # noqa: PLR0913 - the identifiers differ from t
             if current is None
             else protect_configuration(current, vault, sensitive_fields=definition.sensitive_fields)
         ),
-        configuration_hash=(
-            None if current is None else configuration_hash(current, ignored_fields=definition.ignored_fields)
-        ),
+        configuration_hash=None if current is None else fingerprint(definition, current),
         pre_version_id=None if stored is None or stored.is_deleted else stored.id,
     )
 
@@ -245,9 +247,6 @@ async def _refuse_name_collision(
             raise MistMutationError(msg)
 
 
-_MISSING = object()
-
-
 def _switch_management_differences(before: object, after: object) -> list[str]:
     """Describe only fixed schema paths and value categories, never values."""
     if not isinstance(before, dict) or not isinstance(after, dict):
@@ -263,7 +262,7 @@ def _switch_management_differences(before: object, after: object) -> list[str]:
     )
 
     def category(value: object) -> str:
-        if value is _MISSING:
+        if value is MISSING:
             return "missing"
         if value is None:
             return "null"
@@ -275,13 +274,11 @@ def _switch_management_differences(before: object, after: object) -> list[str]:
 
     differences = []
     for key in fields:
-        old = before.get(key, _MISSING)
-        new = after.get(key, _MISSING)
+        old = before.get(key, MISSING)
+        new = after.get(key, MISSING)
         if old != new:
             differences.append(f"switch_mgmt.{key}:stored={category(old)},live={category(new)}")
-    if any(
-        before.get(key, _MISSING) != after.get(key, _MISSING) for key in (before.keys() | after.keys()) - set(fields)
-    ):
+    if any(before.get(key, MISSING) != after.get(key, MISSING) for key in (before.keys() | after.keys()) - set(fields)):
         differences.append("switch_mgmt.<other-field>:different")
     return differences
 
@@ -295,14 +292,26 @@ async def _log_preflight_diagnostics(
     """Log bounded, value-free evidence without replacing the original failure."""
     try:
         definition = get_definition(action.scope, action.object_type)
-        ignored = frozenset() if definition is None else definition.ignored_fields
+
+        def normalized(configuration: dict[str, object]) -> object:
+            # An unsupported type is refused before any live check, but the
+            # diagnostic must still describe one rather than fail on it.
+            return canonicalize(configuration) if definition is None else normalize(definition, configuration)
+
+        def expected_by_plan(configuration: dict[str, object] | None) -> bool:
+            if configuration is None:
+                return False
+            if definition is None:
+                return configuration_hash_matches(action.expected_current_hash, configuration)
+            return fingerprint_matches(definition, action.expected_current_hash, configuration)
+
         baseline = await ObjectVersion.find_one(
             ObjectVersion.logical_object_id == action.logical_object_id,
             ObjectVersion.configuration_hash == action.expected_current_hash,
         )
         stored = None if baseline is None else reveal_configuration(baseline.configuration, vault)
-        before = None if stored is None else canonicalize(stored, ignored_fields=ignored)
-        after = None if current is None else canonicalize(current, ignored_fields=ignored)
+        before = None if stored is None else normalized(stored)
+        after = None if current is None else normalized(current)
         changed = []
         if isinstance(before, dict) and isinstance(after, dict):
             changed = sorted(
@@ -323,18 +332,8 @@ async def _log_preflight_diagnostics(
             operation.id,
             action.order,
             baseline is not None,
-            stored is not None
-            and configuration_hash_matches(
-                action.expected_current_hash,
-                stored,
-                ignored_fields=ignored,
-            ),
-            current is not None
-            and configuration_hash_matches(
-                action.expected_current_hash,
-                current,
-                ignored_fields=ignored,
-            ),
+            expected_by_plan(stored),
+            expected_by_plan(current),
             current is not None,
             len(changed),
             fields,
@@ -352,28 +351,6 @@ async def _log_preflight_diagnostics(
         )
 
 
-def _at_path(value: object, path: SecretPath) -> object:
-    """Read one of the locations :func:`find_unavailable_secrets` reports.
-
-    A step is a mapping key or a sequence position, and only the matching kind
-    of container answers to it: a mapping is not indexed by number, and a list
-    is not keyed by name. Anything else means the location is not there, and a
-    location that is not there supplies nothing.
-    """
-    for step in path:
-        if isinstance(step, str) and isinstance(value, Mapping):
-            if step not in value:
-                return _MISSING
-            value = value[step]
-        elif isinstance(step, int) and isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            if not -len(value) <= step < len(value):
-                return _MISSING
-            value = value[step]
-        else:
-            return _MISSING
-    return value
-
-
 def _usable_secret(value: object) -> bool:
     """Whether a value is a secret that could actually be written back.
 
@@ -382,33 +359,21 @@ def _usable_secret(value: object) -> bool:
     concrete, nonempty value; missing, null, empty, or masked values cannot
     supply the secret.
     """
-    if value is _MISSING or value is None or value == "":
+    if value is MISSING or value is None or value == "":
         return False
     return not (isinstance(value, str) and set(value) == {"*"})
 
 
-def _without_paths(value: object, paths: frozenset[SecretPath], *, path: SecretPath = ()) -> object:
-    """Drop exactly those locations, leaving same-named fields elsewhere.
-
-    The paths are the ones :func:`find_unavailable_secrets` reports, so this
-    walks a configuration the same way it does and removes only what it named
-    — step for step, so a key that happens to spell another location's path
-    does not stand in for it.
-    """
-    if isinstance(value, Mapping):
-        kept: dict[str, object] = {}
-        for key, child in value.items():
-            child_path = (*path, str(key))
-            if child_path in paths:
-                continue
-            kept[str(key)] = _without_paths(child, paths, path=child_path)
-        return kept
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_without_paths(child, paths, path=(*path, index)) for index, child in enumerate(value)]
-    return value
-
-
 LiveAssessment = Literal["proceed", "already_reversed"]
+
+
+def _supported_definition(action: RestoreAction) -> ObjectDefinition:
+    """The registry definition live state is judged under; without one, nothing can be judged."""
+    definition = get_definition(action.scope, action.object_type)
+    if definition is None:
+        msg = f"Unsupported restore type: {action.scope}:{action.object_type}"
+        raise RestoreDriftError(msg)
+    return definition
 
 
 def assess_live_state(
@@ -423,9 +388,11 @@ def assess_live_state(
     reversal would leave it in is not drift; it is a reversal with nothing left
     to do. A missing expected state never counts as a match. Messages name the
     object, never its values.
+
+    Digests and comparisons follow the collector's field policy, so a state
+    recorded from one Mist read matches the next read of the same object.
     """
-    definition = get_definition(action.scope, action.object_type)
-    ignored = frozenset() if definition is None else definition.ignored_fields
+    definition = _supported_definition(action)
     reversal = action.compensates_action_order is not None
     if action.action is RestoreActionType.CREATE:
         if current is None:
@@ -452,9 +419,9 @@ def assess_live_state(
             else f"{action.object_name} was recreated after this plan was reviewed"
         )
         raise RestoreDriftError(msg)
-    if configuration_hash_matches(action.expected_current_hash, current, ignored_fields=ignored):
+    if fingerprint_matches(definition, action.expected_current_hash, current):
         return "proceed"
-    if reversal and action.action is RestoreActionType.UPDATE and _already_written(action, current, vault, ignored):
+    if reversal and action.action is RestoreActionType.UPDATE and _already_written(action, current, vault, definition):
         return "already_reversed"
     msg = f"{action.object_name} changed after this plan was reviewed"
     raise RestoreDriftError(msg)
@@ -464,18 +431,20 @@ def _already_written(
     action: RestoreAction,
     current: dict[str, object],
     vault: CredentialVault,
-    ignored: frozenset[str],
+    definition: ObjectDefinition,
 ) -> bool:
     """Whether live state already equals what this action would write.
 
-    A payload whose secrets no longer decrypt cannot be compared, so it is
-    never taken as already written.
+    Mist returns a secret it holds as a mask, so a masked location is not a
+    difference; any other field, and a secret that came back real, has to
+    agree. A payload whose secrets no longer decrypt cannot be compared, so it
+    is never taken as already written.
     """
     try:
         payload = reveal_configuration(action.protected_configuration, vault)
     except CredentialDecryptionError:
         return False
-    return canonicalize(payload, ignored_fields=ignored) == canonicalize(current, ignored_fields=ignored)
+    return equivalent(definition, payload, current)
 
 
 def _validate_live_state(action: RestoreAction, current: dict[str, object] | None, vault: CredentialVault) -> None:
@@ -737,7 +706,7 @@ class RestoreCompensationService:
             )
             return False
         masked = frozenset(find_unavailable_secrets(live, definition.sensitive_fields))
-        unsourced = sorted(format_secret_path(path) for path in masked if not _usable_secret(_at_path(plaintext, path)))
+        unsourced = sorted(format_secret_path(path) for path in masked if not _usable_secret(at_path(plaintext, path)))
         if unsourced:
             logger.warning(
                 "Stored version %s cannot supply the masked secrets %s, so the live snapshot is kept",
@@ -745,9 +714,8 @@ class RestoreCompensationService:
                 ", ".join(unsourced),
             )
             return False
-        ignored = definition.ignored_fields
-        return canonicalize(_without_paths(live, masked), ignored_fields=ignored) == canonicalize(
-            _without_paths(plaintext, masked), ignored_fields=ignored
+        return normalize(definition, cast("dict[str, object]", without_paths(live, masked))) == normalize(
+            definition, cast("dict[str, object]", without_paths(plaintext, masked))
         )
 
     async def _invert(
