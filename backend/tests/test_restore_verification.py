@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Self
 from unittest.mock import AsyncMock
@@ -10,9 +11,14 @@ import pytest
 from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
 from pymongo.errors import DuplicateKeyError
+from pytest_httpx import HTTPXMock
 
 from mist_config_guardian_backend.config import Settings
-from mist_config_guardian_backend.integrations.mist_mutation import MistMutationStatusError, MistMutationTransportError
+from mist_config_guardian_backend.integrations.mist_mutation import (
+    MistMutationClient,
+    MistMutationStatusError,
+    MistMutationTransportError,
+)
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
@@ -1573,6 +1579,58 @@ async def test_a_payload_that_cannot_be_decrypted_stops_the_run_before_its_write
     assert result.status is RestoreStatus.FAILED
     assert all(RestoreActionStatus.EXECUTING not in statuses for _, statuses, _ in stored.saves)
     assert notifications.failed == ["Restore worker error (CredentialDecryptionError)"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_delete_mist_answers_503_then_404_on_its_retry_is_recorded_as_applied(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+) -> None:
+    """The retry found the object gone, so the first attempt deleted it: done, not failed or unconfirmed."""
+    assert WLAN_DEFINITION is not None
+    wlan = re.compile(r"https://api\.mist\.com/api/v1/sites/site-a/wlans/mist-0$")
+    live = {"id": "mist-0", "name": "wlan-0", "enabled": True}
+    # The write guard's read, the delete Mist answers 503 then 404, and the read-back finding it gone.
+    httpx_mock.add_response(method="GET", url=wlan, json=live)
+    httpx_mock.add_response(method="DELETE", url=wlan, status_code=503)
+    httpx_mock.add_response(method="DELETE", url=wlan, status_code=404)
+    httpx_mock.add_response(method="GET", url=wlan, status_code=404)
+    operation = _operation([_action(0, RestoreActionType.DELETE)])
+    entry = SafetySnapshotEntry(
+        logical_object_id=operation.actions[0].logical_object_id,
+        order=0,
+        action=RestoreActionType.DELETE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        site_mist_id="site-a",
+        existed=True,
+        configuration=live,
+        configuration_hash=configuration_hash(live, ignored_fields=WLAN_DEFINITION.ignored_fields),
+    )
+
+    async def _snapshot(*_args, **_kwargs):
+        return [entry]
+
+    async def _no_wait(_delay: float) -> None:
+        return
+
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True)
+    # The real client over the mocked transport, so its retry and 404 handling are what is exercised.
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.MistMutationClient",
+        lambda **kwargs: MistMutationClient(**kwargs, sleep=_no_wait),
+    )
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert [request.method for request in httpx_mock.get_requests()] == ["GET", "DELETE", "DELETE", "GET"]
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert result.actions[0].outcome_unknown is False
+    assert result.status is RestoreStatus.COMPLETED
+    assert notifications.failed == []
 
 
 class _StickyDeleteClient(_FakeClient):

@@ -243,6 +243,36 @@ async def test_a_retried_delete_that_finds_the_object_gone_has_completed(
 
 
 @pytest.mark.parametrize(
+    ("method", "ambiguous", "delays"),
+    [
+        pytest.param("PUT", [503], [0.5], id="put-503-200"),
+        pytest.param("PUT", [httpx.ReadTimeout("slow")], [0.5], id="put-timeout-200"),
+        pytest.param("DELETE", [503], [0.5], id="delete-503-204"),
+        pytest.param("DELETE", [502, 504], [0.5, 1.0], id="delete-502-504-204"),
+    ],
+)
+async def test_a_retried_write_that_succeeds_after_an_ambiguous_attempt_has_completed(
+    httpx_mock: HTTPXMock,
+    method: str,
+    ambiguous: list[int | Exception],
+    delays: list[float],
+) -> None:
+    """The attempt that answered applied the write: that is a success, not a write that may have happened."""
+    _queue(httpx_mock, method, ambiguous)
+    if method == "PUT":
+        httpx_mock.add_response(method="PUT", url=NETWORK_URL, json={"id": "network-1", "name": "Corp"})
+    else:
+        httpx_mock.add_response(method="DELETE", url=NETWORK_URL, status_code=204)
+    sleeps = _Sleeps()
+
+    async with _client(sleeps) as client:
+        await _write(client, method)
+
+    assert len(httpx_mock.get_requests()) == len(ambiguous) + 1
+    assert sleeps.delays == delays
+
+
+@pytest.mark.parametrize(
     ("method", "steps", "status"),
     [
         pytest.param("PUT", [503, 404], 404, id="put-503-404"),
