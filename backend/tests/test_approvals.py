@@ -44,6 +44,7 @@ from mist_config_guardian_backend.services.approvals import (
     ApprovalRequiredError,
     ApprovalService,
     SelfApprovalError,
+    _digest,
     compute_intent_hash,
     compute_plan_hash,
     evaluate_approval_policy,
@@ -252,6 +253,29 @@ def test_plan_hash_is_stable_for_the_same_reviewed_plan() -> None:
     assert compute_plan_hash(actions) == compute_plan_hash(list(reversed(actions)))
 
 
+def test_a_plan_without_a_written_payload_hashes_as_plans_stored_before_it_existed() -> None:
+    """Only a reversal of an unread write carries the payload, so every stored plan keeps its reviewed hash."""
+    actions = [_action(order=0), _action(order=1, action=RestoreActionType.DELETE)]
+    before = _digest(
+        [
+            [
+                action.order,
+                str(action.logical_object_id),
+                str(action.action),
+                str(action.source_version_id),
+                action.expected_current_hash,
+                action.current_mist_id,
+                action.site_mist_id,
+                str(action.reason),
+                payload_digest(action.protected_configuration),
+            ]
+            for action in actions
+        ]
+    )
+
+    assert compute_plan_hash(actions) == before
+
+
 def test_plan_hash_ignores_execution_progress() -> None:
     actions = [_action(order=0)]
     before = compute_plan_hash(actions)
@@ -275,6 +299,7 @@ def test_plan_hash_ignores_execution_progress() -> None:
         lambda action: setattr(action, "site_mist_id", "site-other"),
         lambda action: setattr(action, "protected_configuration", {"ssid": "Guest"}),
         lambda action: setattr(action, "reason", RestoreActionReason.REFERENCE_REWRITE),
+        lambda action: setattr(action, "written_configuration", {"ssid": "Corp"}),
     ],
 )
 def test_any_plan_change_changes_the_hash(mutate) -> None:

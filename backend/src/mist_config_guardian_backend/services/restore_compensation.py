@@ -60,6 +60,7 @@ from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, ex
 from mist_config_guardian_backend.snapshots.secrets import (
     find_unavailable_secrets,
     format_secret_path,
+    is_protected,
     protect_configuration,
     reveal_configuration,
 )
@@ -408,17 +409,7 @@ def assess_live_state(
         msg = f"{action.object_name} no longer exists"
         raise RestoreDriftError(msg)
     if action.expected_current_hash is None:
-        if reversal and action.outcome_unknown:
-            # A write that may never have happened recorded nothing to expect;
-            # the plan warns that this reversal cannot check for changes.
-            return "proceed"
-        msg = (
-            f"{action.object_name} has no record of what the restore wrote, "
-            "so its reversal cannot check for changes made since"
-            if reversal
-            else f"{action.object_name} was recreated after this plan was reviewed"
-        )
-        raise RestoreDriftError(msg)
+        return _assess_without_expected_hash(action, current, vault, definition)
     if fingerprint_matches(definition, action.expected_current_hash, current):
         return "proceed"
     if reversal and action.action is RestoreActionType.UPDATE and _already_written(action, current, vault, definition):
@@ -447,23 +438,99 @@ def _already_written(
     return equivalent(definition, payload, current)
 
 
+def _assess_without_expected_hash(
+    action: RestoreAction,
+    current: dict[str, object],
+    vault: CredentialVault,
+    definition: ObjectDefinition,
+) -> LiveAssessment:
+    """Judge an existing object whose restore recorded no fingerprint of what it wrote.
+
+    A write that may never have happened recorded nothing to expect; the plan
+    warns that its reversal cannot check for changes. A write Mist accepted but
+    that was never read back is held to the payload it sent instead: live
+    state must still show that payload, masked secrets aside, before the
+    reversal replaces it. Anything else has nothing to compare, so it is never
+    taken as unchanged.
+    """
+    reversal = action.compensates_action_order is not None
+    if reversal and action.outcome_unknown:
+        return "proceed"
+    written = _written_payload(action, vault) if reversal else None
+    if written is not None:
+        # Only what was written has to agree: Mist echoes fields a payload never carried.
+        if equivalent(definition, written, current, fields=written.keys()):
+            return "proceed"
+        if action.action is RestoreActionType.UPDATE and _already_written(action, current, vault, definition):
+            return "already_reversed"
+        msg = f"{action.object_name} changed after this plan was reviewed"
+        raise RestoreDriftError(msg)
+    msg = (
+        f"{action.object_name} has no record of what the restore wrote, "
+        "so its reversal cannot check for changes made since"
+        if reversal
+        else f"{action.object_name} was recreated after this plan was reviewed"
+    )
+    raise RestoreDriftError(msg)
+
+
+def _written_payload(action: RestoreAction, vault: CredentialVault) -> dict[str, object] | None:
+    """The payload an unread write sent, decrypted in memory only; ``None`` when there is none to compare.
+
+    A payload whose secrets no longer decrypt proves nothing, so it is treated
+    as absent and the reversal refuses rather than guesses.
+    """
+    if action.written_configuration is None:
+        return None
+    try:
+        return reveal_configuration(action.written_configuration, vault)
+    except CredentialDecryptionError:
+        return None
+
+
 def _validate_live_state(action: RestoreAction, current: dict[str, object] | None, vault: CredentialVault) -> None:
     """Abort before writes when live state differs from the reviewed plan."""
     assess_live_state(action, current, vault)
 
 
-def _unverifiable(action: RestoreAction) -> str:
-    """Why an applied write with no read-back is not reversed; names the object, never its values."""
-    if action.error is None:
-        return (
-            f"{action.object_name} was restored before writes were read back, so compensation cannot prove it is "
-            "unchanged; restore it from its history instead"
-        )
-    # The run stopped on this action after Mist accepted its write.
-    return (
-        f"{action.object_name} was not read back after the restore wrote it, so compensation cannot prove it is "
-        "unchanged; restore it from its history instead"
-    )
+def _sent_payload(operation: RestoreOperation, action: RestoreAction) -> dict[str, object] | None:
+    """Rebuild, still protected, the payload the executor sent for one applied action.
+
+    The executor drops the fields Mist manages and rewrites every id that an
+    earlier CREATE of the same run replaced, then writes. The same steps over
+    the stored configuration give what it sent without decrypting a secret.
+    ``None`` for a type the registry no longer supports, which leaves the
+    reversal nothing to compare, so it refuses.
+    """
+    definition = get_definition(action.scope, action.object_type)
+    if definition is None:
+        return None
+    id_map: dict[str, str] = {}
+    for earlier in operation.actions:
+        if (
+            earlier.order < action.order
+            and earlier.action is RestoreActionType.CREATE
+            and earlier.resulting_mist_id is not None
+        ):
+            id_map[earlier.current_mist_id] = earlier.resulting_mist_id
+    return {
+        key: _remapped(value, id_map)
+        for key, value in action.protected_configuration.items()
+        if key not in definition.restore_excluded_fields
+    }
+
+
+def _remapped(value: object, id_map: Mapping[str, str]) -> object:
+    """Rewrite replaced ids the way the executor's payload does, leaving each protected secret as stored."""
+    if is_protected(value):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _remapped(child, id_map) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_remapped(child, id_map) for child in value]
+    if isinstance(value, str):
+        return id_map.get(value, value)
+    return value
 
 
 @dataclass
@@ -472,7 +539,6 @@ class _Reversal:
 
     actions: list[RestoreAction] = field(default_factory=list)
     follow_ups: list[str] = field(default_factory=list)
-    unverifiable: list[str] = field(default_factory=list)
 
 
 class RestoreCompensationService:
@@ -558,11 +624,7 @@ class RestoreCompensationService:
             # A compensation plan is reviewed like any other. It keeps a masked
             # secret on purpose when no stored version can supply one, so it is
             # exactly the plan most likely to carry one into authorization.
-            preflight_errors=(
-                reversal.unverifiable
-                + validate_action_capabilities(actions)
-                + unavailable_secret_errors(actions, self._vault)
-            ),
+            preflight_errors=(validate_action_capabilities(actions) + unavailable_secret_errors(actions, self._vault)),
         )
         await compensation.insert()
         if compensation.id is None:
@@ -608,9 +670,10 @@ class RestoreCompensationService:
         """Invert every write that reached Mist, or may have, newest first.
 
         Writes an earlier compensation already reversed are left out. A write
-        that cannot be targeted safely becomes a manual follow-up, and an
-        applied write with no read-back is named as a preflight error: nothing
-        proves the object still holds what the restore wrote.
+        that cannot be targeted safely becomes a manual follow-up. An applied
+        write that was never read back keeps the payload it sent, which its
+        reversal must still find live: one lost read-back must not keep every
+        other write of the restore from being reversed.
         """
         snapshot = {entry.order: entry for entry in state.safety_snapshot}
         reversible = sorted(
@@ -645,6 +708,7 @@ class RestoreCompensationService:
             if entry is None:
                 msg = f"{action.object_name} has no safety snapshot entry, so it cannot be reversed"
                 raise RestoreCompensationError(msg)
+            written = None
             if unconfirmed and action.action is RestoreActionType.UPDATE:
                 reversal.follow_ups.append(
                     f"{action.object_name} was not confirmed, so its reversal cannot check for changes made since"
@@ -654,8 +718,11 @@ class RestoreCompensationService:
                 and action.action is not RestoreActionType.DELETE
                 and action.applied_hash is None
             ):
-                reversal.unverifiable.append(_unverifiable(action))
-            reversal.actions.append(await self._invert(action, entry, len(reversal.actions)))
+                # Mist accepted the write but it was never read back, including
+                # restores recorded before writes were: its reversal is held to
+                # the payload it sent instead of a read-back digest.
+                written = _sent_payload(operation, action)
+            reversal.actions.append(await self._invert(action, entry, len(reversal.actions), written=written))
         if not reversal.actions:
             msg = "; ".join(reversal.follow_ups)
             raise RestoreCompensationError(msg)
@@ -749,8 +816,14 @@ class RestoreCompensationService:
         action: RestoreAction,
         entry: SafetySnapshotEntry,
         order: int,
+        *,
+        written: dict[str, object] | None = None,
     ) -> RestoreAction:
-        """Build the single action that undoes one applied action."""
+        """Build the single action that undoes one applied action.
+
+        ``written`` is the payload of a write that was never read back, which
+        the reversal expects in place of a read-back digest.
+        """
         unconfirmed = unconfirmed_write(action)
         configuration = dict(entry.configuration)
         source_version_id = entry.pre_version_id or action.source_version_id
@@ -788,6 +861,7 @@ class RestoreCompensationService:
             # a deleted object has nothing to compare, and an unconfirmed write
             # recorded nothing.
             expected_current_hash=None if inverse is RestoreActionType.CREATE or unconfirmed else action.applied_hash,
+            written_configuration=written,
             depends_on=[],
             # Only a write that may never have happened leaves its reversal's
             # target uncertain. A flag a confirmed write inherited describes an

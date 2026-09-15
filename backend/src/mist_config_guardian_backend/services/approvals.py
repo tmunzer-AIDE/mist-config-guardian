@@ -95,6 +95,10 @@ def compute_plan_hash(actions: Sequence[RestoreAction]) -> str:
     be written. Execution progress is excluded so a running restore never
     invalidates its own approval. Plans hashed before the target ids and the
     payload were covered no longer match and must be planned again.
+
+    A reversal of a write that was never read back is also bound to the payload
+    that write sent, which is what it expects to find. It is hashed only when
+    present, so every plan stored without one keeps the hash it was reviewed at.
     """
     return _digest(
         [
@@ -108,6 +112,7 @@ def compute_plan_hash(actions: Sequence[RestoreAction]) -> str:
                 action.site_mist_id,
                 str(action.reason),
                 payload_digest(action.protected_configuration),
+                *(() if action.written_configuration is None else (payload_digest(action.written_configuration),)),
             ]
             for action in sorted(actions, key=lambda item: item.order)
         ]

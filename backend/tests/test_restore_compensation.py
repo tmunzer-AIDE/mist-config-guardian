@@ -1671,40 +1671,102 @@ async def test_reversals_expect_exactly_what_the_restore_wrote(monkeypatch: pyte
     assert by_original[2].expected_current_hash is None
 
 
-@pytest.mark.usefixtures("offline_documents")
-async def test_a_restore_recorded_without_read_back_is_not_reversed_blindly(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _plan_without_read_back(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    error: str | None = None,
+    written: dict[str, object] | None = None,
+) -> RestoreAction:
+    """Compensate a restore whose update of wlan-1 Mist accepted but that was never read back; return its reversal."""
     operation, store = await _applied_plan(monkeypatch)
+    # How the executor leaves a write whose read-back failed (``error`` set), and how a
+    # restore recorded before writes were read back at all looks (no error).
     operation.actions[1].applied_hash = None
+    operation.actions[1].error = error
+    if written is not None:
+        operation.actions[1].protected_configuration = written
 
     plan = await RestoreCompensationService(store, _vault()).create_compensation_plan(
         operation=operation, requested_by=ADMINISTRATOR_ID
     )
 
-    assert plan.preflight_errors == [
-        (
-            "wlan-1 was restored before writes were read back, so compensation cannot prove it is unchanged; "
-            "restore it from its history instead"
-        )
-    ]
+    # One unread write no longer blocks every other reversal of the restore.
+    assert plan.preflight_errors == []
+    assert sorted(action.compensates_action_order for action in plan.actions) == [0, 1, 2]
+    return next(action for action in plan.actions if action.compensates_action_order == 1)
 
 
 @pytest.mark.usefixtures("offline_documents")
-async def test_a_write_whose_read_back_failed_is_not_reversed_blindly(monkeypatch: pytest.MonkeyPatch) -> None:
-    operation, store = await _applied_plan(monkeypatch)
-    # How the executor leaves a write Mist accepted but did not show afterwards.
-    operation.actions[1].applied_hash = None
-    operation.actions[1].error = "wlan-1 was not found in Mist after the write"
+@pytest.mark.parametrize("error", [None, "wlan-1 was not found in Mist after the write"])
+async def test_a_write_never_read_back_is_reversed_while_the_object_holds_what_the_restore_wrote(
+    monkeypatch: pytest.MonkeyPatch,
+    error: str | None,
+) -> None:
+    revert = await _plan_without_read_back(monkeypatch, error=error)
 
-    plan = await RestoreCompensationService(store, _vault()).create_compensation_plan(
-        operation=operation, requested_by=ADMINISTRATOR_ID
-    )
+    assert revert.expected_current_hash is None
+    assert revert.written_configuration == {"name": "wlan-1"}
+    # Mist echoes fields the payload never carried; only what was written has to agree.
+    assert assess_live_state(revert, {"id": "mist-1", "name": "wlan-1", "enabled": True}, _vault()) == "proceed"
 
-    assert plan.preflight_errors == [
-        (
-            "wlan-1 was not read back after the restore wrote it, so compensation cannot prove it is unchanged; "
-            "restore it from its history instead"
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_whose_object_changed_since_is_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    revert = await _plan_without_read_back(monkeypatch)
+    changed = {"id": "mist-1", "name": "renamed-by-hand", "enabled": True}
+
+    with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed") as error:
+        assess_live_state(revert, changed, _vault())
+
+    assert "renamed-by-hand" not in str(error.value)
+    # The check a compensation run makes before its first write stops it the same way.
+    with pytest.raises(MistMutationError, match="wlan-1 changed after this plan was reviewed"):
+        await capture_safety_snapshot(
+            _FakeMistClient({"mist-1": changed}), _organization(), _operation([revert]), _vault()
         )
-    ]
+    # Back where the reversal would leave it is not drift: there is nothing left to do.
+    assert assess_live_state(revert, {**CORP_WLAN, "psk": "********"}, _vault()) == "already_reversed"
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_is_compared_through_the_secret_mist_masks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written = protect_configuration(
+        {"id": "mist-1", "name": "wlan-1", "psk": "restored-secret"}, _vault(), sensitive_fields=frozenset({"psk"})
+    )
+    revert = await _plan_without_read_back(monkeypatch, written=written)
+
+    assert revert.written_configuration is not None
+    assert "restored-secret" not in str(revert.written_configuration)
+    assert assess_live_state(revert, {"id": "mist-1", "name": "wlan-1", "psk": "********"}, _vault()) == "proceed"
+    with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed") as error:
+        assess_live_state(revert, {"id": "mist-1", "name": "wlan-1", "psk": "rotated-by-hand"}, _vault())
+    assert "rotated-by-hand" not in str(error.value)
+    assert "restored-secret" not in str(error.value)
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_is_compared_with_the_uuids_the_restore_remapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # wlan-0 was recreated first and Mist gave it "new-uuid"; wlan-1 referenced its old id.
+    revert = await _plan_without_read_back(monkeypatch, written={"name": "wlan-1", "network_id": "mist-0"})
+
+    assert revert.written_configuration == {"name": "wlan-1", "network_id": "new-uuid"}
+    assert assess_live_state(revert, {"name": "wlan-1", "network_id": "new-uuid"}, _vault()) == "proceed"
+    with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed"):
+        assess_live_state(revert, {"name": "wlan-1", "network_id": "mist-0"}, _vault())
+
+
+def test_a_reversal_whose_written_payload_no_longer_decrypts_is_never_taken_as_unchanged() -> None:
+    revert = _reversal(0, RestoreActionType.UPDATE, expected=None)
+    revert.written_configuration = {"name": "wlan-0", "psk": {"$encrypted": "v1:not-for-this-key"}}
+
+    with pytest.raises(RestoreDriftError, match="wlan-0 has no record of what the restore wrote") as error:
+        assess_live_state(revert, {"name": "wlan-0", "psk": "********"}, _vault())
+
+    assert "not-for-this-key" not in str(error.value)
 
 
 def _reversal(order: int, action: RestoreActionType, *, expected: str | None) -> RestoreAction:

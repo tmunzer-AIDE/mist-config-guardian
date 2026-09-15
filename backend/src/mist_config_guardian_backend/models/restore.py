@@ -91,6 +91,11 @@ class RestoreAction(BaseModel):
     # write: what compensation must find before it undoes the write. None for
     # deletes and for actions that have not written yet.
     applied_hash: str | None = None
+    # On a compensation action whose original write Mist accepted but that was
+    # never read back, so it has no ``applied_hash``: the payload that write
+    # sent, still protected and with the ids it remapped. Live state must still
+    # show it before the reversal replaces the object. None everywhere else.
+    written_configuration: dict[str, object] | None = None
     # The site id the action was executed under when it differs from
     # ``site_mist_id`` (the site was recreated by this restore), so later
     # reads and reversals address the object where it now lives.
