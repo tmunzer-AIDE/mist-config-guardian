@@ -54,6 +54,22 @@ async def test_a_stale_lease_counts_as_an_active_restore_when_no_operation_is_qu
     assert await has_active_restore(organization, asking, leases=leases) is False
 
 
+class _FalsyLeases(MemoryRestoreLeaseStore):
+    """A store that evaluates false, as a container-like store with nothing cached might."""
+
+    def __bool__(self) -> bool:
+        return False
+
+
+@pytest.mark.usefixtures("no_queued_restores")
+async def test_the_lease_store_given_is_the_one_consulted_even_when_it_is_falsy() -> None:
+    leases = _FalsyLeases()
+    organization = PydanticObjectId()
+    await leases.acquire(organization, PydanticObjectId(), ttl=TTL)
+
+    assert await has_active_restore(organization, PydanticObjectId(), leases=leases) is True
+
+
 async def test_a_queued_operation_is_active_without_consulting_the_lease(no_queued_restores: SimpleNamespace) -> None:
     no_queued_restores.count.return_value = 1
     leases = MemoryRestoreLeaseStore()

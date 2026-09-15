@@ -65,6 +65,8 @@ export class RestoreStepAuthorize {
   readonly readOnly = input.required<boolean>();
   readonly busy = input.required<boolean>();
   readonly approval = input<ApprovalRequest | null>(null);
+  /** Policy needs a second administrator, so the draft invites asking before its fresh backup. */
+  readonly approvalRequired = input(false);
   readonly blockedByApproval = input(false);
   /** Reverses an applied restore rather than authorizing a new one. */
   readonly compensation = input(false);

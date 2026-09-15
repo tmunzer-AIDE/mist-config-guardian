@@ -330,7 +330,12 @@ async def assert_plan_current(
         raise RestorePlanningError(msg)
     current = compute_plan_hash(operation.actions)
     state = await store.load(operation.organization_id, operation.id)
-    if state is not None and state.plan_hash != current:
+    if state is None:
+        # Planning records what was reviewed; a plan without that record was
+        # never reviewed through it, so nothing vouches for it.
+        msg = "This restore plan has no reviewed plan record; create a new plan"
+        raise RestorePlanningError(msg)
+    if state.plan_hash != current:
         msg = "This restore plan changed after it was reviewed; create a new plan"
         raise RestorePlanningError(msg)
     return current

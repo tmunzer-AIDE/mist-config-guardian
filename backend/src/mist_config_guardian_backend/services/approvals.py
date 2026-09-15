@@ -2,15 +2,17 @@
 
 The plan hash is the contract between a review and an execution: an approval is
 bound to the exact ordered action list that was reviewed, so any change to the
-plan invalidates the decision instead of silently carrying it forward.
+plan invalidates the decision instead of silently carrying it forward. The one
+move an approval makes is from a draft to the plan its fresh backup produced,
+and only when what was asked for and which changes it makes are the same.
 """
 
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Literal, Protocol
 
 from beanie import PydanticObjectId
 
@@ -25,6 +27,7 @@ from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionType,
     RestoreMode,
     RestoreOperation,
@@ -32,8 +35,16 @@ from mist_config_guardian_backend.models.restore import (
 )
 from mist_config_guardian_backend.models.user import User
 from mist_config_guardian_backend.services.notifications import NotificationService
+from mist_config_guardian_backend.snapshots.secrets import is_protected, protected_fingerprint
 
 _MAX_SUMMARY_TYPES = 4
+
+CarryOutcome = Literal["carried", "not_carried", "no_approval"]
+
+APPROVAL_NOT_CARRIED = (
+    "The fresh backup changed what this restore would do, so the approval of the earlier plan does not apply; "
+    "request approval for this plan"
+)
 
 
 class ApprovalError(ValueError):
@@ -48,26 +59,98 @@ class ApprovalRequiredError(ApprovalError):
     """Raised when execution is blocked pending a second administrator."""
 
 
+def _digest(value: object) -> str:
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def payload_digest(configuration: Mapping[str, object]) -> str:
+    """Digest a protected configuration without its ciphertext, which changes on every planning.
+
+    A protected secret contributes its keyed fingerprint, so the same secret
+    encrypted twice digests the same and a different secret does not. A value
+    protected before fingerprints were stored contributes its ciphertext
+    instead: nothing else tells two of them apart, and treating them as equal
+    would let a changed secret pass as reviewed.
+    """
+
+    def stable(value: object) -> object:
+        if isinstance(value, Mapping):
+            if is_protected(value):
+                fingerprint = protected_fingerprint(value)
+                return {"$fingerprint": fingerprint} if fingerprint is not None else {"$encrypted": value["$encrypted"]}
+            return {str(key): stable(child) for key, child in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [stable(child) for child in value]
+        return value
+
+    return _digest(stable(configuration))
+
+
 def compute_plan_hash(actions: Sequence[RestoreAction]) -> str:
     """Hash the reviewed plan so any change to it invalidates an approval.
 
-    Only the reviewed intent is hashed - object identity, action type, source
-    version, and the expected live hash. Per-action execution progress is
-    deliberately excluded so a running restore never invalidates its own
-    approval.
+    The reviewed intent is hashed - object identity, target ids, action type,
+    why the action exists, source version, expected live hash, and what would
+    be written. Execution progress is excluded so a running restore never
+    invalidates its own approval. Plans hashed before the target ids and the
+    payload were covered no longer match and must be planned again.
     """
-    payload = [
+    return _digest(
         [
-            action.order,
-            str(action.logical_object_id),
-            str(action.action),
-            str(action.source_version_id),
-            action.expected_current_hash,
+            [
+                action.order,
+                str(action.logical_object_id),
+                str(action.action),
+                str(action.source_version_id),
+                action.expected_current_hash,
+                action.current_mist_id,
+                action.site_mist_id,
+                str(action.reason),
+                payload_digest(action.protected_configuration),
+            ]
+            for action in sorted(actions, key=lambda item: item.order)
         ]
-        for action in sorted(actions, key=lambda item: item.order)
-    ]
-    serialized = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(serialized.encode()).hexdigest()
+    )
+
+
+def compute_intent_hash(operation: RestoreOperation) -> str:
+    """Hash what was asked for, which a fresh backup does not change.
+
+    The requester is deliberately left out: operators build drafts and an
+    administrator prepares them, which makes the administrator the prepared
+    plan's requester. Who may decide is still enforced on the approval itself.
+    """
+    target_at = (
+        operation.target_at if operation.target_at.tzinfo is not None else operation.target_at.replace(tzinfo=UTC)
+    )
+    return _digest(
+        {
+            "organization_id": str(operation.organization_id),
+            "requested_version_ids": sorted(str(version_id) for version_id in operation.requested_version_ids),
+            "mode": str(operation.mode),
+            "target_at": target_at.astimezone(UTC).isoformat(),
+        }
+    )
+
+
+def compute_action_signature(actions: Sequence[RestoreAction]) -> str:
+    """Hash which objects the plan changes and how, ignoring the backup-specific details.
+
+    A reference rewrite has no target of its own: its source is whatever the
+    fresh backup just captured, so it always moves and is left out.
+    """
+    return _digest(
+        sorted(
+            [
+                str(action.logical_object_id),
+                str(action.action),
+                "" if action.reason is RestoreActionReason.REFERENCE_REWRITE else str(action.source_version_id),
+                str(action.reason),
+            ]
+            for action in actions
+        )
+    )
 
 
 def organization_policy(organization: Organization) -> ApprovalPolicy:
@@ -156,6 +239,8 @@ class ApprovalDraft:
     requested_by: PydanticObjectId
     requested_by_email: str
     plan_hash: str
+    intent_hash: str
+    action_signature: str
     triggered_rules: tuple[TriggeredRule, ...]
     expires_at: datetime
     summary: str
@@ -237,6 +322,8 @@ class BeanieApprovalStore:
             requested_by=draft.requested_by,
             requested_by_email=draft.requested_by_email,
             plan_hash=draft.plan_hash,
+            intent_hash=draft.intent_hash,
+            action_signature=draft.action_signature,
             triggered_rules=list(draft.triggered_rules),
             expires_at=draft.expires_at,
             summary=draft.summary,
@@ -319,6 +406,8 @@ class ApprovalService:
                 requested_by=requester.id,
                 requested_by_email=requester.email,
                 plan_hash=plan_hash,
+                intent_hash=compute_intent_hash(operation),
+                action_signature=compute_action_signature(operation.actions),
                 triggered_rules=tuple(triggered),
                 expires_at=utc_now() + timedelta(hours=policy.expiry_hours),
                 summary=plan_summary(operation),
@@ -357,6 +446,34 @@ class ApprovalService:
         approval.decision_reason = reason
         await self._store.save(approval)
         return approval
+
+    async def carry_to_prepared(self, source: RestoreOperation, prepared: RestoreOperation) -> CarryOutcome:
+        """Move a draft's approval onto the plan its fresh backup produced, when nothing that was reviewed changed.
+
+        A prepared session lasts minutes and an approver may take hours, so the
+        decision is made on the draft. It stays valid for the prepared plan only
+        when the request and the set of changes are the same; the plan hash is
+        rebound because the baseline hashes necessarily differ. The requester,
+        decision and expiry travel unchanged, so the requester still cannot
+        decide it and it expires when it would have.
+        """
+        if prepared.id is None:
+            return "no_approval"
+        approval = await self.for_operation(source)
+        if approval is None or approval.status not in {ApprovalStatus.PENDING, ApprovalStatus.APPROVED}:
+            return "no_approval"
+        if approval.intent_hash != compute_intent_hash(
+            prepared
+        ) or approval.action_signature != compute_action_signature(prepared.actions):
+            await self._invalidate_if_superseded(approval, source)
+            return "not_carried"
+        approval.restore_operation_id = prepared.id
+        approval.plan_hash = compute_plan_hash(prepared.actions)
+        approval.summary = plan_summary(prepared)
+        approval.object_count = len(prepared.actions)
+        approval.delete_count = delete_count(prepared)
+        await self._store.save(approval)
+        return "carried"
 
     # ------------------------------------------------------------------ read
     async def get(
@@ -435,6 +552,8 @@ class ApprovalService:
             raise ApprovalError(msg)
         approval.status = ApprovalStatus.PENDING
         approval.plan_hash = plan_hash
+        approval.intent_hash = compute_intent_hash(operation)
+        approval.action_signature = compute_action_signature(operation.actions)
         approval.triggered_rules = list(triggered)
         approval.decided_by = None
         approval.decided_by_email = None
@@ -447,6 +566,24 @@ class ApprovalService:
         await self._store.save(approval)
         await self._announce(approval)
         return approval
+
+    async def _invalidate_if_superseded(self, approval: RestoreApproval, source: RestoreOperation) -> None:
+        """Retire an approval its superseded draft can no longer use.
+
+        A superseded draft is never prepared or executed again, so a pending or
+        granted decision left on it would sit in the queue with nothing to
+        apply to. The stored draft is read rather than the copy the caller
+        loaded before preparing: that copy predates the supersede. A draft that
+        was not superseded, because another preparation got there first, keeps
+        its approval.
+        """
+        if source.id is None:
+            return
+        stored = await self._store.load_operation(source.organization_id, source.id)
+        if stored is None or stored.status != RestoreStatus.SUPERSEDED:
+            return
+        approval.status = ApprovalStatus.INVALIDATED
+        await self._store.save(approval)
 
     async def _announce(self, approval: RestoreApproval) -> None:
         if approval.id is None:

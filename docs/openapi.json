@@ -7956,6 +7956,11 @@
               }
             ]
           },
+          "approval_required": {
+            "default": false,
+            "title": "Approval Required",
+            "type": "boolean"
+          },
           "baseline_snapshot_id": {
             "anyOf": [
               {

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
+from structlog.testing import capture_logs
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.base import utc_now
@@ -301,6 +302,59 @@ async def test_preparation_refuses_while_another_restore_is_queued_or_running():
     active.assert_awaited_once_with(operation.organization_id, operation.id)
     mist.login.assert_not_awaited()
     mist.verify_write_token.assert_not_awaited()
+
+
+def _preparing_service(monkeypatch, *, superseded: bool):
+    """An authorization service whose fresh backup returns a new plan without reading Mist."""
+    settings = Settings(environment="test")
+    mist = AsyncMock()
+    mist.verify_write_token.return_value = SimpleNamespace(actor="admin")
+    service = RestoreAuthorizationService(
+        settings, CredentialVault(settings), mist, active_restores=AsyncMock(return_value=False)
+    )
+    draft = RestoreOperation.model_construct(
+        id=PydanticObjectId(), organization_id=PydanticObjectId(), status=RestoreStatus.PLANNED
+    )
+    # A preflight error keeps the session from being retained, so nothing is saved.
+    plan = RestoreOperation.model_construct(
+        id=PydanticObjectId(), status=RestoreStatus.PLANNED, preflight_errors=["blocked"], actions=[]
+    )
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_authorization.RestoreBaselineService",
+        MagicMock(return_value=SimpleNamespace(prepare=AsyncMock(return_value=plan))),
+    )
+    supersede = AsyncMock(return_value=superseded)
+    monkeypatch.setattr(service, "supersede", supersede)
+    return service, draft, plan, supersede
+
+
+async def _prepare(service, draft):
+    return await service.prepare(
+        SimpleNamespace(mist_org_id="org", cloud_region=MistCloudRegion.GLOBAL_02),
+        draft,
+        PydanticObjectId(),
+        "admin-token",
+        AsyncMock(),
+    )
+
+
+async def test_preparing_a_draft_supersedes_it_with_the_new_plan(monkeypatch):
+    service, draft, plan, supersede = _preparing_service(monkeypatch, superseded=True)
+
+    with capture_logs() as logs:
+        assert await _prepare(service, draft) is plan
+
+    supersede.assert_awaited_once_with(draft.id, plan.id)
+    assert logs == []
+
+
+async def test_a_draft_that_could_not_be_superseded_is_reported_by_id_only(monkeypatch):
+    service, draft, plan, _supersede = _preparing_service(monkeypatch, superseded=False)
+
+    with capture_logs() as logs:
+        assert await _prepare(service, draft) is plan
+
+    assert logs == [{"event": "restore_draft_not_superseded", "log_level": "warning", "operation_id": str(draft.id)}]
 
 
 async def test_plan_uses_pinned_backup_even_if_background_history_changes(monkeypatch):

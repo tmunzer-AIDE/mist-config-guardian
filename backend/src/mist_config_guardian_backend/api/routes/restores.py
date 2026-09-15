@@ -35,8 +35,10 @@ from mist_config_guardian_backend.schemas.restore import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import (
+    APPROVAL_NOT_CARRIED,
     ApprovalError,
     ApprovalService,
+    evaluate_approval_policy,
     organization_policy,
 )
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
@@ -119,7 +121,11 @@ async def create_restore_plan(  # noqa: PLR0913, PLR0917 - each argument is a se
         )
     except RestorePlanningError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    return RestoreOperationResponse.from_document(operation)
+    # A new draft says whether it will need a second administrator, so approval
+    # can be asked for before the minutes-long prepared session begins.
+    return RestoreOperationResponse.from_document(
+        operation, approval_required=_approval_required(organization, operation)
+    )
 
 
 @router.get("/targets")
@@ -151,9 +157,9 @@ async def list_restore_targets(  # noqa: PLR0913, PLR0917 - filters and paginati
 
 
 @router.get("")
-async def list_restore_operations(
+async def list_restore_operations(  # noqa: PLR0913, PLR0917 - dependencies and pagination are separate parameters
     organization_id: PydanticObjectId,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
     _operator: Annotated[User, Depends(require_operator)],
@@ -163,7 +169,7 @@ async def list_restore_operations(
     """List restore operations newest first."""
     operations, total = await plans.page(organization_id, skip=skip, limit=limit)
     return RestoreOperationListResponse(
-        items=[await _operation_response(item, approvals) for item in operations],
+        items=[await _operation_response(item, approvals, organization) for item in operations],
         total=total,
     )
 
@@ -172,14 +178,14 @@ async def list_restore_operations(
 async def get_restore_operation(
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
     _operator: Annotated[User, Depends(require_operator)],
 ) -> RestoreOperationResponse:
     """Return one restore operation, including live per-action progress."""
     operation = await _load(plans, organization_id, operation_id)
-    return await _operation_response(operation, approvals)
+    return await _operation_response(operation, approvals, organization)
 
 
 @router.get("/{operation_id}/verification")
@@ -223,7 +229,7 @@ async def execute_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         raise HTTPException(status_code=403, detail="Only the administrator who prepared this plan can use its session")
     await _assert_plan_current(store, operation)
     await _assert_approved(organization, operation, approvals)
-    return await _authorize_and_queue(organization_id, operation, authorization, approvals, None)
+    return await _authorize_and_queue(organization_id, organization, operation, authorization, approvals, None)
 
 
 @router.post("/{operation_id}/prepare", status_code=status.HTTP_201_CREATED)
@@ -264,14 +270,19 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail="Mist is unavailable; no restore was queued") from exc
-    return await _operation_response(plan, approvals)
+    # The draft's approval was asked for before this backup existed; it follows
+    # the new plan only when the backup left what would be done unchanged.
+    if await approvals.carry_to_prepared(operation, plan) == "not_carried":
+        plan.warnings.append(APPROVAL_NOT_CARRIED)
+        await plan.save()
+    return await _operation_response(plan, approvals, organization)
 
 
 @router.post("/{operation_id}/compensation", status_code=status.HTTP_201_CREATED)
 async def create_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     compensation: Annotated[RestoreCompensationService, Depends(get_restore_compensation_service)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
@@ -291,7 +302,7 @@ async def create_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency p
         )
     except RestoreCompensationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return await _operation_response(plan, approvals, compensation_available=False)
+    return await _operation_response(plan, approvals, organization, compensation_available=False)
 
 
 @router.post("/{operation_id}/compensation/execute", status_code=status.HTTP_202_ACCEPTED)
@@ -328,6 +339,7 @@ async def execute_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency 
     await _assert_approved(organization, plan, approvals)
     return await _authorize_and_queue(
         organization_id,
+        organization,
         plan,
         authorization,
         approvals,
@@ -348,17 +360,24 @@ async def _load(
     return operation
 
 
+def _approval_required(organization: Organization, operation: RestoreOperation) -> bool:
+    """Whether the organization's policy needs a second administrator for this plan."""
+    return bool(evaluate_approval_policy(organization_policy(organization), operation.actions, operation.mode))
+
+
 async def _operation_response(
     operation: RestoreOperation,
     approvals: ApprovalService,
+    organization: Organization,
     *,
     compensation_available: bool | None = None,
 ) -> RestoreOperationResponse:
-    """Render one operation with its approval and compensation availability."""
+    """Render one operation with its approval, whether policy needs one, and compensation availability."""
     approval = await approvals.for_operation(operation)
     return RestoreOperationResponse.from_document(
         operation,
         approval=None if approval is None else ApprovalResponse.from_document(approval),
+        approval_required=_approval_required(organization, operation),
         compensation_available=(
             operation.status is RestoreStatus.COMPENSATION_AVAILABLE
             if compensation_available is None
@@ -390,8 +409,9 @@ async def _assert_approved(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-async def _authorize_and_queue(  # noqa: PLR0913 - the compensation flag must be named at every call site
+async def _authorize_and_queue(  # noqa: PLR0913, PLR0917 - one argument per collaborator; the compensation flag is named
     organization_id: PydanticObjectId,
+    organization: Organization,
     operation: RestoreOperation,
     authorization: RestoreAuthorizationService,
     approvals: ApprovalService,
@@ -433,4 +453,4 @@ async def _authorize_and_queue(  # noqa: PLR0913 - the compensation flag must be
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Restore worker queue is unavailable",
         ) from exc
-    return await _operation_response(reserved, approvals)
+    return await _operation_response(reserved, approvals, organization)

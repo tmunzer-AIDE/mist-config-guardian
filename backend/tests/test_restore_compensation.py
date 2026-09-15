@@ -1463,7 +1463,9 @@ async def test_compensation_execution_requires_a_fresh_step_up() -> None:
 async def test_compensation_execution_uses_the_delegated_administrator_credential(routed: list[str]) -> None:
     plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
     authorization = _RecordingAuthorization()
-    transport = httpx.ASGITransport(app=_app(_StubCompensation(plan), authorization))
+    transport = httpx.ASGITransport(
+        app=_app(_StubCompensation(plan), authorization, states=await _reviewed(_MemoryStateStore(), plan))
+    )
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -1593,7 +1595,9 @@ class _BusyAuthorization(_RecordingAuthorization):
 
 async def test_compensation_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
     plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
-    transport = httpx.ASGITransport(app=_app(_StubCompensation(plan), _BusyAuthorization()))
+    transport = httpx.ASGITransport(
+        app=_app(_StubCompensation(plan), _BusyAuthorization(), states=await _reviewed(_MemoryStateStore(), plan))
+    )
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(

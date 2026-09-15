@@ -241,8 +241,11 @@ class RestoreAuthorizationService:
             if plan.id is None:
                 msg = "Prepared restore has no identifier"
                 raise RestoreAuthorizationError(msg)
-            if operation.id is not None:
-                await self.supersede(operation.id, plan.id)
+            if operation.id is not None and not await self.supersede(operation.id, plan.id):
+                # Another preparation or a start reached the draft first. The new
+                # plan still stands on its own; this only leaves a trace of why
+                # the draft was not retired.
+                logger.warning("restore_draft_not_superseded", operation_id=str(operation.id))
             if not plan.preflight_errors and plan.actions:
                 plan.credential_actor = access.actor
                 plan.encrypted_delegated_credential = self._vault.encrypt_for_context(

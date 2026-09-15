@@ -164,4 +164,6 @@ async def has_active_restore(
     ).count()
     if count > 0:
         return True
-    return await (leases or MongoRestoreLeaseStore()).held_by_another(organization_id, operation_id)
+    # Tested against None, not truthiness: a store that evaluates false is still the one to ask.
+    store = MongoRestoreLeaseStore() if leases is None else leases
+    return await store.held_by_another(organization_id, operation_id)

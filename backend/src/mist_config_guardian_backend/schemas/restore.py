@@ -126,6 +126,9 @@ class RestoreOperationResponse(BaseModel):
     created_at: datetime
     task_id: str | None
     approval: ApprovalResponse | None = None
+    # Whether policy needs a second administrator for this plan, evaluated for
+    # each response, so a draft can ask for approval before it is prepared.
+    approval_required: bool = False
     compensation_available: bool = False
 
     @classmethod
@@ -134,6 +137,7 @@ class RestoreOperationResponse(BaseModel):
         operation: RestoreOperation,
         *,
         approval: ApprovalResponse | None = None,
+        approval_required: bool = False,
         compensation_available: bool | None = None,
     ) -> "RestoreOperationResponse":
         """Create an API response with no credential material."""
@@ -142,6 +146,7 @@ class RestoreOperationResponse(BaseModel):
             raise ValueError(msg)
         return cls(
             approval=approval,
+            approval_required=approval_required,
             compensation_available=(
                 operation.status is RestoreStatus.COMPENSATION_AVAILABLE
                 if compensation_available is None

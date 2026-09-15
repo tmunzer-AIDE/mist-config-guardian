@@ -102,6 +102,8 @@ export interface RestoreOperation {
   task_id: string | null;
   /** Null when no policy rule asked for a second administrator. */
   approval?: ApprovalRequest | null;
+  /** Policy needs a second administrator for this plan, whether or not anyone has asked yet. */
+  approval_required?: boolean;
   compensation_available?: boolean;
 }
 
@@ -347,8 +349,11 @@ export function approvalStatusTone(status: ApprovalStatus): Tone {
 }
 
 /** An approval that exists and has not been granted blocks execution. */
-export function blocksExecution(approval: ApprovalRequest | null | undefined): boolean {
-  return approval != null && approval.status !== 'approved';
+export function blocksExecution(approval: ApprovalRequest | null | undefined, required = false): boolean {
+  if (approval != null) {
+    return approval.status !== 'approved';
+  }
+  return required;
 }
 
 /** Missing or invalid expiry timestamps require a new backup. */

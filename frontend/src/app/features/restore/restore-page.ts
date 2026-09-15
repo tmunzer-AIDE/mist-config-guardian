@@ -291,8 +291,13 @@ export class RestorePage {
     () => this.activeOperation()?.approval ?? null,
   );
 
-  /** The approval gate: a non-null approval that has not been granted blocks execution. */
-  protected readonly blockedByApproval = computed(() => blocksExecution(this.approval()));
+  /**
+   * The approval gate: an approval that has not been granted blocks execution,
+   * and so does the absence of one that policy requires.
+   */
+  protected readonly blockedByApproval = computed(() =>
+    blocksExecution(this.approval(), this.activeOperation()?.approval_required === true),
+  );
 
   protected readonly steps = computed(() => {
     const currentIndex = STEP_ORDER.indexOf(this.currentStep());

@@ -56,6 +56,11 @@ class RestoreApproval(TimestampedModel, Document):
     requested_by: PydanticObjectId
     requested_by_email: str
     plan_hash: str
+    # What was asked for and which actions it produced, independent of the
+    # fresh backup that refines the plan; lets an approval survive preparation.
+    # Absent on approvals recorded before they were bound, which never carry.
+    intent_hash: str | None = None
+    action_signature: str | None = None
     triggered_rules: list[TriggeredRule] = Field(default_factory=list)
     status: ApprovalStatus = ApprovalStatus.PENDING
     decided_by: PydanticObjectId | None = None

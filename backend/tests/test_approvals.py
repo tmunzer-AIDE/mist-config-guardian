@@ -6,8 +6,13 @@ import httpx
 import pytest
 from beanie import PydanticObjectId
 
-from mist_config_guardian_backend.api.dependencies import get_current_user, require_organization
+from mist_config_guardian_backend.api.dependencies import (
+    get_current_user,
+    get_restore_authorization_service,
+    require_organization,
+)
 from mist_config_guardian_backend.api.routes.approvals import get_approval_service
+from mist_config_guardian_backend.api.routes.restores import get_plan_state_store, get_restore_plans
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.approval import (
@@ -23,6 +28,7 @@ from mist_config_guardian_backend.models.organization import (
 )
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
     RestoreMode,
@@ -30,14 +36,19 @@ from mist_config_guardian_backend.models.restore import (
     RestoreStatus,
 )
 from mist_config_guardian_backend.models.user import User, UserRole
+from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import (
+    APPROVAL_NOT_CARRIED,
     ApprovalRequiredError,
     ApprovalService,
     SelfApprovalError,
     compute_plan_hash,
     evaluate_approval_policy,
     organization_policy,
+    payload_digest,
 )
+from mist_config_guardian_backend.services.restore_planner import RestorePlanningError, assert_plan_current
+from mist_config_guardian_backend.snapshots.secrets import protect_configuration
 
 ORGANIZATION_ID = PydanticObjectId()
 OPERATION_ID = PydanticObjectId()
@@ -57,6 +68,7 @@ def _action(  # noqa: PLR0913 - one keyword per action field a test varies
     logical_id: PydanticObjectId | None = None,
     source_version_id: PydanticObjectId | None = None,
     expected_current_hash: str | None = "hash-1",
+    reason: RestoreActionReason = RestoreActionReason.RESTORE,
 ) -> RestoreAction:
     identifier = logical_id or PydanticObjectId()
     return RestoreAction(
@@ -71,6 +83,7 @@ def _action(  # noqa: PLR0913 - one keyword per action field a test varies
         site_mist_id="site-1" if scope == "site" else None,
         protected_configuration={"ssid": "Corp"},
         expected_current_hash=expected_current_hash,
+        reason=reason,
     )
 
 
@@ -79,11 +92,14 @@ def _operation(
     *,
     mode: RestoreMode = RestoreMode.NON_DESTRUCTIVE,
     status: RestoreStatus = RestoreStatus.PLANNED,
+    identifier: PydanticObjectId = OPERATION_ID,
+    requested_version_ids: list[PydanticObjectId] | None = None,
 ) -> RestoreOperation:
     return RestoreOperation.model_construct(
-        id=OPERATION_ID,
+        id=identifier,
         organization_id=ORGANIZATION_ID,
         requested_by=REQUESTER_ID,
+        requested_version_ids=requested_version_ids or [],
         mode=mode,
         include_dependencies=True,
         target_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -181,6 +197,8 @@ class _MemoryApprovalStore:
             requested_by=draft.requested_by,
             requested_by_email=draft.requested_by_email,
             plan_hash=draft.plan_hash,
+            intent_hash=draft.intent_hash,
+            action_signature=draft.action_signature,
             triggered_rules=list(draft.triggered_rules),
             status=ApprovalStatus.PENDING,
             decided_by=None,
@@ -250,6 +268,10 @@ def test_plan_hash_ignores_execution_progress() -> None:
         lambda action: setattr(action, "expected_current_hash", "hash-2"),
         lambda action: setattr(action, "logical_object_id", PydanticObjectId()),
         lambda action: setattr(action, "order", 7),
+        lambda action: setattr(action, "current_mist_id", "mist-other"),
+        lambda action: setattr(action, "site_mist_id", "site-other"),
+        lambda action: setattr(action, "protected_configuration", {"ssid": "Guest"}),
+        lambda action: setattr(action, "reason", RestoreActionReason.REFERENCE_REWRITE),
     ],
 )
 def test_any_plan_change_changes_the_hash(mutate) -> None:
@@ -461,6 +483,252 @@ async def test_a_rejected_plan_cannot_be_resubmitted_for_approval() -> None:
 
     with pytest.raises(ApprovalRequiredError, match="rejected"):
         await service.assert_execution_allowed(_organization(), operation)
+
+
+PREPARED_ID = PydanticObjectId()
+
+
+def _prepared_from(draft: RestoreOperation, actions: list[RestoreAction] | None = None, **changes) -> RestoreOperation:
+    """The plan a fresh backup produces: new id, new baseline hashes, same intent."""
+    prepared = draft.model_copy(update={"id": PREPARED_ID, "baseline_snapshot_id": PydanticObjectId(), **changes})
+    prepared.warnings = list(draft.warnings)
+    prepared.actions = (
+        actions
+        if actions is not None
+        else [action.model_copy(update={"expected_current_hash": "fresh-backup-hash"}) for action in draft.actions]
+    )
+    return prepared
+
+
+async def _approved_draft(policy: ApprovalPolicy, actions: list[RestoreAction], *, decide: bool = True):
+    version = PydanticObjectId()
+    draft = _operation(actions, requested_version_ids=[version])
+    service, store, _ = _service(draft)
+    approval = await service.request(_organization(policy), draft, _requester())
+    assert approval.id is not None
+    if decide:
+        await service.decide(ORGANIZATION_ID, approval.id, _approver(), approved=True)
+    return draft, service, store, approval
+
+
+def test_payload_digest_is_blind_to_encryption_nonces_but_not_to_secrets() -> None:
+    vault = CredentialVault(Settings(environment="test", credential_encryption_key="test-key"))
+    sensitive = frozenset({"psk"})
+    first = protect_configuration({"ssid": "Corp", "psk": "correct-horse"}, vault, sensitive_fields=sensitive)
+    second = protect_configuration({"ssid": "Corp", "psk": "correct-horse"}, vault, sensitive_fields=sensitive)
+    other = protect_configuration({"ssid": "Corp", "psk": "battery-staple"}, vault, sensitive_fields=sensitive)
+
+    assert first != second
+    assert payload_digest(first) == payload_digest(second)
+    assert payload_digest(first) != payload_digest(other)
+
+
+def test_payload_digest_of_a_protected_value_without_a_fingerprint_follows_its_ciphertext() -> None:
+    """A value protected before fingerprints existed has nothing else to compare, so it is not treated as equal."""
+    assert payload_digest({"psk": {"$encrypted": "v1:one"}}) != payload_digest({"psk": {"$encrypted": "v1:two"}})
+
+
+async def test_an_approval_carries_to_the_prepared_plan_of_the_same_intent() -> None:
+    policy = ApprovalPolicy(enabled=True)
+    draft, service, store, approval = await _approved_draft(policy, [_action(scope="org")])
+    prepared = _prepared_from(draft)
+    store.operations[PREPARED_ID] = prepared
+
+    assert await service.carry_to_prepared(draft, prepared) == "carried"
+    assert approval.restore_operation_id == PREPARED_ID
+    assert await service.assert_execution_allowed(_organization(policy), prepared) is approval
+
+
+async def test_an_approval_carries_to_a_plan_prepared_by_another_administrator() -> None:
+    """Operators draft and administrators prepare; who asked is not part of what was asked for."""
+    policy = ApprovalPolicy(enabled=True)
+    draft, service, store, approval = await _approved_draft(policy, [_action(scope="org")])
+    expires_at, decided_at = approval.expires_at, approval.decided_at
+    prepared = _prepared_from(draft, requested_by=PydanticObjectId())
+    store.operations[PREPARED_ID] = prepared
+
+    assert await service.carry_to_prepared(draft, prepared) == "carried"
+    assert approval.restore_operation_id == PREPARED_ID
+    assert approval.requested_by == REQUESTER_ID
+    assert approval.status is ApprovalStatus.APPROVED
+    assert approval.decided_by == APPROVER_ID
+    assert approval.decided_at == decided_at
+    assert approval.expires_at == expires_at
+    assert approval.plan_hash == compute_plan_hash(prepared.actions)
+
+
+async def test_the_requester_cannot_decide_an_approval_carried_to_the_prepared_plan() -> None:
+    draft, service, store, approval = await _approved_draft(
+        ApprovalPolicy(enabled=True), [_action(scope="org")], decide=False
+    )
+    prepared = _prepared_from(draft)
+    store.operations[PREPARED_ID] = prepared
+    assert await service.carry_to_prepared(draft, prepared) == "carried"
+    assert approval.id is not None
+
+    with pytest.raises(SelfApprovalError):
+        await service.decide(ORGANIZATION_ID, approval.id, _requester(), approved=True)
+    assert approval.status is ApprovalStatus.PENDING
+
+
+async def test_an_approval_does_not_carry_when_the_backup_changes_the_actions() -> None:
+    policy = ApprovalPolicy(enabled=True)
+    draft, service, store, approval = await _approved_draft(policy, [_action(scope="org")])
+    prepared = _prepared_from(draft, actions=[*draft.actions, _action(order=1, action=RestoreActionType.DELETE)])
+    store.operations[PREPARED_ID] = prepared
+
+    assert await service.carry_to_prepared(draft, prepared) == "not_carried"
+    assert approval.restore_operation_id == OPERATION_ID
+    # The draft was not superseded (another preparation may have won), so its approval is left as it was.
+    assert approval.status is ApprovalStatus.APPROVED
+    with pytest.raises(ApprovalRequiredError):
+        await service.assert_execution_allowed(_organization(policy), prepared)
+
+
+@pytest.mark.parametrize("decide", [True, False], ids=["approved", "pending"])
+async def test_an_approval_left_on_a_superseded_draft_is_invalidated(decide: bool) -> None:  # noqa: FBT001 - pytest parameter
+    draft, service, store, approval = await _approved_draft(
+        ApprovalPolicy(enabled=True), [_action(scope="org")], decide=decide
+    )
+    prepared = _prepared_from(draft, actions=[*draft.actions, _action(order=1, action=RestoreActionType.DELETE)])
+    store.operations[PREPARED_ID] = prepared
+    # Superseding writes the stored draft; the copy the route loaded earlier still says planned.
+    store.operations[OPERATION_ID] = draft.model_copy(update={"status": RestoreStatus.SUPERSEDED})
+
+    assert await service.carry_to_prepared(draft, prepared) == "not_carried"
+    assert approval.status is ApprovalStatus.INVALIDATED
+    assert approval.restore_operation_id == OPERATION_ID
+
+
+async def test_an_approval_does_not_carry_to_a_plan_in_another_mode() -> None:
+    draft, service, store, _approval = await _approved_draft(ApprovalPolicy(enabled=True), [_action(scope="org")])
+    prepared = _prepared_from(draft, mode=RestoreMode.EXACT)
+    store.operations[PREPARED_ID] = prepared
+
+    assert await service.carry_to_prepared(draft, prepared) == "not_carried"
+
+
+async def test_a_reference_rewrite_whose_source_moved_still_carries() -> None:
+    rewrite = _action(scope="org", reason=RestoreActionReason.REFERENCE_REWRITE)
+    draft, service, store, _approval = await _approved_draft(ApprovalPolicy(enabled=True), [rewrite])
+    prepared = _prepared_from(
+        draft,
+        actions=[rewrite.model_copy(update={"source_version_id": PydanticObjectId(), "expected_current_hash": "x"})],
+    )
+    store.operations[PREPARED_ID] = prepared
+
+    assert await service.carry_to_prepared(draft, prepared) == "carried"
+
+
+async def test_an_approval_recorded_before_intents_were_bound_does_not_carry() -> None:
+    assert RestoreApproval.model_fields["intent_hash"].default is None
+    assert RestoreApproval.model_fields["action_signature"].default is None
+    draft, service, store, approval = await _approved_draft(ApprovalPolicy(enabled=True), [_action(scope="org")])
+    approval.intent_hash = None
+    approval.action_signature = None
+    prepared = _prepared_from(draft)
+    store.operations[PREPARED_ID] = prepared
+
+    assert await service.carry_to_prepared(draft, prepared) == "not_carried"
+    assert approval.restore_operation_id == OPERATION_ID
+
+
+class _NoStates:
+    async def load(self, organization_id, operation_id):  # noqa: ARG002
+        return None
+
+
+async def test_a_plan_without_a_reviewed_record_is_not_current() -> None:
+    with pytest.raises(RestorePlanningError, match="no reviewed plan record"):
+        await assert_plan_current(_NoStates(), _operation([_action()]))
+
+
+class _PreparingAuthorization:
+    def __init__(self, prepared: RestoreOperation) -> None:
+        self.prepared = prepared
+
+    async def prepare(self, organization, operation, requested_by, credential, store):  # noqa: ARG002
+        return self.prepared
+
+
+class _Plans:
+    def __init__(self, *plans: RestoreOperation) -> None:
+        self.plans = {plan.id: plan for plan in plans}
+
+    async def load(self, organization_id, operation_id):  # noqa: ARG002
+        return self.plans.get(operation_id)
+
+    async def page(self, organization_id, *, skip, limit):  # noqa: ARG002
+        return list(self.plans.values()), len(self.plans)
+
+
+async def test_preparing_an_approved_draft_carries_its_approval_over_the_api() -> None:
+    draft, service, store, _approval = await _approved_draft(ApprovalPolicy(), [_action()])
+    prepared = _prepared_from(draft, requested_by=APPROVER_ID)
+    store.operations[PREPARED_ID] = prepared
+    administrator = _user(UserRole.ADMINISTRATOR, identifier=APPROVER_ID, email="approver@example.com")
+    app = _app(service, administrator)
+    app.dependency_overrides[get_restore_authorization_service] = lambda: _PreparingAuthorization(prepared)
+    app.dependency_overrides[get_restore_plans] = lambda: _Plans(draft)
+    app.dependency_overrides[get_plan_state_store] = _NoStates
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/prepare",
+            json={"administrator_token": "fresh-admin-token"},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == str(PREPARED_ID)
+    assert body["approval"]["status"] == "approved"
+    assert body["approval_required"] is False
+    assert APPROVAL_NOT_CARRIED not in body["warnings"]
+
+
+async def test_a_plan_says_when_policy_needs_an_approval_nobody_asked_for() -> None:
+    policy = ApprovalPolicy(enabled=True)
+    operation = _operation([_action(scope="org")])
+    service, _, _ = _service(operation)
+    app = _app(service, _requester())
+    app.dependency_overrides[require_organization] = lambda: _organization(policy)
+    app.dependency_overrides[get_restore_plans] = lambda: _Plans(operation)
+
+    async with _client(app) as client:
+        single = await client.get(f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}")
+        listed = await client.get(f"/api/v1/organizations/{ORGANIZATION_ID}/restores")
+
+    assert single.status_code == 200
+    assert single.json()["approval"] is None
+    assert single.json()["approval_required"] is True
+    assert listed.json()["items"][0]["approval_required"] is True
+
+
+async def test_a_new_draft_says_it_will_need_an_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = ApprovalPolicy(enabled=True)
+    operation = _operation([_action(scope="org")])
+    service, _, _ = _service(operation)
+
+    class _Planner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        async def create_plan(self, **_kwargs: object) -> RestoreOperation:
+            return operation
+
+    monkeypatch.setattr("mist_config_guardian_backend.api.routes.restores.RestorePlanner", _Planner)
+    app = _app(service, _requester())
+    app.dependency_overrides[require_organization] = lambda: _organization(policy)
+    app.dependency_overrides[get_plan_state_store] = _NoStates
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/plans",
+            json={"version_ids": [str(PydanticObjectId())], "mode": "non_destructive"},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["approval_required"] is True
 
 
 def _requester() -> User:

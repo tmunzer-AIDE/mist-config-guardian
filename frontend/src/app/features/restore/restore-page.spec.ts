@@ -13,6 +13,7 @@ import { TimeContextService } from '../../core/time-context.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { RestorePage } from './restore-page';
 import {
+  ApprovalRequest,
   RestoreAction,
   RestoreOperation,
   RestoreStatus,
@@ -110,6 +111,26 @@ function operation(overrides: Partial<RestoreOperation> = {}): RestoreOperation 
     task_id: null,
     approval: null,
     compensation_available: false,
+    ...overrides,
+  };
+}
+
+function approvalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: 'ap-1',
+    restore_operation_id: 'op-1',
+    status: 'pending',
+    triggered_rules: [{ rule: 'organization_scope', detail: 'NW-Corp is organization-scoped.' }],
+    requested_by_email: 's.kaur@northwind.example',
+    decided_by_email: null,
+    decided_at: null,
+    decision_reason: null,
+    expires_at: '2026-09-08T14:22:00Z',
+    plan_hash: 'abc',
+    summary: '2 objects restored to their 02 SEP state.',
+    object_count: 2,
+    delete_count: 0,
+    created_at: '2026-09-07T14:22:00Z',
     ...overrides,
   };
 }
@@ -1506,5 +1527,54 @@ describe('RestorePage', () => {
 
     expect(button('Execute reviewed plan')).toBeTruthy();
     expect(JSON.stringify(navigations.at(-1))).toContain('"operation":"op-2"');
+  });
+
+  it('lets a second administrator review the draft before the fresh backup and keeps that approval', async () => {
+    await plan({ approval_required: true });
+    expect(text()).toContain('carries over to the prepared plan');
+
+    button('Ask a second administrator to review')!.click();
+    await tick();
+    const request = httpMock.expectOne(`${BASE}/approvals`);
+    expect(request.request.body).toEqual({ restore_operation_id: 'op-1' });
+    request.flush(approvalRequest());
+    await settle();
+
+    const token = element().querySelector<HTMLInputElement>('.token-input')!;
+    token.value = 'a-fresh-administrator-token';
+    token.dispatchEvent(new Event('input'));
+    await settle();
+    expect(button('Capture backup and review new plan')!.disabled).toBe(false);
+    button('Capture backup and review new plan')!.click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`).flush(
+      operation({
+        id: 'op-2',
+        approval_required: true,
+        baseline_snapshot_id: 'backup-1',
+        prepared_until: new Date(Date.now() + 60_000).toISOString(),
+        approval: approvalRequest({
+          restore_operation_id: 'op-2',
+          status: 'approved',
+          decided_by_email: 'a.osei@northwind.example',
+          decided_at: '2026-09-07T15:00:00Z',
+        }),
+      }),
+    );
+    await settle();
+
+    expect(text()).toContain('APPROVED');
+    expect(button('Execute reviewed plan')!.disabled).toBe(false);
+  });
+
+  it('withholds a prepared plan that needs an approval it does not have', async () => {
+    await plan({
+      approval_required: true,
+      baseline_snapshot_id: 'backup-1',
+      prepared_until: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    expect(button('Execute reviewed plan')!.disabled).toBe(true);
+    expect(button('Ask a second administrator to review')).toBeTruthy();
   });
 });
