@@ -29,7 +29,7 @@ from mist_config_guardian_backend.models.snapshot import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.notifications import NotificationService
-from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot
+from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot, recreated_site_ids
 from mist_config_guardian_backend.services.restore_outcome import mark_unconfirmed, terminal_failure_status
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
@@ -41,9 +41,10 @@ from mist_config_guardian_backend.services.restore_planner import (
     load_or_build_state,
 )
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
+from mist_config_guardian_backend.services.restore_write_guard import check_before_write
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     protect_configuration,
     reveal_configuration,
@@ -77,6 +78,20 @@ class _RunOutcome:
     succeeded: bool = True
     id_map: dict[str, str] = field(default_factory=dict)
     applied: dict[int, dict[str, object]] = field(default_factory=dict)
+
+
+@dataclass
+class _RunContext:
+    """Plan state one pass over the actions reads and extends.
+
+    The snapshot grows during the pass: an action under a site the plan
+    recreates is only recorded right before its write, at the new site.
+    """
+
+    state: RestoreOperationState
+    snapshot: dict[int, SafetySnapshotEntry]
+    recreated_sites: frozenset[str]
+    compensating: bool
 
 
 @dataclass
@@ -194,12 +209,13 @@ class RestoreExecutor:
             await self._store.save(state)
             await self._heartbeat(operation)
 
-            outcome = await self._run_actions(
-                client,
-                organization,
-                operation,
+            context = _RunContext(
+                state=state,
                 snapshot={entry.order: entry for entry in state.safety_snapshot},
+                recreated_sites=recreated_site_ids(operation.actions),
+                compensating=compensating,
             )
+            outcome = await self._run_actions(client, organization, operation, context)
             if not outcome.succeeded:
                 await self._notify_failure(operation, _failure_reason(operation))
                 return operation
@@ -384,8 +400,7 @@ class RestoreExecutor:
         client: MistMutationClient,
         organization: Organization,
         operation: RestoreOperation,
-        *,
-        snapshot: dict[int, SafetySnapshotEntry],
+        context: _RunContext,
     ) -> _RunOutcome:
         outcome = _RunOutcome()
         for index, action in enumerate(operation.actions):
@@ -397,7 +412,7 @@ class RestoreExecutor:
                     operation,
                     index,
                     outcome.id_map,
-                    snapshot=snapshot,
+                    context,
                 )
                 if payload is not None:
                     outcome.applied[action.order] = payload
@@ -534,15 +549,14 @@ class RestoreExecutor:
         operation.touch()
         await self._persist(operation)
 
-    async def _execute_action(  # noqa: PLR0913 - the pre-write snapshot decides whether a write is still needed
+    async def _execute_action(  # noqa: PLR0913, PLR0917 - the pass state travels with the action
         self,
         client: MistMutationClient,
         organization: Organization,
         operation: RestoreOperation,
         index: int,
         id_map: dict[str, str],
-        *,
-        snapshot: dict[int, SafetySnapshotEntry],
+        context: _RunContext,
     ) -> dict[str, object] | None:
         action = operation.actions[index]
         definition = get_definition(action.scope, action.object_type)
@@ -553,8 +567,29 @@ class RestoreExecutor:
             msg = f"Unsupported {action.action} for {action.scope}:{action.object_type}"
             raise MistMutationError(msg)
 
-        entry = snapshot.get(action.order)
-        if action.outcome_unknown and action.action is RestoreActionType.CREATE and entry is not None and entry.existed:
+        # Remapped first, so an object under a site recreated earlier in this
+        # pass is read, written and read back where it now lives.
+        site_id = rewrite_identifier(action.site_mist_id, id_map)
+        object_id = rewrite_identifier(action.current_mist_id, id_map) or action.current_mist_id
+        check = await check_before_write(
+            client,
+            organization,
+            self._vault,
+            action,
+            definition,
+            object_id=object_id,
+            site_id=site_id,
+            entry=context.snapshot.get(action.order),
+            deferred=action.site_mist_id is not None and action.site_mist_id in context.recreated_sites,
+            compensating=context.compensating,
+        )
+        if check.recorded:
+            # Stored before the write, so compensation can undo it even if the
+            # worker stops right after Mist applies it.
+            context.snapshot[action.order] = check.entry
+            context.state.safety_snapshot.append(check.entry)
+            await self._store.save(context.state)
+        if action.outcome_unknown and action.action is RestoreActionType.CREATE and check.entry.existed:
             # The delete this CREATE reverses never happened: the object is
             # still there, and writing it again would duplicate it.
             action.status = RestoreActionStatus.SKIPPED
@@ -569,8 +604,6 @@ class RestoreExecutor:
         operation.touch()
         await self._persist(operation)
 
-        site_id = rewrite_identifier(action.site_mist_id, id_map)
-        object_id = rewrite_identifier(action.current_mist_id, id_map)
         configuration = reveal_configuration(action.protected_configuration, self._vault)
         payload = prepare_restore_payload(
             configuration,
@@ -597,7 +630,7 @@ class RestoreExecutor:
         elif action.action is RestoreActionType.UPDATE:
             result = await client.update(
                 definition,
-                object_id or action.current_mist_id,
+                object_id,
                 payload,
                 org_id=organization.mist_org_id,
                 site_id=site_id,
@@ -606,7 +639,7 @@ class RestoreExecutor:
         else:
             await client.delete(
                 definition,
-                object_id or action.current_mist_id,
+                object_id,
                 org_id=organization.mist_org_id,
                 site_id=site_id,
             )
@@ -620,6 +653,14 @@ class RestoreExecutor:
         operation.touch()
         await self._persist(operation)
 
+        readback = await self._read_back(client, organization, action, definition, object_id=object_id, site_id=site_id)
+        action.applied_hash = (
+            None if readback is None else configuration_hash(readback, ignored_fields=definition.ignored_fields)
+        )
+        operation.actions[index] = action
+        operation.touch()
+        await self._persist(operation)
+
         await self._record_result(
             operation,
             action,
@@ -628,6 +669,38 @@ class RestoreExecutor:
             site_id=site_id,
         )
         return payload
+
+    @staticmethod
+    async def _read_back(  # noqa: PLR0913 - the remapped identifiers are what the write targeted
+        client: MistMutationClient,
+        organization: Organization,
+        action: RestoreAction,
+        definition: ObjectDefinition,
+        *,
+        object_id: str,
+        site_id: str | None,
+    ) -> dict[str, object] | None:
+        """Read the written object back from Mist before trusting the write (spec §9.5.5).
+
+        A write Mist accepted but does not show is not a success: the run
+        stops there, with the write already recorded as applied, so it stays
+        compensable. The error names the object, never what was read.
+        """
+        target = (
+            action.resulting_mist_id
+            if action.action is RestoreActionType.CREATE and action.resulting_mist_id
+            else object_id
+        )
+        current = await client.get_current(definition, target, org_id=organization.mist_org_id, site_id=site_id)
+        if action.action is RestoreActionType.DELETE:
+            if current is not None:
+                msg = f"{action.object_name} still exists in Mist after the delete"
+                raise MistMutationError(msg)
+            return None
+        if current is None:
+            msg = f"{action.object_name} was not found in Mist after the write"
+            raise MistMutationError(msg)
+        return current
 
     @staticmethod
     async def _insert_next_version(

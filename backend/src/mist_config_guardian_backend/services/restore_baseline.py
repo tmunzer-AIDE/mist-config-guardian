@@ -105,12 +105,23 @@ class RestoreBaselineService:
         actor: str | None,
     ) -> dict[PydanticObjectId, ObjectVersion]:
         baselines = {}
+        deleted_sites = {
+            logical.current_mist_id
+            for logical in objects.values()
+            if logical.object_type == "sites" and logical.is_deleted
+        }
         for logical_id, logical in objects.items():
             definition = get_definition(logical.scope, logical.object_type)
             previous = await latest_version(logical_id)
             if definition is None or previous is None:
                 msg = "A restore target has no supported baseline"
                 raise RestorePlanningError(msg)
+            if logical.site_mist_id is not None and logical.site_mist_id in deleted_sites:
+                # Nothing under a deleted site can be read back; its recorded
+                # history is the only baseline there is.
+                baselines[logical_id] = previous
+                manifest.unchanged_objects += 1
+                continue
             current = await client.get_current(
                 definition,
                 logical.current_mist_id,

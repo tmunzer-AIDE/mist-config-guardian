@@ -120,6 +120,35 @@ async def test_deleted_object_requires_history_refresh(capture):
     assert versions == []
 
 
+async def test_objects_under_a_deleted_site_are_not_read(capture):
+    service, client, org, objects, manifest, versions, _vault = capture
+    organization_id = next(iter(objects.values())).organization_id
+    site_id, settings_id = PydanticObjectId(), PydanticObjectId()
+    site = SimpleNamespace(
+        scope="org",
+        object_type="sites",
+        current_mist_id="site-old",
+        site_mist_id=None,
+        is_deleted=True,
+        organization_id=organization_id,
+    )
+    settings = SimpleNamespace(
+        scope="site",
+        object_type="settings",
+        current_mist_id="site-old:settings",
+        site_mist_id="site-old",
+        is_deleted=True,
+        organization_id=organization_id,
+    )
+    client.get_current.return_value = None
+
+    baselines = await service._capture(client, org, {site_id: site, settings_id: settings}, manifest, "admin")
+
+    assert [call.args[1] for call in client.get_current.await_args_list] == ["site-old"]
+    assert set(baselines) == {site_id, settings_id}
+    assert versions == []
+
+
 @pytest.fixture
 def authorization(monkeypatch):
     settings = Settings(environment="test")

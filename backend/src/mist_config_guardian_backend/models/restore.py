@@ -75,6 +75,10 @@ class RestoreAction(BaseModel):
     outcome_unknown: bool = False
     # On a compensation action: the order of the original action it reverses.
     compensates_action_order: int | None = None
+    # Fingerprint of the object as Mist returned it right after this action's
+    # write: what compensation must find before it undoes the write. None for
+    # deletes and for actions that have not written yet.
+    applied_hash: str | None = None
 
 
 class RestoreOperationStateRecord(TimestampedModel, Document):

@@ -22,8 +22,15 @@ from mist_config_guardian_backend.models.restore import (
     RestoreStatus,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
-from mist_config_guardian_backend.services.restore_executor import RestoreExecutor, RestoreOwnershipLostError
+from mist_config_guardian_backend.services.restore_executor import (
+    RestoreExecutor,
+    RestoreOwnershipLostError,
+    _RunContext,
+)
+from mist_config_guardian_backend.services.restore_planner import RestoreOperationState, SafetySnapshotEntry
 from mist_config_guardian_backend.services.restore_recovery import INTERRUPTED_REASON, RestoreRecoveryService
+from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.registry import get_definition
 
 MONGO_URL = os.environ.get("MONGO_TEST_URL")
 DATABASE = "restore_recovery"
@@ -165,6 +172,9 @@ async def test_a_run_that_heartbeats_before_the_janitor_writes_is_left_alone() -
 # ----------------------------------------------- a worker the janitor overtook
 
 
+_LIVE = {"name": "wlan-0"}
+
+
 class _Client:
     """Records Mist writes, optionally letting something happen while one is in flight."""
 
@@ -172,11 +182,42 @@ class _Client:
         self.writes: list[str] = []
         self.during_write = during_write
 
+    async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
+        return dict(_LIVE)
+
     async def update(self, definition, object_id, configuration, *, org_id, site_id):  # noqa: ARG002
         self.writes.append(object_id)
         if self.during_write is not None:
             await self.during_write()
         return dict(configuration)
+
+
+def _context(worker: RestoreOperation) -> _RunContext:
+    """A pass whose safety snapshot still matches what the fake client reads."""
+    assert worker.id is not None
+    definition = get_definition("site", "wlans")
+    assert definition is not None
+    action = worker.actions[0]
+    entry = SafetySnapshotEntry(
+        logical_object_id=action.logical_object_id,
+        order=action.order,
+        action=action.action,
+        scope=action.scope,
+        object_type=action.object_type,
+        object_name=action.object_name,
+        mist_object_id=action.current_mist_id,
+        site_mist_id=action.site_mist_id,
+        existed=True,
+        configuration=dict(_LIVE),
+        configuration_hash=configuration_hash(_LIVE, ignored_fields=definition.ignored_fields),
+    )
+    state = RestoreOperationState(
+        organization_id=worker.organization_id,
+        operation_id=worker.id,
+        plan_hash="plan-hash",
+        safety_snapshot=[entry],
+    )
+    return _RunContext(state=state, snapshot={entry.order: entry}, recreated_sites=frozenset(), compensating=False)
 
 
 def _organization() -> Organization:
@@ -238,7 +279,7 @@ async def test_a_worker_cannot_start_a_write_on_a_run_the_janitor_closed() -> No
     client = _Client()
 
     with pytest.raises(RestoreOwnershipLostError):
-        await _executor()._execute_action(client, _organization(), worker, 0, {}, snapshot={})  # noqa: SLF001
+        await _executor()._execute_action(client, _organization(), worker, 0, {}, _context(worker))  # noqa: SLF001
 
     assert client.writes == []
     closed = await _still_closed(running.id)
@@ -253,7 +294,7 @@ async def test_a_write_mist_applied_after_the_janitor_closed_the_run_stays_uncon
     client = _Client(during_write=_janitor_closes_every_run)
 
     with pytest.raises(RestoreOwnershipLostError):
-        await _executor()._execute_action(client, _organization(), worker, 0, {}, snapshot={})  # noqa: SLF001
+        await _executor()._execute_action(client, _organization(), worker, 0, {}, _context(worker))  # noqa: SLF001
 
     assert client.writes == ["mist-0"]
     closed = await _still_closed(running.id)

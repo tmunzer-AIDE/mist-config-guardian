@@ -46,7 +46,7 @@ from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash,
     configuration_hash_matches,
 )
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     SecretPath,
     find_unavailable_secrets,
@@ -62,6 +62,60 @@ _DEBUG_MAX_FIELD_LENGTH = 64
 
 class RestoreCompensationError(ValueError):
     """Raised when a compensating plan cannot be built or executed."""
+
+
+class RestoreDriftError(MistMutationError):
+    """Live state no longer matches what the plan was validated against.
+
+    A Mist error, so the executor fails the action and the run the same way it
+    does for a refused write. The message names the object, never its values.
+    """
+
+
+def recreated_site_ids(actions: Sequence[RestoreAction]) -> frozenset[str]:
+    """Site ids that do not exist in Mist until this plan creates them."""
+    return frozenset(
+        action.current_mist_id
+        for action in actions
+        if action.object_type == "sites" and action.action is RestoreActionType.CREATE
+    )
+
+
+async def build_snapshot_entry(  # noqa: PLR0913 - the identifiers differ from the action's once remapped
+    action: RestoreAction,
+    definition: ObjectDefinition,
+    vault: CredentialVault,
+    current: dict[str, object] | None,
+    *,
+    mist_object_id: str,
+    site_mist_id: str | None,
+) -> SafetySnapshotEntry:
+    """Record what one object looked like immediately before this plan touched it.
+
+    Shared by the up-front capture and the deferred reads under a recreated
+    site, so an entry means the same thing whenever it was taken.
+    """
+    stored = await latest_version(action.logical_object_id)
+    return SafetySnapshotEntry(
+        logical_object_id=action.logical_object_id,
+        order=action.order,
+        action=action.action,
+        scope=action.scope,
+        object_type=action.object_type,
+        object_name=action.object_name,
+        mist_object_id=mist_object_id,
+        site_mist_id=site_mist_id,
+        existed=current is not None,
+        configuration=(
+            {}
+            if current is None
+            else protect_configuration(current, vault, sensitive_fields=definition.sensitive_fields)
+        ),
+        configuration_hash=(
+            None if current is None else configuration_hash(current, ignored_fields=definition.ignored_fields)
+        ),
+        pre_version_id=None if stored is None or stored.is_deleted else stored.id,
+    )
 
 
 async def capture_safety_snapshot(
@@ -80,7 +134,12 @@ async def capture_safety_snapshot(
     authority on what must be put back.
     """
     entries: list[SafetySnapshotEntry] = []
+    recreated = recreated_site_ids(operation.actions)
     for action in operation.actions:
+        if action.site_mist_id is not None and action.site_mist_id in recreated:
+            # Nothing exists under a site this plan has not created yet. The
+            # executor reads these right before their writes, at the new site.
+            continue
         definition = get_definition(action.scope, action.object_type)
         if definition is None:
             msg = f"Unsupported restore type: {action.scope}:{action.object_type}"
@@ -96,32 +155,14 @@ async def capture_safety_snapshot(
         except MistMutationError:
             await _log_preflight_diagnostics(operation, action, current, vault)
             raise
-
-        stored = await latest_version(action.logical_object_id)
         entries.append(
-            SafetySnapshotEntry(
-                logical_object_id=action.logical_object_id,
-                order=action.order,
-                action=action.action,
-                scope=action.scope,
-                object_type=action.object_type,
-                object_name=action.object_name,
+            await build_snapshot_entry(
+                action,
+                definition,
+                vault,
+                current,
                 mist_object_id=action.current_mist_id,
                 site_mist_id=action.site_mist_id,
-                existed=current is not None,
-                configuration=(
-                    {}
-                    if current is None
-                    else protect_configuration(
-                        current,
-                        vault,
-                        sensitive_fields=definition.sensitive_fields,
-                    )
-                ),
-                configuration_hash=(
-                    None if current is None else configuration_hash(current, ignored_fields=definition.ignored_fields)
-                ),
-                pre_version_id=(None if stored is None or stored.is_deleted else stored.id),
             )
         )
     return entries

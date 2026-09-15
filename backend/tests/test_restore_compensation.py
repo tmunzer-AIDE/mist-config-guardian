@@ -737,6 +737,44 @@ async def test_a_stored_version_that_has_drifted_is_not_paired_with(
     assert entries[0].configuration_hash == live
 
 
+async def test_capture_leaves_objects_under_a_site_this_plan_recreates_for_later(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        _no_stored_version,
+    )
+    site = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="sites",
+        object_name="Lab",
+        current_mist_id="site-old",
+        protected_configuration={"name": "Lab"},
+    )
+    settings = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=1,
+        action=RestoreActionType.UPDATE,
+        scope="site",
+        object_type="settings",
+        object_name="Lab settings",
+        current_mist_id="site-old:settings",
+        site_mist_id="site-old",
+        protected_configuration={"vlan": 5},
+    )
+    client = _FakeMistClient({})
+
+    entries = await capture_safety_snapshot(client, _organization(), _operation([site, settings]), _vault())
+
+    assert client.reads == ["site-old"]
+    assert [entry.order for entry in entries] == [0]
+
+
 async def _no_stored_version(_logical_id):
     return None
 

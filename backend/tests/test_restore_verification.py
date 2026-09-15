@@ -33,6 +33,7 @@ from mist_config_guardian_backend.models.snapshot import (
     VersionEvent,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutionError, RestoreExecutor
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
@@ -44,6 +45,8 @@ from mist_config_guardian_backend.services.restore_verification import (
     RestoreVerificationService,
     find_stale_references,
 )
+from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.registry import get_definition
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,6 +55,7 @@ ORGANIZATION_ID = PydanticObjectId()
 OPERATION_ID = PydanticObjectId()
 SOURCE_OPERATION_ID = PydanticObjectId()
 REQUESTER_ID = PydanticObjectId()
+WLAN_DEFINITION = get_definition("site", "wlans")
 
 
 def _vault() -> CredentialVault:
@@ -152,11 +156,14 @@ class _MemoryStateStore:
 
 
 class _FakeClient:
-    """A Mist mutation client that records writes and replays canned reads."""
+    """A Mist mutation client whose reads reflect its own writes."""
 
     def __init__(self, readback: dict[str, dict[str, object] | None] | None = None) -> None:
-        self.readback = readback or {}
+        self.state: dict[str, dict[str, object]] = {
+            key: dict(value) for key, value in (readback or {}).items() if value is not None
+        }
         self.writes: list[tuple[str, str]] = []
+        self.reads: list[tuple[str, str | None]] = []
 
     async def __aenter__(self) -> Self:
         return self
@@ -166,17 +173,49 @@ class _FakeClient:
 
     async def create(self, definition, configuration, *, org_id, site_id):  # noqa: ARG002
         self.writes.append(("create", str(configuration.get("name"))))
-        return {"id": "new-uuid", **configuration}
+        created = {"id": "new-uuid", **configuration}
+        self.state["new-uuid"] = created
+        return dict(created)
 
     async def update(self, definition, object_id, configuration, *, org_id, site_id):  # noqa: ARG002
         self.writes.append(("update", object_id))
+        self.state[object_id] = {"id": object_id, **configuration}
         return dict(configuration)
 
     async def delete(self, definition, object_id, *, org_id, site_id) -> None:  # noqa: ARG002
         self.writes.append(("delete", object_id))
+        self.state.pop(object_id, None)
 
     async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
-        return self.readback.get(object_id)
+        self.reads.append((object_id, site_id))
+        value = self.state.get(object_id)
+        return None if value is None else dict(value)
+
+
+def _snapshot_entries(client: _FakeClient, operation: RestoreOperation) -> list[SafetySnapshotEntry]:
+    """What capture_safety_snapshot records against the fake's current state."""
+    assert WLAN_DEFINITION is not None
+    entries = []
+    for action in operation.actions:
+        live = client.state.get(action.current_mist_id)
+        entries.append(
+            SafetySnapshotEntry(
+                logical_object_id=action.logical_object_id,
+                order=action.order,
+                action=action.action,
+                scope=action.scope,
+                object_type=action.object_type,
+                object_name=action.object_name,
+                mist_object_id=action.current_mist_id,
+                site_mist_id=action.site_mist_id,
+                existed=live is not None,
+                configuration=dict(live or {}),
+                configuration_hash=(
+                    None if live is None else configuration_hash(live, ignored_fields=WLAN_DEFINITION.ignored_fields)
+                ),
+            )
+        )
+    return entries
 
 
 class _FailingClient(_FakeClient):
@@ -544,8 +583,8 @@ def executed(
 
     monkeypatch.setattr(RestoreExecutor, "_record_result", _no_record_result)
 
-    async def _snapshot(*_args, **_kwargs):
-        return []
+    async def _snapshot(client, _organization, operation, *_args, **_kwargs):
+        return _snapshot_entries(client, operation)
 
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot",
@@ -601,6 +640,9 @@ def _run(  # noqa: PLR0913 - every fake the executor accepts is optional here
     heartbeat_interval_seconds: float = 60.0,
 ) -> tuple[RestoreExecutor, _StubNotifications, _StubVerifier, _FakeClient]:
     client = client or _FakeClient()
+    for action in operation.actions:
+        if action.action is not RestoreActionType.CREATE:
+            client.state.setdefault(action.current_mist_id, dict(action.protected_configuration))
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_executor.MistMutationClient",
         lambda **_kwargs: client,
@@ -1091,8 +1133,8 @@ async def test_a_compensation_that_changes_nothing_fails_despite_inherited_uncon
         existed=True,
     )
 
-    async def _snapshot(*_args, **_kwargs):
-        return [entry]
+    async def _snapshot(client, _organization, operation, *_args, **_kwargs):
+        return [entry, *_snapshot_entries(client, operation)[1:]]
 
     monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
     store = _MemoryStateStore()
@@ -1172,9 +1214,8 @@ async def test_the_worker_heartbeats_around_every_phase(monkeypatch: pytest.Monk
     async def _beat(self, operation) -> None:  # noqa: ARG001
         events.append("beat")
 
-    async def _snapshot(*_args, **_kwargs):
-        events.append("capture")
-        return []
+    async def _snapshot(client, _organization, operation, *_args, **_kwargs):
+        return events.append("capture") or _snapshot_entries(client, operation)
 
     monkeypatch.setattr(RestoreExecutor, "_heartbeat", _beat)
     monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
@@ -1234,6 +1275,116 @@ async def test_the_credential_is_cleared_in_the_database_when_the_terminal_state
     assert notifications.failed == ["Restore worker error (RuntimeError)"]
 
 
+# ------------------------------------------------------------- per-write guard
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_object_changed_after_the_safety_snapshot_is_not_overwritten(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
+    executor, _, _, client = _run(monkeypatch, operation, verified=True)
+    original_update = client.update
+
+    async def _update_while_someone_edits(definition, object_id, configuration, *, org_id, site_id):
+        result = await original_update(definition, object_id, configuration, org_id=org_id, site_id=site_id)
+        client.state["mist-1"] = {"name": "wlan-1", "enabled": False}
+        return result
+
+    client.update = _update_while_someone_edits
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-0")]
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert result.actions[1].status is RestoreActionStatus.FAILED
+    assert "changed in Mist after the pre-restore safety snapshot" in (result.actions[1].error or "")
+
+
+@pytest.mark.usefixtures("executed")
+async def test_each_write_is_read_back_and_its_fingerprint_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert WLAN_DEFINITION is not None
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, _, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.actions[0].applied_hash == configuration_hash(
+        client.state["mist-0"], ignored_fields=WLAN_DEFINITION.ignored_fields
+    )
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_write_mist_does_not_show_afterwards_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+    original_update = client.update
+
+    async def _update_then_vanish(definition, object_id, configuration, *, org_id, site_id):
+        result = await original_update(definition, object_id, configuration, org_id=org_id, site_id=site_id)
+        client.state.pop(object_id)
+        return result
+
+    client.update = _update_then_vanish
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-0")]
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert "was not found in Mist after the write" in notifications.failed[0]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_deleted_site_is_restored_together_with_its_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The settings cannot be read before the site exists, so they are read at the new site, right before the write."""
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot",
+        capture_safety_snapshot,
+    )
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        AsyncMock(return_value=None),
+    )
+    site = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="sites",
+        object_name="Lab",
+        current_mist_id="site-old",
+        protected_configuration={"name": "Lab"},
+    )
+    settings = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=1,
+        action=RestoreActionType.UPDATE,
+        scope="site",
+        object_type="settings",
+        object_name="Lab settings",
+        current_mist_id="site-old:settings",
+        site_mist_id="site-old",
+        protected_configuration={"vlan": 5},
+        expected_current_hash="plan-time-hash-of-the-deleted-site",
+    )
+    store = _MemoryStateStore()
+    operation = _operation([site, settings])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert notifications.failed == []
+    assert result.status is RestoreStatus.COMPLETED
+    assert client.writes == [("create", "Lab"), ("update", "site-old:settings")]
+    # Before the write at the new site, then the read-back of that write.
+    assert client.reads.count(("site-old:settings", "new-uuid")) == 2
+    assert ("site-old:settings", "site-old") not in client.reads
+    state = await store.load(ORGANIZATION_ID, OPERATION_ID)
+    assert state is not None
+    assert [(entry.order, entry.site_mist_id) for entry in state.safety_snapshot] == [(0, None), (1, "new-uuid")]
+
+
 # ------------------------------------------------------------------- ownership
 
 _EXECUTOR_LOGGER = "mist_config_guardian_backend.services.restore_executor"
@@ -1276,10 +1427,10 @@ async def test_a_run_the_janitor_closed_stops_without_another_mist_write_or_noti
     caplog: pytest.LogCaptureFixture,
     closed_during: str,
 ) -> None:
-    async def _snapshot(*_args, **_kwargs):
+    async def _snapshot(client, _organization, operation, *_args, **_kwargs):
         if closed_during == "snapshot":
             stored.status = RestoreStatus.COMPENSATION_AVAILABLE
-        return []
+        return _snapshot_entries(client, operation)
 
     monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
     operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
@@ -1308,13 +1459,13 @@ async def test_the_background_heartbeat_keeps_a_long_phase_alive_until_ownership
 ) -> None:
     beats_while_owned = 0
 
-    async def _long_snapshot(*_args, **_kwargs):
+    async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
         nonlocal beats_while_owned
         await asyncio.sleep(0.05)
         beats_while_owned = len(stored.heartbeats())
         stored.status = RestoreStatus.COMPENSATION_AVAILABLE
         await asyncio.sleep(0.05)
-        return []
+        return _snapshot_entries(client, operation)
 
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
@@ -1338,9 +1489,9 @@ async def test_the_background_heartbeat_ends_with_the_run(
     monkeypatch: pytest.MonkeyPatch,
     stored: _StoredOperation,
 ) -> None:
-    async def _long_snapshot(*_args, **_kwargs):
+    async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
         await asyncio.sleep(0.03)
-        return []
+        return _snapshot_entries(client, operation)
 
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
@@ -1367,11 +1518,11 @@ async def test_a_failing_background_heartbeat_is_logged_by_type_and_keeps_beatin
             return RuntimeError("configuration content in a driver message")
         return None
 
-    async def _long_snapshot(*_args, **_kwargs):
+    async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
         stored.fault = _heartbeat_write_fails
         await asyncio.sleep(0.05)
         stored.fault = None
-        return []
+        return _snapshot_entries(client, operation)
 
     monkeypatch.setattr(
         "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _long_snapshot
