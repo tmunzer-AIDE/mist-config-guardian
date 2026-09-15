@@ -8,6 +8,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
+from mist_config_guardian_backend.impact.agent import MAX_INPUT_BYTES_TOTAL, MCP_MAX_INPUT_BYTES_TOTAL
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.organization import MistCloudRegion, OrganizationStatus
 from mist_config_guardian_backend.security.credentials import CredentialVault
@@ -298,3 +299,14 @@ async def test_shadow_mode_never_invokes_the_legacy_device_ai(monkeypatch, mode)
     )
     await service._assess_with_ai(None, None, None)  # noqa: SLF001
     provider.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("legacy", MAX_INPUT_BYTES_TOTAL), ("shadow", MAX_INPUT_BYTES_TOTAL), ("agent_shadow", MCP_MAX_INPUT_BYTES_TOTAL)],
+)
+async def test_only_new_agent_shadow_roots_receive_the_mcp_input_budget(monkeypatch, mode, expected):
+    service, root, collection, _, _ = setup_runtime(monkeypatch)
+    monkeypatch.setattr(runtime, "get_settings", lambda: SimpleNamespace(impact_engine_mode=mode))
+    await service.ensure(ORG, root.audit_id, changed_at=NOW, anchor_known=True)
+    assert collection.update_one.await_args.args[1]["$setOnInsert"]["model_input_bytes_limit"] == expected

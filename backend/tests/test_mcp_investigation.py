@@ -19,7 +19,7 @@ from bson.codec_options import CodecOptions
 from pydantic import ValidationError
 from pymongo.errors import ConnectionFailure
 
-from mist_config_guardian_backend.impact.agent import ModelRequestRecord, ModelResponseError
+from mist_config_guardian_backend.impact.agent import MCP_MAX_INPUT_BYTES_TOTAL, ModelRequestRecord, ModelResponseError
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import (
     McpConclusion,
@@ -842,3 +842,142 @@ async def test_safety_timeout_publishes_unavailable_checkpoint(monkeypatch):
     assert len(artifacts) == 1
     assert artifacts[0].mcp.state == "unavailable"
     assert "safety timeout" in artifacts[0].mcp.reason
+
+
+SYSTEM = "system prompt"
+bounded_context = mcp_impact_agent.McpImpactAgent._bounded_context  # noqa: SLF001
+
+
+def prompt_data(*observations, attributes=None, previous=None):
+    return {
+        "configuration_changes": {
+            "changes": [
+                {
+                    "attributes": attributes
+                    or [{"stp_config": {"before": {"enabled": True}, "after": {"enabled": False}}}]
+                }
+            ],
+            "gaps": [],
+        },
+        "configured_devices": {
+            "state": "available",
+            "groups": [
+                {
+                    "site_id": SITE,
+                    "device_type": "ap",
+                    "outcome": "configured",
+                    "correlation": "audit_id",
+                    "device_macs": [f"{n:012x}" for n in range(40)],
+                }
+            ],
+        },
+        "deterministic_context": {
+            "id": str(uuid4()),
+            "tool": "guardian_deterministic",
+            "data": {"assessment": {"impact": "info"}, "evidence": ["d" * 2000]},
+        },
+        "previous_checkpoint": previous,
+        "observations": list(observations),
+    }
+
+
+def observation(size, identity=None):
+    return {
+        "id": identity or str(uuid4()),
+        "tool": "search_mist_data",
+        "state": "complete",
+        "data": {"results": ["r" * size]},
+    }
+
+
+def encoded_size(data):
+    return len((SYSTEM + json.dumps(data, separators=(",", ":"), sort_keys=True)).encode())
+
+
+def test_prompt_that_fits_is_unchanged():
+    data = prompt_data(observation(100))
+    result = bounded_context(data, SYSTEM, encoded_size(data))
+    assert json.loads(result.body) == data
+    assert (result.steps, result.hidden_observations) == (0, 0)
+
+
+def test_trimming_rechecks_after_each_step_and_keeps_later_observations():
+    data = prompt_data(observation(8000), observation(8000), observation(8000))
+    result = bounded_context(data, SYSTEM, encoded_size(data) - 7000)
+    context = json.loads(result.body)
+    assert context["configured_devices"]["groups"][0]["device_count"] == 40
+    assert context["deterministic_context"]["id"] == data["deterministic_context"]["id"]
+    assert context["deterministic_context"]["data"]["assessment"] == {"impact": "info"}
+    hidden = [row["data"] == mcp_impact_agent.HIDDEN_PAYLOAD for row in context["observations"]]
+    assert hidden == [True, False, False]
+    assert result.hidden_observations == 1
+    assert context["configuration_changes"] == data["configuration_changes"]
+
+
+def test_evidence_cited_by_previous_report_is_never_hidden():
+    cited = observation(8000)
+    previous = {"source_revision": 1, "state": "complete", "reason": "", "evidence": [cited, observation(8000)]}
+    data = prompt_data(observation(8000), previous=previous)
+    result = bounded_context(data, SYSTEM, encoded_size(data) - 7000, frozenset({cited["id"]}))
+    context = json.loads(result.body)
+    assert context["previous_checkpoint"]["evidence"][0]["data"] == cited["data"]
+    assert context["previous_checkpoint"]["evidence"][1]["data"] == mcp_impact_agent.HIDDEN_PAYLOAD
+    assert context["observations"][0]["data"] == data["observations"][0]["data"]
+
+
+def test_long_changed_values_are_shortened_individually_as_last_resort():
+    attributes = [{"port_config": {"before": {"ge-0/0/1": "v" * 5000}, "after": {"enabled": True}}}]
+    newest = observation(3000)
+    data = prompt_data(newest, attributes=attributes)
+    result = bounded_context(data, SYSTEM, encoded_size(data) - 6000)
+    context = json.loads(result.body)
+    change = context["configuration_changes"]["changes"][0]["attributes"][0]["port_config"]
+    assert change["after"] == {"enabled": True}
+    assert change["before"].endswith("…[shortened]")
+    assert len(change["before"]) <= 200 + len("…[shortened]")
+    assert context["observations"][0]["data"] == newest["data"]
+    assert bounded_context(data, SYSTEM, 1000) is None
+
+
+async def test_mcp_prompts_use_their_own_input_bound(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    root.model_input_bytes_limit = MCP_MAX_INPUT_BYTES_TOTAL
+    rows = [
+        {
+            "org_id": MIST_ORG,
+            "site_id": SITE,
+            "mac": MAC,
+            "type": "SW_PORT_DOWN",
+            "timestamp": int(LATER.timestamp()),
+            "text": "e" * 200,
+        }
+        for _ in range(25)
+    ]
+    mcp_responses(httpx_mock, stored, result={"results": rows, "total": 25})
+    contexts = []
+
+    def respond(request):
+        context = read_context(request)
+        contexts.append(context)
+        if len(context["observations"]) == 2:
+            return ai_response(report(context))
+        if not context["observations"] and not context["described_tools"]:
+            return ai_response({"action": "describe", "tools": ["search_mist_data"]})
+        return ai_response(
+            {
+                "action": "tool",
+                "tool": "search_mist_data",
+                "arguments": {
+                    "search_type": "alarms" if context["observations"] else "device_events",
+                    "site_id": SITE,
+                },
+                "purpose": "Collect operational events for the changed site.",
+            }
+        )
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+    assert all("results" in row["data"] for row in contexts[-1]["observations"])
+    assert max(r["input_bytes"] for r in stored["model_requests"]) > 24_000
+    assert artifacts[0].mcp.diagnostics.observations_hidden_in_prompt == 0

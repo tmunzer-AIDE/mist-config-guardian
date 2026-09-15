@@ -168,6 +168,8 @@ class ModelRequestJournal:
         runtime: AiRuntimeConfiguration,
         record: ModelRequestRecord,
         service_credential: str,
+        *,
+        input_bytes_total: int = MAX_INPUT_BYTES_TOTAL,
     ) -> ModelDispatchDenial | None:
         try:
             fresh = await self._configuration.ai_runtime()
@@ -195,7 +197,7 @@ class ModelRequestJournal:
                         {
                             "$lte": [
                                 {"$ifNull": ["$model_input_bytes_reserved", 0]},
-                                min(root.model_input_bytes_limit, MAX_INPUT_BYTES_TOTAL) - record.input_bytes,
+                                min(root.model_input_bytes_limit, input_bytes_total) - record.input_bytes,
                             ]
                         },
                     ]
@@ -209,7 +211,7 @@ class ModelRequestJournal:
                 # Later releases must not silently enlarge an existing audit's budget.
                 "$set": {
                     "model_calls_limit": min(root.model_calls_limit, MAX_MODEL_CALLS),
-                    "model_input_bytes_limit": min(root.model_input_bytes_limit, MAX_INPUT_BYTES_TOTAL),
+                    "model_input_bytes_limit": min(root.model_input_bytes_limit, input_bytes_total),
                 },
             },
         )

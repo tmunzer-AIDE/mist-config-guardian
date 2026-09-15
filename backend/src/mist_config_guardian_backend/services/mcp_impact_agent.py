@@ -17,15 +17,17 @@ from pydantic import TypeAdapter, ValidationError
 
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.impact.agent import (
-    MAX_INPUT_BYTES,
     MAX_MODEL_CALLS,
     MAX_OUTPUT_BYTES,
     MAX_OUTPUT_TOKENS,
+    MCP_MAX_INPUT_BYTES,
+    MCP_MAX_INPUT_BYTES_TOTAL,
     ModelRequestRecord,
     ModelResponseError,
 )
 from mist_config_guardian_backend.impact.mcp_contracts import (
     MAX_MCP_ERROR_DETAIL_BYTES,
+    MAX_MCP_EVIDENCE_BYTES,
     McpAction,
     McpCheckpoint,
     McpCheckpointState,
@@ -66,6 +68,29 @@ TOOL_TIMEOUT_SECONDS = 20.0
 MIN_TURN_SECONDS = 5.0
 DEFAULT_RUN_SECONDS = 140.0
 ADAPTER = TypeAdapter(McpAction)
+HIDDEN_PAYLOAD = {"omitted_for_prompt": "Payload hidden for prompt size; the evidence ID remains citable."}
+MAX_PROMPT_VALUE_CHARS = 200
+
+
+@dataclass(frozen=True)
+class BoundedPrompt:
+    body: str
+    steps: int
+    hidden_observations: int
+
+
+def _short(value: object) -> object:
+    encoded = json.dumps(value, separators=(",", ":"), sort_keys=True)
+    return value if len(encoded) <= MAX_PROMPT_VALUE_CHARS else encoded[:MAX_PROMPT_VALUE_CHARS] + "…[shortened]"
+
+
+def _shorten_attribute(row: object) -> object:
+    if not isinstance(row, dict) or len(row) != 1:
+        return row
+    name, value = next(iter(row.items()))
+    return {name: {k: _short(v) for k, v in value.items()} if isinstance(value, dict) else _short(value)}
+
+
 _SYSTEM = """Investigate the supplied configuration change using the existing Mist MCP read tools.
 Deterministic findings are optional evidence, never a prerequisite or the scope of your investigation.
 Discover affected devices/dependencies, select relevant measurements, and compare before/after evidence.
@@ -202,6 +227,8 @@ class McpImpactAgent(ModelRequestJournal):
         requests = []
         digest = None
         stats = _RunStats()
+        protected = self._protected_ids(previous)
+        reserved_bytes = 0
 
         def stopped(
             state: McpCheckpointState,
@@ -287,7 +314,7 @@ class McpImpactAgent(ModelRequestJournal):
                             if deterministic_evidence
                             else None,
                             "configured_devices": self._deployment_summary(deployment),
-                            "previous_checkpoint": self._checkpoint_summary(previous),
+                            "previous_checkpoint": self._checkpoint_summary(previous, protected),
                             "previous_report": previous.mcp.conclusion.model_dump(mode="json")
                             if isinstance(previous, InvestigationRevision) and previous.mcp and previous.mcp.conclusion
                             else None,
@@ -299,11 +326,20 @@ class McpImpactAgent(ModelRequestJournal):
                         system = (
                             _SYSTEM + "\nAction schema:\n" + json.dumps(ADAPTER.json_schema(), separators=(",", ":"))
                         )
-                        body = self._bounded_context(data, system)
-                        if body is None:
+                        budget = min(
+                            MCP_MAX_INPUT_BYTES,
+                            min(root.model_input_bytes_limit, MCP_MAX_INPUT_BYTES_TOTAL)
+                            - root.model_input_bytes_reserved
+                            - reserved_bytes,
+                        )
+                        bounded = self._bounded_context(data, system, budget, protected)
+                        if bounded is None:
                             return stopped(
                                 "budget_exhausted", "Bounded model context could not fit; evidence retained."
                             )
+                        body = bounded.body
+                        stats.trim_steps = max(stats.trim_steps, bounded.steps)
+                        stats.observations_hidden = max(stats.observations_hidden, bounded.hidden_observations)
                         record = ModelRequestRecord(
                             id=uuid4(),
                             generation=root.generation,
@@ -318,10 +354,17 @@ class McpImpactAgent(ModelRequestJournal):
                             output_token_limit=min(runtime.max_response_tokens, MAX_OUTPUT_TOKENS),
                         )
                         await self._artifact(root, record, "input", body, record.input_artifact_id)
-                        denial = await self._reserve(root, runtime, record, organization.encrypted_service_token)
+                        denial = await self._reserve(
+                            root,
+                            runtime,
+                            record,
+                            organization.encrypted_service_token,
+                            input_bytes_total=MCP_MAX_INPUT_BYTES_TOTAL,
+                        )
                         if denial:
                             return stopped("dispatch_denied", denial.explanation)
                         requests.append(record.id)
+                        reserved_bytes += record.input_bytes
                         stats.turns += 1
                         stats.max_prompt_bytes = max(stats.max_prompt_bytes, record.input_bytes)
                         try:
@@ -496,7 +539,24 @@ class McpImpactAgent(ModelRequestJournal):
         }
 
     @staticmethod
-    def _checkpoint_summary(previous: InvestigationRevision | Literal[False] | None) -> dict | None:
+    def _protected_ids(previous: InvestigationRevision | Literal[False] | None) -> frozenset[str]:
+        if not isinstance(previous, InvestigationRevision) or not previous.mcp or not previous.mcp.conclusion:
+            return frozenset()
+        report = previous.mcp.conclusion
+        return frozenset(
+            str(ref)
+            for ref in (
+                *report.evidence,
+                *(r for f in report.findings for r in f.evidence),
+                *(r for d in report.impacted_devices for r in d.evidence),
+                *(v.evidence_id for v in report.views),
+            )
+        )
+
+    @staticmethod
+    def _checkpoint_summary(
+        previous: InvestigationRevision | Literal[False] | None, protected: frozenset[str] = frozenset()
+    ) -> dict | None:
         if not isinstance(previous, InvestigationRevision) or previous.mcp is None:
             return None
         return {
@@ -511,7 +571,8 @@ class McpImpactAgent(ModelRequestJournal):
                     "state": e.state,
                     "captured_at": e.captured_at.isoformat(),
                     "data": e.data
-                    if len(json.dumps(e.data)) <= MAX_PREVIOUS_EVIDENCE_BYTES
+                    if len(json.dumps(e.data).encode())
+                    <= (MAX_MCP_EVIDENCE_BYTES if str(e.id) in protected else MAX_PREVIOUS_EVIDENCE_BYTES)
                     else {"omitted": "Historical payload retained in prior revision."},
                 }
                 for e in previous.mcp.evidence
@@ -547,32 +608,69 @@ class McpImpactAgent(ModelRequestJournal):
         return cleaned if isinstance(cleaned, str) else ""
 
     @staticmethod
-    def _bounded_context(data: dict, system: str) -> str | None:
+    def _bounded_context(  # noqa: C901 - ordered, re-checked degradation steps
+        data: dict, system: str, budget: int, protected: frozenset[str] = frozenset()
+    ) -> BoundedPrompt | None:
         data = deepcopy(data)
+        steps = hidden = 0
 
-        def encode() -> str:
-            return json.dumps(data, separators=(",", ":"), sort_keys=True)
+        def fits() -> str | None:
+            body = json.dumps(data, separators=(",", ":"), sort_keys=True)
+            return body if len((system + body).encode()) <= budget else None
 
-        body = encode()
-        if len((system + body).encode()) <= MAX_INPUT_BYTES:
-            return body
-        data["deterministic_context"] = {"omitted": "Optional context exceeds prompt budget; retained in revision."}
-        data["configured_devices"] = {"omitted": "Deployment list omitted for prompt budget."}
-        # Keep current raw evidence if it fits; older payloads retain IDs and an explicit omission marker.
-        for row in data["observations"]:
-            body = encode()
-            if len((system + body).encode()) <= MAX_INPUT_BYTES:
-                return body
-            row["data"] = {"omitted": "Previously returned evidence omitted from this prompt for size."}
-        for change in data["configuration_changes"].get("changes", []):
-            change["attributes"] = [
-                {next(iter(field)): "Values omitted for prompt size; consult recorded diff or MCP."}
-                for field in change.get("attributes", [])
-                if isinstance(field, dict) and field
-            ]
-        data["configuration_changes"].setdefault("gaps", []).append("Changed values omitted from this prompt for size.")
-        body = encode()
-        return body if len((system + body).encode()) <= MAX_INPUT_BYTES else None
+        if (body := fits()) is not None:
+            return BoundedPrompt(body, steps, hidden)
+        # (a) Configured devices keep site/type/outcome counts instead of MAC lists.
+        devices = data.get("configured_devices")
+        if isinstance(devices, dict) and isinstance(devices.get("groups"), list):
+            data["configured_devices"] = {
+                **devices,
+                "groups": [
+                    {
+                        **{k: v for k, v in g.items() if k != "device_macs"},
+                        "device_count": len(g.get("device_macs", [])),
+                    }
+                    for g in devices["groups"]
+                ],
+                "detail": "Device MACs omitted for prompt size; counts per site/type/outcome retained.",
+            }
+        steps += 1
+        if (body := fits()) is not None:
+            return BoundedPrompt(body, steps, hidden)
+        # (b) Optional rule evidence keeps its citable ID and assessment only.
+        optional = data.get("deterministic_context")
+        if isinstance(optional, dict) and isinstance(optional.get("data"), dict):
+            data["deterministic_context"] = {
+                **optional,
+                "data": {"assessment": optional["data"].get("assessment"), **HIDDEN_PAYLOAD},
+            }
+        steps += 1
+        if (body := fits()) is not None:
+            return BoundedPrompt(body, steps, hidden)
+        # (c) Hide payloads oldest-first, never the newest observation or previously cited evidence.
+        steps += 1
+        history = (data.get("previous_checkpoint") or {}).get("evidence", [])
+        for row in [*history, *data.get("observations", [])[:-1]]:
+            payload = row.get("data")
+            if row.get("id") in protected or payload is None or (isinstance(payload, dict) and "omitted" in payload):
+                continue
+            if payload == HIDDEN_PAYLOAD:
+                continue
+            row["data"] = dict(HIDDEN_PAYLOAD)
+            hidden += 1
+            if (body := fits()) is not None:
+                return BoundedPrompt(body, steps, hidden)
+        # (d) Last resort: shorten long changed values one by one; field names and short values stay.
+        changes = data.get("configuration_changes", {})
+        for change in changes.get("changes", []):
+            change["attributes"] = [_shorten_attribute(row) for row in change.get("attributes", [])]
+        changes.setdefault("gaps", []).append(
+            "Long changed values were shortened in this prompt; consult the recorded diff or MCP."
+        )
+        steps += 1
+        if (body := fits()) is not None:
+            return BoundedPrompt(body, steps, hidden)
+        return None
 
     @staticmethod
     def _rejection(exc: Exception, secrets: tuple[str, ...]) -> tuple[ModelResponseError, str]:

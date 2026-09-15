@@ -10,7 +10,12 @@ from beanie.odm.utils.encoder import Encoder
 from pydantic import TypeAdapter
 from pymongo.errors import PyMongoError
 
-from mist_config_guardian_backend.impact.agent import ACTION_ADAPTER, MAX_INPUT_BYTES, ModelRequestRecord
+from mist_config_guardian_backend.impact.agent import (
+    ACTION_ADAPTER,
+    MAX_INPUT_BYTES,
+    MCP_MAX_INPUT_BYTES,
+    ModelRequestRecord,
+)
 from mist_config_guardian_backend.impact.mcp_contracts import McpAction
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, ModelRequestArtifact
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
@@ -92,6 +97,7 @@ async def _artifact(
     if any(actual.get(key) != value for key, value in identity.items()):
         return None
     body = artifact.content_json
-    if len(body.encode()) > MAX_INPUT_BYTES or sha256(body.encode()).hexdigest() != expected_hash:
+    bound = MCP_MAX_INPUT_BYTES if record.prompt_version.startswith("impact-mcp") else MAX_INPUT_BYTES
+    if len(body.encode()) > bound or sha256(body.encode()).hexdigest() != expected_hash:
         return None
     return body

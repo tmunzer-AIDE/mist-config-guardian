@@ -15,7 +15,12 @@ from pymongo import ReturnDocument
 from pymongo.errors import PyMongoError
 
 from mist_config_guardian_backend.config import get_settings
-from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
+from mist_config_guardian_backend.impact.agent import (
+    MAX_INPUT_BYTES_TOTAL,
+    MCP_MAX_INPUT_BYTES_TOTAL,
+    CheckCapability,
+    capabilities,
+)
 from mist_config_guardian_backend.impact.contracts import (
     ApEvidence,
     AuthEvidence,
@@ -104,6 +109,9 @@ class ImpactInvestigationService:
             first_due_at=due,
             expires_at=changed_at + _DURATION,
             next_poll_at=due,
+            model_input_bytes_limit=MCP_MAX_INPUT_BYTES_TOTAL
+            if get_settings().impact_engine_mode == "agent_shadow"
+            else MAX_INPUT_BYTES_TOTAL,
         )
         await ImpactInvestigation.get_pymongo_collection().update_one(
             {"organization_id": organization_id, "audit_id": audit_id},

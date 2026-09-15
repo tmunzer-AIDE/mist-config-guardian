@@ -37,6 +37,9 @@ MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
+# MCP-led prompts carry tool schemas and real results; the retired fixed-menu agent keeps 24 KB.
+MCP_MAX_INPUT_BYTES = 96_000
+MCP_MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MCP_MAX_INPUT_BYTES
 PROMPT_VERSION = "impact-investigator.v8"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -379,7 +382,7 @@ class ModelRequestRecord(Contract):
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)
-    input_bytes: int = Field(ge=1, le=MAX_INPUT_BYTES)
+    input_bytes: int = Field(ge=1, le=MCP_MAX_INPUT_BYTES)
     output_token_limit: int = Field(ge=1, le=MAX_OUTPUT_TOKENS)
     input_artifact_id: PydanticObjectId | None = None
     input_context_hash: Handle | None = None

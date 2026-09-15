@@ -5498,7 +5498,7 @@
           "input_json": {
             "anyOf": [
               {
-                "maxLength": 24000,
+                "maxLength": 96000,
                 "type": "string"
               },
               {
@@ -5614,7 +5614,7 @@
             ]
           },
           "input_bytes": {
-            "maximum": 24000.0,
+            "maximum": 96000.0,
             "minimum": 1.0,
             "title": "Input Bytes",
             "type": "integer"

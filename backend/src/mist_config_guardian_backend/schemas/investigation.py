@@ -6,7 +6,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from mist_config_guardian_backend.impact.agent import AgentCheckpoint, CollectAction, ModelActivity, ReportAction
+from mist_config_guardian_backend.impact.agent import (
+    MCP_MAX_INPUT_BYTES,
+    AgentCheckpoint,
+    CollectAction,
+    ModelActivity,
+    ReportAction,
+)
 from mist_config_guardian_backend.impact.contracts import (
     ApAdjacency,
     DispatchDenial,
@@ -54,7 +60,7 @@ class ModelRequestDetails(BaseModel):
     response_state: Literal["available", "unavailable", "not_recorded"] = "not_recorded"
     request_id: UUID
     input_state: Literal["available", "legacy", "unavailable"] = "unavailable"
-    input_json: str | None = Field(default=None, max_length=24_000)
+    input_json: str | None = Field(default=None, max_length=MCP_MAX_INPUT_BYTES)
     action_state: Literal["available", "legacy", "unavailable", "not_recorded"] = "unavailable"
     action: CollectAction | ReportAction | McpToolAction | McpDescribeAction | McpReportAction | None = None
 
