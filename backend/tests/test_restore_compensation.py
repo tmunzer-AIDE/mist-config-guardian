@@ -51,6 +51,7 @@ from mist_config_guardian_backend.services.restore_lease import ANOTHER_RESTORE_
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     SafetySnapshotEntry,
+    assert_plan_current,
 )
 from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash,
@@ -1425,6 +1426,17 @@ class _MemoryPlans:
         matched = [plan for plan in self.plans if plan.organization_id == organization_id]
         return matched[skip : skip + limit], len(matched)
 
+    async def supersede_planned(self, organization_id, operation_id, replacement_id):
+        """The same conditional retire MongoDB performs: only a plan that never started."""
+        plan = await self.load(organization_id, operation_id)
+        if plan is None or plan.status is not RestoreStatus.PLANNED or plan.started_at is not None:
+            return False
+        plan.status = RestoreStatus.SUPERSEDED
+        plan.superseded_by = replacement_id
+        plan.encrypted_delegated_credential = None
+        plan.delegated_credential_expires_at = None
+        return True
+
 
 @pytest.fixture(name="routed")
 def _routed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -1871,14 +1883,16 @@ async def test_a_compensation_already_running_is_not_planned_twice(monkeypatch: 
         )
 
 
-async def _link_earlier_compensation(store: _MemoryStateStore, operation: RestoreOperation) -> None:
+async def _link_earlier_compensation(
+    store: _MemoryStateStore, operation: RestoreOperation, *, plan_hash: str = "earlier"
+) -> None:
     """Record ``operation`` as the compensation last planned for the failed restore."""
     assert operation.id is not None
     await store.save(
         RestoreOperationState(
             organization_id=ORGANIZATION_ID,
             operation_id=operation.id,
-            plan_hash="earlier",
+            plan_hash=plan_hash,
             compensates_operation_id=OPERATION_ID,
         )
     )
@@ -1892,13 +1906,42 @@ async def _link_earlier_compensation(store: _MemoryStateStore, operation: Restor
 async def test_a_planned_compensation_is_reused_rather_than_planned_twice(monkeypatch: pytest.MonkeyPatch) -> None:
     operation, store = await _applied_plan(monkeypatch)
     planned = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
-    await _link_earlier_compensation(store, planned)
+    await _link_earlier_compensation(store, planned, plan_hash=compute_plan_hash(planned.actions))
 
     plan = await RestoreCompensationService(store, plans=_MemoryPlans([operation, planned])).create_compensation_plan(
         operation=operation, requested_by=ADMINISTRATOR_ID
     )
 
     assert plan is planned
+    assert planned.status is RestoreStatus.PLANNED
+    assert planned.superseded_by is None
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_planned_compensation_hashed_under_an_older_formula_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its reviewed record can never match again, so reusing it would leave the failed restore stuck."""
+    operation, store = await _applied_plan(monkeypatch)
+    stale = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    stale.encrypted_delegated_credential = "v1:should-not-be-here"
+    await _link_earlier_compensation(store, stale, plan_hash="hashed-before-targets-and-payload-were-covered")
+    plans = _MemoryPlans([operation, stale])
+    service = RestoreCompensationService(store, plans=plans)
+
+    plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+    plans.plans.append(plan)
+
+    assert plan is not stale
+    assert plan.id == COMPENSATION_ID
+    assert [action.compensates_action_order for action in plan.actions] == [2, 1, 0]
+    assert stale.status is RestoreStatus.SUPERSEDED
+    assert stale.superseded_by == COMPENSATION_ID
+    assert stale.encrypted_delegated_credential is None
+    assert await assert_plan_current(store, plan) == compute_plan_hash(plan.actions)
+    linked = await service.compensation_for(operation)
+    assert linked is not None
+    assert linked.id == COMPENSATION_ID
 
 
 @pytest.mark.usefixtures("offline_documents")

@@ -515,12 +515,20 @@ class RestoreCompensationService:
             raise RestoreCompensationError(msg)
 
         already_reversed: set[int] = set()
+        stale: list[PydanticObjectId] = []
         for earlier in reversed(await self._store.compensations_of(operation.organization_id, operation.id)):
             plan = await self._plans.load(operation.organization_id, earlier.operation_id)
             if plan is None:
                 continue
             if plan.status is RestoreStatus.PLANNED:
-                return plan
+                if earlier.plan_hash == compute_plan_hash(plan.actions):
+                    return plan
+                # Reviewed under an earlier plan-hash formula, so execution
+                # refuses it as changed; returning it again would leave the
+                # failed restore with no compensation that can ever run. It is
+                # retired once its replacement exists.
+                stale.append(earlier.operation_id)
+                continue
             if plan.status in {RestoreStatus.QUEUED, RestoreStatus.RUNNING}:
                 msg = "A compensation of this restore is already queued or running"
                 raise RestoreCompensationError(msg)
@@ -571,7 +579,25 @@ class RestoreCompensationService:
         )
         state.compensation_operation_id = compensation.id
         await self._store.save(state)
+        await self._retire_stale(operation.organization_id, stale, compensation.id)
         return compensation
+
+    async def _retire_stale(
+        self,
+        organization_id: PydanticObjectId,
+        stale: Sequence[PydanticObjectId],
+        replacement_id: PydanticObjectId,
+    ) -> None:
+        """Supersede compensations that can no longer run, now that their replacement is linked.
+
+        Retiring only after the replacement exists means a failure in between
+        leaves an unrunnable plan behind rather than no plan at all, and the
+        next planning retires it again.
+        """
+        for stale_id in stale:
+            if not await self._plans.supersede_planned(organization_id, stale_id, replacement_id):
+                # It left PLANNED meanwhile; the new plan is still the one linked.
+                logger.warning("restore_compensation_not_superseded operation_id=%s", stale_id)
 
     async def _reverse(
         self,

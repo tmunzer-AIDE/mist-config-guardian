@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.approval import ApprovalPolicy, TriggeredRule
+from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
     RestoreActionReason,
@@ -25,6 +26,7 @@ from mist_config_guardian_backend.models.restore import (
     RestoreMode,
     RestoreOperation,
     RestoreOperationStateRecord,
+    RestoreStatus,
 )
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
@@ -263,6 +265,14 @@ class RestorePlanRepository(Protocol):
     ) -> tuple[list[RestoreOperation], int]:
         """Return one newest-first page of restore operations and its total."""
 
+    async def supersede_planned(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+        replacement_id: PydanticObjectId,
+    ) -> bool:
+        """Retire a plan that never started in favour of its replacement; ``False`` if it had moved on."""
+
 
 class BeanieRestorePlanRepository:
     """MongoDB-backed restore plan reads."""
@@ -290,6 +300,38 @@ class BeanieRestorePlanRepository:
         total = await query.count()
         items = await query.sort("-created_at").skip(skip).limit(limit).to_list()
         return items, total
+
+    async def supersede_planned(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+        replacement_id: PydanticObjectId,
+    ) -> bool:
+        """Retire a plan that never started in favour of its replacement; ``False`` if it had moved on.
+
+        One conditional update, so a plan queued or started between the read
+        that found it stale and this write is left alone. A session is not
+        expected on such a plan, but one would be cleared in the same write so
+        a retired plan never holds a credential.
+        """
+        result = await RestoreOperation.get_pymongo_collection().update_one(
+            {
+                "_id": operation_id,
+                "organization_id": organization_id,
+                "status": RestoreStatus.PLANNED,
+                "started_at": None,
+            },
+            {
+                "$set": {
+                    "status": RestoreStatus.SUPERSEDED,
+                    "superseded_by": replacement_id,
+                    "encrypted_delegated_credential": None,
+                    "delegated_credential_expires_at": None,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+        return result.modified_count == 1
 
 
 def get_restore_plan_repository() -> RestorePlanRepository:

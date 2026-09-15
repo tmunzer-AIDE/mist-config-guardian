@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import httpx
+import structlog
 from beanie import PydanticObjectId
 from celery.exceptions import CeleryError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -67,6 +68,8 @@ from mist_config_guardian_backend.services.restore_targets import (
 )
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.worker import celery_app
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/organizations/{organization_id}/restores")
 
@@ -270,12 +273,28 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail="Mist is unavailable; no restore was queued") from exc
-    # The draft's approval was asked for before this backup existed; it follows
-    # the new plan only when the backup left what would be done unchanged.
-    if await approvals.carry_to_prepared(operation, plan) == "not_carried":
+    await _carry_approval(approvals, operation, plan)
+    return await _operation_response(plan, approvals, organization)
+
+
+async def _carry_approval(approvals: ApprovalService, draft: RestoreOperation, plan: RestoreOperation) -> None:
+    """Move the draft's approval to its prepared plan, or say on the plan why it did not follow.
+
+    The approval was asked for before this backup existed; it follows the new
+    plan only when the backup left what would be done unchanged. A failure here
+    must not fail the request: the prepared plan and its session already exist.
+    """
+    try:
+        carried = await approvals.carry_to_prepared(draft, plan)
+    except Exception as exc:  # noqa: BLE001 - the prepared plan and its session already exist and must be returned
+        # The response reads the approval from the store, so it shows wherever
+        # the approval actually is. Only the type is logged: the message could
+        # hold database detail.
+        logger.warning("restore_approval_carry_failed", operation_id=str(plan.id), error_type=type(exc).__name__)
+        return
+    if carried == "not_carried":
         plan.warnings.append(APPROVAL_NOT_CARRIED)
         await plan.save()
-    return await _operation_response(plan, approvals, organization)
 
 
 @router.post("/{operation_id}/compensation", status_code=status.HTTP_201_CREATED)

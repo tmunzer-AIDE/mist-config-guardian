@@ -1,4 +1,4 @@
-"""The compensation lookup returns the newest attempt.
+"""The compensation lookup returns the newest attempt, and a stale plan is retired atomically.
 
 Skipped unless ``MONGO_TEST_URL`` names a reachable MongoDB.
 """
@@ -11,8 +11,13 @@ import pytest_asyncio
 from beanie import PydanticObjectId, init_beanie
 from pymongo import AsyncMongoClient
 
-from mist_config_guardian_backend.models.restore import RestoreOperationStateRecord
-from mist_config_guardian_backend.services.restore_planner import MongoRestoreStateStore
+from mist_config_guardian_backend.models.restore import (
+    RestoreMode,
+    RestoreOperation,
+    RestoreOperationStateRecord,
+    RestoreStatus,
+)
+from mist_config_guardian_backend.services.restore_planner import BeanieRestorePlanRepository, MongoRestoreStateStore
 
 MONGO_URL = os.environ.get("MONGO_TEST_URL")
 DATABASE = "restore_state_store"
@@ -28,10 +33,54 @@ pytestmark = [
 async def database() -> None:
     client = AsyncMongoClient(MONGO_URL, tz_aware=True)
     await client.drop_database(DATABASE)
-    await init_beanie(database=client[DATABASE], document_models=[RestoreOperationStateRecord])
+    await init_beanie(database=client[DATABASE], document_models=[RestoreOperationStateRecord, RestoreOperation])
     yield
     await client.drop_database(DATABASE)
     await client.close()
+
+
+async def _plan(organization: PydanticObjectId, **fields: object) -> RestoreOperation:
+    plan = RestoreOperation(
+        organization_id=organization,
+        requested_by=PydanticObjectId(),
+        mode=RestoreMode.NON_DESTRUCTIVE,
+        target_at=datetime.now(UTC),
+        **fields,
+    )
+    return await plan.insert()
+
+
+async def test_only_a_planned_compensation_that_never_started_is_retired() -> None:
+    organization, replacement = PydanticObjectId(), PydanticObjectId()
+    stale = await _plan(
+        organization, encrypted_delegated_credential="v1:held", delegated_credential_expires_at=datetime.now(UTC)
+    )
+    started = await _plan(organization, started_at=datetime.now(UTC))
+    queued = await _plan(organization, status=RestoreStatus.QUEUED)
+    elsewhere = await _plan(PydanticObjectId())
+    plans = BeanieRestorePlanRepository()
+    assert stale.id is not None
+    assert started.id is not None
+    assert queued.id is not None
+    assert elsewhere.id is not None
+
+    assert await plans.supersede_planned(organization, stale.id, replacement) is True
+    assert await plans.supersede_planned(organization, stale.id, PydanticObjectId()) is False
+    assert await plans.supersede_planned(organization, started.id, replacement) is False
+    assert await plans.supersede_planned(organization, queued.id, replacement) is False
+    assert await plans.supersede_planned(organization, elsewhere.id, replacement) is False
+
+    retired = await RestoreOperation.get(stale.id)
+    assert retired is not None
+    assert retired.status is RestoreStatus.SUPERSEDED
+    assert retired.superseded_by == replacement
+    assert retired.encrypted_delegated_credential is None
+    assert retired.delegated_credential_expires_at is None
+    for untouched in (started, queued, elsewhere):
+        reloaded = await RestoreOperation.get(untouched.id)
+        assert reloaded is not None
+        assert reloaded.status is untouched.status
+        assert reloaded.superseded_by is None
 
 
 async def _compensation(

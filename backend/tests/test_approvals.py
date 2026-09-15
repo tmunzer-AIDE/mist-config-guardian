@@ -1,10 +1,12 @@
 """Plan hashing, approval policy, two-person enforcement, and role checks."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from beanie import PydanticObjectId
+from structlog.testing import capture_logs
 
 from mist_config_guardian_backend.api.dependencies import (
     get_current_user,
@@ -42,6 +44,7 @@ from mist_config_guardian_backend.services.approvals import (
     ApprovalRequiredError,
     ApprovalService,
     SelfApprovalError,
+    compute_intent_hash,
     compute_plan_hash,
     evaluate_approval_policy,
     organization_policy,
@@ -684,6 +687,80 @@ async def test_preparing_an_approved_draft_carries_its_approval_over_the_api() -
     assert body["approval"]["status"] == "approved"
     assert body["approval_required"] is False
     assert APPROVAL_NOT_CARRIED not in body["warnings"]
+
+
+def _preparing_app(service: ApprovalService, draft: RestoreOperation, prepared: RestoreOperation):
+    """The prepare route with a fresh backup that returns ``prepared`` and no reviewed-state record."""
+    administrator = _user(UserRole.ADMINISTRATOR, identifier=APPROVER_ID, email="approver@example.com")
+    app = _app(service, administrator)
+    app.dependency_overrides[get_restore_authorization_service] = lambda: _PreparingAuthorization(prepared)
+    app.dependency_overrides[get_restore_plans] = lambda: _Plans(draft)
+    app.dependency_overrides[get_plan_state_store] = _NoStates
+    return app
+
+
+async def _post_prepare(app) -> httpx.Response:
+    async with _client(app) as client:
+        return await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/prepare",
+            json={"administrator_token": "fresh-admin-token"},
+        )
+
+
+async def test_preparing_a_draft_whose_backup_changed_the_actions_warns_over_the_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft, service, store, approval = await _approved_draft(ApprovalPolicy(), [_action()])
+    prepared = _prepared_from(draft, actions=[*draft.actions, _action(order=1, action=RestoreActionType.DELETE)])
+    store.operations[PREPARED_ID] = prepared
+    saved = AsyncMock()
+    monkeypatch.setattr(RestoreOperation, "save", saved)
+
+    response = await _post_prepare(_preparing_app(service, draft, prepared))
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == str(PREPARED_ID)
+    assert APPROVAL_NOT_CARRIED in body["warnings"]
+    assert body["approval"] is None
+    saved.assert_awaited_once()
+    assert approval.restore_operation_id == OPERATION_ID
+
+
+async def test_a_carry_that_fails_still_returns_the_prepared_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The plan and its session already exist; failing the request would hide them."""
+    draft, service, store, approval = await _approved_draft(ApprovalPolicy(), [_action()])
+    prepared = _prepared_from(draft)
+    store.operations[PREPARED_ID] = prepared
+    monkeypatch.setattr(service, "carry_to_prepared", AsyncMock(side_effect=RuntimeError("database detail")))
+
+    with capture_logs() as logs:
+        response = await _post_prepare(_preparing_app(service, draft, prepared))
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == str(PREPARED_ID)
+    assert APPROVAL_NOT_CARRIED not in body["warnings"]
+    # The approval stayed on the draft, and the response says so rather than guessing.
+    assert body["approval"] is None
+    assert approval.restore_operation_id == OPERATION_ID
+    assert logs == [
+        {
+            "event": "restore_approval_carry_failed",
+            "log_level": "warning",
+            "operation_id": str(PREPARED_ID),
+            "error_type": "RuntimeError",
+        }
+    ]
+
+
+def test_a_naive_target_moment_hashes_as_the_same_utc_moment() -> None:
+    """A datetime read back without a timezone names the UTC moment it was stored as."""
+    aware = _operation([_action()])
+    naive = aware.model_copy(update={"target_at": datetime(2026, 1, 1)})  # noqa: DTZ001 - the naive value under test
+
+    assert naive.target_at.tzinfo is None
+    assert compute_intent_hash(naive) == compute_intent_hash(aware)
 
 
 async def test_a_plan_says_when_policy_needs_an_approval_nobody_asked_for() -> None:
