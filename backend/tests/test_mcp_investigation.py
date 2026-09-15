@@ -17,6 +17,7 @@ from bson.codec_options import CodecOptions
 from pydantic import ValidationError
 from pymongo.errors import ConnectionFailure
 
+from mist_config_guardian_backend.impact.agent import ModelRequestRecord, ModelResponseError
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import (
     McpConclusion,
@@ -614,3 +615,110 @@ async def test_optional_rules_leave_budget_for_mcp_investigation(monkeypatch, ht
     assert artifacts[0].mcp.state == "complete"
     assert len(stored["mcp_dispatches"]) == 2
     assert stored["calls_used"] == 6
+
+
+async def test_rejected_actions_return_specific_bounded_feedback(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored)
+    foreign = str(uuid4())
+    feedback = []
+
+    def respond(request):
+        context = read_context(request)
+        feedback.append(context["feedback"])
+        step = len(feedback)
+        if step == 1:
+            return ai_response(
+                {"action": "tool", "tool": "secret-provider-text", "arguments": {}, "purpose": "Invalid tool."}
+            )
+        if step == 2:
+            return ai_response({"action": "describe", "tools": ["search_mist_data"]})
+        if step == 3:
+            return ai_response(
+                {
+                    "action": "tool",
+                    "tool": "search_mist_data",
+                    "arguments": {"search_type": "device_events", "site_id": foreign},
+                    "purpose": "Query an undiscovered site.",
+                }
+            )
+        return ai_response(report({"observations": [{"id": str(uuid4()), "state": "complete"}]}))
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    records = [ModelRequestRecord.model_validate(r) for r in stored["model_requests"]]
+    assert records[0].response_error == ModelResponseError.SCHEMA_MISMATCH
+    assert "Input should be" in records[0].response_detail
+    assert "secret-provider-text" not in records[0].response_detail
+    assert feedback[1].startswith("Action rejected (schema_mismatch): ")
+    assert "secret-provider-text" not in feedback[1]
+    assert records[2].response_error == ModelResponseError.ARGUMENT_OUT_OF_SCOPE
+    assert feedback[3] == (
+        "Action rejected (argument_out_of_scope): Discover this site through an organization-scoped MCP result first"
+    )
+    assert records[3].response_error == ModelResponseError.CITATION_INVALID
+    assert all(len((r.response_detail or "").encode()) <= 300 for r in records)
+    assert all(r.response_detail is None for r in records if r.state == "complete")
+    assert artifacts[0].mcp.state == "invalid_response"
+
+
+def test_invalid_json_detail_never_echoes_model_text():
+    category, detail = mcp_impact_agent.McpImpactAgent._rejection(  # noqa: SLF001
+        _validation_error('{"action":"report","report":{"summary":"secret-provider-text"'), ("test-token",)
+    )
+    assert category == ModelResponseError.INVALID_JSON
+    assert "secret-provider-text" not in detail
+    assert detail.startswith("<root>: Invalid JSON")
+
+
+def _validation_error(text):
+    try:
+        mcp_impact_agent.ADAPTER.validate_json(text)
+    except ValidationError as exc:
+        return exc
+    raise AssertionError
+
+
+def test_unresolvable_chart_view_is_dropped_with_limitation():
+    scope = McpScope(org_id=UUID(MIST_ORG), changed_at=NOW, as_of=LATER, sites=[SITE])
+    evidence = McpEvidence(
+        id=uuid4(),
+        tool="get_mist_stats",
+        arguments={},
+        captured_at=LATER,
+        schema_hash="test",
+        state="complete",
+        data={"results": [{"name": "a", "value": 1}]},
+    )
+    action = McpReportAction.model_validate(
+        {
+            "action": "report",
+            "report": {
+                "summary": "Statistics were retrieved.",
+                "scope": "Organization statistics.",
+                "impact": "info",
+                "confidence": "low",
+                "coverage": "partial",
+                "evidence": [str(evidence.id)],
+                "views": [
+                    {
+                        "evidence_id": str(evidence.id),
+                        "kind": "bar",
+                        "rows_path": ["results"],
+                        "label_key": "name",
+                        "value_key": "invented",
+                    },
+                    {
+                        "evidence_id": str(uuid4()),
+                        "kind": "table",
+                        "rows_path": ["results"],
+                        "label_key": "name",
+                        "value_key": "value",
+                    },
+                ],
+            },
+        }
+    )
+    cleaned = mcp_impact_agent.McpImpactAgent._validate_conclusion(action, [evidence], scope)  # noqa: SLF001
+    assert cleaned.report.views == ()
+    assert cleaned.report.gaps == ("A proposed chart was omitted because it did not select returned evidence rows.",)

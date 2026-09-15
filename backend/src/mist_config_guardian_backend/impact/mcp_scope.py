@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta
 from hashlib import sha256
 from math import isfinite
-from typing import Any, get_args
+from typing import Any, ClassVar, get_args
 
 # Dynamic JSON from MCP is validated at this boundary.
 # ruff: noqa: ANN401
@@ -111,7 +111,37 @@ def catalog(rows: list[dict]) -> tuple[McpTool, ...]:
 
 
 class McpScopeError(ValueError):
-    pass
+    """Guardian-authored rejection text; ``category`` is a ModelResponseError value."""
+
+    category: ClassVar[str] = "argument_out_of_scope"
+
+
+class McpToolNotDiscoveredError(McpScopeError):
+    category: ClassVar[str] = "tool_not_discovered"
+
+
+class McpCitationError(McpScopeError):
+    category: ClassVar[str] = "citation_invalid"
+
+
+class McpOutputTooLargeError(McpScopeError):
+    category: ClassVar[str] = "output_too_large"
+
+
+_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
+_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
+
+
+def bounded_text(value: str, *, secrets: tuple[str, ...] = (), max_bytes: int) -> str:
+    """Redact credentials and bearer values, then cut to a UTF-8 byte bound."""
+    text = _BEARER.sub("Bearer [redacted]", str(sanitize(str(value), secrets=secrets)))
+    return text.encode()[:max_bytes].decode(errors="ignore")
+
+
+def safe_location(parts: Iterable[object]) -> str:
+    """Render a validation path; model-authored key names that are not plain identifiers are masked."""
+    rendered = [str(part) if isinstance(part, int) or _LOCATION.fullmatch(str(part)) else "?" for part in parts]
+    return ".".join(rendered) or "<root>"
 
 
 class McpScope:
@@ -178,8 +208,11 @@ class McpScope:
                 raise McpScopeError(msg) from None
         try:
             Draft202012Validator(tool.input_schema).validate(args)
-        except ValidationError:
-            msg = "Arguments do not match the discovered MCP schema"
+        except ValidationError as exc:
+            msg = (
+                f"Arguments do not match the discovered MCP schema at {safe_location(exc.absolute_path)}: "
+                f"'{exc.validator}' constraint"
+            )
             raise McpScopeError(msg) from None
         return args
 

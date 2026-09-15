@@ -5564,6 +5564,18 @@
             "title": "Reserved At",
             "type": "string"
           },
+          "response_detail": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Detail"
+          },
           "response_error": {
             "anyOf": [
               {
@@ -5618,7 +5630,12 @@
           "output_too_large",
           "empty_collection",
           "unknown_or_repeated_check",
-          "unobserved_or_foreign_evidence"
+          "unobserved_or_foreign_evidence",
+          "tool_not_discovered",
+          "argument_out_of_scope",
+          "citation_invalid",
+          "truncated",
+          "tool_call_limit"
         ],
         "title": "ModelResponseError",
         "type": "string"

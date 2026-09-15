@@ -223,6 +223,7 @@ class ModelRequestJournal:
         action: AgentAction | McpAction | None = None,
         *,
         response_error: ModelResponseError | None = None,
+        response_detail: str | None = None,
         request_tokens: int | None = None,
         response_tokens: int | None = None,
     ) -> None:
@@ -238,6 +239,7 @@ class ModelRequestJournal:
                 **record.model_dump(),
                 "state": state,
                 "response_error": response_error,
+                "response_detail": response_detail,
                 "finished_at": utc_now(),
                 "action_artifact_id": action_artifact_id,
                 "action_hash": action_hash,
@@ -251,6 +253,7 @@ class ModelRequestJournal:
                     "state",
                     "finished_at",
                     "response_error",
+                    "response_detail",
                     "action_artifact_id",
                     "action_hash",
                     "request_tokens",

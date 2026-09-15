@@ -30,7 +30,17 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpReportAction,
     McpToolAction,
 )
-from mist_config_guardian_backend.impact.mcp_scope import McpScope, McpScopeError, catalog, normalize_result
+from mist_config_guardian_backend.impact.mcp_scope import (
+    McpCitationError,
+    McpOutputTooLargeError,
+    McpScope,
+    McpScopeError,
+    McpToolNotDiscoveredError,
+    bounded_text,
+    catalog,
+    normalize_result,
+    safe_location,
+)
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
 from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
@@ -43,6 +53,7 @@ from mist_config_guardian_backend.services.impact_agent import ModelRequestJourn
 from mist_config_guardian_backend.services.mcp_dispatch import McpDispatchDeniedError, McpJournal
 
 MAX_PREVIOUS_EVIDENCE_BYTES = 600
+MAX_REJECTION_DETAIL_BYTES = 300
 ADAPTER = TypeAdapter(McpAction)
 _SYSTEM = """Investigate the supplied configuration change using the existing Mist MCP read tools.
 Deterministic findings are optional evidence, never a prerequisite or the scope of your investigation.
@@ -99,6 +110,7 @@ class McpImpactAgent(ModelRequestJournal):
             runtime = None
         if runtime is None:
             return McpCheckpoint(state="unavailable", reason="AI provider is disabled or unavailable.")
+        secrets = (token, runtime.api_key or "")
         if root.model_calls_used >= min(root.model_calls_limit, MAX_MODEL_CALLS):
             return McpCheckpoint(
                 state="budget_exhausted", reason="Audit model-call budget exhausted; no MCP connection opened."
@@ -117,9 +129,7 @@ class McpImpactAgent(ModelRequestJournal):
             e.get("check_id") != "mist-docs-attribute.v1" and e.get("state") in {"complete", "partial"}
             for e in deterministic.get("evidence", [])
         ):
-            clean, partial = normalize_result(
-                {"structuredContent": deterministic}, secrets=(token, runtime.api_key or "")
-            )
+            clean, partial = normalize_result({"structuredContent": deterministic}, secrets=secrets)
             deterministic_evidence = McpEvidence(
                 id=uuid5(
                     NAMESPACE_URL, f"guardian:{root.organization_id}:{root.audit_id}:{root.id}:{root.revision + 1}"
@@ -265,11 +275,12 @@ class McpImpactAgent(ModelRequestJournal):
                         try:
                             arguments: dict = {}
                             if len(completion.content.encode()) > MAX_OUTPUT_BYTES:
-                                msg = "Model output exceeds its byte limit"
-                                raise McpScopeError(msg)
-                            action = ADAPTER.validate_json(completion.content)
+                                msg = "Model output exceeds its byte limit; return a shorter action."
+                                raise McpOutputTooLargeError(msg)
+                            raw_action = ADAPTER.validate_json(completion.content)
+                            action = raw_action
                             if isinstance(action, McpReportAction):
-                                self._validate_conclusion(
+                                action = self._validate_conclusion(
                                     action,
                                     [*([deterministic_evidence] if deterministic_evidence else []), *observations],
                                     scope,
@@ -277,31 +288,30 @@ class McpImpactAgent(ModelRequestJournal):
                             elif isinstance(action, McpDescribeAction):
                                 if any(t not in menu for t in action.tools):
                                     msg = "Only discovered read tools are available."
-                                    raise McpScopeError(msg)
+                                    raise McpToolNotDiscoveredError(msg)
                             elif isinstance(action, McpToolAction):
                                 if action.tool not in described:
                                     msg = "Describe the tool before calling it."
-                                    raise McpScopeError(msg)
+                                    raise McpToolNotDiscoveredError(msg)
                                 arguments = scope.arguments(menu[action.tool], action.arguments)
-                        except (ValidationError, ValueError, TypeError):
+                        except (ValidationError, ValueError, TypeError) as exc:
+                            category, detail = self._rejection(exc, secrets)
                             await self._finish(
                                 root,
                                 record,
                                 "invalid_response",
-                                response_error=ModelResponseError.SCHEMA_MISMATCH,
+                                response_error=category,
+                                response_detail=detail,
                                 request_tokens=completion.request_tokens,
                                 response_tokens=completion.response_tokens,
                             )
-                            feedback = (
-                                "Action rejected. Match the JSON schema; describe tools first; "
-                                "use in-scope arguments and observed citations."
-                            )
+                            feedback = f"Action rejected ({category.value}): {detail}"
                             continue
                         await self._finish(
                             root,
                             record,
                             "complete",
-                            action,
+                            raw_action,
                             request_tokens=completion.request_tokens,
                             response_tokens=completion.response_tokens,
                         )
@@ -332,7 +342,7 @@ class McpImpactAgent(ModelRequestJournal):
                             if result.get("isError"):
                                 msg = "tool_error"
                                 raise MistMcpError(msg)  # noqa: TRY301 - fixed safe transport category
-                            cleaned, partial = normalize_result(result, secrets=(token, runtime.api_key or ""))
+                            cleaned, partial = normalize_result(result, secrets=secrets)
                             if isinstance(cleaned, dict) and (
                                 cleaned.get("error")
                                 or cleaned.get("success") is False
@@ -460,45 +470,80 @@ class McpImpactAgent(ModelRequestJournal):
         return body if len((system + body).encode()) <= MAX_INPUT_BYTES else None
 
     @staticmethod
-    def _validate_conclusion(action: McpReportAction, observations: list[McpEvidence], scope: McpScope) -> None:  # noqa: C901 - independent report provenance constraints
-        if scope.configuration_incomplete and action.report.coverage == "complete":
+    def _rejection(exc: Exception, secrets: tuple[str, ...]) -> tuple[ModelResponseError, str]:
+        """Map a rejected action to a fixed category plus a bounded detail without input values."""
+        if isinstance(exc, ValidationError):
+            errors = exc.errors(include_input=False, include_context=False, include_url=False)
+            category = (
+                ModelResponseError.INVALID_JSON
+                if any(e["type"] == "json_invalid" for e in errors)
+                else ModelResponseError.SCHEMA_MISMATCH
+            )
+            # union_tag_invalid echoes the model's tag value; every other pydantic message is fixed text.
+            detail = "; ".join(
+                f"{safe_location(e['loc'])}: "
+                + ("action must be describe, tool or report" if e["type"] == "union_tag_invalid" else e["msg"])
+                for e in errors[:4]
+            )
+        elif isinstance(exc, McpScopeError):
+            category, detail = ModelResponseError(exc.category), str(exc)
+        else:
+            category, detail = ModelResponseError.SCHEMA_MISMATCH, "Action could not be validated."
+        return category, bounded_text(detail, secrets=secrets, max_bytes=MAX_REJECTION_DETAIL_BYTES)
+
+    _DROPPED_VIEW_GAP = "A proposed chart was omitted because it did not select returned evidence rows."
+
+    @staticmethod
+    def _validate_conclusion(  # noqa: C901 - independent report provenance constraints
+        action: McpReportAction, observations: list[McpEvidence], scope: McpScope
+    ) -> McpReportAction:
+        report = action.report
+        if scope.configuration_incomplete and report.coverage == "complete":
             msg = "Omitted configuration changes prevent complete audit coverage"
-            raise McpScopeError(msg)
+            raise McpCitationError(msg)
         if not observations:
             msg = "An investigation must attempt evidence collection before reporting"
-            raise McpScopeError(msg)
+            raise McpCitationError(msg)
         usable = {
             e.id: e
             for e in observations
             if e.state != "error" and e.data is not None and not (isinstance(e.data, dict) and "omitted" in e.data)
         }
         refs = (
-            *action.report.evidence,
-            *(r for f in action.report.findings for r in f.evidence),
-            *(r for d in action.report.impacted_devices for r in d.evidence),
+            *report.evidence,
+            *(r for f in report.findings for r in f.evidence),
+            *(r for d in report.impacted_devices for r in d.evidence),
         )
         if any(ref not in usable for ref in refs):
             msg = "Only observed successful evidence may be cited."
-            raise McpScopeError(msg)
-        for view in action.report.views:
-            if view.evidence_id not in usable:
-                msg = "Chart evidence was not observed"
-                raise McpScopeError(msg)
-            selected_rows(usable[view.evidence_id], view)
+            raise McpCitationError(msg)
+        views = []
+        for view in report.views:
+            try:
+                if view.evidence_id not in usable:
+                    raise McpScopeError  # noqa: TRY301 - unresolvable views are dropped, not fatal
+                selected_rows(usable[view.evidence_id], view)
+                views.append(view)
+            except McpScopeError:
+                continue
         operational = {r for r, e in usable.items() if e.tool not in {"get_mist_constants", "get_mist_config"}}
-        if action.report.impact != "info" and not operational.intersection(action.report.evidence):
+        if report.impact != "info" and not operational.intersection(report.evidence):
             msg = "Operational evidence is required for an impact verdict."
-            raise McpScopeError(msg)
-        if action.report.impact == "none" and any(usable[ref].state != "complete" for ref in action.report.evidence):
+            raise McpCitationError(msg)
+        if report.impact == "none" and any(usable[ref].state != "complete" for ref in report.evidence):
             msg = "Partial cited evidence cannot establish a clean outcome"
-            raise McpScopeError(msg)
-        for device in action.report.impacted_devices:
+            raise McpCitationError(msg)
+        for device in report.impacted_devices:
             if (str(device.site_id), device.device_mac) not in scope.devices:
                 msg = "Device identity must be observed in an organization-scoped result."
-                raise McpScopeError(msg)
+                raise McpCitationError(msg)
             if not any(
                 ref in operational and scope.contains_device(usable[ref], device.site_id, device.device_mac)
                 for ref in device.evidence
             ):
                 msg = "Device impact must cite its own operational evidence."
-                raise McpScopeError(msg)
+                raise McpCitationError(msg)
+        if len(views) == len(report.views):
+            return action
+        gaps = report.gaps if len(report.gaps) >= 12 else (*report.gaps, McpImpactAgent._DROPPED_VIEW_GAP)  # noqa: PLR2004
+        return action.model_copy(update={"report": report.model_copy(update={"views": tuple(views), "gaps": gaps})})
