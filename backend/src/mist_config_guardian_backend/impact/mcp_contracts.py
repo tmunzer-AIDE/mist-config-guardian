@@ -24,6 +24,7 @@ McpCheckpointState = Literal[
     "provider_error",
     "dispatch_denied",
     "deadline_exceeded",
+    "not_scheduled",
 ]
 Text = Annotated[str, Field(min_length=1, max_length=500)]
 Band = Literal["none", "info", "warning", "critical"]
@@ -155,6 +156,14 @@ class McpDiagnostics(Contract):
     elapsed_ms: int = Field(default=0, ge=0)
 
 
+class McpCarriedConclusion(Contract):
+    """The last validated agent conclusion plus exactly the evidence it cites, from an earlier revision."""
+
+    source_revision: int = Field(ge=1)
+    conclusion: McpConclusion
+    evidence: tuple[McpEvidence, ...] = Field(default=(), max_length=MAX_MCP_CHECKPOINT_CALLS + 1)
+
+
 class McpCheckpoint(Contract):
     source: Literal["mcp_agent"] = "mcp_agent"
     state: McpCheckpointState
@@ -164,4 +173,6 @@ class McpCheckpoint(Contract):
     request_ids: tuple[UUID, ...] = Field(default=(), max_length=8)
     catalogue_hash: str | None = None
     deterministic_evidence: McpEvidence | None = None
+    carried: McpCarriedConclusion | None = None
+    agent_as_of: datetime | None = None
     diagnostics: McpDiagnostics | None = None

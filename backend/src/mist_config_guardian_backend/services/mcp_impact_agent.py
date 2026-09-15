@@ -29,6 +29,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     MAX_MCP_ERROR_DETAIL_BYTES,
     MAX_MCP_EVIDENCE_BYTES,
     McpAction,
+    McpCarriedConclusion,
     McpCheckpoint,
     McpCheckpointState,
     McpConclusion,
@@ -39,6 +40,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpReportAction,
     McpToolAction,
 )
+from mist_config_guardian_backend.impact.mcp_schedule import cited_ids, prior_conclusion
 from mist_config_guardian_backend.impact.mcp_scope import (
     McpCitationError,
     McpOutputTooLargeError,
@@ -189,6 +191,10 @@ class McpImpactAgent(ModelRequestJournal):
             return McpCheckpoint(
                 state="unavailable", reason="Correlated change, timestamp or published history is unavailable."
             )
+        prior = (
+            prior_conclusion(previous.mcp, previous.revision) if isinstance(previous, InvestigationRevision) else None
+        )
+        protected = self._protected_ids(prior)
         try:
             runtime = await self._configuration.ai_runtime()
         except ApplicationConfigurationError:
@@ -233,7 +239,6 @@ class McpImpactAgent(ModelRequestJournal):
         requests = []
         digest = None
         stats = _RunStats()
-        protected = self._protected_ids(previous)
         reserved_bytes = 0
 
         def stopped(
@@ -320,10 +325,8 @@ class McpImpactAgent(ModelRequestJournal):
                             if deterministic_evidence
                             else None,
                             "configured_devices": self._deployment_summary(deployment),
-                            "previous_checkpoint": self._checkpoint_summary(previous, protected),
-                            "previous_report": previous.mcp.conclusion.model_dump(mode="json")
-                            if isinstance(previous, InvestigationRevision) and previous.mcp and previous.mcp.conclusion
-                            else None,
+                            "previous_checkpoint": self._checkpoint_summary(previous, protected, prior),
+                            "previous_report": prior.conclusion.model_dump(mode="json") if prior else None,
                             "observations": [e.model_dump(mode="json") for e in observations],
                             "remaining_model_calls": min(
                                 8 - turn, root.model_calls_limit - root.model_calls_used - len(requests)
@@ -567,30 +570,27 @@ class McpImpactAgent(ModelRequestJournal):
         return sites
 
     @staticmethod
-    def _protected_ids(previous: InvestigationRevision | Literal[False] | None) -> frozenset[str]:
-        if not isinstance(previous, InvestigationRevision) or not previous.mcp or not previous.mcp.conclusion:
-            return frozenset()
-        report = previous.mcp.conclusion
-        return frozenset(
-            str(ref)
-            for ref in (
-                *report.evidence,
-                *(r for f in report.findings for r in f.evidence),
-                *(r for d in report.impacted_devices for r in d.evidence),
-                *(v.evidence_id for v in report.views),
-            )
-        )
+    def _protected_ids(prior: McpCarriedConclusion | None) -> frozenset[str]:
+        return frozenset(str(ref) for ref in cited_ids(prior.conclusion)) if prior else frozenset()
 
     @staticmethod
     def _checkpoint_summary(
-        previous: InvestigationRevision | Literal[False] | None, protected: frozenset[str] = frozenset()
+        previous: InvestigationRevision | Literal[False] | None,
+        protected: frozenset[str] = frozenset(),
+        prior: McpCarriedConclusion | None = None,
     ) -> dict | None:
         if not isinstance(previous, InvestigationRevision) or previous.mcp is None:
             return None
+        # A not_scheduled revision has no evidence of its own; the carried rows are what the next run sees.
+        rows = (
+            *previous.mcp.evidence,
+            *(e for e in (prior.evidence if prior else ()) if e not in previous.mcp.evidence),
+        )
         return {
             "source_revision": previous.revision,
             "state": previous.mcp.state,
             "reason": previous.mcp.reason,
+            "conclusion_source_revision": prior.source_revision if prior else None,
             "evidence": [
                 {
                     "id": str(e.id),
@@ -603,7 +603,7 @@ class McpImpactAgent(ModelRequestJournal):
                     <= (MAX_MCP_EVIDENCE_BYTES if str(e.id) in protected else MAX_PREVIOUS_EVIDENCE_BYTES)
                     else {"omitted": "Historical payload retained in prior revision."},
                 }
-                for e in previous.mcp.evidence
+                for e in rows
             ],
         }
 

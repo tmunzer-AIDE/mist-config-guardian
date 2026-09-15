@@ -5,6 +5,7 @@ import json
 import logging
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -22,12 +23,14 @@ from pymongo.errors import ConnectionFailure
 from mist_config_guardian_backend.impact.agent import MCP_MAX_INPUT_BYTES_TOTAL, ModelRequestRecord, ModelResponseError
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import (
+    McpCheckpoint,
     McpConclusion,
     McpDispatch,
     McpEvidence,
     McpReportAction,
     McpView,
 )
+from mist_config_guardian_backend.impact.mcp_schedule import agent_due, last_agent_run, prior_conclusion
 from mist_config_guardian_backend.impact.mcp_scope import (
     McpScope,
     McpScopeError,
@@ -559,6 +562,7 @@ async def test_followup_reuses_verified_tool_schema_and_historical_context(monke
     root.revision = first.revision
     root.model_calls_used = stored["model_calls_used"]
     root.calls_used = stored["calls_used"]
+    monkeypatch.setattr(worker, "agent_due", lambda *_args: True)  # Same fixed clock; force a second agent run.
     await service._poll(root)  # noqa: SLF001
     assert artifacts[-1].mcp.state == "complete"
     assert len(artifacts[-1].mcp.request_ids) == 2  # Query then report, not another catalogue explanation.
@@ -1083,3 +1087,236 @@ def test_scope_sites_include_configured_device_and_deployment_sites():
         {"devices": [{"site_id": deployed, "device_mac": MAC}, {"site_id": "not-a-uuid"}]},
     )
     assert sites == {SITE, deployed, configured}
+
+
+def agent_conclusion(summary="Agent summary.", evidence=()):
+    return McpConclusion(
+        summary=summary,
+        scope="Changed switch.",
+        impact="info",
+        confidence="low",
+        coverage="partial",
+        evidence=evidence,
+        gaps=("A coincident fault has not been excluded.",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("minutes", "last", "due"),
+    [
+        (1, None, False),
+        (9, None, False),
+        (10, None, True),
+        (20, 10, False),
+        (29, 10, False),
+        (30, 10, True),
+        (50, 30, False),
+        (60, 30, True),
+        (60, 60, False),
+        (35, None, True),
+        (60, 35, True),
+    ],
+)
+def test_agent_runs_once_per_schedule_band(minutes, last, due):
+    last_run = NOW + timedelta(minutes=last) if last is not None else None
+    assert agent_due(NOW, NOW + timedelta(minutes=minutes), last_run) is due
+
+
+def test_last_agent_run_reads_legacy_revisions():
+    assert last_agent_run(McpCheckpoint(state="complete"), LATER) == LATER
+    assert last_agent_run(McpCheckpoint(state="not_scheduled"), LATER) is None
+    assert last_agent_run(McpCheckpoint(state="provider_error", agent_as_of=NOW), LATER) == NOW
+    assert last_agent_run(None, LATER) is None
+
+
+def test_prior_conclusion_keeps_only_cited_evidence_and_passes_carried_forward():
+    cited, other = (
+        McpEvidence(
+            id=uuid4(),
+            tool="get_mist_stats",
+            arguments={},
+            data={"v": n},
+            state="complete",
+            captured_at=LATER,
+            schema_hash="t",
+        )
+        for n in range(2)
+    )
+    complete = McpCheckpoint(
+        state="complete", conclusion=agent_conclusion(evidence=(cited.id,)), evidence=(cited, other)
+    )
+    carried = prior_conclusion(complete, 4)
+    assert (carried.source_revision, carried.evidence) == (4, (cited,))
+    assert prior_conclusion(McpCheckpoint(state="not_scheduled", carried=carried), 5) == carried
+    assert prior_conclusion(McpCheckpoint(state="budget_exhausted"), 5) is None
+
+
+def test_prior_conclusion_is_not_carried_without_every_cited_evidence_row():
+    missing = McpCheckpoint(state="complete", conclusion=agent_conclusion(evidence=(uuid4(),)))
+    assert prior_conclusion(missing, 4) is None
+
+
+async def test_agent_runs_at_ten_thirty_and_sixty_minutes_and_carries_conclusion(monkeypatch):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+    runs = []
+
+    async def fake_run(_self, _root, **kwargs):
+        runs.append(kwargs["as_of"])
+        return McpCheckpoint(state="complete", conclusion=agent_conclusion(f"Run {len(runs)}."))
+
+    monkeypatch.setattr(worker.McpImpactAgent, "run_mcp", fake_run)
+    for minutes in (1, 10, 20, 30, 40, 50, 60):
+        now = NOW + timedelta(minutes=minutes)
+        monkeypatch.setattr(worker, "utc_now", lambda now=now: now)
+        await service._poll(root)  # noqa: SLF001
+        root.report_id, root.revision = artifacts[-1].id, artifacts[-1].revision
+    assert runs == [NOW + timedelta(minutes=m) for m in (10, 30, 60)]
+    assert [a.mcp.state for a in artifacts] == [
+        "not_scheduled",
+        "complete",
+        "not_scheduled",
+        "complete",
+        "not_scheduled",
+        "not_scheduled",
+        "complete",
+    ]
+    assert artifacts[0].mcp.carried is None
+    assert artifacts[2].mcp.carried.source_revision == artifacts[1].revision
+    assert artifacts[5].mcp.carried.conclusion.summary == "Run 2."
+    assert artifacts[5].mcp.agent_as_of == NOW + timedelta(minutes=30)
+    assert "Carried forward from revision" in artifacts[5].report.sections.summary.explanation
+    assert artifacts[5].assessment.policy_version == "mcp-agent.v1"
+
+
+async def poll_at(monkeypatch, service, root, artifacts, minutes):
+    now = NOW + timedelta(minutes=minutes)
+    monkeypatch.setattr(worker, "utc_now", lambda: now)
+    await service._poll(root)  # noqa: SLF001
+    root.report_id, root.revision = artifacts[-1].id, artifacts[-1].revision
+
+
+def counting_agent(monkeypatch, runs, checkpoint=None):
+    async def fake_run(_self, _root, **kwargs):
+        runs.append(kwargs["as_of"])
+        return checkpoint or McpCheckpoint(state="complete", conclusion=agent_conclusion(f"Run {len(runs)}."))
+
+    monkeypatch.setattr(worker.McpImpactAgent, "run_mcp", fake_run)
+
+
+async def test_late_and_skipped_checkpoints_still_run_each_band_once(monkeypatch):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+    runs = []
+    counting_agent(monkeypatch, runs)
+    for minutes in (1, 12, 25, 41, 52, 61):
+        await poll_at(monkeypatch, service, root, artifacts, minutes)
+    # The +61 checkpoint evaluates at the one-hour expiry, which is the third band.
+    assert runs == [NOW + timedelta(minutes=m) for m in (12, 41, 60)]
+    assert [a.mcp.state for a in artifacts] == [
+        "not_scheduled",
+        "complete",
+        "not_scheduled",
+        "complete",
+        "not_scheduled",
+        "complete",
+    ]
+
+
+async def test_unpublished_agent_attempt_spends_its_band(monkeypatch):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+    runs = []
+    counting_agent(monkeypatch, runs)
+    attempt = NOW + timedelta(minutes=10, seconds=5)
+    # A worker reserved MCP discovery for this candidate, then lost its lease before publishing.
+    root.mcp_dispatches = [
+        McpDispatch(
+            id=uuid4(),
+            generation=root.generation - 1,
+            candidate_revision=root.revision + 1,
+            tool="tools/list",
+            arguments_hash="h",
+            reserved_at=attempt,
+        )
+    ]
+    for minutes in (15, 20, 30):
+        await poll_at(monkeypatch, service, root, artifacts, minutes)
+    assert runs == [NOW + timedelta(minutes=30)]
+    assert [a.mcp.state for a in artifacts] == ["not_scheduled", "not_scheduled", "complete"]
+    assert artifacts[0].mcp.agent_as_of == attempt
+    assert artifacts[1].mcp.agent_as_of == attempt
+
+
+async def test_failed_agent_run_still_spends_its_band(monkeypatch):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+    runs = []
+    counting_agent(monkeypatch, runs, McpCheckpoint(state="provider_error", reason="AI provider request failed."))
+    for minutes in (10, 20):
+        await poll_at(monkeypatch, service, root, artifacts, minutes)
+    assert runs == [NOW + timedelta(minutes=10)]
+    assert artifacts[0].mcp.agent_as_of == NOW + timedelta(minutes=10)
+    assert (artifacts[1].mcp.state, artifacts[1].mcp.carried) == ("not_scheduled", None)
+    assert "first runs" not in artifacts[1].mcp.reason
+
+
+async def test_revision_without_agent_as_of_counts_as_a_run_at_its_evaluation(monkeypatch):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+    runs = []
+    counting_agent(monkeypatch, runs)
+    await poll_at(monkeypatch, service, root, artifacts, 10)
+    # Simulate a revision stored before scheduling existed.
+    artifacts[0].mcp = artifacts[0].mcp.model_copy(update={"agent_as_of": None})
+    await poll_at(monkeypatch, service, root, artifacts, 20)
+    assert runs == [NOW + timedelta(minutes=10)]
+    assert artifacts[1].mcp.state == "not_scheduled"
+    assert artifacts[1].mcp.agent_as_of == artifacts[0].assessment.evaluated_at
+    assert artifacts[1].mcp.carried.source_revision == artifacts[0].revision
+
+
+async def test_not_scheduled_checkpoint_spends_no_model_or_mcp_budget(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    await poll_at(monkeypatch, service, root, artifacts, 1)
+    assert artifacts[0].mcp.state == "not_scheduled"
+    assert artifacts[0].mcp.diagnostics is None
+    assert (stored["model_calls_used"], stored["calls_used"], stored["mcp_dispatches"]) == (0, 0, [])
+    assert not httpx_mock.get_requests()
+
+
+@pytest.mark.parametrize("mode", ["legacy", "shadow"])
+async def test_non_agent_modes_publish_no_mcp_checkpoint(monkeypatch, mode):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+    settings = SimpleNamespace(impact_engine_mode=mode, mist_mcp_url=MCP_URL)
+    monkeypatch.setattr(worker, "get_settings", lambda: settings)
+    runs = []
+    counting_agent(monkeypatch, runs)
+    for minutes in (1, 10, 20):
+        await poll_at(monkeypatch, service, root, artifacts, minutes)
+    assert runs == []
+    assert all(a.mcp is None for a in artifacts)
+
+
+def test_next_agent_run_sees_carried_conclusion_and_its_evidence():
+    evidence = McpEvidence(
+        id=uuid4(),
+        tool="get_mist_stats",
+        arguments={"site_id": SITE},
+        data={"v": 1},
+        state="complete",
+        captured_at=LATER,
+        schema_hash="t",
+    )
+    carried = prior_conclusion(
+        McpCheckpoint(state="complete", conclusion=agent_conclusion(evidence=(evidence.id,)), evidence=(evidence,)),
+        4,
+    )
+    previous = InvestigationRevision.model_construct(
+        revision=5, mcp=McpCheckpoint(state="not_scheduled", carried=carried)
+    )
+    agent = mcp_impact_agent.McpImpactAgent
+    protected = agent._protected_ids(prior_conclusion(previous.mcp, previous.revision))  # noqa: SLF001
+    assert protected == frozenset({str(evidence.id)})
+    summary = agent._checkpoint_summary(previous, protected, carried)  # noqa: SLF001
+    assert (summary["source_revision"], summary["state"], summary["conclusion_source_revision"]) == (
+        5,
+        "not_scheduled",
+        4,
+    )
+    assert [row["id"] for row in summary["evidence"]] == [str(evidence.id)]

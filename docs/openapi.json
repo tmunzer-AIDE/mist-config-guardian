@@ -4380,9 +4380,60 @@
         "title": "ManagedNeighbor",
         "type": "object"
       },
+      "McpCarriedConclusion": {
+        "additionalProperties": false,
+        "description": "The last validated agent conclusion plus exactly the evidence it cites, from an earlier revision.",
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/McpConclusion"
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpEvidence"
+            },
+            "maxItems": 9,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "source_revision": {
+            "minimum": 1.0,
+            "title": "Source Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_revision",
+          "conclusion"
+        ],
+        "title": "McpCarriedConclusion",
+        "type": "object"
+      },
       "McpCheckpoint": {
         "additionalProperties": false,
         "properties": {
+          "agent_as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent As Of"
+          },
+          "carried": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpCarriedConclusion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "catalogue_hash": {
             "anyOf": [
               {
@@ -4463,7 +4514,8 @@
               "invalid_response",
               "provider_error",
               "dispatch_denied",
-              "deadline_exceeded"
+              "deadline_exceeded",
+              "not_scheduled"
             ],
             "title": "State",
             "type": "string"

@@ -4,13 +4,29 @@ import json
 from datetime import UTC, datetime
 
 from mist_config_guardian_backend.impact.contracts import Window, WlanAssessment
-from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint
+from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint, McpConclusion, McpEvidence
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
 from mist_config_guardian_backend.impact.report import DeviceImpact, EvidenceDataset, ImpactReport, ReportSection
 
 
+def effective_conclusion(
+    checkpoint: McpCheckpoint,
+) -> tuple[McpConclusion, tuple[McpEvidence, ...], int | None] | None:
+    """This run's validated conclusion, else the carried one with its source revision."""
+    if checkpoint.state == "complete" and checkpoint.conclusion is not None:
+        pool = (
+            *([checkpoint.deterministic_evidence] if checkpoint.deterministic_evidence else []),
+            *checkpoint.evidence,
+        )
+        return checkpoint.conclusion, pool, None
+    if checkpoint.carried is not None:
+        return checkpoint.carried.conclusion, checkpoint.carried.evidence, checkpoint.carried.source_revision
+    return None
+
+
 def mcp_assessment(audit_id: str, as_of: datetime, checkpoint: McpCheckpoint) -> WlanAssessment:
-    conclusion = checkpoint.conclusion if checkpoint.state == "complete" else None
+    effective = effective_conclusion(checkpoint)
+    conclusion = effective[0] if effective else None
     return WlanAssessment(
         policy_version="mcp-agent.v1",
         audit_id=audit_id,
@@ -24,11 +40,13 @@ def mcp_assessment(audit_id: str, as_of: datetime, checkpoint: McpCheckpoint) ->
 
 
 def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint) -> ImpactReport:
-    conclusion = checkpoint.conclusion if checkpoint.state == "complete" else None
+    effective = effective_conclusion(checkpoint)
+    conclusion = effective[0] if effective else None
+    carried_from = effective[2] if effective else None
     datasets = []
-    for index, evidence in enumerate(
-        (*([checkpoint.deterministic_evidence] if checkpoint.deterministic_evidence else []), *checkpoint.evidence)
-    ):
+    own = (*([checkpoint.deterministic_evidence] if checkpoint.deterministic_evidence else []), *checkpoint.evidence)
+    carried_rows = tuple(e for e in (effective[1] if effective else ()) if e.id not in {o.id for o in own})
+    for index, evidence in enumerate((*own, *carried_rows)):
         view = next((v for v in conclusion.views if v.evidence_id == evidence.id), None) if conclusion else None
         rows = selected_rows(evidence, view) if view else _flatten(evidence.data)
         datasets.append(
@@ -62,7 +80,11 @@ def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint) -> ImpactRep
         update={
             "summary": ReportSection(
                 state="available" if conclusion else "unavailable",
-                explanation=conclusion.summary if conclusion else checkpoint.reason or "No validated agent conclusion.",
+                explanation=(
+                    conclusion.summary + (f" (Carried forward from revision {carried_from}.)" if carried_from else "")
+                )[:500]
+                if conclusion
+                else checkpoint.reason or "No validated agent conclusion.",
             ),
             "scope": ReportSection(
                 state="partial",
