@@ -17,6 +17,15 @@ from mist_config_guardian_backend.impact.report import (
 
 _SEVERITY = {"none": 0, "info": 1, "warning": 2, "critical": 3}
 RULE_RAISED_GAP = "Rule-derived impact exceeds the agent conclusion; the more severe verdict is published."
+CLEAN_OUTCOME_GAP = "Partial coverage cannot establish a clean outcome; info is published instead of none."
+
+
+def _no_clean_outcome_without_coverage(assessment: WlanAssessment, *, explained: bool) -> WlanAssessment:
+    """Missing or partial coverage never publishes none; `explained` means a gap already states why it is partial."""
+    if assessment.coverage == "complete" or assessment.impact != "none":
+        return assessment
+    gaps = assessment.gaps if explained else tuple(dict.fromkeys((*assessment.gaps, CLEAN_OUTCOME_GAP)))
+    return assessment.model_copy(update={"impact": "info", "gaps": gaps})
 
 
 def effective_conclusion(
@@ -49,10 +58,12 @@ def compose_assessment(
         reason = (checkpoint.reason or "Agent investigation is incomplete.")[:300]
         gap = f"Rule-derived verdict: the AI agent did not conclude ({reason})."
         update: dict[str, object] = {"gaps": tuple(dict.fromkeys((*deterministic.gaps, gap)))}
-        if final and deterministic.coverage == "complete":
+        forced = final and deterministic.coverage == "complete"
+        if forced:
             # Agent failure stays explicit: the final checkpoint cannot complete the investigation on rules alone.
             update["coverage"] = "partial"
-        return deterministic.model_copy(update=update), "rule"
+        # When coverage is forced partial, the agent-did-not-conclude gap already explains it.
+        return _no_clean_outcome_without_coverage(deterministic.model_copy(update=update), explained=forced), "rule"
     conclusion, _, carried_from = effective
     raised = (
         deterministic.impact in {"warning", "critical"}
@@ -88,7 +99,9 @@ def compose_assessment(
         domain_findings=deterministic.domain_findings if raised else (),
         gaps=tuple(dict.fromkeys(gaps)),
     )
-    return assessment, "combined" if raised else "mcp_agent"
+    # A carried conclusion forced partial on the final checkpoint already carries its final-checkpoint gap.
+    explained = final and carried_from is not None
+    return _no_clean_outcome_without_coverage(assessment, explained=explained), "combined" if raised else "mcp_agent"
 
 
 def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: VerdictSource) -> ImpactReport:
@@ -174,11 +187,16 @@ def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: Verd
                 (device.role, str(device.site_id), device.device_mac, device.service, device.target_handle), device
             )
     devices = tuple(merged.values())
+    current = conclusion.impact if source == "mcp_agent" and conclusion else base.current_impact
+    if base.coverage != "complete" and current == "none":
+        # As build_report: non-complete coverage never publishes a clean current outcome. The peak follows the
+        # published assessment, which compose_assessment already clamps the same way.
+        current = "info"
     return base.model_copy(
         update={
             "source": "mcp_agent",
             "verdict_source": source,
-            "current_impact": conclusion.impact if source == "mcp_agent" and conclusion else base.current_impact,
+            "current_impact": current,
             "sections": sections,
             "datasets": tuple(datasets),
             "gaps": tuple(

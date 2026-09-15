@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from mist_config_guardian_backend.impact import mcp_report
 from mist_config_guardian_backend.impact.contracts import WlanAssessment
 from mist_config_guardian_backend.impact.mcp_contracts import (
     McpCarriedConclusion,
@@ -245,7 +246,9 @@ def test_final_checkpoint_never_claims_complete_coverage_from_a_carried_conclusi
     checkpoint = McpCheckpoint(state=state, reason="Guardian reason.", carried=carried)
     ongoing, _ = compose_assessment("audit-one", LATER, checkpoint, rule("info"))
     final, verdict = compose_assessment("audit-one", LATER, checkpoint, rule("info"), final=True)
-    assert (ongoing.coverage, final.coverage, final.impact, verdict) == ("complete", "partial", "none", "mcp_agent")
+    assert (ongoing.coverage, ongoing.impact) == ("complete", "none")
+    # Partial coverage cannot publish a clean outcome.
+    assert (final.coverage, final.impact, verdict) == ("partial", "info", "mcp_agent")
     assert any("carried from revision 2" in gap for gap in final.gaps)
     this_run, _ = compose_assessment("audit-one", LATER, complete_none_run(), rule("info"), final=True)
     assert this_run.coverage == "complete"
@@ -281,22 +284,27 @@ async def test_expiry_checkpoint_without_a_due_agent_run_finishes_incomplete(mon
     assert runs == [NOW + timedelta(minutes=30)]
     final = artifacts[-1]
     assert (final.mcp.state, final.mcp.carried.source_revision) == ("not_scheduled", artifacts[0].revision)
-    assert (final.assessment.impact, final.assessment.coverage) == ("none", "partial")
-    assert final.report.coverage == "partial"
+    assert (final.assessment.impact, final.assessment.coverage) == ("info", "partial")
+    assert (final.report.coverage, final.report.current_impact, final.report.peak_impact) == ("partial", "info", "info")
     assert any(f"carried from revision {artifacts[0].revision}" in gap for gap in final.assessment.gaps)
     assert collection.update_one.await_args_list[-1].args[1]["$set"]["status"] == "incomplete"
 
 
-async def test_final_rule_derived_checkpoint_never_completes_the_investigation(monkeypatch):
+@pytest.mark.parametrize("rule_impact", ["none", "info"])
+async def test_final_rule_derived_checkpoint_never_completes_the_investigation(monkeypatch, rule_impact):
     checkpoint = McpCheckpoint(state="provider_error", reason="AI provider request failed.")
-    complete_rule = rule("info").model_copy(update={"coverage": "complete"})
-    assert compose_assessment("audit-one", LATER, checkpoint, complete_rule)[0].coverage == "complete"
+    complete_rule = rule(rule_impact).model_copy(update={"coverage": "complete"})
+    ongoing, _ = compose_assessment("audit-one", LATER, checkpoint, complete_rule)
+    assert (ongoing.coverage, ongoing.impact) == ("complete", rule_impact)
+    final_rule, _ = compose_assessment("audit-one", LATER, checkpoint, complete_rule, final=True)
+    # Forced partial coverage cannot publish a clean outcome.
+    assert (final_rule.coverage, final_rule.impact) == ("partial", "info")
     service, root, collection, artifacts, _ = mcp_runtime(monkeypatch)
     compose_domains = worker.compose_domains
     monkeypatch.setattr(
         worker,
         "compose_domains",
-        lambda *args: compose_domains(*args).model_copy(update={"coverage": "complete"}),
+        lambda *args: compose_domains(*args).model_copy(update={"coverage": "complete", "impact": rule_impact}),
     )
 
     async def fake_run(_self, _root, **_kwargs):
@@ -314,11 +322,66 @@ async def test_final_rule_derived_checkpoint_never_completes_the_investigation(m
         "partial",
         "rule",
     )
+    assert (final.assessment.impact, final.report.current_impact, final.report.peak_impact) == ("info", "info", "info")
     assert (
         "Rule-derived verdict: the AI agent did not conclude (AI provider request failed; prior evidence is retained.)."
         in final.assessment.gaps
     )
     assert collection.update_one.await_args_list[-1].args[1]["$set"]["status"] == "incomplete"
+
+
+@pytest.mark.parametrize("rule_impact", ["none", "info"])
+async def test_final_carried_none_is_published_as_info_with_partial_coverage(monkeypatch, rule_impact):
+    """+10 concludes none/complete; the +30 and +60 runs fail, so the final checkpoint only carries it."""
+    service, root, collection, artifacts, _ = mcp_runtime(monkeypatch)
+    compose_domains = worker.compose_domains
+    monkeypatch.setattr(
+        worker, "compose_domains", lambda *args: compose_domains(*args).model_copy(update={"impact": rule_impact})
+    )
+    failed = McpCheckpoint(state="provider_error", reason="AI provider request failed; prior evidence is retained.")
+    outcomes = iter([complete_none_run(), failed, failed])
+
+    async def fake_run(_self, _root, **_kwargs):
+        return next(outcomes)
+
+    monkeypatch.setattr(worker.McpImpactAgent, "run_mcp", fake_run)
+    for minutes in (10, 30, 61):
+        now = NOW + timedelta(minutes=minutes)
+        monkeypatch.setattr(worker, "utc_now", lambda now=now: now)
+        await service._poll(root)  # noqa: SLF001
+        root.report_id, root.revision = artifacts[-1].id, artifacts[-1].revision
+    ran, ongoing, final = artifacts
+    # Non-final checkpoints with a complete none conclusion (own or carried) still publish none.
+    for artifact in (ran, ongoing):
+        assert (artifact.assessment.impact, artifact.assessment.coverage) == ("none", "complete")
+        assert (artifact.report.current_impact, artifact.report.verdict_source) == ("none", "mcp_agent")
+    assert (final.mcp.state, final.mcp.carried.source_revision) == ("provider_error", ran.revision)
+    assert (final.assessment.impact, final.assessment.coverage) == ("info", "partial")
+    assert (final.report.current_impact, final.report.peak_impact, final.report.coverage) == ("info", "info", "partial")
+    assert final.report.verdict_source == "mcp_agent"
+    assert any(f"carried from revision {ran.revision}" in gap for gap in final.assessment.gaps)
+    assert collection.update_one.await_args_list[-1].args[1]["$set"]["status"] == "incomplete"
+
+
+@pytest.mark.parametrize("rule_impact", ["none", "info"])
+def test_non_final_complete_none_is_published_as_none(rule_impact):
+    checkpoint = complete_none_run()
+    assessment, verdict = compose_assessment("audit-one", LATER, checkpoint, rule(rule_impact))
+    assert (assessment.impact, assessment.coverage, verdict) == ("none", "complete", "mcp_agent")
+    assert not any("clean outcome" in gap for gap in assessment.gaps)
+    base = rule_report(()).model_copy(
+        update={"coverage": "complete", "current_impact": "info", "peak_impact": "none", "attribution": "undetermined"}
+    )
+    assert build_mcp_report(base, checkpoint, verdict).current_impact == "none"
+
+
+def test_rule_none_with_partial_coverage_is_published_as_info_with_a_limitation():
+    checkpoint = McpCheckpoint(state="provider_error", reason="AI provider request failed.")
+    assessment, verdict = compose_assessment("audit-one", LATER, checkpoint, rule("none"))
+    assert (assessment.impact, assessment.coverage, verdict) == ("info", "partial", "rule")
+    assert mcp_report.CLEAN_OUTCOME_GAP in assessment.gaps
+    base = rule_report(()).model_copy(update={"current_impact": "none", "peak_impact": "none"})
+    assert build_mcp_report(base, checkpoint, verdict).current_impact == "info"
 
 
 async def test_expiry_checkpoint_with_a_due_complete_agent_run_still_completes(monkeypatch):

@@ -90,8 +90,12 @@ skills and the change type, at most 6 KB. Over budget, context degrades in re-ch
 steps and stops as soon as it fits: configured-device MAC lists become counts, rule
 evidence keeps its ID and assessment, older observation payloads are hidden oldest-first
 (never the newest observation or evidence cited by the previous conclusion; hidden
-payloads stay citable), and finally long changed values are shortened with an explicit
-gap. A context that still does not fit stops the run as `budget_exhausted`.
+payloads stay citable), long changed values are shortened with an explicit gap, and as
+a last step the payloads of evidence cited by the previous conclusion are hidden
+oldest-first, keeping their ID, tool, arguments, state and capture time. Each hide is
+re-checked, and only a context that still does not fit stops the run as
+`budget_exhausted`. This step counts as a trim step, and its hidden payloads count as
+hidden observations in the diagnostics.
 
 MCP results over 12 KB, or with a row list longer than 50 items, are not dropped: every
 returned row passes the organization check and is summarized into a citable `partial`
@@ -104,12 +108,15 @@ limit and 4,096 tokens; a response that stops at the token limit is rejected as
 `truncated` before parsing, so no partial report or tool call executes. Rejected actions
 return `Action rejected (<category>): <detail>` (or `Call N rejected (…)` within a batch)
 with a fixed category and a bounded, redacted detail. Tool errors keep a redacted
-500-byte message that the model sees but cannot cite. Every agent run that reaches MCP
-discovery records `McpDiagnostics` counters (turns, describes, calls, cached calls,
-rejections by category, digested/omitted results, hidden observations, trim steps,
-largest prompt, finish reasons and elapsed time) on its checkpoint, and every published
-MCP checkpoint, including `not_scheduled`, logs one structured `mcp_checkpoint` line
-without prompt, tool or provider text.
+500-byte message that the model sees but cannot cite. Checkpoints that `run_mcp` returns
+once it reaches the MCP discovery reservation record `McpDiagnostics` counters (turns,
+describes, calls, cached calls, rejections by category, digested/omitted results, hidden
+observations, trim steps, largest prompt, finish reasons and elapsed time). Checkpoints
+returned before that point, and the worker's safety-timeout `unavailable` checkpoint,
+carry no diagnostics. The worker logs one structured `mcp_checkpoint` line for each MCP
+checkpoint candidate, including `not_scheduled`, before the fenced publication (so a
+candidate that loses its fence is logged but not published), without prompt, tool or
+provider text.
 
 The published verdict is the more severe of the agent conclusion and a rule-derived
 warning or critical; a rule-only info or none never overrides the agent. A rule-raised
@@ -117,15 +124,23 @@ verdict publishes partial coverage with a limitation. A carried conclusion count
 agent conclusion with a carried-forward limitation. Without any agent conclusion the
 deterministic assessment is published with a rule-derived limitation. The final
 checkpoint cannot complete the investigation on a carried conclusion or on rules alone,
-so such investigations end `incomplete`. `report.verdict_source` records `mcp_agent`,
-`combined` or `rule`.
+so such investigations end `incomplete`. Whenever the published coverage is not complete,
+a `none` verdict (agent, carried or rule-derived) is published as `info`, and the report's
+`current_impact` is clamped the same way, so partial coverage never presents a clean
+outcome. `report.verdict_source` records `mcp_agent`, `combined` or `rule`.
 
 Follow-up checkpoints retain the previous structured conclusion and bounded evidence
 summaries, including query arguments and timestamps even when no report was completed.
 `previous_report` is the last validated conclusion, including one carried through
-`not_scheduled` checkpoints. Evidence cited by the previous conclusion keeps its payload
-(up to 12 KB) in the next prompt; other previous evidence keeps its payload only up to
-600 bytes. Full sanitized evidence remains in immutable revisions and request artifacts;
+`not_scheduled` checkpoints. Evidence cited by the previous conclusion, including a cited
+rule-evidence row, keeps its payload (each up to 12 KB) in the next prompt newest-first by
+capture time (ties in citation order) until 32 KB of such payloads in total. Older
+cited rows keep their ID, tool, arguments, state and capture time, with the payload
+hidden. Other previous evidence keeps its payload only up to 600 bytes. Payload sizes are
+UTF-8 bytes of non-escaped JSON, the same measure as the 12 KB capture bound. This trims
+only the prompt view: previous-checkpoint rows are context and cannot be cited, and the
+carried conclusion still stores every cited row in full.
+Full sanitized evidence remains in immutable revisions and request artifacts;
 it is not repeatedly copied into the root record or the entire model conversation.
 Configured device lists are grouped by site/type/outcome, preserving MACs without
 creating one agent per device. Any further prompt-size omission is explicit.
@@ -179,5 +194,10 @@ SLE-like series through fake MCP and model clients that check the prompts they r
 In that harness the system prompt with its action schema measured about 10.7 KB, the
 other fixed prompt data about 6.8 KB (5.6 KB of compact tool schemas), a 200-row event
 digest about 10 KB, and a follow-up run with eight event digests plus its cited previous
-evidence exceeded 96 KB until older observations were hidden. No live Mist, MCP or model
-runs were performed for this revision; the live checks above predate it.
+evidence exceeded 96 KB until older observations were hidden. When a +10 report cited all
+eight of its digests, the cited payloads came to about 80 KB. Before the 32 KB protected
+cap, the +30 run's first prompt measured about 97.9 KB with nothing left to hide, so the
+run stopped as `budget_exhausted` before any model call. With the cap, the same first
+prompt measures about 50.4 KB: the three newest cited payloads are shown and five are
+hidden with their identity kept. The run completes. No live Mist, MCP or model runs were
+performed for this revision; the live checks above predate it.
