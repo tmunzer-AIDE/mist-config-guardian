@@ -7900,11 +7900,6 @@
                 "type": "null"
               }
             ]
-          },
-          "use_prepared_credential": {
-            "default": false,
-            "title": "Use Prepared Credential",
-            "type": "boolean"
           }
         },
         "title": "RestoreExecuteRequest",
@@ -8057,6 +8052,17 @@
           "status": {
             "$ref": "#/components/schemas/RestoreStatus"
           },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
+          },
           "target_at": {
             "format": "date-time",
             "title": "Target At",
@@ -8136,7 +8142,8 @@
           "completed",
           "failed",
           "compensation_available",
-          "compensated"
+          "compensated",
+          "superseded"
         ],
         "title": "RestoreStatus",
         "type": "string"
@@ -15863,7 +15870,7 @@
     },
     "/api/v1/organizations/{organization_id}/restores/{operation_id}/execute": {
       "post": {
-        "description": "Verify a fresh Mist administrator and queue the reviewed plan.",
+        "description": "Queue a prepared plan with the administrator session its fresh backup retained.\n\nThere is no credential to supply: a plan reviewed against anything but a\nbackup taken with the identity that will write is not executed at all.",
         "operationId": "execute_restore_api_v1_organizations__organization_id__restores__operation_id__execute_post",
         "parameters": [
           {
@@ -15883,16 +15890,6 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RestoreExecuteRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "202": {
             "content": {

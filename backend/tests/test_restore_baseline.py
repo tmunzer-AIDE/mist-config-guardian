@@ -226,6 +226,60 @@ async def test_authorization_refuses_while_another_restore_is_queued_or_running(
     mist.verify_write_token.assert_not_awaited()
 
 
+async def test_a_pasted_credential_cannot_execute_an_ordinary_plan(authorization):
+    service, operation, query, mist = authorization
+
+    with pytest.raises(RestoreAuthorizationError, match="Prepare a fresh backup"):
+        await service.authorize(operation.organization_id, operation.id, "pasted-token", "task")
+
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_an_unprepared_plan_cannot_be_executed_without_a_credential(authorization):
+    service, operation, query, mist = authorization
+    operation.baseline_snapshot_id = None
+
+    with pytest.raises(RestoreAuthorizationError, match="capture a fresh backup"):
+        await service.authorize(operation.organization_id, operation.id, None, "task")
+
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_a_compensation_plan_is_authorized_with_a_fresh_credential(authorization):
+    service, operation, _query, mist = authorization
+    operation.baseline_snapshot_id = None
+
+    await service.authorize(operation.organization_id, operation.id, "fresh-token", "task", compensation=True)
+
+    assert mist.verify_write_token.call_args.kwargs["token"] == "fresh-token"
+
+
+async def test_a_compensation_plan_is_not_authorized_without_a_fresh_credential(authorization):
+    service, operation, query, mist = authorization
+    operation.baseline_snapshot_id = None
+
+    with pytest.raises(RestoreAuthorizationError, match="fresh administrator credential"):
+        await service.authorize(operation.organization_id, operation.id, None, "task", compensation=True)
+
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_a_superseded_draft_cannot_be_prepared_again():
+    service = RestoreAuthorizationService(
+        Settings(environment="test"),
+        CredentialVault(Settings(environment="test")),
+        AsyncMock(),
+        active_restores=AsyncMock(return_value=False),
+    )
+    draft = RestoreOperation.model_construct(id=PydanticObjectId(), status=RestoreStatus.SUPERSEDED)
+
+    with pytest.raises(RestoreAuthorizationError, match="replaced by a newer prepared plan"):
+        await service.prepare(SimpleNamespace(), draft, PydanticObjectId(), "token", AsyncMock())
+
+
 async def test_preparation_refuses_while_another_restore_is_queued_or_running():
     settings = Settings(environment="test")
     mist = AsyncMock()

@@ -648,7 +648,7 @@ describe('RestorePage', () => {
     button('Execute reviewed plan')!.click();
     await tick();
     const execution = httpMock.expectOne(`${OPERATIONS_URL}/op-2/execute`);
-    expect(execution.request.body).toEqual({ use_prepared_credential: true });
+    expect(execution.request.body).toEqual({});
     execution.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(), status: 'queued' }));
     await settle();
     // Both the draft and the freshly prepared plan get their own URLs.
@@ -1468,5 +1468,43 @@ describe('RestorePage', () => {
     });
 
     expect(text()).toContain('Updates references to a recreated object');
+  });
+
+  it('offers no backup comparison for a reference rewrite, whose backup is its own target', async () => {
+    await plan({
+      actions: [
+        action({ baseline_version_id: 'v-backup' }),
+        action({
+          logical_object_id: 'lo-2',
+          order: 1,
+          object_name: 'Lobby-AP',
+          reason: 'reference_rewrite',
+          source_version_id: 'v-lobby',
+          baseline_version_id: 'v-lobby',
+        }),
+      ],
+    });
+
+    const links = all<HTMLAnchorElement>('a').filter((node) =>
+      (node.textContent ?? '').includes('Compare backup with target'),
+    );
+    expect(links.length).toBe(1);
+    expect(links[0].getAttribute('href')).toContain('a=v-backup');
+  });
+
+  it('opens the prepared plan in place of the draft it superseded', async () => {
+    await boot(targetList([NW_CORP]), [operation({ id: 'op-1', status: 'superseded', superseded_by: 'op-2' })]);
+
+    all('.entry')[0].click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ id: 'op-1', status: 'superseded', superseded_by: 'op-2' }));
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-2`).flush(
+      operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString() }),
+    );
+    await settle();
+
+    expect(button('Execute reviewed plan')).toBeTruthy();
+    expect(JSON.stringify(navigations.at(-1))).toContain('"operation":"op-2"');
   });
 });

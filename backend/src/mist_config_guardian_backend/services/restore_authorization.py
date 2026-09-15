@@ -68,8 +68,16 @@ class RestoreAuthorizationService:
         operation_id: PydanticObjectId,
         credential: str | MistLoginCredentials | None,
         task_id: str,
+        *,
+        compensation: bool = False,
     ) -> RestoreOperation:
-        """Verify a write identity and atomically reserve the plan."""
+        """Verify a write identity and atomically reserve the plan.
+
+        A restore writes only with the session its fresh backup retained, so
+        ``credential`` must be ``None``. A compensation plan has no fresh
+        backup to retain one (it reverses against the original safety
+        snapshot) and is the one plan that takes a fresh credential here.
+        """
         organization = await Organization.get(organization_id)
         operation = await RestoreOperation.find_one(
             RestoreOperation.id == operation_id,
@@ -91,8 +99,8 @@ class RestoreAuthorizationService:
 
         self._validate_action_secrets(operation)
 
-        using_prepared = credential is None
-        credential = self._execution_credential(operation, credential)
+        using_prepared = not compensation
+        credential = self._execution_credential(operation, credential, compensation=compensation)
 
         if isinstance(credential, MistLoginCredentials):
             throttle = get_throttle_service(self._settings)
@@ -156,12 +164,17 @@ class RestoreAuthorizationService:
         self,
         operation: RestoreOperation,
         credential: str | MistLoginCredentials | None,
+        *,
+        compensation: bool,
     ) -> str | MistLoginCredentials:
-        if credential is not None:
-            if getattr(operation, "baseline_snapshot_id", None) is not None:
-                msg = "Execute this plan with its prepared credential, or capture a new backup"
+        if compensation:
+            if credential is None:
+                msg = "Compensation needs a fresh administrator credential"
                 raise RestoreAuthorizationError(msg)
             return credential
+        if credential is not None:
+            msg = "Prepare a fresh backup of this plan and execute it with the session that backup retained"
+            raise RestoreAuthorizationError(msg)
         if (
             operation.baseline_snapshot_id is None
             or operation.encrypted_delegated_credential is None
@@ -196,6 +209,9 @@ class RestoreAuthorizationService:
         store: RestoreStateStore,
     ) -> RestoreOperation:
         """Read a new baseline and retain its identity for a separate reviewed execution."""
+        if operation.status is RestoreStatus.SUPERSEDED:
+            msg = "This plan was replaced by a newer prepared plan; open that plan instead"
+            raise RestoreAuthorizationError(msg)
         if operation.status not in {RestoreStatus.PLANNED, RestoreStatus.FAILED}:
             msg = "This restore cannot be prepared while it is running or already applied"
             raise RestoreAuthorizationError(msg)
@@ -225,6 +241,8 @@ class RestoreAuthorizationService:
             if plan.id is None:
                 msg = "Prepared restore has no identifier"
                 raise RestoreAuthorizationError(msg)
+            if operation.id is not None:
+                await self.supersede(operation.id, plan.id)
             if not plan.preflight_errors and plan.actions:
                 plan.credential_actor = access.actor
                 plan.encrypted_delegated_credential = self._vault.encrypt_for_context(
@@ -245,6 +263,37 @@ class RestoreAuthorizationService:
                     timeout=10,
                 ) as client:
                     await logout_session(client)
+
+    async def supersede(self, operation_id: PydanticObjectId, replacement_id: PydanticObjectId) -> bool:
+        """Retire a never-executed plan once the prepared plan built from it exists.
+
+        The draft could otherwise still be prepared again, and a prepared plan
+        it replaces could still hold a live session; both end here, in one
+        conditional update, so a plan that was queued or started meanwhile is
+        left alone. The captured session is revoked only after it is cleared.
+        """
+        before = await RestoreOperation.get_pymongo_collection().find_one_and_update(
+            {
+                "_id": operation_id,
+                "status": {"$in": [RestoreStatus.PLANNED, RestoreStatus.FAILED]},
+                "started_at": None,
+            },
+            {
+                "$set": {
+                    "status": RestoreStatus.SUPERSEDED,
+                    "superseded_by": replacement_id,
+                    "encrypted_delegated_credential": None,
+                    "delegated_credential_expires_at": None,
+                    "updated_at": utc_now(),
+                }
+            },
+            return_document=ReturnDocument.BEFORE,
+            projection={"encrypted_delegated_credential": 1, "organization_id": 1},
+        )
+        if before is None:
+            return False
+        await self.logout_unused_credential(before)
+        return True
 
     async def release(self, operation_id: PydanticObjectId, task_id: str) -> None:
         """Release only this queued task and revoke its unused Mist session.

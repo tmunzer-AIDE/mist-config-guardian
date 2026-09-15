@@ -28,6 +28,8 @@ class RestoreStatus(StrEnum):
     FAILED = "failed"
     COMPENSATION_AVAILABLE = "compensation_available"
     COMPENSATED = "compensated"
+    # A plan replaced by the prepared plan built from its fresh backup; never executed.
+    SUPERSEDED = "superseded"
 
 
 class RestoreActionType(StrEnum):
@@ -141,6 +143,9 @@ class RestoreOperation(TimestampedModel, Document):
     # output. Empty on operations planned before this was recorded.
     requested_version_ids: list[PydanticObjectId] = Field(default_factory=list)
     baseline_snapshot_id: PydanticObjectId | None = None
+    # On a SUPERSEDED plan: the prepared plan that replaced it, which is the one
+    # a reviewer must open instead.
+    superseded_by: PydanticObjectId | None = None
     target_at: datetime
     status: RestoreStatus = RestoreStatus.PLANNED
     actions: list[RestoreAction] = Field(default_factory=list)

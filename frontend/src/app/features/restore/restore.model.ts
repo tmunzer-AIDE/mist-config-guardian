@@ -12,7 +12,9 @@ export type RestoreStatus =
   | 'completed'
   | 'failed'
   | 'compensation_available'
-  | 'compensated';
+  | 'compensated'
+  // Replaced by the prepared plan built from its fresh backup; never executed.
+  | 'superseded';
 
 export type RestoreActionKind = 'create' | 'update' | 'delete';
 export type RestoreActionStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'skipped';
@@ -86,6 +88,8 @@ export interface RestoreOperation {
   requested_version_ids?: string[];
   baseline_snapshot_id?: string | null;
   prepared_until?: string | null;
+  /** On a superseded draft: the prepared plan that replaced it. */
+  superseded_by?: string | null;
   target_at: string;
   status: RestoreStatus;
   actions: RestoreAction[];

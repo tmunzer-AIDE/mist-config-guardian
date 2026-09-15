@@ -155,6 +155,44 @@ async def test_release_of_api_token_does_not_attempt_logout(cleanup):
     assert operation["encrypted_delegated_credential"] is None
 
 
+async def test_a_prepared_plan_retires_the_draft_it_replaced(cleanup, httpx_mock):
+    service, vault, collection = cleanup
+    draft = queued(vault, status=RestoreStatus.PLANNED, expired=False)
+    collection.documents.append(draft)
+    httpx_mock.add_response(url=BASE + "/api/v1/logout", status_code=200)
+    replacement = PydanticObjectId()
+
+    assert await service.supersede(draft["_id"], replacement) is True
+    assert draft["status"] == RestoreStatus.SUPERSEDED
+    assert draft["superseded_by"] == replacement
+    assert draft["encrypted_delegated_credential"] is None
+    assert draft["delegated_credential_expires_at"] is None
+    assert len(httpx_mock.get_requests()) == 1
+    assert await service.supersede(draft["_id"], PydanticObjectId()) is False
+
+
+@pytest.mark.parametrize("status", [RestoreStatus.QUEUED, RestoreStatus.RUNNING, RestoreStatus.COMPLETED])
+async def test_only_a_plan_awaiting_execution_can_be_superseded(cleanup, status):
+    service, vault, collection = cleanup
+    operation = queued(vault, status=status, expired=False)
+    collection.documents.append(operation)
+    before = copy.deepcopy(operation)
+
+    assert await service.supersede(operation["_id"], PydanticObjectId()) is False
+    assert operation == before
+
+
+async def test_a_failed_run_that_started_stays_on_record(cleanup):
+    service, vault, collection = cleanup
+    operation = queued(vault, status=RestoreStatus.FAILED, expired=False)
+    operation["started_at"] = utc_now()
+    collection.documents.append(operation)
+    before = copy.deepcopy(operation)
+
+    assert await service.supersede(operation["_id"], PydanticObjectId()) is False
+    assert operation == before
+
+
 async def test_expiry_revokes_session_awaiting_plan_review(cleanup, httpx_mock):
     service, vault, collection = cleanup
     operation = queued(vault, status=RestoreStatus.PLANNED)

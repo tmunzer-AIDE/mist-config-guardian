@@ -38,21 +38,18 @@ class RestoreExecuteRequest(BaseModel):
 
     administrator_token: SecretStr | None = Field(default=None, min_length=1, max_length=2048)
     mist_login: MistLoginCredentials | None = None
-    use_prepared_credential: bool = False
 
     @model_validator(mode="after")
     def exactly_one_credential(self) -> Self:
-        if sum((self.administrator_token is not None, self.mist_login is not None, self.use_prepared_credential)) != 1:
-            msg = "Supply exactly one of administrator_token, mist_login, or use_prepared_credential=true"
+        if (self.administrator_token is None) == (self.mist_login is None):
+            msg = "Supply exactly one of administrator_token or mist_login"
             raise ValueError(msg)
         if self.administrator_token and self.administrator_token.get_secret_value().startswith("mist-session:"):
             msg = "Supply an API token, not an encoded session"
             raise ValueError(msg)
         return self
 
-    def credential(self) -> str | MistLoginCredentials | None:
-        if self.use_prepared_credential:
-            return None
+    def credential(self) -> str | MistLoginCredentials:
         if self.administrator_token is not None:
             return self.administrator_token.get_secret_value()
         if self.mist_login is None:
@@ -117,6 +114,7 @@ class RestoreOperationResponse(BaseModel):
     requested_version_ids: list[str] = Field(default_factory=list)
     baseline_snapshot_id: str | None = None
     prepared_until: datetime | None = None
+    superseded_by: str | None = None
     target_at: datetime
     status: RestoreStatus
     actions: list[RestoreActionResponse]
@@ -157,6 +155,7 @@ class RestoreOperationResponse(BaseModel):
             if operation.baseline_snapshot_id is None
             else str(operation.baseline_snapshot_id),
             prepared_until=operation.delegated_credential_expires_at if operation.baseline_snapshot_id else None,
+            superseded_by=None if operation.superseded_by is None else str(operation.superseded_by),
             target_at=operation.target_at,
             status=operation.status,
             actions=[RestoreActionResponse.from_model(action) for action in operation.actions],

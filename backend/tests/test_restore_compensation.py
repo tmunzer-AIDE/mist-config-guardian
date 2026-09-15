@@ -1303,12 +1303,14 @@ class _RecordingAuthorization:
     """Captures the delegated credential the route hands to authorization."""
 
     def __init__(self) -> None:
-        self.credentials: list[str] = []
+        self.credentials: list[str | None] = []
         self.operations: list[PydanticObjectId] = []
+        self.compensation: list[bool] = []
 
-    async def authorize(self, organization_id, operation_id, credential, task_id):  # noqa: ARG002
+    async def authorize(self, organization_id, operation_id, credential, task_id, *, compensation=False):  # noqa: ARG002
         self.credentials.append(credential)
         self.operations.append(operation_id)
+        self.compensation.append(compensation)
         return _operation([], status=RestoreStatus.QUEUED, identifier=operation_id)
 
     async def release(self, operation_id, task_id) -> None:  # noqa: ARG002
@@ -1337,22 +1339,52 @@ def _administrator() -> User:
     )
 
 
-def _app(compensation: _StubCompensation, authorization: _RecordingAuthorization):
+def _app(
+    compensation: _StubCompensation,
+    authorization: _RecordingAuthorization,
+    *,
+    plans: list[RestoreOperation] | None = None,
+    states: _MemoryStateStore | None = None,
+):
     from mist_config_guardian_backend.api.dependencies import (  # noqa: PLC0415
         get_restore_authorization_service,
     )
 
+    shared_states = states or _MemoryStateStore()
+    listed = (
+        plans
+        if plans is not None
+        else [_operation([_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED)])]
+    )
     app = create_app(Settings(environment="test", database_enabled=False))
     app.dependency_overrides[get_current_user] = _administrator
     app.dependency_overrides[require_organization] = _organization
     app.dependency_overrides[get_restore_compensation_service] = lambda: compensation
     app.dependency_overrides[get_restore_authorization_service] = lambda: authorization
-    app.dependency_overrides[get_plan_state_store] = _MemoryStateStore
-    app.dependency_overrides[get_restore_plans] = lambda: _MemoryPlans(
-        [_operation([_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED)])]
-    )
+    app.dependency_overrides[get_plan_state_store] = lambda: shared_states
+    app.dependency_overrides[get_restore_plans] = lambda: _MemoryPlans(listed)
     app.dependency_overrides[get_approval_service] = lambda: ApprovalService(_NoApprovals())
     return app
+
+
+async def _reviewed(states: _MemoryStateStore, plan: RestoreOperation) -> _MemoryStateStore:
+    """Record the plan hash a reviewer saw, as planning does."""
+    assert plan.id is not None
+    await states.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID, operation_id=plan.id, plan_hash=compute_plan_hash(plan.actions)
+        )
+    )
+    return states
+
+
+def _prepared(**overrides: object) -> RestoreOperation:
+    """A plan built from a fresh backup, as preparation leaves it."""
+    plan = _operation([_action(0, RestoreActionType.UPDATE)], status=RestoreStatus.PLANNED)
+    plan.baseline_snapshot_id = PydanticObjectId()
+    for field, value in overrides.items():
+        setattr(plan, field, value)
+    return plan
 
 
 class _NoApprovals:
@@ -1442,8 +1474,94 @@ async def test_compensation_execution_uses_the_delegated_administrator_credentia
     assert response.status_code == 202
     assert authorization.credentials == ["fresh-admin-token"]
     assert authorization.operations == [COMPENSATION_ID]
+    assert authorization.compensation == [True]
     assert len(routed) == 1
     assert "fresh-admin-token" not in response.text
+
+
+async def test_a_plan_without_a_fresh_backup_cannot_be_executed(routed: list[str]) -> None:
+    draft = _operation([_action(0, RestoreActionType.UPDATE)], status=RestoreStatus.PLANNED)
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[draft], states=await _reviewed(_MemoryStateStore(), draft)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute", json={}
+        )
+
+    assert response.status_code == 409
+    assert "Prepare a fresh backup" in response.json()["detail"]
+    assert authorization.operations == []
+    assert routed == []
+
+
+async def test_a_prepared_plan_is_queued_with_its_retained_session(routed: list[str]) -> None:
+    prepared = _prepared()
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute", json={}
+        )
+
+    assert response.status_code == 202
+    assert authorization.credentials == [None]
+    assert authorization.compensation == [False]
+    assert len(routed) == 1
+
+
+async def test_a_pasted_credential_on_execute_is_ignored_rather_than_used(routed: list[str]) -> None:
+    prepared = _prepared()
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute",
+            json={"administrator_token": "pasted-token"},
+        )
+
+    assert response.status_code == 202
+    assert authorization.credentials == [None]
+    assert len(routed) == 1
+
+
+async def test_only_the_administrator_who_prepared_a_plan_can_execute_it(routed: list[str]) -> None:
+    prepared = _prepared(requested_by=PydanticObjectId())
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute")
+
+    assert response.status_code == 403
+    assert authorization.operations == []
+    assert routed == []
+
+
+@pytest.mark.usefixtures("routed")
+async def test_compensation_still_requires_a_fresh_credential() -> None:
+    plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
+    authorization = _RecordingAuthorization()
+    app = _app(_StubCompensation(plan), authorization)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/compensation/execute",
+            json={"use_prepared_credential": True},
+        )
+
+    assert response.status_code == 422
+    assert authorization.credentials == []
 
 
 @pytest.mark.usefixtures("routed")
@@ -1488,17 +1606,29 @@ async def test_compensation_is_refused_with_a_conflict_while_another_restore_run
     assert routed == []
 
 
-@pytest.mark.parametrize("route", ["execute", "prepare"])
-async def test_execution_and_preparation_are_refused_with_a_conflict_while_another_restore_runs(
-    routed: list[str],
-    route: str,
-) -> None:
+async def test_a_prepared_plan_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
+    prepared = _prepared()
+    authorization = _BusyAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ANOTHER_RESTORE_RUNNING
+    assert authorization.credentials == [None]
+    assert routed == []
+
+
+async def test_preparation_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
     authorization = _BusyAuthorization()
     transport = httpx.ASGITransport(app=_app(_StubCompensation(None), authorization))
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
-            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/{route}",
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/prepare",
             json={"administrator_token": "fresh-admin-token"},
         )
 

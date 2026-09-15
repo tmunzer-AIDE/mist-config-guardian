@@ -1144,6 +1144,11 @@ export class RestorePage {
     if (!operation || this.stale(token)) {
       return false;
     }
+    if (operation.status === 'superseded' && operation.superseded_by) {
+      // A draft that was prepared has nothing left to review; its replacement does.
+      this.canonicalize(organizationId, operation.superseded_by, true);
+      return this.openOperation(operation.superseded_by, compensate);
+    }
     this.activeOperation.set(operation);
     this.mode.set(operation.mode);
     this.includeDependencies.set(operation.include_dependencies);

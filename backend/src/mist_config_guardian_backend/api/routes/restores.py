@@ -200,28 +200,30 @@ async def get_restore_verification(
 async def execute_restore(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
-    request: RestoreExecuteRequest,
     organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     authorization: Annotated[RestoreAuthorizationService, Depends(get_restore_authorization_service)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
     store: Annotated[RestoreStateStore, Depends(get_plan_state_store)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
     _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
 ) -> RestoreOperationResponse:
-    """Verify a fresh Mist administrator and queue the reviewed plan."""
+    """Queue a prepared plan with the administrator session its fresh backup retained.
+
+    There is no credential to supply: a plan reviewed against anything but a
+    backup taken with the identity that will write is not executed at all.
+    """
     operation = await _load(plans, organization_id, operation_id)
-    if request.use_prepared_credential and operation.requested_by != _administrator.id:
+    if operation.baseline_snapshot_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Prepare a fresh backup of this plan before executing it",
+        )
+    if operation.requested_by != administrator.id:
         raise HTTPException(status_code=403, detail="Only the administrator who prepared this plan can use its session")
     await _assert_plan_current(store, operation)
     await _assert_approved(organization, operation, approvals)
-    return await _authorize_and_queue(
-        organization_id,
-        operation,
-        authorization,
-        approvals,
-        request.credential(),
-    )
+    return await _authorize_and_queue(organization_id, operation, authorization, approvals, None)
 
 
 @router.post("/{operation_id}/prepare", status_code=status.HTTP_201_CREATED)
@@ -240,8 +242,11 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
     """Back up live state and return a new plan for review; never queue writes."""
     operation = await _load(plans, organization_id, operation_id)
     credential = request.credential()
-    if credential is None or administrator.id is None:
-        raise HTTPException(status_code=422, detail="Fresh administrator credentials are required to prepare a backup")
+    if administrator.id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authenticated administrator is missing an identifier",
+        )
     state = await store.load(organization_id, operation_id)
     if state is not None and state.compensates_operation_id is not None:
         raise HTTPException(status_code=409, detail="Compensation must use its original safety backup")
@@ -327,6 +332,7 @@ async def execute_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency 
         authorization,
         approvals,
         request.credential(),
+        compensation=True,
     )
 
 
@@ -384,12 +390,14 @@ async def _assert_approved(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-async def _authorize_and_queue(
+async def _authorize_and_queue(  # noqa: PLR0913 - the compensation flag must be named at every call site
     organization_id: PydanticObjectId,
     operation: RestoreOperation,
     authorization: RestoreAuthorizationService,
     approvals: ApprovalService,
     credential: str | MistLoginCredentials | None,
+    *,
+    compensation: bool = False,
 ) -> RestoreOperationResponse:
     """Reserve the plan with a delegated credential and hand it to the worker."""
     if operation.id is None:
@@ -404,6 +412,7 @@ async def _authorize_and_queue(
             operation.id,
             credential,
             task_id,
+            compensation=compensation,
         )
     except MistMfaRequiredError as exc:
         raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
