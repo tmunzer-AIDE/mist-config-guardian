@@ -20,6 +20,17 @@
     </p>
   }
 
+  @if (compensationWarnings().length > 0) {
+    <section class="notice notice--warn">
+      <p class="cg-label notice-label">PLAN WARNINGS</p>
+      <ul class="notice-list">
+        @for (warning of compensationWarnings(); track $index) {
+          <li>{{ warning }}</li>
+        }
+      </ul>
+    </section>
+  }
+
   @if (!compensation()) {
     <p class="cg-label section-label">RESTORE MODE</p>
     <div class="modes" role="radiogroup" aria-label="Restore mode">

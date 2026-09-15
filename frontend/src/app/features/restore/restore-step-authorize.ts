@@ -99,6 +99,13 @@ export class RestoreStepAuthorize {
   protected readonly deleteCount = computed(
     () => this.actions().filter((action) => action.action === 'delete').length,
   );
+  /**
+   * A compensation plan has no review step of its own, so what it warns about,
+   * a manual follow-up among it, is read here before the credential is given.
+   */
+  protected readonly compensationWarnings = computed(() =>
+    this.compensation() ? (this.operation().warnings ?? []) : [],
+  );
 
   protected readonly title = computed(() =>
     this.compensation()

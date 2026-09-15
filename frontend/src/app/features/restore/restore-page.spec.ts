@@ -1391,8 +1391,22 @@ describe('RestorePage', () => {
     await tick();
     httpMock
       .expectOne(`${OPERATIONS_URL}/op-1/compensation`)
-      .flush(operation({ id: 'op-2', status: 'planned', actions: [action({ action: 'update' })] }));
+      .flush(
+        operation({
+          id: 'op-2',
+          status: 'planned',
+          actions: [action({ action: 'update' })],
+          warnings: [
+            'Compensating plan for restore op-1: reverses 1 applied actions in reverse dependency order',
+            'SEA-Voice may have been created in Mist before the worker lost contact; check for it and delete it manually if it exists',
+          ],
+        }),
+      );
     await settle();
+
+    // A manual follow-up is part of what is authorized, so it is read before the credential is asked for.
+    expect(text()).toContain('reverses 1 applied actions in reverse dependency order');
+    expect(text()).toContain('check for it and delete it manually if it exists');
 
     // Compensation reuses the credential form; the token is asked for again.
     expect(all('app-restore-step-authorize').length).toBe(1);
