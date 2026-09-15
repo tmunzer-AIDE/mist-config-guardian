@@ -202,6 +202,96 @@ async def test_a_read_that_cannot_reach_mist_is_retried_and_changed_nothing(http
     assert len(httpx_mock.get_requests()) == 3
 
 
+def _queue(httpx_mock: HTTPXMock, method: str, steps: list[int | Exception]) -> None:
+    """Answer successive requests with a status, or fail them in transport."""
+    for step in steps:
+        if isinstance(step, Exception):
+            httpx_mock.add_exception(step, method=method, url=NETWORK_URL)
+        else:
+            httpx_mock.add_response(method=method, url=NETWORK_URL, status_code=step)
+
+
+async def _write(client: MistMutationClient, method: str) -> None:
+    """Issue the idempotent write under test."""
+    if method == "PUT":
+        await client.update(_networks(), "network-1", {"name": "Corp"}, org_id="org-1", site_id=None)
+    else:
+        await client.delete(_networks(), "network-1", org_id="org-1", site_id=None)
+
+
+@pytest.mark.parametrize(
+    ("steps", "delays"),
+    [
+        pytest.param([503, 404], [0.5], id="503-404"),
+        pytest.param([502, 503, 404], [0.5, 1.0], id="502-503-404"),
+        pytest.param([httpx.ReadTimeout("slow"), 404], [0.5], id="timeout-404"),
+    ],
+)
+async def test_a_retried_delete_that_finds_the_object_gone_has_completed(
+    httpx_mock: HTTPXMock,
+    steps: list[int | Exception],
+    delays: list[float],
+) -> None:
+    _queue(httpx_mock, "DELETE", steps)
+    sleeps = _Sleeps()
+
+    async with _client(sleeps) as client:
+        await client.delete(_networks(), "network-1", org_id="org-1", site_id=None)
+
+    assert len(httpx_mock.get_requests()) == len(steps)
+    assert sleeps.delays == delays
+
+
+@pytest.mark.parametrize(
+    ("method", "steps", "status"),
+    [
+        pytest.param("PUT", [503, 404], 404, id="put-503-404"),
+        pytest.param("PUT", [httpx.ReadTimeout("slow"), 409], 409, id="put-timeout-409"),
+        pytest.param("DELETE", [503, 400], 400, id="delete-503-400"),
+        pytest.param("PUT", [503, 429, 429], 429, id="put-503-then-throttled-out"),
+    ],
+)
+async def test_a_write_that_fails_after_an_ambiguous_attempt_may_have_been_applied(
+    httpx_mock: HTTPXMock,
+    method: str,
+    steps: list[int | Exception],
+    status: int,
+) -> None:
+    _queue(httpx_mock, method, steps)
+
+    async with _client(_Sleeps()) as client:
+        with pytest.raises(MistMutationStatusError) as error:
+            await _write(client, method)
+
+    assert error.value.outcome_unknown is True
+    assert error.value.status_code == status
+    assert len(httpx_mock.get_requests()) == len(steps)
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        pytest.param([404], id="404"),
+        pytest.param([429, 404], id="429-404"),
+    ],
+)
+async def test_a_delete_answered_404_without_an_ambiguous_attempt_is_a_plain_failure(
+    httpx_mock: HTTPXMock,
+    steps: list[int | Exception],
+) -> None:
+    _queue(httpx_mock, "DELETE", steps)
+
+    async with _client(_Sleeps()) as client:
+        with pytest.raises(MistMutationStatusError) as error:
+            await _write(client, "DELETE")
+
+    # A 429 proves Mist did not process the request, so the 404 is the
+    # object's real state before this restore touched it.
+    assert error.value.outcome_unknown is False
+    assert error.value.status_code == 404
+    assert len(httpx_mock.get_requests()) == len(steps)
+
+
 async def test_a_rejected_update_is_not_retried_and_was_not_applied(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(method="PUT", url=NETWORK_URL, status_code=400, text="sensitive upstream response")
 

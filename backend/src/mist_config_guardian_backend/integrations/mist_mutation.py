@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from http import HTTPStatus
 from types import TracebackType
 from typing import Literal, Self, cast
@@ -37,7 +38,8 @@ class MistMutationError(RuntimeError):
     ``outcome_unknown`` is the one fact the executor cannot recover on its own:
     whether a write Mist never confirmed may nevertheless have been applied. It
     is true only for writes that failed in transport, were answered with a
-    server error, or succeeded with an unreadable body.
+    server error, succeeded with an unreadable body, or failed after an earlier
+    attempt of the same write ended in one of those ways.
     """
 
     def __init__(self, message: str, *, outcome_unknown: bool = False, status_code: int | None = None) -> None:
@@ -52,6 +54,18 @@ class MistMutationStatusError(MistMutationError):
 
 class MistMutationTransportError(MistMutationError):
     """The request never produced an answer this client could use."""
+
+
+@dataclass(frozen=True)
+class _Sent:
+    """The final answer to a request, and whether an earlier attempt may already have applied it.
+
+    A retried write whose first attempt timed out or hit a gateway error may
+    have reached Mist, so the final answer alone no longer says what Mist holds.
+    """
+
+    response: httpx.Response
+    ambiguous: bool = False
 
 
 def _backoff(attempt: int) -> float:
@@ -111,14 +125,14 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         site_id: str | None,
     ) -> dict[str, object]:
         """Create one configuration object."""
-        response = await self._send(
+        sent = await self._send(
             "POST",
             definition.path(org_id=org_id, site_id=site_id),
             action="create",
             object_type=definition.key,
             json=configuration,
         )
-        payload = self._response_payload(response, "create", definition.key, write=True)
+        payload = self._response_payload(sent.response, "create", definition.key, write=True, ambiguous=sent.ambiguous)
         if not isinstance(payload, dict):
             msg = f"Mist did not return the created {definition.key}"
             raise MistMutationError(msg, outcome_unknown=True)
@@ -133,15 +147,15 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         site_id: str | None,
     ) -> dict[str, object] | None:
         """Read one live object; ``None`` when Mist says it does not exist."""
-        response = await self._send(
+        sent = await self._send(
             "GET",
             definition.item_path(object_id, org_id=org_id, site_id=site_id),
             action="read",
             object_type=definition.key,
         )
-        if response.status_code == HTTPStatus.NOT_FOUND:
+        if sent.response.status_code == HTTPStatus.NOT_FOUND:
             return None
-        payload = self._response_payload(response, "read", definition.key, write=False)
+        payload = self._response_payload(sent.response, "read", definition.key, write=False)
         if not isinstance(payload, dict):
             msg = f"Mist did not return the current {definition.key}"
             raise MistMutationError(msg)
@@ -157,14 +171,14 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         site_id: str | None,
     ) -> dict[str, object] | None:
         """Replace one configuration object."""
-        response = await self._send(
+        sent = await self._send(
             "PUT",
             definition.item_path(object_id, org_id=org_id, site_id=site_id),
             action="update",
             object_type=definition.key,
             json=configuration,
         )
-        payload = self._response_payload(response, "update", definition.key, write=True)
+        payload = self._response_payload(sent.response, "update", definition.key, write=True, ambiguous=sent.ambiguous)
         return cast("dict[str, object]", payload) if isinstance(payload, dict) else None
 
     async def delete(
@@ -175,14 +189,20 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         org_id: str,
         site_id: str | None,
     ) -> None:
-        """Delete one configuration object."""
-        response = await self._send(
+        """Delete one configuration object.
+
+        A retry answered ``404`` after an attempt that may have reached Mist
+        means that attempt deleted the object: the restore got what it asked for.
+        """
+        sent = await self._send(
             "DELETE",
             definition.item_path(object_id, org_id=org_id, site_id=site_id),
             action="delete",
             object_type=definition.key,
         )
-        self._response_payload(response, "delete", definition.key, write=True)
+        if sent.ambiguous and sent.response.status_code == HTTPStatus.NOT_FOUND:
+            return
+        self._response_payload(sent.response, "delete", definition.key, write=True, ambiguous=sent.ambiguous)
 
     async def _send(  # noqa: PLR0913 - request identity, logging context and payload are all distinct
         self,
@@ -193,14 +213,20 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         object_type: str,
         json: dict[str, object] | None = None,
         params: Mapping[str, str | int] | None = None,
-    ) -> httpx.Response:
+    ) -> _Sent:
         """Send one request, retrying only where a retry cannot apply a write twice.
 
         GET, PUT and DELETE are idempotent and are retried on throttling,
         gateway errors and transport failures. POST is retried only on 429,
         the one answer that proves Mist did not process it.
+
+        A PUT or DELETE attempt that failed in transport or with a retried
+        gateway error may have been applied, so the result carries that
+        ambiguity to the caller; a 429 proves nothing was processed and never
+        makes a write ambiguous.
         """
         write = method != "GET"
+        ambiguous = False
         for attempt in range(1, MAX_ATTEMPTS + 1):
             last = attempt == MAX_ATTEMPTS
             try:
@@ -209,6 +235,7 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
                 if method == "POST" or last:
                     msg = f"Unable to reach Mist to {action} {object_type}"
                     raise MistMutationTransportError(msg, outcome_unknown=write) from exc
+                ambiguous = ambiguous or write
                 await self._sleep(_backoff(attempt))
                 continue
             except httpx.HTTPError as exc:
@@ -218,7 +245,8 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
                 method != "POST" or response.status_code == HTTPStatus.TOO_MANY_REQUESTS
             )
             if not retryable or last:
-                return response
+                return _Sent(response, ambiguous=ambiguous)
+            ambiguous = ambiguous or (write and response.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR)
             await self._sleep(_retry_delay(response, attempt))
         msg = f"Unable to {action} {object_type} in Mist"
         raise MistMutationTransportError(msg, outcome_unknown=write)
@@ -230,12 +258,14 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         object_type: str,
         *,
         write: bool,
+        ambiguous: bool = False,
     ) -> object:
+        """Classify the final answer; ``ambiguous`` says an earlier attempt may already have applied the write."""
         if response.status_code not in _SUCCESS_STATUSES:
             msg = f"Mist failed to {action} {object_type} ({response.status_code})"
             raise MistMutationStatusError(
                 msg,
-                outcome_unknown=write and response.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR,
+                outcome_unknown=write and (ambiguous or response.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR),
                 status_code=response.status_code,
             )
         if response.status_code == HTTPStatus.NO_CONTENT or not response.content:
