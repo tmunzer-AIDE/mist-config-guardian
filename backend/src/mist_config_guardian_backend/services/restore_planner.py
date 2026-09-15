@@ -38,6 +38,7 @@ from mist_config_guardian_backend.services.approvals import (
     compute_plan_hash,
     evaluate_approval_policy,
 )
+from mist_config_guardian_backend.snapshots.fingerprint import equivalent
 from mist_config_guardian_backend.snapshots.references import is_restore_reference
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
@@ -620,8 +621,37 @@ class RestorePlanner:
             if logical.is_deleted or version.is_deleted or not self._references_any(version, recreated):
                 continue
             current = await self._latest_version(logical_id)
-            if current is not None and current.id == version.id:
+            if current is not None and (current.id == version.id or self._records_again(logical, version, current)):
                 context.reference_rewrites.add(logical_id)
+
+    def _records_again(self, logical: LogicalObject, selected: ObjectVersion, latest: ObjectVersion) -> bool:
+        """Whether the newest version is the selected one read again with the secrets it masked.
+
+        A fresh backup reads with an administrator's rights, so Mist returns
+        the secrets the collector's read masked, and the backup records that
+        read as a new version. The version chosen as current is then no longer
+        the newest, yet the object has not changed: it is still only re-pointed,
+        however many times the plan is prepared.
+
+        Only that exact shape counts: masks on the selected version, none on the
+        newest, and every other field the same. An older version that merely
+        holds the same configuration, as a reverted change leaves it, stays an
+        ordinary restore. A version whose secrets do not decrypt cannot be
+        compared, so it does not count either.
+        """
+        definition = get_definition(logical.scope, logical.object_type)
+        if definition is None or latest.is_deleted:
+            return False
+        try:
+            chosen = reveal_configuration(selected.configuration, self._vault)
+            newest = reveal_configuration(latest.configuration, self._vault)
+        except CredentialDecryptionError:
+            return False
+        return (
+            bool(find_unavailable_secrets(chosen, definition.sensitive_fields))
+            and not find_unavailable_secrets(newest, definition.sensitive_fields)
+            and equivalent(definition, chosen, newest)
+        )
 
     @staticmethod
     def _recreated_mist_ids(

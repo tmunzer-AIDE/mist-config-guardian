@@ -139,6 +139,15 @@ class RestoreBaselineService:
             if find_unavailable_secrets(current, definition.sensitive_fields):
                 msg = "The administrator response contains unavailable secrets; a recoverable backup cannot be made"
                 raise RestorePlanningError(msg)
+            current_hash = fingerprint(definition, current)
+            if not previous.is_deleted and previous.configuration_hash == current_hash:
+                # Mist holds exactly what history already records, secrets
+                # included, so that version is the recoverable backup. A copy of
+                # it would move every id the plan takes from its baseline on each
+                # preparation, and with them the approval bound to those ids.
+                baselines[logical_id] = previous
+                manifest.unchanged_objects += 1
+                continue
             version = ObjectVersion(
                 organization_id=logical.organization_id,
                 logical_object_id=logical_id,

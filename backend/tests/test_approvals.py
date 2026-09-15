@@ -1,11 +1,13 @@
 """Plan hashing, approval policy, two-person enforcement, and role checks."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from beanie import PydanticObjectId
+from beanie.odm.fields import ExpressionField
 from structlog.testing import capture_logs
 
 from mist_config_guardian_backend.api.dependencies import (
@@ -37,8 +39,10 @@ from mist_config_guardian_backend.models.restore import (
     RestoreOperation,
     RestoreStatus,
 )
+from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectReference, ObjectVersion, VersionEvent
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services import restore_baseline as baseline_module
 from mist_config_guardian_backend.services.approvals import (
     APPROVAL_NOT_CARRIED,
     ApprovalRequiredError,
@@ -51,7 +55,14 @@ from mist_config_guardian_backend.services.approvals import (
     organization_policy,
     payload_digest,
 )
-from mist_config_guardian_backend.services.restore_planner import RestorePlanningError, assert_plan_current
+from mist_config_guardian_backend.services.restore_baseline import RestoreBaselineService
+from mist_config_guardian_backend.services.restore_planner import (
+    RestorePlanner,
+    RestorePlanningError,
+    assert_plan_current,
+)
+from mist_config_guardian_backend.snapshots.fingerprint import fingerprint
+from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import protect_configuration
 
 ORGANIZATION_ID = PydanticObjectId()
@@ -777,6 +788,253 @@ async def test_a_carry_that_fails_still_returns_the_prepared_plan(monkeypatch: p
             "error_type": "RuntimeError",
         }
     ]
+
+
+# ------------------------------------------------- preparing the same plan again
+
+_BEFORE_TARGET = datetime(2026, 1, 1, tzinfo=UTC)
+_AFTER_TARGET = datetime(2026, 2, 1, tzinfo=UTC)
+_PREPARING_VAULT = CredentialVault(Settings(environment="test", credential_encryption_key="test-key"))
+
+
+class _PreparedHistory:
+    """Stored history as the planner reads it and every fresh backup extends it, beside Mist's live answers.
+
+    Each preparation runs the real planner and the real baseline capture; only
+    the database and Mist are replaced, so a second preparation sees exactly
+    the history the first one left behind.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.objects: dict[PydanticObjectId, LogicalObject] = {}
+        self.versions: dict[PydanticObjectId, list[ObjectVersion]] = {}
+        self.live: dict[str, dict[str, object] | None] = {}
+        self.related: dict[PydanticObjectId, list[LogicalObject]] = {}
+        history = self
+
+        async def _get_version(version_id, *_args, **_kwargs):
+            return next((item for items in history.versions.values() for item in items if item.id == version_id), None)
+
+        async def _get_logical(logical_id, *_args, **_kwargs):
+            return history.objects.get(logical_id)
+
+        async def _latest(logical_id):
+            stored = history.versions.get(logical_id)
+            return stored[-1] if stored else None
+
+        async def _version_at(logical_id, target_at):
+            earlier = [item for item in history.versions.get(logical_id, []) if item.observed_at <= target_at]
+            return earlier[-1] if earlier else None
+
+        async def _related(_planner, _organization_id, logical, _version, *, include_contained):
+            return history.related.get(logical.id, []) if include_contained else []
+
+        async def _insert_version(version, *_args, **_kwargs):
+            history.versions[version.logical_object_id].append(version)
+            return version
+
+        async def _insert_operation(operation, *_args, **_kwargs):
+            operation.id = PydanticObjectId()
+            return operation
+
+        monkeypatch.setattr(ObjectVersion, "get", _get_version)
+        monkeypatch.setattr(ObjectVersion, "insert", _insert_version)
+        monkeypatch.setattr(LogicalObject, "get", _get_logical)
+        monkeypatch.setattr(RestoreOperation, "insert", _insert_operation)
+        monkeypatch.setattr(RestoreOperation, "get_pymongo_collection", classmethod(lambda _cls: None))
+        monkeypatch.setattr(RestorePlanner, "_latest_version", staticmethod(_latest))
+        monkeypatch.setattr(RestorePlanner, "_version_at", staticmethod(_version_at))
+        monkeypatch.setattr(RestorePlanner, "_related_logical_objects", _related)
+        monkeypatch.setattr(RestorePlanner, "_action_dependencies", AsyncMock(return_value=[]))
+        monkeypatch.setattr(baseline_module, "latest_version", _latest)
+        monkeypatch.setattr(
+            baseline_module,
+            "ObjectVersion",
+            lambda **fields: ObjectVersion.model_construct(id=PydanticObjectId(), **fields),
+        )
+        monkeypatch.setattr(
+            baseline_module,
+            "LogicalObject",
+            SimpleNamespace(
+                id=ExpressionField("id"),
+                find_one=MagicMock(return_value=SimpleNamespace(update=AsyncMock())),
+            ),
+        )
+
+    def add(self, scope: str, object_type: str, mist_id: str, *, site_mist_id: str | None = None) -> LogicalObject:
+        logical = LogicalObject.model_construct(
+            id=PydanticObjectId(),
+            organization_id=ORGANIZATION_ID,
+            scope=scope,
+            object_type=object_type,
+            source_key=mist_id,
+            current_mist_id=mist_id,
+            site_mist_id=site_mist_id,
+            name=mist_id,
+            is_deleted=False,
+            current_version=1,
+        )
+        assert logical.id is not None
+        self.objects[logical.id] = logical
+        self.versions[logical.id] = []
+        return logical
+
+    def record(
+        self,
+        logical: LogicalObject,
+        configuration: dict[str, object],
+        *,
+        observed_at: datetime,
+        is_deleted: bool = False,
+        references: list[ObjectReference] | None = None,
+    ) -> ObjectVersion:
+        """What the collector stores for one read of the object."""
+        assert logical.id is not None
+        definition = get_definition(logical.scope, logical.object_type)
+        assert definition is not None
+        version = ObjectVersion.model_construct(
+            id=PydanticObjectId(),
+            organization_id=ORGANIZATION_ID,
+            logical_object_id=logical.id,
+            incarnation_id=PydanticObjectId(),
+            version=len(self.versions[logical.id]) + 1,
+            event=VersionEvent.DELETED if is_deleted else VersionEvent.UPDATED,
+            configuration=protect_configuration(
+                configuration, _PREPARING_VAULT, sensitive_fields=definition.sensitive_fields
+            ),
+            configuration_hash=fingerprint(definition, configuration),
+            changed_fields=[],
+            references=references or [],
+            is_deleted=is_deleted,
+            observed_at=observed_at,
+        )
+        self.versions[logical.id].append(version)
+        logical.is_deleted = is_deleted
+        return version
+
+    async def plan(
+        self,
+        version_ids: list[PydanticObjectId],
+        *,
+        mode: RestoreMode,
+        include_dependencies: bool,
+        prepared: bool,
+    ) -> RestoreOperation:
+        """Build a draft, or prepare a plan against a fresh backup of what Mist holds now."""
+        reader = None
+        if prepared:
+            manifest = SimpleNamespace(id=PydanticObjectId(), created_versions=0, unchanged_objects=0)
+            client = SimpleNamespace(
+                get_current=AsyncMock(side_effect=lambda _definition, mist_id, **_kwargs: self.live[mist_id])
+            )
+            baseline = RestoreBaselineService(_PREPARING_VAULT, AsyncMock())
+
+            async def reader(objects):
+                # The capture alone: the manifest and Mist session around it are not under test.
+                return await baseline._capture(client, _organization(), objects, manifest, "admin")  # noqa: SLF001
+
+        planner = RestorePlanner(AsyncMock(), ApprovalPolicy(enabled=True), _PREPARING_VAULT, baseline_reader=reader)
+        return await planner.create_plan(
+            organization_id=ORGANIZATION_ID,
+            requested_by=REQUESTER_ID,
+            version_ids=version_ids,
+            mode=mode,
+            include_dependencies=include_dependencies,
+        )
+
+
+async def _approve(draft: RestoreOperation) -> tuple[ApprovalService, _MemoryApprovalStore, RestoreApproval]:
+    service, store, _ = _service(draft)
+    approval = await service.request(_organization(ApprovalPolicy(enabled=True)), draft, _requester())
+    assert approval.id is not None
+    await service.decide(ORGANIZATION_ID, approval.id, _approver(), approved=True)
+    return service, store, approval
+
+
+# The collector's last read of an object either matches what an administrator
+# reads now, or masks a secret the administrator's read returns.
+_COLLECTED = pytest.mark.parametrize("collected_secret", ["guest-secret", "********"], ids=["same", "masked"])
+
+
+@_COLLECTED
+async def test_an_approval_carries_across_every_preparation_of_an_exact_plan_that_force_deletes(
+    monkeypatch: pytest.MonkeyPatch,
+    collected_secret: str,
+) -> None:
+    history = _PreparedHistory(monkeypatch)
+    site = history.add("org", "sites", "site-1")
+    site_target = history.record(site, {"id": "site-1", "name": "Seattle"}, observed_at=_BEFORE_TARGET)
+    # Created after the target moment, so an exact restore deletes it.
+    late = history.add("site", "wlans", "wlan-late", site_mist_id="site-1")
+    history.record(late, {"id": "wlan-late", "ssid": "Late", "psk": collected_secret}, observed_at=_AFTER_TARGET)
+    history.related[site.id] = [late]
+    history.live = {
+        "site-1": {"id": "site-1", "name": "Seattle"},
+        "wlan-late": {"id": "wlan-late", "ssid": "Late", "psk": "guest-secret"},
+    }
+    inputs = {"mode": RestoreMode.EXACT, "include_dependencies": True}
+
+    draft = await history.plan([site_target.id], prepared=False, **inputs)
+    service, store, approval = await _approve(draft)
+    source = draft
+    for _ in range(2):
+        prepared = await history.plan([site_target.id], prepared=True, **inputs)
+        assert prepared.id is not None
+        store.operations[prepared.id] = prepared
+        assert [(action.logical_object_id, action.action) for action in prepared.actions] == [
+            (late.id, RestoreActionType.DELETE)
+        ]
+        assert await service.carry_to_prepared(source, prepared) == "carried"
+        source = prepared
+
+    assert approval.restore_operation_id == source.id
+    assert await service.assert_execution_allowed(_organization(ApprovalPolicy(enabled=True)), source) is approval
+    # A backup that read what history already held records nothing new.
+    assert len(history.versions[late.id]) == (1 if collected_secret == "guest-secret" else 2)
+
+
+@_COLLECTED
+async def test_an_object_repointed_at_its_current_version_stays_a_rewrite_across_preparations(
+    monkeypatch: pytest.MonkeyPatch,
+    collected_secret: str,
+) -> None:
+    history = _PreparedHistory(monkeypatch)
+    network = history.add("org", "networks", "net-old")
+    network_target = history.record(network, {"id": "net-old", "name": "Corp"}, observed_at=_BEFORE_TARGET)
+    history.record(network, {"id": "net-old", "name": "Corp"}, observed_at=_AFTER_TARGET, is_deleted=True)
+    wlan = history.add("site", "wlans", "wlan-1", site_mist_id="site-1")
+    wlan_current = history.record(
+        wlan,
+        {"id": "wlan-1", "ssid": "Guest", "network_id": "net-old", "psk": collected_secret},
+        observed_at=_AFTER_TARGET,
+        references=[ObjectReference(target_mist_id="net-old", field_path="network_id")],
+    )
+    history.live = {
+        "net-old": None,
+        "wlan-1": {"id": "wlan-1", "ssid": "Guest", "network_id": "net-old", "psk": "guest-secret"},
+    }
+    requested = [network_target.id, wlan_current.id]
+    inputs = {"mode": RestoreMode.NON_DESTRUCTIVE, "include_dependencies": False}
+    expected = [
+        (network.id, RestoreActionType.CREATE, RestoreActionReason.RESTORE),
+        (wlan.id, RestoreActionType.UPDATE, RestoreActionReason.REFERENCE_REWRITE),
+    ]
+
+    draft = await history.plan(requested, prepared=False, **inputs)
+    assert [(action.logical_object_id, action.action, action.reason) for action in draft.actions] == expected
+    service, store, approval = await _approve(draft)
+    source = draft
+    for _ in range(2):
+        prepared = await history.plan(requested, prepared=True, **inputs)
+        assert prepared.id is not None
+        store.operations[prepared.id] = prepared
+        assert [(action.logical_object_id, action.action, action.reason) for action in prepared.actions] == expected
+        assert prepared.preflight_errors == []
+        assert await service.carry_to_prepared(source, prepared) == "carried"
+        source = prepared
+
+    assert approval.restore_operation_id == source.id
+    assert approval.status is ApprovalStatus.APPROVED
 
 
 def test_a_naive_target_moment_hashes_as_the_same_utc_moment() -> None:

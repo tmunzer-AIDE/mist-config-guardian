@@ -32,7 +32,14 @@ from mist_config_guardian_backend.snapshots.secrets import reveal_configuration
 def capture(monkeypatch):
     vault = CredentialVault(Settings(environment="test"))
     logical_id, org_id = PydanticObjectId(), PydanticObjectId()
-    previous = SimpleNamespace(version=2, incarnation_id=PydanticObjectId(), configuration={"name": "test"})
+    previous = SimpleNamespace(
+        id=PydanticObjectId(),
+        version=2,
+        incarnation_id=PydanticObjectId(),
+        configuration={"name": "test"},
+        configuration_hash=configuration_hash({"name": "test"}),
+        is_deleted=False,
+    )
     logical = SimpleNamespace(
         scope="org",
         object_type="networktemplates",
@@ -94,6 +101,24 @@ async def test_backup_pins_admin_response_and_encrypts_root_password(capture):
     assert reveal_configuration(version.configuration, vault) == client.get_current.return_value
     assert version.configuration_hash == configuration_hash(client.get_current.return_value)
     assert manifest.created_versions == 1
+
+
+async def test_an_unchanged_object_keeps_its_latest_version_as_the_baseline(capture, monkeypatch):
+    """A new row per preparation would move every baseline-derived id, and an approval keyed on them with it."""
+    service, client, org, objects, manifest, versions, _vault = capture
+    logical_id = next(iter(objects))
+    previous = await baseline_module.latest_version(logical_id)
+    previous.configuration_hash = configuration_hash(client.get_current.return_value)
+    touched = MagicMock(return_value=SimpleNamespace(update=AsyncMock()))
+    monkeypatch.setattr(baseline_module.LogicalObject, "find_one", touched)
+
+    baselines = await service._capture(client, org, objects, manifest, "admin")
+
+    assert versions == []
+    assert baselines[logical_id] is previous
+    assert manifest.created_versions == 0
+    assert manifest.unchanged_objects == 1
+    touched.assert_not_called()
 
 
 async def test_masked_backup_is_rejected_before_version_is_saved(capture):

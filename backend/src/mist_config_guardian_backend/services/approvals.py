@@ -143,14 +143,19 @@ def compute_action_signature(actions: Sequence[RestoreAction]) -> str:
     """Hash which objects the plan changes and how, ignoring the backup-specific details.
 
     A reference rewrite has no target of its own: its source is whatever the
-    fresh backup just captured, so it always moves and is left out.
+    fresh backup just captured, so it always moves and is left out. A delete
+    has none either: it removes the object whichever version recorded it last,
+    and a preparation that records the object again must not turn the same
+    delete into a different change.
     """
     return _digest(
         sorted(
             [
                 str(action.logical_object_id),
                 str(action.action),
-                "" if action.reason is RestoreActionReason.REFERENCE_REWRITE else str(action.source_version_id),
+                ""
+                if action.reason is RestoreActionReason.REFERENCE_REWRITE or action.action is RestoreActionType.DELETE
+                else str(action.source_version_id),
                 str(action.reason),
             ]
             for action in actions
