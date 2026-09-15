@@ -44,7 +44,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpToolAction,
     McpToolCall,
 )
-from mist_config_guardian_backend.impact.mcp_schedule import cited_ids, prior_conclusion
+from mist_config_guardian_backend.impact.mcp_schedule import cited_ids, cited_order, prior_conclusion
 from mist_config_guardian_backend.impact.mcp_scope import (
     McpCitationError,
     McpOutputTooLargeError,
@@ -73,6 +73,9 @@ from mist_config_guardian_backend.services.impact_agent import ModelRequestJourn
 from mist_config_guardian_backend.services.mcp_dispatch import McpDispatchDeniedError, McpJournal
 
 MAX_PREVIOUS_EVIDENCE_BYTES = 600
+# Total full payloads shown for evidence cited by the previous conclusion; older cited rows keep identity only.
+MAX_PROTECTED_PREVIOUS_BYTES = 32_000
+PREVIOUS_PAYLOAD_OMITTED = {"omitted": "Historical payload retained in prior revision."}
 MAX_REJECTION_DETAIL_BYTES = 300
 PROVIDER_TIMEOUT_SECONDS = 20.0
 TOOL_TIMEOUT_SECONDS = 20.0
@@ -89,6 +92,15 @@ class BoundedPrompt:
     body: str
     steps: int
     hidden_observations: int
+
+
+def _encoded_bytes(value: object) -> int:
+    """UTF-8 bytes of non-ASCII-escaped JSON, the measure of the MCP capture bound."""
+    return len(json.dumps(value, ensure_ascii=False).encode())
+
+
+def _payload_hidden(payload: object) -> bool:
+    return payload is None or payload == HIDDEN_PAYLOAD or (isinstance(payload, dict) and "omitted" in payload)
 
 
 def _short(value: object) -> object:
@@ -720,6 +732,28 @@ class McpImpactAgent(ModelRequestJournal):
             *previous.mcp.evidence,
             *(e for e in (prior.evidence if prior else ()) if e not in previous.mcp.evidence),
         )
+        sizes = {e.id: _encoded_bytes(e.data) for e in rows}
+        # Cited payloads are shown newest-first (ties in citation order) until the total cap; this is a prompt
+        # view only, the carried conclusion keeps every cited row in full.
+        rank = {str(ref): n for n, ref in enumerate(cited_order(prior.conclusion))} if prior else {}
+        cited = sorted(
+            (e for e in rows if str(e.id) in protected and sizes[e.id] <= MAX_MCP_EVIDENCE_BYTES),
+            key=lambda e: (-e.captured_at.timestamp(), rank.get(str(e.id), len(rank))),
+        )
+        shown, used = set(), 0
+        for e in cited:
+            if used + sizes[e.id] > MAX_PROTECTED_PREVIOUS_BYTES:
+                break
+            shown.add(e.id)
+            used += sizes[e.id]
+
+        def payload(e: McpEvidence) -> object:
+            if e.id in shown or (str(e.id) not in protected and sizes[e.id] <= MAX_PREVIOUS_EVIDENCE_BYTES):
+                return e.data
+            if str(e.id) in protected and sizes[e.id] <= MAX_MCP_EVIDENCE_BYTES:
+                return dict(HIDDEN_PAYLOAD)
+            return dict(PREVIOUS_PAYLOAD_OMITTED)
+
         return {
             "source_revision": previous.revision,
             "state": previous.mcp.state,
@@ -732,10 +766,7 @@ class McpImpactAgent(ModelRequestJournal):
                     "arguments": e.arguments,
                     "state": e.state,
                     "captured_at": e.captured_at.isoformat(),
-                    "data": e.data
-                    if len(json.dumps(e.data).encode())
-                    <= (MAX_MCP_EVIDENCE_BYTES if str(e.id) in protected else MAX_PREVIOUS_EVIDENCE_BYTES)
-                    else {"omitted": "Historical payload retained in prior revision."},
+                    "data": payload(e),
                 }
                 for e in rows
             ],
@@ -770,11 +801,14 @@ class McpImpactAgent(ModelRequestJournal):
         return cleaned if isinstance(cleaned, str) else ""
 
     @staticmethod
-    def _bounded_context(  # noqa: C901 - ordered, re-checked degradation steps
+    def _bounded_context(  # noqa: C901, PLR0911 - ordered, re-checked degradation steps
         data: dict, system: str, budget: int, protected: frozenset[str] = frozenset()
     ) -> BoundedPrompt | None:
         data = deepcopy(data)
-        steps = hidden = 0
+        history = (data.get("previous_checkpoint") or {}).get("evidence", [])
+        steps = 0
+        # Cited previous payloads beyond the protected-payload cap arrive hidden and count as hidden observations.
+        hidden = sum(row.get("data") == HIDDEN_PAYLOAD for row in history)
 
         def fits() -> str | None:
             body = json.dumps(data, separators=(",", ":"), sort_keys=True)
@@ -811,12 +845,8 @@ class McpImpactAgent(ModelRequestJournal):
             return BoundedPrompt(body, steps, hidden)
         # (c) Hide payloads oldest-first, never the newest observation or previously cited evidence.
         steps += 1
-        history = (data.get("previous_checkpoint") or {}).get("evidence", [])
         for row in [*history, *data.get("observations", [])[:-1]]:
-            payload = row.get("data")
-            if row.get("id") in protected or payload is None or (isinstance(payload, dict) and "omitted" in payload):
-                continue
-            if payload == HIDDEN_PAYLOAD:
+            if row.get("id") in protected or _payload_hidden(row.get("data")):
                 continue
             row["data"] = dict(HIDDEN_PAYLOAD)
             hidden += 1
@@ -832,6 +862,19 @@ class McpImpactAgent(ModelRequestJournal):
         steps += 1
         if (body := fits()) is not None:
             return BoundedPrompt(body, steps, hidden)
+        # (e) Final: hide payloads cited by the previous conclusion oldest-first (ties: later rows first);
+        # their id, tool, arguments, state and capture time stay in the prompt.
+        steps += 1
+        cited = [
+            (n, row)
+            for n, row in enumerate(history)
+            if row.get("id") in protected and not _payload_hidden(row.get("data"))
+        ]
+        for _, row in sorted(cited, key=lambda item: (str(item[1].get("captured_at") or ""), -item[0])):
+            row["data"] = dict(HIDDEN_PAYLOAD)
+            hidden += 1
+            if (body := fits()) is not None:
+                return BoundedPrompt(body, steps, hidden)
         return None
 
     @staticmethod
@@ -910,5 +953,5 @@ class McpImpactAgent(ModelRequestJournal):
                 raise McpCitationError(msg)
         if len(views) == len(report.views):
             return action
-        gaps = report.gaps if len(report.gaps) >= 12 else (*report.gaps, McpImpactAgent._DROPPED_VIEW_GAP)  # noqa: PLR2004
+        gaps = report.gaps if len(report.gaps) >= 12 else (*report.gaps, McpImpactAgent._DROPPED_VIEW_GAP)  # noqa: PLR2004 - McpConclusion.gaps max_length; a full list keeps its gaps
         return action.model_copy(update={"report": report.model_copy(update={"views": tuple(views), "gaps": gaps})})

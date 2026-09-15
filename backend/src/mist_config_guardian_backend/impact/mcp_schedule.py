@@ -27,15 +27,22 @@ def last_agent_run(checkpoint: McpCheckpoint | None, evaluated_at: datetime) -> 
     return None if checkpoint.state == "not_scheduled" else evaluated_at
 
 
-def cited_ids(conclusion: McpConclusion) -> frozenset[UUID]:
-    return frozenset(
-        (
-            *conclusion.evidence,
-            *(r for f in conclusion.findings for r in f.evidence),
-            *(r for d in conclusion.impacted_devices for r in d.evidence),
-            *(v.evidence_id for v in conclusion.views),
+def cited_order(conclusion: McpConclusion) -> tuple[UUID, ...]:
+    """Cited evidence IDs in first-citation order: report evidence, findings, devices, then views."""
+    return tuple(
+        dict.fromkeys(
+            (
+                *conclusion.evidence,
+                *(r for f in conclusion.findings for r in f.evidence),
+                *(r for d in conclusion.impacted_devices for r in d.evidence),
+                *(v.evidence_id for v in conclusion.views),
+            )
         )
     )
+
+
+def cited_ids(conclusion: McpConclusion) -> frozenset[UUID]:
+    return frozenset(cited_order(conclusion))
 
 
 def prior_conclusion(checkpoint: McpCheckpoint | None, revision: int) -> McpCarriedConclusion | None:

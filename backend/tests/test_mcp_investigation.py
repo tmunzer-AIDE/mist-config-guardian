@@ -29,6 +29,7 @@ from mist_config_guardian_backend.impact.agent import (
 )
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import (
+    MAX_MCP_EVIDENCE_BYTES,
     McpCheckpoint,
     McpConclusion,
     McpDispatch,
@@ -1328,6 +1329,91 @@ def test_next_agent_run_sees_carried_conclusion_and_its_evidence():
         4,
     )
     assert [row["id"] for row in summary["evidence"]] == [str(evidence.id)]
+
+
+def cited_rows(*specs):
+    """(payload, minutes after LATER) per row; payload sizes sit between the 600-byte and 12 KB bounds."""
+    return [
+        McpEvidence(
+            id=uuid4(),
+            tool="search_mist_data",
+            arguments={"search_type": "device_events", "site_id": SITE},
+            data={"results": [payload]},
+            state="partial",
+            captured_at=LATER + timedelta(minutes=minutes),
+            schema_hash="t",
+        )
+        for payload, minutes in specs
+    ]
+
+
+def previous_summary(rows, cited):
+    """The next run's previous_checkpoint for a completed run whose report cites `cited` in that order."""
+    agent = mcp_impact_agent.McpImpactAgent
+    checkpoint = McpCheckpoint(
+        state="complete", conclusion=agent_conclusion(evidence=tuple(e.id for e in cited)), evidence=tuple(rows)
+    )
+    previous = InvestigationRevision.model_construct(revision=5, mcp=checkpoint)
+    carried = prior_conclusion(checkpoint, 5)
+    summary = agent._checkpoint_summary(previous, agent._protected_ids(carried), carried)  # noqa: SLF001
+    return {row["id"]: row for row in summary["evidence"]}
+
+
+def test_protected_previous_payloads_are_shown_newest_first_up_to_the_total_cap():
+    cap = mcp_impact_agent.MAX_PROTECTED_PREVIOUS_BYTES
+    payload = "r" * 9_000
+    assert mcp_impact_agent.MAX_PREVIOUS_EVIDENCE_BYTES < 9_020 < MAX_MCP_EVIDENCE_BYTES
+    assert 3 * 9_020 < cap < 4 * 9_020
+
+    oldest, middle, newest, uncited = cited_rows((payload, 0), (payload, 1), (payload, 2), (payload, 3))
+    rows = previous_summary([oldest, middle, newest, uncited], [oldest, middle, newest])
+    # Under the total cap every protected payload is shown in full; uncited history keeps only 600 bytes.
+    assert [rows[str(e.id)]["data"] for e in (oldest, middle, newest)] == [e.data for e in (oldest, middle, newest)]
+    assert rows[str(uncited.id)]["data"] == {"omitted": "Historical payload retained in prior revision."}
+
+    newer = cited_rows((payload, 4))[0]
+    rows = previous_summary([oldest, middle, newest, newer], [oldest, middle, newest, newer])
+    # Once the cap is exceeded the oldest protected payload is hidden, but its identity stays in the prompt.
+    assert rows[str(oldest.id)] == {
+        "id": str(oldest.id),
+        "tool": oldest.tool,
+        "arguments": oldest.arguments,
+        "state": oldest.state,
+        "captured_at": oldest.captured_at.isoformat(),
+        "data": mcp_impact_agent.HIDDEN_PAYLOAD,
+    }
+    assert [rows[str(e.id)]["data"] for e in (middle, newest, newer)] == [e.data for e in (middle, newest, newer)]
+
+    # Equal capture times fall back to the report's citation order.
+    tied = cited_rows((payload, 0), (payload, 0), (payload, 0), (payload, 0))
+    rows = previous_summary(tied, [tied[1], tied[3], tied[0], tied[2]])
+    assert [rows[str(e.id)]["data"] == e.data for e in tied] == [True, True, False, True]
+
+
+def test_protected_previous_payload_is_sized_as_utf8_not_escaped_json():
+    [accented] = cited_rows(("é" * 5_000, 0))
+    assert len(json.dumps(accented.data).encode()) > MAX_MCP_EVIDENCE_BYTES
+    assert len(json.dumps(accented.data, ensure_ascii=False).encode()) <= MAX_MCP_EVIDENCE_BYTES
+    assert previous_summary([accented], [accented])[str(accented.id)]["data"] == accented.data
+
+
+def test_protected_previous_payloads_are_hidden_oldest_first_only_as_a_final_step():
+    def protected_row(minutes):
+        return {**observation(8000), "captured_at": (LATER + timedelta(minutes=minutes)).isoformat()}
+
+    middle, oldest, newest = protected_row(1), protected_row(0), protected_row(2)
+    history = [middle, oldest, newest]
+    previous = {"source_revision": 1, "state": "complete", "reason": "", "evidence": history}
+    data = prompt_data(observation(3000), previous=previous)
+    protected = frozenset(row["id"] for row in history)
+    result = bounded_context(data, SYSTEM, encoded_size(data) - 7000, protected)
+    context = json.loads(result.body)
+    rows = context["previous_checkpoint"]["evidence"]
+    assert [row["data"] == mcp_impact_agent.HIDDEN_PAYLOAD for row in rows] == [False, True, False]
+    assert rows[1] == {**oldest, "data": mcp_impact_agent.HIDDEN_PAYLOAD}
+    assert (result.steps, result.hidden_observations) == (5, 1)
+    assert context["observations"][0]["data"] == data["observations"][0]["data"]
+    assert bounded_context(data, SYSTEM, 1000, protected) is None
 
 
 def test_tool_action_accepts_single_or_batched_form_only():

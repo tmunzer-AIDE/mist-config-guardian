@@ -381,6 +381,73 @@ async def test_newest_observation_and_changed_values_reach_the_model(monkeypatch
     assert_redacted(replay, stored, artifacts, caplog)
 
 
+def ticking(monkeypatch, root, minutes):
+    """Pin the checkpoint to +minutes but give every agent timestamp its own second, so capture order is explicit."""
+    at(monkeypatch, root, minutes)
+    start, ticks = NOW + timedelta(minutes=minutes), iter(range(10_000))
+    monkeypatch.setattr(mcp_impact_agent, "utc_now", lambda: start + timedelta(seconds=next(ticks)))
+
+
+async def test_follow_up_run_fits_after_a_report_cites_every_digest(monkeypatch, caplog):
+    """Eight cited ~10 KB digests used to be protected in full, so no later prompt could fit 96 KB."""
+    service, root, _, artifacts, stored = replay_runtime(monkeypatch)
+    caplog.set_level(logging.INFO, logger=worker.__name__)
+
+    def policy(context, _turn):
+        observations = context["observations"]
+        if context["previous_report"] is None:
+            # +10: four before/after event searches, then a report citing every digest it gathered.
+            if len(observations) < len(EVENT_KINDS) * 2:
+                kind = EVENT_KINDS[len(observations) // 2]
+                return {"action": "tool", "calls": before_and_after(context, "search_mist_data", kind)}
+            return {"action": "report", "report": {**INFO_REPORT, "evidence": [o["id"] for o in observations]}}
+        if not observations:
+            return {"action": "tool", "calls": [call("search_mist_data", spanning(context), "Re-check events.")]}
+        return {"action": "report", "report": {**INFO_REPORT, "evidence": [observations[0]["id"]]}}
+
+    replay = Replay(policy).install(monkeypatch)
+    ticking(monkeypatch, root, 10)
+    await service._poll(root)  # noqa: SLF001 - the replay drives the production worker checkpoint
+    advance(root, artifacts, stored)
+    for minutes in (20, 30):
+        await poll(monkeypatch, service, root, minutes)
+        advance(root, artifacts, stored)
+    first, carried, follow_up = (a.mcp for a in artifacts)
+    assert first.state == "complete", first.reason
+    assert len(first.evidence) == len(first.conclusion.evidence) == 8
+    assert all("digest" in e.data and encoded(e.data) > 8_000 for e in first.evidence)
+    assert carried.state == "not_scheduled"
+    assert carried.carried.evidence == first.evidence
+    # The follow-up run receives a fitting prompt instead of stopping before its first model call.
+    assert follow_up.state == "complete", (follow_up.state, follow_up.reason, follow_up.diagnostics.turns)
+    follow_up_requests = stored["model_requests"][-follow_up.diagnostics.turns :]
+    assert all(r["input_bytes"] <= MCP_MAX_INPUT_BYTES for r in follow_up_requests)
+
+    rows = replay.prompts[-follow_up.diagnostics.turns]["previous_checkpoint"]["evidence"]
+    by_id = {str(e.id): e for e in first.evidence}
+    assert [row["id"] for row in rows] == list(by_id)
+    for row in rows:
+        # Every carried row keeps its identity, query and capture time even when its payload is hidden.
+        source = by_id[row["id"]]
+        assert (row["tool"], row["arguments"], row["state"], row["captured_at"]) == (
+            source.tool,
+            source.arguments,
+            source.state,
+            source.captured_at.isoformat(),
+        )
+        assert row["data"] in (source.data, mcp_impact_agent.HIDDEN_PAYLOAD)
+    newest_first = sorted(first.evidence, key=lambda e: e.captured_at, reverse=True)
+    shown = [e for e in newest_first if next(r for r in rows if r["id"] == str(e.id))["data"] == e.data]
+    cap = mcp_impact_agent.MAX_PROTECTED_PREVIOUS_BYTES
+    assert shown == newest_first[: len(shown)]
+    assert shown[0] == newest_first[0]
+    assert sum(encoded(e.data) for e in shown) <= cap < sum(encoded(e.data) for e in newest_first[: len(shown) + 1])
+    hidden = len(rows) - len(shown)
+    assert hidden >= 1
+    assert follow_up.diagnostics.observations_hidden_in_prompt >= hidden
+    assert_redacted(replay, stored, artifacts, caplog)
+
+
 LONG_VLANS = ",".join(str(vlan) for vlan in range(1, 450))  # About 1.7 KB, below every context value bound.
 
 
