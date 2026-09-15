@@ -193,6 +193,10 @@ class _FakeClient:
         value = self.state.get(object_id)
         return None if value is None else dict(value)
 
+    async def list_objects(self, definition, *, org_id, site_id):  # noqa: ARG002
+        # Nothing else in this Mist carries the name of an object a plan creates.
+        return []
+
 
 def _snapshot_entries(client: _FakeClient, operation: RestoreOperation) -> list[SafetySnapshotEntry]:
     """What capture_safety_snapshot records against the fake's current state."""

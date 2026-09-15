@@ -132,8 +132,14 @@ async def capture_safety_snapshot(
     of a compensation describes state Mist has already replaced, so existence
     is enforced but equality is not: the safety snapshot, not the hash, is the
     authority on what must be put back.
+
+    A CREATE is also refused when Mist already holds an object of its type and
+    name under another UUID: the old UUID being gone does not mean the object
+    is, and creating it again would leave two. Each type is listed once per
+    site however many CREATEs share it.
     """
     entries: list[SafetySnapshotEntry] = []
+    listings: dict[tuple[str, str | None], list[dict[str, object]]] = {}
     recreated = recreated_site_ids(operation.actions)
     for action in operation.actions:
         if action.site_mist_id is not None and action.site_mist_id in recreated:
@@ -152,6 +158,10 @@ async def capture_safety_snapshot(
         )
         try:
             _validate_live_state(action, current, relaxed=relaxed)
+            # A reversal that finds its object still present is skipped at
+            # execution, so it creates nothing that could collide.
+            if action.action is RestoreActionType.CREATE and not (action.outcome_unknown and current is not None):
+                await _refuse_name_collision(client, organization, action, definition, vault=vault, listings=listings)
         except MistMutationError:
             await _log_preflight_diagnostics(operation, action, current, vault)
             raise
@@ -166,6 +176,51 @@ async def capture_safety_snapshot(
             )
         )
     return entries
+
+
+def restore_name(definition: ObjectDefinition, configuration: Mapping[str, object]) -> str | None:
+    """The explicit display name a configuration carries, if any.
+
+    ``None`` means there is nothing to compare a live object against, so no
+    collision can be established and none is claimed.
+    """
+    for field_name in definition.name_fields:
+        value = configuration.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+async def _refuse_name_collision(  # noqa: PLR0913 - one argument per fact the check needs
+    client: MistMutationClient,
+    organization: Organization,
+    action: RestoreAction,
+    definition: ObjectDefinition,
+    *,
+    vault: CredentialVault,
+    listings: dict[tuple[str, str | None], list[dict[str, object]]],
+) -> None:
+    """Refuse to create an object Mist already holds under a new UUID with the same name.
+
+    Someone who recreated the object by hand gave it a new UUID, so the old one
+    reading as missing proves nothing. ``listings`` is shared across the pass so
+    each type is listed once per site.
+    """
+    name = restore_name(definition, reveal_configuration(action.protected_configuration, vault))
+    if name is None:
+        return
+    scope = (definition.key, action.site_mist_id)
+    if scope not in listings:
+        listings[scope] = await client.list_objects(
+            definition, org_id=organization.mist_org_id, site_id=action.site_mist_id
+        )
+    for item in listings[scope]:
+        if item.get("id") != action.current_mist_id and restore_name(definition, item) == name:
+            msg = (
+                f"{action.object_name}: a {definition.key} named '{name}' already exists in Mist; "
+                "it may have been recreated manually. Rename or remove it, then rebuild the plan"
+            )
+            raise MistMutationError(msg)
 
 
 _MISSING = object()

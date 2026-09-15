@@ -141,13 +141,23 @@ def _operation(
 class _FakeMistClient:
     """Returns canned live state for every plan target."""
 
-    def __init__(self, live: dict[str, dict[str, object] | None]) -> None:
+    def __init__(
+        self,
+        live: dict[str, dict[str, object] | None],
+        listing: dict[tuple[str, str | None], list[dict[str, object]]] | None = None,
+    ) -> None:
         self.live = live
         self.reads: list[str] = []
+        self.listing = listing or {}
+        self.listed: list[tuple[str, str | None]] = []
 
     async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
         self.reads.append(object_id)
         return self.live.get(object_id)
+
+    async def list_objects(self, definition, *, org_id, site_id):  # noqa: ARG002
+        self.listed.append((definition.key, site_id))
+        return [dict(item) for item in self.listing.get((definition.key, site_id), [])]
 
 
 class _MemoryStateStore:
@@ -773,6 +783,114 @@ async def test_capture_leaves_objects_under_a_site_this_plan_recreates_for_later
 
     assert client.reads == ["site-old"]
     assert [entry.order for entry in entries] == [0]
+
+
+async def test_a_create_is_refused_when_mist_already_has_an_object_with_that_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0"}]})
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist") as error:
+        await capture_safety_snapshot(
+            client, _organization(), _operation([_action(0, RestoreActionType.CREATE)]), _vault()
+        )
+
+    assert str(error.value) == (
+        "wlan-0: a wlans named 'wlan-0' already exists in Mist; it may have been recreated manually. "
+        "Rename or remove it, then rebuild the plan"
+    )
+
+
+async def test_a_create_with_a_free_name_lists_its_scope_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "other", "name": "Guest"}]})
+    operation = _operation([_action(0, RestoreActionType.CREATE), _action(1, RestoreActionType.CREATE)])
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert len(entries) == 2
+    assert client.listed == [("wlans", "site-a")]
+
+
+async def test_a_reversal_that_finds_its_object_still_present_is_not_a_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.outcome_unknown = True
+    client = _FakeMistClient(
+        {"mist-0": {"id": "mist-0", "name": "wlan-0"}},
+        listing={("wlans", "site-a"): [{"id": "mist-0", "name": "wlan-0"}]},
+    )
+
+    await capture_safety_snapshot(client, _organization(), _operation([recreate]), _vault(), relaxed=True)
+
+    assert client.listed == []
+
+
+async def test_the_object_a_create_targets_is_not_its_own_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "mist-0", "name": "wlan-0"}]})
+
+    entries = await capture_safety_snapshot(
+        client, _organization(), _operation([_action(0, RestoreActionType.CREATE)]), _vault()
+    )
+
+    assert [entry.order for entry in entries] == [0]
+
+
+async def test_a_create_without_an_explicit_name_cannot_be_checked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    unnamed = _action(0, RestoreActionType.CREATE)
+    unnamed.protected_configuration = {"name": "   ", "enabled": True}
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "   "}]})
+
+    await capture_safety_snapshot(client, _organization(), _operation([unnamed]), _vault())
+
+    assert client.listed == []
+
+
+async def test_a_create_under_a_site_this_plan_recreates_is_not_checked_at_the_old_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    site = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="sites",
+        object_name="Lab",
+        current_mist_id="site-old",
+        protected_configuration={"name": "Lab"},
+    )
+    wlan = _action(1, RestoreActionType.CREATE)
+    wlan.site_mist_id = "site-old"
+    client = _FakeMistClient({}, listing={("wlans", "site-old"): [{"id": "manual-uuid", "name": "wlan-1"}]})
+
+    entries = await capture_safety_snapshot(client, _organization(), _operation([site, wlan]), _vault())
+
+    assert client.listed == [("sites", None)]
+    assert [entry.order for entry in entries] == [0]
+
+
+async def test_a_listing_mist_refuses_fails_the_preflight_without_its_values(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    monkeypatch.setattr(ObjectVersion, "find_one", AsyncMock(return_value=None))
+    client = _FakeMistClient({})
+    client.list_objects = AsyncMock(side_effect=MistMutationError("Mist failed to list wlans (403)"))
+
+    with pytest.raises(MistMutationError, match=r"list wlans \(403\)"):
+        await capture_safety_snapshot(
+            client, _organization(), _operation([_action(0, RestoreActionType.CREATE)]), _vault()
+        )
+
+    assert "restore_preflight_debug" in caplog.text
 
 
 async def _no_stored_version(_logical_id):

@@ -11,7 +11,7 @@ from mist_config_guardian_backend.integrations.mist_mutation import (
     MistMutationTransportError,
 )
 from mist_config_guardian_backend.models.organization import MistCloudRegion
-from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS
+from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, ObjectDefinition
 
 
 async def test_create_configuration_uses_admin_token(
@@ -302,3 +302,56 @@ async def test_a_rejected_update_is_not_retried_and_was_not_applied(httpx_mock: 
     assert error.value.outcome_unknown is False
     assert "sensitive upstream response" not in str(error.value)
     assert len(httpx_mock.get_requests()) == 1
+
+
+async def test_list_objects_reads_every_page(httpx_mock: HTTPXMock) -> None:
+    headers = {"X-Page-Total": "2", "X-Page-Limit": "1"}
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{NETWORKS_URL}?limit=1000&page=1",
+        json=[{"id": "network-1", "name": "Corp"}],
+        headers=headers,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{NETWORKS_URL}?limit=1000&page=2",
+        json=[{"id": "network-2", "name": "Guest"}],
+        headers=headers,
+    )
+
+    async with _client(_Sleeps()) as client:
+        listed = await client.list_objects(_networks(), org_id="org-1", site_id=None)
+
+    assert [item["id"] for item in listed] == ["network-1", "network-2"]
+
+
+async def test_list_objects_honours_the_definitions_filter_and_envelope(httpx_mock: HTTPXMock) -> None:
+    definition = ObjectDefinition(
+        key="widgets",
+        label="Widgets",
+        scope="org",
+        endpoint="/api/v1/orgs/{org_id}/widgets",
+        request_params=(("type", "ap"),),
+        response_items_key="results",
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="https://api.mist.com/api/v1/orgs/org-1/widgets?type=ap&limit=1000&page=1",
+        json={"results": [{"id": "widget-1", "name": "Lobby"}]},
+    )
+
+    async with _client(_Sleeps()) as client:
+        listed = await client.list_objects(definition, org_id="org-1", site_id=None)
+
+    assert listed == [{"id": "widget-1", "name": "Lobby"}]
+
+
+async def test_a_listing_mist_refuses_is_a_plain_failure(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", url=f"{NETWORKS_URL}?limit=1000&page=1", status_code=403, text="private")
+
+    async with _client(_Sleeps()) as client:
+        with pytest.raises(MistMutationStatusError, match=r"list networks \(403\)") as error:
+            await client.list_objects(_networks(), org_id="org-1", site_id=None)
+
+    assert error.value.outcome_unknown is False
+    assert "private" not in str(error.value)

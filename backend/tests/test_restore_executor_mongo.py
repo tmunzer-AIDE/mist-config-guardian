@@ -467,6 +467,10 @@ class _MistAfterSiteDeletion:
         found = self.sites.get(object_id) if definition.key == "sites" else self.settings.get(site_id)
         return None if found is None else dict(found)
 
+    async def list_objects(self, definition, *, org_id, site_id):  # noqa: ARG002
+        assert definition.key == "sites"
+        return [dict(site) for site in self.sites.values()]
+
 
 async def _site_and_settings_restore(organization_id: PydanticObjectId, old_site: str) -> RestoreOperation:
     """A queued plan recreating a deleted site and restoring its settings, as the planner builds it."""
@@ -658,6 +662,10 @@ class _MistAfterNetworkDeletion:
     async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
         found = self.objects.get(object_id)
         return None if found is None else dict(found)
+
+    async def list_objects(self, definition, *, org_id, site_id):  # noqa: ARG002
+        assert definition.key == "networks"
+        return [dict(item) for key, item in self.objects.items() if key == self.new_network]
 
 
 async def _wlan_referencing(

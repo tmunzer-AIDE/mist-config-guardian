@@ -161,6 +161,38 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
             raise MistMutationError(msg)
         return cast("dict[str, object]", payload)
 
+    async def list_objects(
+        self,
+        definition: ObjectDefinition,
+        *,
+        org_id: str,
+        site_id: str | None,
+    ) -> list[dict[str, object]]:
+        """List every live object of one type at one scope.
+
+        Paged and filtered exactly as the collector reads the same type, so a
+        restore sees what a backup would: an object on a later page, or behind a
+        response envelope, is still there.
+        """
+        path = definition.path(org_id=org_id, site_id=site_id)
+        items: list[dict[str, object]] = []
+        page = 1
+        while True:
+            params: dict[str, str | int] = {**dict(definition.request_params), "limit": 1000, "page": page}
+            sent = await self._send("GET", path, action="list", object_type=definition.key, params=params)
+            payload = self._response_payload(sent.response, "list", definition.key, write=False)
+            if definition.response_items_key is not None and isinstance(payload, dict):
+                payload = payload.get(definition.response_items_key)
+            if not isinstance(payload, list):
+                msg = f"Mist returned an invalid list for {definition.key}"
+                raise MistMutationError(msg)
+            items.extend(cast("dict[str, object]", item) for item in payload if isinstance(item, dict))
+            total = self._integer_header(sent.response, "X-Page-Total")
+            limit = self._integer_header(sent.response, "X-Page-Limit") or len(payload)
+            if not payload or total is None or page * limit >= total:
+                return items
+            page += 1
+
     async def update(
         self,
         definition: ObjectDefinition,
@@ -275,3 +307,14 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         except ValueError as exc:
             msg = f"Mist returned invalid JSON after {action} of {object_type}"
             raise MistMutationError(msg, outcome_unknown=write) from exc
+
+    @staticmethod
+    def _integer_header(response: httpx.Response, name: str) -> int | None:
+        """Read a paging header the way the collector does, so both walk the same pages."""
+        value = response.headers.get(name)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
