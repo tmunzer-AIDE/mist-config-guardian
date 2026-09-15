@@ -5,6 +5,7 @@ the adapter itself never inspects or logs configuration values.
 """
 
 import json
+import re
 import time
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
@@ -21,6 +22,7 @@ _UNAUTHORIZED_STATUSES = frozenset({401, 403})
 _NOT_FOUND = 404
 _TOO_MANY_REQUESTS = 429
 _SERVER_ERROR_FLOOR = 500
+_FINISH_REASON = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
 class AiProviderError(RuntimeError):
@@ -44,6 +46,7 @@ class AiCompletion:
     request_tokens: int | None = None
     response_tokens: int | None = None
     duration_ms: int = 0
+    finish_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,7 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
                         raise AiProviderError(msg)
                 envelope = json.loads(data)
             content = envelope["choices"][0]["message"]["content"]
+            reason = envelope["choices"][0].get("finish_reason")
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             detail = describe_http_failure(exc, model=self._model, timeout=self._timeout)
             raise AiProviderError(detail) from exc
@@ -189,6 +193,7 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
             request_tokens=_usage_value(usage, "prompt_tokens"),
             response_tokens=_usage_value(usage, "completion_tokens"),
             duration_ms=int((time.perf_counter() - started) * 1000),
+            finish_reason=reason if isinstance(reason, str) and _FINISH_REASON.fullmatch(reason) else None,
         )
 
     async def list_models(self) -> list[AiModel]:

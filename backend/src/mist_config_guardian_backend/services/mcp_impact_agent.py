@@ -1,9 +1,12 @@
 """MCP-led investigation of arbitrary configuration changes, with optional rule evidence."""
 
 import json
+from collections import Counter
 from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
+from time import monotonic
 from typing import Literal
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -26,6 +29,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpCheckpoint,
     McpConclusion,
     McpDescribeAction,
+    McpDiagnostics,
     McpDispatch,
     McpEvidence,
     McpReportAction,
@@ -81,6 +85,44 @@ Previous reports are historical context, not new evidence. Remaining calls inclu
 If a response is omitted, narrow the query. Evidence tables are generated from returned values; never
 invent measurements. Complete a report within the remaining model calls, including gaps if necessary.
 """
+
+
+@dataclass
+class _RunStats:
+    """Mutable per-run counters; frozen into McpDiagnostics when the checkpoint stops."""
+
+    started: float = field(default_factory=lambda: monotonic())  # noqa: PLW0108 - late-bind for monkeypatched monotonic
+    turns: int = 0
+    describes: int = 0
+    tool_calls: int = 0
+    cached_calls: int = 0
+    rejected: Counter[str] = field(default_factory=Counter)
+    results_digested: int = 0
+    results_omitted: int = 0
+    observations_hidden: int = 0
+    trim_steps: int = 0
+    max_prompt_bytes: int = 0
+    finish_reasons: list[str] = field(default_factory=list)
+
+    def reject(self, category: ModelResponseError) -> None:
+        self.rejected[category.value] += 1
+
+    def contract(self, final_state: str) -> McpDiagnostics:
+        return McpDiagnostics(
+            final_state=final_state,
+            turns=self.turns,
+            describes=self.describes,
+            tool_calls=self.tool_calls,
+            cached_calls=self.cached_calls,
+            rejected_actions=dict(sorted(self.rejected.items())),
+            results_digested=self.results_digested,
+            results_omitted=self.results_omitted,
+            observations_hidden_in_prompt=self.observations_hidden,
+            prompt_trim_steps=self.trim_steps,
+            max_prompt_bytes=self.max_prompt_bytes,
+            finish_reasons=tuple(self.finish_reasons[-8:]),
+            elapsed_ms=max(0, int((monotonic() - self.started) * 1000)),
+        )
 
 
 class McpImpactAgent(ModelRequestJournal):
@@ -146,6 +188,7 @@ class McpImpactAgent(ModelRequestJournal):
             )
         requests = []
         digest = None
+        stats = _RunStats()
 
         def stopped(
             state: Literal[
@@ -162,6 +205,7 @@ class McpImpactAgent(ModelRequestJournal):
                 catalogue_hash=digest,
                 deterministic_evidence=deterministic_evidence,
                 conclusion=conclusion,
+                diagnostics=stats.contract(state),
             )
 
         # The connection handshake is bounded and accounted with catalogue discovery.
@@ -264,6 +308,8 @@ class McpImpactAgent(ModelRequestJournal):
                         if denial:
                             return stopped("dispatch_denied", denial.explanation)
                         requests.append(record.id)
+                        stats.turns += 1
+                        stats.max_prompt_bytes = max(stats.max_prompt_bytes, record.input_bytes)
                         try:
                             completion = await provider.complete(
                                 [AiMessage(role="system", content=system), AiMessage(role="user", content=body)],
@@ -273,6 +319,7 @@ class McpImpactAgent(ModelRequestJournal):
                         except (AiProviderError, TimeoutError):
                             await self._finish(root, record, "provider_error")
                             return stopped("provider_error", "AI provider request failed; prior evidence is retained.")
+                        stats.finish_reasons.append(completion.finish_reason or "unreported")
                         try:
                             arguments: dict = {}
                             if len(completion.content.encode()) > MAX_OUTPUT_BYTES:
@@ -297,6 +344,7 @@ class McpImpactAgent(ModelRequestJournal):
                                 arguments = scope.arguments(menu[action.tool], action.arguments)
                         except (ValidationError, ValueError, TypeError) as exc:
                             category, detail = self._rejection(exc, secrets)
+                            stats.reject(category)
                             await self._finish(
                                 root,
                                 record,
@@ -320,6 +368,7 @@ class McpImpactAgent(ModelRequestJournal):
                         if isinstance(action, McpReportAction):
                             return stopped("complete", conclusion=action.report)
                         if isinstance(action, McpDescribeAction):
+                            stats.describes += 1
                             described.update({name: menu[name].model_dump(mode="json") for name in action.tools})
                             # Reinsert the requested schema last so one complete schema fits the context.
                             selected = action.tools[0]
@@ -329,6 +378,7 @@ class McpImpactAgent(ModelRequestJournal):
                         show_schema = False
                         cache_key = json.dumps([action.tool, arguments], sort_keys=True)
                         if cache_key in cache:
+                            stats.cached_calls += 1
                             cached = next(e for e in observations if str(e.id) == cache[cache_key])
                             observations.remove(cached)
                             observations.append(cached)
@@ -338,6 +388,7 @@ class McpImpactAgent(ModelRequestJournal):
                             reservation = await journal.reserve(action.tool, arguments)
                         except McpDispatchDeniedError as exc:
                             return stopped("dispatch_denied", str(exc))
+                        stats.tool_calls += 1
                         try:
                             result = await client.call_tool(action.tool, arguments)
                             cleaned, partial = normalize_result(result, secrets=secrets)

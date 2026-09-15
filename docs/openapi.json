@@ -4414,6 +4414,16 @@
               }
             ]
           },
+          "diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "evidence": {
             "default": [],
             "items": {
@@ -4652,6 +4662,99 @@
           "explanation"
         ],
         "title": "McpDeviceImpact",
+        "type": "object"
+      },
+      "McpDiagnostics": {
+        "additionalProperties": false,
+        "description": "Counters only: no prompt, tool or provider text beyond bounded finish-reason tokens.",
+        "properties": {
+          "cached_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Cached Calls",
+            "type": "integer"
+          },
+          "describes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Describes",
+            "type": "integer"
+          },
+          "elapsed_ms": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Elapsed Ms",
+            "type": "integer"
+          },
+          "final_state": {
+            "maxLength": 40,
+            "title": "Final State",
+            "type": "string"
+          },
+          "finish_reasons": {
+            "default": [],
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Finish Reasons",
+            "type": "array"
+          },
+          "max_prompt_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Max Prompt Bytes",
+            "type": "integer"
+          },
+          "observations_hidden_in_prompt": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Observations Hidden In Prompt",
+            "type": "integer"
+          },
+          "prompt_trim_steps": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Prompt Trim Steps",
+            "type": "integer"
+          },
+          "rejected_actions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Rejected Actions",
+            "type": "object"
+          },
+          "results_digested": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Results Digested",
+            "type": "integer"
+          },
+          "results_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Results Omitted",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "turns": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "final_state"
+        ],
+        "title": "McpDiagnostics",
         "type": "object"
       },
       "McpDispatch": {

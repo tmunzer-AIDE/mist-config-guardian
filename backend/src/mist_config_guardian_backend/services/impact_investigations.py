@@ -1,6 +1,7 @@
 """Bounded deterministic shadow investigations driven by the existing worker tick."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from functools import partial
@@ -315,6 +316,18 @@ class ImpactInvestigationService:
                     previous=previous,
                 )
             assessment = mcp_assessment(root.audit_id, evidence_as_of, mcp)
+            logger.info(
+                "mcp_checkpoint %s",
+                json.dumps(
+                    {
+                        "investigation_id": str(root.id),
+                        "candidate_revision": root.revision + 1,
+                        "state": mcp.state,
+                        **(mcp.diagnostics.model_dump(mode="json") if mcp.diagnostics else {}),
+                    },
+                    sort_keys=True,
+                ),
+            )
         if root.id is None:
             msg = "Persisted investigation has no identity"
             raise ValueError(msg)

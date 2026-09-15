@@ -1,6 +1,7 @@
 """Production MCP loop with real advertised tool schemas, independent of rule coverage."""
 
 import json
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -756,3 +757,38 @@ def test_unresolvable_chart_view_is_dropped_with_limitation():
     cleaned = mcp_impact_agent.McpImpactAgent._validate_conclusion(action, [evidence], scope)  # noqa: SLF001
     assert cleaned.report.views == ()
     assert cleaned.report.gaps == ("A proposed chart was omitted because it did not select returned evidence rows.",)
+
+
+async def test_checkpoint_diagnostics_are_persisted_and_logged(monkeypatch, httpx_mock, caplog):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored)
+    httpx_mock.add_callback(investigator, method="POST", url=AI_URL, is_reusable=True)
+    caplog.set_level(logging.INFO, logger=worker.__name__)
+    await service._poll(root)  # noqa: SLF001
+    diagnostics = artifacts[0].mcp.diagnostics
+    assert diagnostics.final_state == "complete"
+    assert (diagnostics.turns, diagnostics.describes, diagnostics.tool_calls, diagnostics.cached_calls) == (3, 1, 1, 0)
+    assert diagnostics.rejected_actions == {}
+    assert diagnostics.max_prompt_bytes == max(r["input_bytes"] for r in stored["model_requests"])
+    assert diagnostics.finish_reasons == ("unreported", "unreported", "unreported")
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("mcp_checkpoint ")]
+    assert len(lines) == 1
+    payload = json.loads(lines[0].removeprefix("mcp_checkpoint "))
+    assert (payload["state"], payload["turns"], payload["candidate_revision"]) == ("complete", 3, root.revision + 1)
+    assert "test-token" not in lines[0]
+    assert "test-provider-key" not in lines[0]
+
+
+async def test_rejections_are_counted_by_category(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored)
+    httpx_mock.add_callback(
+        lambda _request: httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]}),
+        method="POST",
+        url=AI_URL,
+        is_reusable=True,
+    )
+    await service._poll(root)  # noqa: SLF001
+    diagnostics = artifacts[0].mcp.diagnostics
+    assert diagnostics.rejected_actions == {"invalid_json": 8}
+    assert diagnostics.final_state == "invalid_response"

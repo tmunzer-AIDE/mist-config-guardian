@@ -128,6 +128,24 @@ class McpReportAction(Contract):
 McpAction = Annotated[McpToolAction | McpDescribeAction | McpReportAction, Field(discriminator="action")]
 
 
+class McpDiagnostics(Contract):
+    """Counters only: no prompt, tool or provider text beyond bounded finish-reason tokens."""
+
+    final_state: str = Field(max_length=40)
+    turns: int = Field(default=0, ge=0)
+    describes: int = Field(default=0, ge=0)
+    tool_calls: int = Field(default=0, ge=0)
+    cached_calls: int = Field(default=0, ge=0)
+    rejected_actions: dict[str, int] = Field(default_factory=dict)
+    results_digested: int = Field(default=0, ge=0)
+    results_omitted: int = Field(default=0, ge=0)
+    observations_hidden_in_prompt: int = Field(default=0, ge=0)
+    prompt_trim_steps: int = Field(default=0, ge=0)
+    max_prompt_bytes: int = Field(default=0, ge=0)
+    finish_reasons: tuple[Annotated[str, Field(max_length=32)], ...] = Field(default=(), max_length=8)
+    elapsed_ms: int = Field(default=0, ge=0)
+
+
 class McpCheckpoint(Contract):
     source: Literal["mcp_agent"] = "mcp_agent"
     state: Literal[
@@ -139,3 +157,4 @@ class McpCheckpoint(Contract):
     request_ids: tuple[UUID, ...] = Field(default=(), max_length=8)
     catalogue_hash: str | None = None
     deterministic_evidence: McpEvidence | None = None
+    diagnostics: McpDiagnostics | None = None
