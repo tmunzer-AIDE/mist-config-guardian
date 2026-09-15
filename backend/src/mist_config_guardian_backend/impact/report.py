@@ -25,6 +25,7 @@ from mist_config_guardian_backend.impact.limits import MAX_CHECKPOINT_EVIDENCE
 
 Band = Literal["none", "info", "warning", "critical"]
 _ORDER = {"none": 0, "info": 1, "warning": 2, "critical": 3}
+VerdictSource = Literal["mcp_agent", "rule", "combined"]
 Text = Annotated[str, Field(max_length=500)]
 Cell = str | int | float | None
 MAX_DEVICE_IMPACTS = 200
@@ -88,6 +89,8 @@ class DeviceImpact(Contract):
 
 class ImpactReport(Contract):
     source: Literal["deterministic", "mcp_agent"] = "deterministic"
+    # Which assessment set current_impact in MCP-led mode; None for deterministic-only and historical reports.
+    verdict_source: VerdictSource | None = None
     schema_version: Literal[1] = 1
     investigation_id: str
     audit_id: str

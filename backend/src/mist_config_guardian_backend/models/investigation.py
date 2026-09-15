@@ -11,6 +11,7 @@ from pymongo import IndexModel
 from mist_config_guardian_backend.impact.agent import (
     MAX_INPUT_BYTES_TOTAL,
     MAX_MODEL_CALLS,
+    MCP_MAX_INPUT_BYTES,
     AgentCheckpoint,
     ModelRequestRecord,
 )
@@ -37,7 +38,7 @@ class ModelRequestArtifact(Document):
     candidate_revision: int
     kind: Literal["input", "action", "mcp_input", "mcp_result"]
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    content_json: str = Field(max_length=24_000)
+    content_json: str = Field(max_length=MCP_MAX_INPUT_BYTES)
     created_at: datetime
     retained_until: datetime | None = None
 

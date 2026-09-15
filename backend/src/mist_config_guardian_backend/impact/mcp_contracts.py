@@ -16,10 +16,22 @@ McpToolName = Literal[
     "get_mist_stats",
     "search_mist_data",
 ]
+McpCheckpointState = Literal[
+    "complete",
+    "unavailable",
+    "budget_exhausted",
+    "invalid_response",
+    "provider_error",
+    "dispatch_denied",
+    "deadline_exceeded",
+    "not_scheduled",
+]
 Text = Annotated[str, Field(min_length=1, max_length=500)]
 Band = Literal["none", "info", "warning", "critical"]
 MAX_MCP_CHECKPOINT_CALLS = 8
 MAX_MCP_EVIDENCE_BYTES = 12_000
+MAX_MCP_ERROR_DETAIL_BYTES = 500
+MAX_MCP_BATCH_CALLS = 3
 
 
 class McpTool(Contract):
@@ -53,6 +65,8 @@ class McpEvidence(Contract):
     captured_at: datetime
     schema_hash: str
     error: Literal["transport", "invalid_response", "tool_error", "response_limit"] | None = None
+    # Redacted, byte-bounded tool error text. Untrusted data: shown to the model, never citable.
+    error_detail: str | None = Field(default=None, max_length=MAX_MCP_ERROR_DETAIL_BYTES)
 
 
 class McpFinding(Contract):
@@ -105,11 +119,36 @@ class McpConclusion(Contract):
         return self
 
 
-class McpToolAction(Contract):
-    action: Literal["tool"]
+class McpToolCall(Contract):
     tool: McpToolName
     arguments: dict[str, JsonValue]
     purpose: Text
+
+
+class McpToolAction(Contract):
+    """Single-call form (historical) or up to three independent calls in one model turn."""
+
+    action: Literal["tool"]
+    tool: McpToolName | None = None
+    arguments: dict[str, JsonValue] | None = None
+    purpose: Text | None = None
+    calls: tuple[McpToolCall, ...] = Field(default=(), max_length=MAX_MCP_BATCH_CALLS)
+
+    @model_validator(mode="after")
+    def one_form(self) -> "McpToolAction":
+        single = (self.tool, self.arguments, self.purpose)
+        if self.calls and any(value is not None for value in single):
+            msg = "Use either tool/arguments/purpose or calls, not both"
+            raise ValueError(msg)
+        if not self.calls and any(value is None for value in single):
+            msg = "A tool action requires tool, arguments and purpose, or a calls list"
+            raise ValueError(msg)
+        return self
+
+    def requested_calls(self) -> tuple[McpToolCall, ...]:
+        if self.calls:
+            return self.calls
+        return (McpToolCall.model_validate({"tool": self.tool, "arguments": self.arguments, "purpose": self.purpose}),)
 
 
 class McpDescribeAction(Contract):
@@ -125,14 +164,41 @@ class McpReportAction(Contract):
 McpAction = Annotated[McpToolAction | McpDescribeAction | McpReportAction, Field(discriminator="action")]
 
 
+class McpDiagnostics(Contract):
+    """Counters only: no prompt, tool or provider text beyond bounded finish-reason tokens."""
+
+    final_state: str = Field(max_length=40)
+    turns: int = Field(default=0, ge=0)
+    describes: int = Field(default=0, ge=0)
+    tool_calls: int = Field(default=0, ge=0)
+    cached_calls: int = Field(default=0, ge=0)
+    rejected_actions: dict[str, int] = Field(default_factory=dict)
+    results_digested: int = Field(default=0, ge=0)
+    results_omitted: int = Field(default=0, ge=0)
+    observations_hidden_in_prompt: int = Field(default=0, ge=0)
+    prompt_trim_steps: int = Field(default=0, ge=0)
+    max_prompt_bytes: int = Field(default=0, ge=0)
+    finish_reasons: tuple[Annotated[str, Field(max_length=32)], ...] = Field(default=(), max_length=8)
+    elapsed_ms: int = Field(default=0, ge=0)
+
+
+class McpCarriedConclusion(Contract):
+    """The last validated agent conclusion plus exactly the evidence it cites, from an earlier revision."""
+
+    source_revision: int = Field(ge=1)
+    conclusion: McpConclusion
+    evidence: tuple[McpEvidence, ...] = Field(default=(), max_length=MAX_MCP_CHECKPOINT_CALLS + 1)
+
+
 class McpCheckpoint(Contract):
     source: Literal["mcp_agent"] = "mcp_agent"
-    state: Literal[
-        "complete", "unavailable", "budget_exhausted", "invalid_response", "provider_error", "dispatch_denied"
-    ]
+    state: McpCheckpointState
     reason: str = Field(default="", max_length=500)
     conclusion: McpConclusion | None = None
     evidence: tuple[McpEvidence, ...] = Field(default=(), max_length=MAX_MCP_CHECKPOINT_CALLS)
     request_ids: tuple[UUID, ...] = Field(default=(), max_length=8)
     catalogue_hash: str | None = None
     deterministic_evidence: McpEvidence | None = None
+    carried: McpCarriedConclusion | None = None
+    agent_as_of: datetime | None = None
+    diagnostics: McpDiagnostics | None = None

@@ -182,3 +182,15 @@ async def test_invalid_provider_token_counts_remain_unknown(httpx_mock: HTTPXMoc
     async with _provider() as provider:
         result = await provider.complete([AiMessage(role="user", content="evidence")])
     assert result.request_tokens is result.response_tokens is None
+
+
+@pytest.mark.parametrize(("reason", "expected"), [("length", "length"), ("stop", "stop"), (7, None), ("x" * 40, None)])
+async def test_complete_reports_bounded_finish_reason(httpx_mock: HTTPXMock, reason, expected) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url=COMPLETIONS_URL,
+        json={"choices": [{"message": {"content": "{}"}, "finish_reason": reason}]},
+    )
+    async with _provider() as provider:
+        completion = await provider.complete([AiMessage(role="user", content="evidence")])
+    assert completion.finish_reason == expected

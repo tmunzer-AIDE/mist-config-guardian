@@ -35,9 +35,15 @@ MAX_MODEL_CALLS = 21
 MAX_CHECKPOINT_CALLS = 3
 MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
+# MCP reports with findings, devices and views need more room; the retired agent keeps 1500.
+MCP_MAX_OUTPUT_TOKENS = 4096
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
+# MCP-led prompts carry tool schemas and real results; the retired fixed-menu agent keeps 24 KB.
+MCP_MAX_INPUT_BYTES = 96_000
+MCP_MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MCP_MAX_INPUT_BYTES
 PROMPT_VERSION = "impact-investigator.v8"
+MCP_PROMPT_VERSION = "impact-mcp.v2"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -338,6 +344,11 @@ class ModelResponseError(StrEnum):
     EMPTY_COLLECTION = "empty_collection"
     UNKNOWN_CHECK = "unknown_or_repeated_check"
     INVALID_EVIDENCE = "unobserved_or_foreign_evidence"
+    TOOL_NOT_DISCOVERED = "tool_not_discovered"
+    ARGUMENT_OUT_OF_SCOPE = "argument_out_of_scope"
+    CITATION_INVALID = "citation_invalid"
+    TRUNCATED = "truncated"
+    TOOL_CALL_LIMIT = "tool_call_limit"
 
     @property
     def explanation(self) -> str:
@@ -348,6 +359,11 @@ class ModelResponseError(StrEnum):
             self.EMPTY_COLLECTION: "Model requested an empty check collection; return a report instead.",
             self.UNKNOWN_CHECK: "Unknown or repeated check ref",
             self.INVALID_EVIDENCE: "Unobserved or foreign evidence reference",
+            self.TOOL_NOT_DISCOVERED: "Model requested a tool outside the discovered read catalogue.",
+            self.ARGUMENT_OUT_OF_SCOPE: "Model tool arguments were outside the investigation scope or tool schema.",
+            self.CITATION_INVALID: "Model report cited unobserved, failed or insufficient evidence.",
+            self.TRUNCATED: "Model output stopped at the token limit.",
+            self.TOOL_CALL_LIMIT: "Model requested more tool calls than this checkpoint allows.",
         }[self]
 
 
@@ -366,15 +382,18 @@ class ModelRequestRecord(Contract):
         "impact-investigator.v7",
         "impact-investigator.v8",
         "impact-mcp.v1",
+        "impact-mcp.v2",
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)
-    input_bytes: int = Field(ge=1, le=MAX_INPUT_BYTES)
-    output_token_limit: int = Field(ge=1, le=MAX_OUTPUT_TOKENS)
+    input_bytes: int = Field(ge=1, le=MCP_MAX_INPUT_BYTES)
+    output_token_limit: int = Field(ge=1, le=MCP_MAX_OUTPUT_TOKENS)
     input_artifact_id: PydanticObjectId | None = None
     input_context_hash: Handle | None = None
     state: Literal["reserved", "complete", "invalid_response", "provider_error"] = "reserved"
     response_error: ModelResponseError | None = None
+    # Fixed validation category detail (loc/msg or guardian text), never model or tool input values.
+    response_detail: str | None = Field(default=None, max_length=300)
     finished_at: AwareDatetime | None = None
     request_tokens: int | None = Field(default=None, ge=0)
     response_tokens: int | None = Field(default=None, ge=0)

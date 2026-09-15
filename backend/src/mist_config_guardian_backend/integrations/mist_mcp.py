@@ -11,8 +11,10 @@ MAX_WIRE_BYTES = 262_144
 
 
 class MistMcpError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, detail: str = "") -> None:
         self.code = code
+        # Server-provided text; callers must redact and bound it before storing or showing it.
+        self.detail = detail[:2000]
         super().__init__(code)
 
 
@@ -116,8 +118,10 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
     @staticmethod
     def _result(item: dict) -> dict:
         if "error" in item:
+            error = item["error"]
+            detail = error.get("message", "") if isinstance(error, dict) else ""
             msg = "tool_error"
-            raise MistMcpError(msg)
+            raise MistMcpError(msg, detail=detail if isinstance(detail, str) else "")
         result = item.get("result")
         if not isinstance(result, dict):
             msg = "invalid_response"
