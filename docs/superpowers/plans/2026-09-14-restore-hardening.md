@@ -6483,4 +6483,3 @@ git commit -m "fix(restore): bind approvals to plan intent so they survive prepa
 7. The new plan-hash formula invalidates plans and approvals created before Task 13; they must be rebuilt.
 8. Intent `requester` is the plan's `requested_by`; a draft built by an operator and prepared by an administrator therefore does not carry its approval.
 9. A failed compensation ends `FAILED`; retry starts from the original operation, which stays `COMPENSATION_AVAILABLE`.
-
