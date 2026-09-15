@@ -4130,6 +4130,22 @@
             ],
             "title": "Source",
             "type": "string"
+          },
+          "verdict_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mcp_agent",
+                  "rule",
+                  "combined"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict Source"
           }
         },
         "required": [

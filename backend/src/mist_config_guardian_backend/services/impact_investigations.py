@@ -40,9 +40,9 @@ from mist_config_guardian_backend.impact.knowledge import describe_attribute, do
 from mist_config_guardian_backend.impact.limits import MAX_OPTIONAL_RULE_CHECKS, MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint
-from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, mcp_assessment
+from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, compose_assessment
 from mist_config_guardian_backend.impact.mcp_schedule import agent_due, last_agent_run, prior_conclusion
-from mist_config_guardian_backend.impact.report import build_report
+from mist_config_guardian_backend.impact.report import VerdictSource, build_report
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_ap_evidence import MistScopedEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -322,6 +322,10 @@ class ImpactInvestigationService:
         )
         assessment = compose_domains(plan, evidence, assessment)
         deterministic_assessment = assessment
+        verdict_source: VerdictSource = "rule"
+        finished = now >= root.expires_at or any(
+            item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
+        )
         if (
             get_settings().impact_engine_mode == "agent_shadow"
             and not expired
@@ -362,7 +366,9 @@ class ImpactInvestigationService:
                             "this run's evidence was not retained."
                         ),
                     )
-                mcp = mcp.model_copy(update={"agent_as_of": evidence_as_of})
+                mcp = mcp.model_copy(
+                    update={"agent_as_of": evidence_as_of, "carried": None if mcp.state == "complete" else carried}
+                )
             else:
                 if carried:
                     reason = (
@@ -373,7 +379,9 @@ class ImpactInvestigationService:
                 else:
                     reason = "The AI agent runs at +10, +30 and +60 minutes; no earlier agent conclusion is available."
                 mcp = McpCheckpoint(state="not_scheduled", reason=reason, carried=carried, agent_as_of=last_run)
-            assessment = mcp_assessment(root.audit_id, evidence_as_of, mcp)
+            assessment, verdict_source = compose_assessment(
+                root.audit_id, evidence_as_of, mcp, deterministic_assessment, final=finished
+            )
             logger.info(
                 "mcp_checkpoint %s",
                 json.dumps(
@@ -415,11 +423,8 @@ class ImpactInvestigationService:
             history_available=previous is not False and (root.revision == 0 or bool(previous and previous.report)),
         )
         if mcp is not None:
-            artifact.report = build_mcp_report(artifact.report, mcp)
+            artifact.report = build_mcp_report(artifact.report, mcp, verdict_source)
         await artifact.insert()
-        finished = now >= root.expires_at or any(
-            item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
-        )
         if finished:
             status = "completed" if assessment.coverage == "complete" else "incomplete"
             next_poll = None
