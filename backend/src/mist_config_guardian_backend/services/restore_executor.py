@@ -88,10 +88,20 @@ class RestoreExecutor:
         Every exit leaves a terminal status, a failure notification when it did
         not complete, and no delegated credential: a worker that stops halfway
         must never leave an operation running with a live session attached.
+
+        The one exception is a redelivered task that finds the operation no
+        longer queued: another delivery owns it, so it is refused untouched. A
+        precondition that fails after that check is closed like any other
+        failure and then re-raised as ``RestoreExecutionError``, so the task
+        still records that the restore never started.
         """
-        operation, organization, token = await self._prepare(operation_id)
+        operation = await self._load_queued(operation_id)
         try:
+            organization, token = await self._prepare(operation)
             return await self._run(operation, organization, token)
+        except RestoreExecutionError as exc:
+            await self._close_failed(operation, str(exc))
+            raise
         except Exception as exc:  # noqa: BLE001 - every exit must end in a terminal, notified state
             await self._fail_unexpectedly(operation, exc)
             return operation
@@ -194,10 +204,14 @@ class RestoreExecutor:
                 type(exc).__name__,
             )
 
-    async def _prepare(
-        self,
-        operation_id: PydanticObjectId,
-    ) -> tuple[RestoreOperation, Organization, str]:
+    @staticmethod
+    async def _load_queued(operation_id: PydanticObjectId) -> RestoreOperation:
+        """Load the operation to run, refusing one that another delivery already claimed.
+
+        Nothing here may change the operation: a redelivered task that finds it
+        running or finished must leave its status, notifications and credential
+        to the run that owns it.
+        """
         operation = await RestoreOperation.get(operation_id)
         if operation is None:
             msg = "Restore operation not found"
@@ -207,19 +221,20 @@ class RestoreExecutor:
         if operation.status is not RestoreStatus.QUEUED:
             msg = "Restore operation is not ready to execute"
             raise RestoreExecutionError(msg)
+        return operation
+
+    async def _prepare(self, operation: RestoreOperation) -> tuple[Organization, str]:
+        """Resolve what the run needs, raising ``RestoreExecutionError`` with a storable reason.
+
+        The caller closes the operation on that error, so each message is fixed
+        text: it becomes the recorded reason and the failure notification.
+        """
         if (
             operation.encrypted_delegated_credential is None
             or operation.delegated_credential_expires_at is None
             or operation.delegated_credential_expires_at <= utc_now()
         ):
-            operation.status = RestoreStatus.FAILED
-            operation.encrypted_delegated_credential = None
-            operation.delegated_credential_expires_at = None
-            operation.preflight_errors.append("Delegated Mist administrator credential expired before execution")
-            operation.touch()
-            await operation.save()
-            await self._notify_failure(operation, "Delegated Mist administrator credential expired before execution")
-            msg = "Delegated Mist administrator credential has expired"
+            msg = "Delegated Mist administrator credential expired before execution"
             raise RestoreExecutionError(msg)
 
         organization = await Organization.get(operation.organization_id)
@@ -236,12 +251,9 @@ class RestoreExecutor:
                 context=f"restore:{operation.id}",
             )
         except CredentialDecryptionError:
-            reason = "The delegated Mist administrator credential could not be decrypted"
-            await self._fail_preflight(operation, reason)
-            await self._notify_failure(operation, reason)
             msg = "Delegated Mist administrator credential could not be decrypted"
             raise RestoreExecutionError(msg) from None
-        return operation, organization, token
+        return organization, token
 
     async def _run_actions(
         self,
@@ -311,6 +323,15 @@ class RestoreExecutor:
         """
         reason = str(exc) if isinstance(exc, MistMutationError) else f"Restore worker error ({type(exc).__name__})"
         logger.error("restore_execution_aborted operation=%s error_type=%s", operation.id, type(exc).__name__)
+        await self._close_failed(operation, reason)
+
+    async def _close_failed(self, operation: RestoreOperation, reason: str) -> None:
+        """Record a terminal failure and notify exactly once, even while storage or notifications fail.
+
+        Shared by failed preconditions and unexpected errors, so every exit that
+        nothing more specific handled leaves the same terminal, credential-free
+        state; ``execute`` still clears the credential with its own write.
+        """
         first = mark_unconfirmed(operation.actions, reason)
         if first is not None:
             operation.failure_action_order = first

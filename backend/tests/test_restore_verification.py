@@ -489,6 +489,56 @@ def executed(
     return saves
 
 
+@pytest.fixture
+def persisted(
+    monkeypatch: pytest.MonkeyPatch,
+    executed: list[tuple[RestoreStatus, tuple, tuple]],  # noqa: ARG001 - installs the fakes this recorder refines
+) -> list[dict[str, object]]:
+    """Record what every document save would persist, the credential fields included."""
+    documents: list[dict[str, object]] = []
+
+    async def _record(self) -> None:
+        documents.append(
+            {
+                "status": self.status,
+                "encrypted_delegated_credential": self.encrypted_delegated_credential,
+                "delegated_credential_expires_at": self.delegated_credential_expires_at,
+                "preflight_errors": list(self.preflight_errors),
+            }
+        )
+
+    monkeypatch.setattr(RestoreOperation, "save", _record)
+    return documents
+
+
+_CREDENTIAL_CLEARED = {"$set": {"encrypted_delegated_credential": None, "delegated_credential_expires_at": None}}
+
+
+def _assert_failed_before_running(
+    operation: RestoreOperation,
+    reason: str,
+    *,
+    persisted: list[dict[str, object]],
+    notifications: _StubNotifications,
+    client: _FakeClient,
+) -> None:
+    """A failed preparation ends FAILED, credential-free, with one reason and one notification."""
+    assert client.writes == []
+    assert operation.status is RestoreStatus.FAILED
+    assert operation.completed_at is not None
+    assert operation.preflight_errors == [reason]
+    assert operation.encrypted_delegated_credential is None
+    assert operation.delegated_credential_expires_at is None
+    assert notifications.failed == [reason]
+    assert notifications.completed == []
+    assert persisted[-1] == {
+        "status": RestoreStatus.FAILED,
+        "encrypted_delegated_credential": None,
+        "delegated_credential_expires_at": None,
+        "preflight_errors": [reason],
+    }
+
+
 def _run(
     monkeypatch: pytest.MonkeyPatch,
     operation: RestoreOperation,
@@ -570,15 +620,30 @@ async def test_per_action_progress_is_persisted_as_it_happens(
     assert len(running) > 1
 
 
-@pytest.mark.usefixtures("executed")
-async def test_a_redelivered_task_refuses_to_apply_the_plan_twice(monkeypatch: pytest.MonkeyPatch) -> None:
-    operation = _operation([_action(0, RestoreActionType.UPDATE)], status=RestoreStatus.RUNNING)
-    executor, _, _, client = _run(monkeypatch, operation, verified=True)
+@pytest.mark.parametrize("status", [RestoreStatus.RUNNING, RestoreStatus.COMPLETED])
+async def test_a_redelivered_task_refuses_to_apply_the_plan_twice_and_touches_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+    status: RestoreStatus,
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)], status=status)
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
 
     with pytest.raises(RestoreExecutionError, match="not ready to execute"):
         await executor.execute(OPERATION_ID)
 
+    # The run that owns this operation is still in charge of it: the redelivery
+    # must not close it, notify about it, or take its credential away.
     assert client.writes == []
+    assert persisted == []
+    assert credential_clears == []
+    assert notifications.failed == []
+    assert notifications.completed == []
+    assert operation.status is status
+    assert operation.preflight_errors == []
+    assert operation.encrypted_delegated_credential is not None
+    assert operation.delegated_credential_expires_at is not None
 
 
 @pytest.mark.usefixtures("executed")
@@ -720,8 +785,11 @@ async def test_an_error_before_any_write_fails_closed(monkeypatch: pytest.Monkey
     assert len(notifications.failed) == 1
 
 
-@pytest.mark.usefixtures("executed")
-async def test_a_credential_that_will_not_decrypt_fails_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_credential_that_will_not_decrypt_fails_the_restore(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+) -> None:
     operation = _operation([_action(0, RestoreActionType.UPDATE)])
     operation.encrypted_delegated_credential = "broken"
     executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
@@ -729,10 +797,14 @@ async def test_a_credential_that_will_not_decrypt_fails_the_restore(monkeypatch:
     with pytest.raises(RestoreExecutionError, match="could not be decrypted"):
         await executor.execute(OPERATION_ID)
 
-    assert client.writes == []
-    assert operation.status is RestoreStatus.FAILED
-    assert operation.encrypted_delegated_credential is None
-    assert len(notifications.failed) == 1
+    _assert_failed_before_running(
+        operation,
+        "Delegated Mist administrator credential could not be decrypted",
+        persisted=persisted,
+        notifications=notifications,
+        client=client,
+    )
+    assert credential_clears == [([{"id": OPERATION_ID}], _CREDENTIAL_CLEARED)]
 
 
 @pytest.mark.usefixtures("executed")
@@ -756,19 +828,99 @@ async def test_a_mist_error_during_preflight_fails_and_notifies_once(monkeypatch
     assert notifications.failed == ["Unable to reach Mist to read wlans"]
 
 
-@pytest.mark.usefixtures("executed")
-async def test_an_expired_credential_fails_and_notifies(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_expired_credential_fails_and_notifies(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+) -> None:
     operation = _operation([_action(0, RestoreActionType.UPDATE)])
     operation.delegated_credential_expires_at = datetime.now(UTC) - timedelta(minutes=1)
     executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
 
-    with pytest.raises(RestoreExecutionError, match="has expired"):
+    with pytest.raises(RestoreExecutionError, match="expired before execution"):
         await executor.execute(OPERATION_ID)
 
-    assert client.writes == []
-    assert operation.status is RestoreStatus.FAILED
-    assert operation.encrypted_delegated_credential is None
-    assert len(notifications.failed) == 1
+    _assert_failed_before_running(
+        operation,
+        "Delegated Mist administrator credential expired before execution",
+        persisted=persisted,
+        notifications=notifications,
+        client=client,
+    )
+    assert credential_clears == [([{"id": OPERATION_ID}], _CREDENTIAL_CLEARED)]
+
+
+async def test_an_organization_deleted_after_authorization_fails_and_clears_the_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+) -> None:
+    async def _deleted(_document_id, *_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(Organization, "get", _deleted)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    with pytest.raises(RestoreExecutionError, match="organization not found"):
+        await executor.execute(OPERATION_ID)
+
+    _assert_failed_before_running(
+        operation,
+        "Restore organization not found",
+        persisted=persisted,
+        notifications=notifications,
+        client=client,
+    )
+    assert credential_clears == [([{"id": OPERATION_ID}], _CREDENTIAL_CLEARED)]
+
+
+async def test_an_operation_without_an_identifier_fails_and_clears_the_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)], identifier=None)
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    with pytest.raises(RestoreExecutionError, match="missing an identifier"):
+        await executor.execute(OPERATION_ID)
+
+    _assert_failed_before_running(
+        operation,
+        "Persisted restore operation is missing an identifier",
+        persisted=persisted,
+        notifications=notifications,
+        client=client,
+    )
+    # Without an id there is no document to address with a field-scoped write;
+    # the saved document itself carries the cleared credential.
+    assert credential_clears == []
+
+
+async def test_an_unexpected_error_while_preparing_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    persisted: list[dict[str, object]],
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+) -> None:
+    async def _database_gone(_document_id, *_args, **_kwargs):
+        msg = "connection reset"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(Organization, "get", _database_gone)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    _assert_failed_before_running(
+        result,
+        "Restore worker error (RuntimeError)",
+        persisted=persisted,
+        notifications=notifications,
+        client=client,
+    )
+    assert credential_clears == [([{"id": OPERATION_ID}], _CREDENTIAL_CLEARED)]
 
 
 async def test_a_version_number_that_stays_taken_is_given_up_after_bounded_attempts(
