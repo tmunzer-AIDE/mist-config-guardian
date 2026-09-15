@@ -1543,6 +1543,19 @@ describe('RestorePage', () => {
     expect(JSON.stringify(navigations.at(-1))).toContain('"operation":"op-2"');
   });
 
+  it('never reopens a superseded plan for review when its replacement is not named', async () => {
+    await boot(targetList([NW_CORP]), [operation({ id: 'op-1', status: 'superseded', superseded_by: null })]);
+
+    all('.entry')[0].click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ id: 'op-1', status: 'superseded', superseded_by: null }));
+    await settle();
+
+    expect(all('app-restore-step-plan').length).toBe(0);
+    expect(all('app-restore-step-execute').length).toBe(1);
+    expect(text()).toContain('SUPERSEDED');
+  });
+
   it('lets a second administrator review the draft before the fresh backup and keeps that approval', async () => {
     await plan({ approval_required: true });
     expect(text()).toContain('carries over to the prepared plan');

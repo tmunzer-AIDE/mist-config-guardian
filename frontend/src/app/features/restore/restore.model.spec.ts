@@ -2,9 +2,20 @@ import {
   actionStatusLabel,
   actionStatusTone,
   failedAction,
+  isRestoreInFlight,
+  isRestoreTerminal,
   RestoreAction,
   RestoreOperation,
+  restoreStatusTone,
 } from './restore.model';
+
+describe('a superseded plan', () => {
+  it('is finished, so it is never reopened for review, and reads as neither a success nor a failure', () => {
+    expect(isRestoreTerminal('superseded')).toBe(true);
+    expect(isRestoreInFlight('superseded')).toBe(false);
+    expect(restoreStatusTone('superseded')).toBe('none');
+  });
+});
 
 function action(overrides: Partial<RestoreAction> = {}): RestoreAction {
   return {

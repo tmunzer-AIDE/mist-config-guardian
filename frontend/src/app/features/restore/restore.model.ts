@@ -178,13 +178,19 @@ export function isRestoreInFlight(status: RestoreStatus): boolean {
   return status === 'queued' || status === 'running';
 }
 
-/** True once the operation has reached a state the worker will not leave on its own. */
+/**
+ * True once the operation has reached a state the worker will not leave on its own.
+ *
+ * A superseded plan is one of them: it is never prepared or executed again, so
+ * one whose replacement is not named must not be reopened for review.
+ */
 export function isRestoreTerminal(status: RestoreStatus): boolean {
   return (
     status === 'completed' ||
     status === 'failed' ||
     status === 'compensated' ||
-    status === 'compensation_available'
+    status === 'compensation_available' ||
+    status === 'superseded'
   );
 }
 
@@ -227,6 +233,8 @@ export function restoreStatusTone(status: RestoreStatus): Tone {
   if (status === 'queued' || status === 'running') {
     return 'info';
   }
+  // Neutral: a plan still under review, or one superseded by another plan,
+  // which neither succeeded nor failed.
   return 'none';
 }
 
