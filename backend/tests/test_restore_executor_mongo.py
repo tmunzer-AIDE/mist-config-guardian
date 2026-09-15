@@ -17,6 +17,7 @@ from mist_config_guardian_backend.integrations.mist_mutation import MistMutation
 from mist_config_guardian_backend.models.organization import MistCloudRegion, Organization, OrganizationStatus
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
     RestoreMode,
@@ -29,8 +30,11 @@ from mist_config_guardian_backend.services import restore_executor
 from mist_config_guardian_backend.services.restore_compensation import RestoreCompensationService
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutor
 from mist_config_guardian_backend.services.restore_identity import RestoreIdentityConflictError
+from mist_config_guardian_backend.services.restore_planner import RestorePlanner
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.services.snapshots import CaptureContext, SnapshotService
+from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition
 
 MONGO_URL = os.environ.get("MONGO_TEST_URL")
@@ -519,7 +523,9 @@ async def _site_and_settings_restore(organization_id: PydanticObjectId, old_site
 
 
 def _executor_against(
-    monkeypatch: pytest.MonkeyPatch, client: _MistAfterSiteDeletion, organization_id: PydanticObjectId
+    monkeypatch: pytest.MonkeyPatch,
+    client: "_MistAfterSiteDeletion | _MistAfterNetworkDeletion",
+    organization_id: PydanticObjectId,
 ) -> tuple[RestoreExecutor, _MemoryStateStore, _Notifications, list[set[str]]]:
     """The real executor and verifier, with Mist, notifications and the worker queues faked."""
     monkeypatch.setattr(restore_executor, "MistMutationClient", lambda **_kwargs: client)
@@ -617,3 +623,148 @@ async def test_a_deleted_site_restored_with_its_settings_is_verified_rekeyed_and
         ("settings", RestoreActionType.UPDATE, f"{old_site}:settings", new_site),
         ("sites", RestoreActionType.DELETE, new_site, None),
     ]
+
+
+# ------------------------------------- a recreated network and a WLAN pointing at it
+
+
+class _MistAfterNetworkDeletion:
+    """Mist with a network gone and a WLAN still referencing its UUID."""
+
+    def __init__(self, new_network: str, wlan_id: str, live_wlan: dict[str, object]) -> None:
+        self.new_network = new_network
+        self.objects: dict[str, dict[str, object]] = {wlan_id: dict(live_wlan)}
+        self.writes: list[tuple[str, str, dict[str, object]]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return
+
+    async def create(self, definition, configuration, *, org_id, site_id):  # noqa: ARG002
+        assert definition.key == "networks"
+        self.writes.append(("create", definition.key, dict(configuration)))
+        created = {**configuration, "id": self.new_network, "org_id": org_id}
+        self.objects[self.new_network] = created
+        return dict(created)
+
+    async def update(self, definition, object_id, configuration, *, org_id, site_id):  # noqa: ARG002
+        assert definition.key == "wlans"
+        self.writes.append(("update", object_id, dict(configuration)))
+        self.objects[object_id] = {**configuration, "id": object_id, "org_id": org_id}
+        return dict(self.objects[object_id])
+
+    async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
+        found = self.objects.get(object_id)
+        return None if found is None else dict(found)
+
+
+async def _wlan_referencing(
+    organization_id: PydanticObjectId, network_id: str
+) -> tuple[LogicalObject, list[ObjectVersion]]:
+    """Seed a live WLAN with two captured versions, both referencing the network."""
+    wlan_id = str(uuid4())
+    wlan = LogicalObject(
+        organization_id=organization_id,
+        scope="org",
+        object_type="wlans",
+        source_key=f"org:wlans:{wlan_id}",
+        current_mist_id=wlan_id,
+        name="Corp WLAN",
+        current_version=2,
+    )
+    await wlan.insert()
+    incarnation = ObjectIncarnation(
+        organization_id=organization_id, logical_object_id=wlan.id, mist_object_id=wlan_id, ordinal=1
+    )
+    await incarnation.insert()
+    definition = get_definition("org", "wlans")
+    assert definition is not None
+    versions = []
+    for number in (1, 2):
+        configuration = {"id": wlan_id, "ssid": "Corp", "network_id": network_id, "vlan_id": number}
+        version = ObjectVersion(
+            organization_id=organization_id,
+            logical_object_id=wlan.id,
+            incarnation_id=incarnation.id,
+            version=number,
+            event=VersionEvent.INITIAL if number == 1 else VersionEvent.UPDATED,
+            configuration=configuration,
+            configuration_hash=configuration_hash(configuration, ignored_fields=definition.ignored_fields),
+            references=extract_uuid_references(configuration),
+        )
+        await version.insert()
+        versions.append(version)
+    return wlan, versions
+
+
+@pytest.mark.parametrize("chosen", ["current", "older"])
+async def test_a_wlan_chosen_with_the_network_it_references_ends_on_the_recreated_network(
+    monkeypatch: pytest.MonkeyPatch,
+    chosen: str,
+) -> None:
+    """At its current version the WLAN is only re-pointed; at an older one it is restored, and re-pointed too."""
+    organization_id = PydanticObjectId()
+    old_network, new_network = str(uuid4()), str(uuid4())
+    network = await _deleted_object(
+        object_type="networks",
+        mist_id=old_network,
+        configuration={"id": old_network, "name": "Corp"},
+        organization_id=organization_id,
+    )
+    network_target = await ObjectVersion.find_one(
+        ObjectVersion.logical_object_id == network.id, ObjectVersion.version == 1
+    )
+    assert network_target is not None
+    wlan, versions = await _wlan_referencing(organization_id, old_network)
+    selected_wlan = versions[1] if chosen == "current" else versions[0]
+
+    operation = await RestorePlanner(store=_MemoryStateStore(), vault=_vault()).create_plan(
+        organization_id=organization_id,
+        requested_by=PydanticObjectId(),
+        version_ids=[network_target.id, selected_wlan.id],
+        mode=RestoreMode.NON_DESTRUCTIVE,
+        include_dependencies=True,
+    )
+
+    assert operation.preflight_errors == []
+    reason = RestoreActionReason.REFERENCE_REWRITE if chosen == "current" else RestoreActionReason.RESTORE
+    assert [
+        (action.logical_object_id, action.action, action.reason, action.depends_on) for action in operation.actions
+    ] == [
+        (network.id, RestoreActionType.CREATE, RestoreActionReason.RESTORE, []),
+        (wlan.id, RestoreActionType.UPDATE, reason, [network.id]),
+    ]
+    assert operation.actions[1].source_version_id == selected_wlan.id
+
+    identifier = operation.id
+    assert identifier is not None
+    operation.status = RestoreStatus.QUEUED
+    operation.credential_actor = "admin@example.com"
+    operation.encrypted_delegated_credential = _vault().encrypt_for_context(
+        "api-token", context=f"restore:{identifier}"
+    )
+    operation.delegated_credential_expires_at = datetime.now(UTC) + timedelta(minutes=10)
+    await operation.save()
+    client = _MistAfterNetworkDeletion(new_network, wlan.current_mist_id, versions[1].configuration)
+    executor, store, notifications, _ = _executor_against(monkeypatch, client, organization_id)
+
+    result = await executor.execute(identifier)
+
+    assert notifications.failed == []
+    assert result.status is RestoreStatus.COMPLETED
+    assert client.writes == [
+        ("create", "networks", {"name": "Corp"}),
+        (
+            "update",
+            wlan.current_mist_id,
+            {"ssid": "Corp", "network_id": new_network, "vlan_id": selected_wlan.configuration["vlan_id"]},
+        ),
+    ]
+    state = await store.load(organization_id, identifier)
+    assert state is not None
+    assert state.verification is not None
+    checks = {check.label: check.status for check in state.verification.checks}
+    assert checks["Replaced UUID references"] == "ok"
+    assert state.verification.verified is True

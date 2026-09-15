@@ -427,6 +427,7 @@ class RestorePlanner:
         )
         if include_dependencies:
             await self._expand_dependencies(context)
+        await self._mark_selected_reference_rewrites(context)
 
         if self._baseline_reader is not None:
             self._baselines = await self._baseline_reader(logical_objects)
@@ -510,6 +511,47 @@ class RestorePlanner:
                     context.logical_objects[dependent.id] = dependent
                     context.reference_rewrites.add(dependent.id)
 
+    async def _mark_selected_reference_rewrites(self, context: PlanningContext) -> None:
+        """Re-point objects the plan holds at their current version at the objects it recreates.
+
+        Such an object has nothing to restore, so ``_build_actions`` would drop
+        it as a no-op and leave it referencing the old UUID. It is in the plan
+        whether or not dependencies were expanded, so this does not rely on
+        expansion. An object held at any other version stays an ordinary
+        restore, whose payload the executor remaps.
+        """
+        recreated = self._recreated_mist_ids(context.selected, context.logical_objects, context.force_delete)
+        if not recreated:
+            return
+        for logical_id, version in context.selected.items():
+            if logical_id in context.reference_rewrites or logical_id in context.force_delete:
+                continue
+            logical = context.logical_objects[logical_id]
+            if logical.is_deleted or version.is_deleted or not self._references_any(version, recreated):
+                continue
+            current = await self._latest_version(logical_id)
+            if current is not None and current.id == version.id:
+                context.reference_rewrites.add(logical_id)
+
+    @staticmethod
+    def _recreated_mist_ids(
+        selected: dict[PydanticObjectId, ObjectVersion],
+        logical_objects: dict[PydanticObjectId, LogicalObject],
+        force_delete: set[PydanticObjectId],
+    ) -> frozenset[str]:
+        """The old ids of objects this plan brings back, which Mist will give new UUIDs."""
+        return frozenset(
+            logical_objects[logical_id].current_mist_id
+            for logical_id, version in selected.items()
+            if logical_objects[logical_id].is_deleted and not version.is_deleted and logical_id not in force_delete
+        )
+
+    @staticmethod
+    def _references_any(version: ObjectVersion, mist_ids: frozenset[str]) -> bool:
+        return any(
+            reference.target_mist_id in mist_ids and is_restore_reference(reference) for reference in version.references
+        )
+
     async def _related_logical_objects(
         self,
         organization_id: PydanticObjectId,
@@ -585,6 +627,7 @@ class RestorePlanner:
         reference_rewrites: frozenset[PydanticObjectId] = frozenset(),
     ) -> list[RestoreAction]:
         actions: list[RestoreAction] = []
+        recreated = self._recreated_mist_ids(selected, logical_objects, force_delete)
         for logical_id, selected_version in selected.items():
             logical = logical_objects[logical_id]
             latest = self._baselines.get(logical_id) or await self._latest_version(logical_id)
@@ -609,6 +652,9 @@ class RestorePlanner:
                     and logical_id not in force_delete
                     and definition is not None
                     and target.configuration_hash == latest.configuration_hash
+                    # Not a no-op while it points at an object this plan
+                    # recreates: the executor remaps that UUID in its payload.
+                    and not self._references_any(target, recreated)
                 ):
                     continue
                 action_type = self._action_type(

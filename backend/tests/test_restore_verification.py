@@ -20,6 +20,7 @@ from mist_config_guardian_backend.models.organization import (
 )
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
     RestoreMode,
@@ -1447,6 +1448,39 @@ async def test_a_deleted_site_is_restored_together_with_its_settings(monkeypatch
     state = await store.load(ORGANIZATION_ID, OPERATION_ID)
     assert state is not None
     assert [(entry.order, entry.site_mist_id) for entry in state.safety_snapshot] == [(0, None), (1, "new-uuid")]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_older_version_referencing_a_recreated_object_is_written_with_the_new_uuid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A version chosen for restore stays an ordinary update, yet still points at the object recreated before it."""
+    old_network = "8aa21779-1178-4357-b3e0-42c02b93b870"
+    network = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="networks",
+        object_name="Corp",
+        current_mist_id=old_network,
+        protected_configuration={"name": "Corp"},
+    )
+    wlan = _action(1, RestoreActionType.UPDATE, configuration={"name": "wlan-1", "network_id": old_network})
+    wlan.depends_on = [network.logical_object_id]
+    operation = _operation([network, wlan])
+    executor, notifications, verifier, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert notifications.failed == []
+    assert result.status is RestoreStatus.COMPLETED
+    assert wlan.reason is RestoreActionReason.RESTORE
+    assert client.writes == [("create", "Corp"), ("update", "mist-1")]
+    assert verifier.id_map == {old_network: "new-uuid"}
+    assert verifier.applied[1] == {"name": "wlan-1", "network_id": "new-uuid"}
+    assert client.state["mist-1"]["network_id"] == "new-uuid"
 
 
 # ------------------------------------------------------------------- ownership

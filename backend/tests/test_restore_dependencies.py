@@ -8,7 +8,12 @@ from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
 
 from mist_config_guardian_backend.config import Settings
-from mist_config_guardian_backend.models.restore import RestoreActionReason, RestoreActionType, RestoreMode
+from mist_config_guardian_backend.models.restore import (
+    RestoreAction,
+    RestoreActionReason,
+    RestoreActionType,
+    RestoreMode,
+)
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
     ObjectIncarnation,
@@ -451,3 +456,115 @@ async def test_a_reverse_dependent_of_a_recreated_object_gets_a_reference_rewrit
     assert rewrite.source_version_id == device_current.id
     assert rewrite.expected_current_hash == device_current.configuration_hash
     assert rewrite.depends_on == [wlan.id]
+
+
+def _chosen_dependent_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    chosen: str,
+) -> tuple[RestorePlanner, PlanningContext, dict[str, ObjectVersion], PydanticObjectId, PydanticObjectId]:
+    """A deleted WLAN chosen for restore together with a live device that still references it."""
+    organization_id = PydanticObjectId()
+    wlan_uuid = "8aa21779-1178-4357-b3e0-42c02b93b870"
+    wlan = _logical(organization_id, object_type="wlans", mist_id=wlan_uuid, is_deleted=True)
+    device = _logical(organization_id, object_type="devices", mist_id="device-1")
+    assert wlan.id is not None
+    assert device.id is not None
+    reference = [ObjectReference(target_mist_id=wlan_uuid, field_path="port_config.eth0.wlan_id")]
+    wlan_target = _version(organization_id, wlan)
+    versions = {
+        "wlan_tombstone": ObjectVersion.model_construct(
+            **{**wlan_target.model_dump(), "id": PydanticObjectId(), "is_deleted": True}
+        ),
+        # Same configuration hash as the current one, as a reverted change leaves it.
+        "device_older": _version(organization_id, device, references=reference),
+        "device_current": _version(organization_id, device, references=reference),
+        "device_baseline": _version(organization_id, device, references=reference),
+    }
+    latest = {wlan.id: versions["wlan_tombstone"], device.id: versions["device_current"]}
+    planner = _planner()
+    monkeypatch.setattr(planner, "_related_logical_objects", AsyncMock(return_value=[]))
+    monkeypatch.setattr(planner, "_reverse_dependents", AsyncMock(return_value=[(device, versions["device_current"])]))
+    monkeypatch.setattr(planner, "_latest_version", AsyncMock(side_effect=lambda logical_id: latest[logical_id]))
+    monkeypatch.setattr(
+        planner,
+        "_action_dependencies",
+        AsyncMock(side_effect=lambda _org, target, *_args: [wlan.id] if target.logical_object_id == device.id else []),
+    )
+    context = PlanningContext(
+        organization_id=organization_id,
+        selected={wlan.id: wlan_target, device.id: versions[f"device_{chosen}"]},
+        requested_logical_ids=frozenset({wlan.id, device.id}),
+        logical_objects={wlan.id: wlan, device.id: device},
+        force_delete=set(),
+        target_at=datetime(2026, 1, 1, tzinfo=UTC),
+        mode=RestoreMode.NON_DESTRUCTIVE,
+    )
+    return planner, context, versions, wlan.id, device.id
+
+
+async def _plan_actions(
+    planner: RestorePlanner,
+    context: PlanningContext,
+    *,
+    include_dependencies: bool,
+    baselines: dict[PydanticObjectId, ObjectVersion] | None,
+) -> list[RestoreAction]:
+    """The planning steps ``create_plan`` runs, in its order, without the database."""
+    if include_dependencies:
+        await planner._expand_dependencies(context)  # noqa: SLF001
+    await planner._mark_selected_reference_rewrites(context)  # noqa: SLF001
+    if baselines is not None:
+        planner._baselines = baselines  # noqa: SLF001
+    return order_restore_actions(
+        await planner._build_actions(  # noqa: SLF001
+            context.organization_id,
+            context.selected,
+            context.logical_objects,
+            context.force_delete,
+            frozenset(context.reference_rewrites),
+        )
+    )
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize("include_dependencies", [True, False])
+async def test_a_reverse_dependent_chosen_at_its_current_version_gets_one_reference_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+    include_dependencies: bool,  # noqa: FBT001 - a pytest parameter
+    prepared: bool,  # noqa: FBT001 - a pytest parameter
+) -> None:
+    planner, context, versions, wlan_id, device_id = _chosen_dependent_plan(monkeypatch, chosen="current")
+    baselines = {wlan_id: versions["wlan_tombstone"], device_id: versions["device_baseline"]} if prepared else None
+
+    actions = await _plan_actions(planner, context, include_dependencies=include_dependencies, baselines=baselines)
+
+    assert context.reference_rewrites == {device_id}
+    assert [(action.logical_object_id, action.action, action.reason) for action in actions] == [
+        (wlan_id, RestoreActionType.CREATE, RestoreActionReason.RESTORE),
+        (device_id, RestoreActionType.UPDATE, RestoreActionReason.REFERENCE_REWRITE),
+    ]
+    source = versions["device_baseline" if prepared else "device_current"]
+    assert actions[1].source_version_id == source.id
+    assert actions[1].expected_current_hash == source.configuration_hash
+    assert actions[1].depends_on == [wlan_id]
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+async def test_a_reverse_dependent_chosen_at_an_older_version_stays_one_restore_update(
+    monkeypatch: pytest.MonkeyPatch,
+    prepared: bool,  # noqa: FBT001 - a pytest parameter
+) -> None:
+    planner, context, versions, wlan_id, device_id = _chosen_dependent_plan(monkeypatch, chosen="older")
+    baselines = {wlan_id: versions["wlan_tombstone"], device_id: versions["device_baseline"]} if prepared else None
+
+    actions = await _plan_actions(planner, context, include_dependencies=True, baselines=baselines)
+
+    assert context.reference_rewrites == set()
+    # Not dropped as a no-op when prepared: its payload still has an old UUID to remap.
+    assert [(action.logical_object_id, action.action, action.reason) for action in actions] == [
+        (wlan_id, RestoreActionType.CREATE, RestoreActionReason.RESTORE),
+        (device_id, RestoreActionType.UPDATE, RestoreActionReason.RESTORE),
+    ]
+    assert actions[1].source_version_id == versions["device_older"].id
+    assert actions[1].depends_on == [wlan_id]
