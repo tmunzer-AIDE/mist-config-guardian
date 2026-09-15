@@ -185,6 +185,14 @@ class _FailingClient(_FakeClient):
         raise self.error
 
 
+class _NoIdClient(_FakeClient):
+    """Accepts every create but answers without the new object's id."""
+
+    async def create(self, definition, configuration, *, org_id, site_id):  # noqa: ARG002
+        self.writes.append(("create", str(configuration.get("name"))))
+        return {"name": configuration.get("name")}
+
+
 class _StubNotifications:
     """Records restore lifecycle notifications."""
 
@@ -567,6 +575,74 @@ async def test_an_unconfirmed_write_leaves_the_restore_compensable(monkeypatch: 
     assert result.actions[0].outcome_unknown is True
     assert result.encrypted_delegated_credential is None
     assert len(notifications.failed) == 1
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_create_answered_without_an_id_is_unconfirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.CREATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True, client=_NoIdClient())
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("create", "wlan-0")]
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert result.actions[0].status is RestoreActionStatus.FAILED
+    assert result.actions[0].outcome_unknown is True
+    assert result.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
+
+
+async def test_a_lost_completion_notification_never_reopens_a_completed_restore(
+    monkeypatch: pytest.MonkeyPatch,
+    executed: list[tuple[RestoreStatus, tuple, tuple]],
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True)
+
+    async def _notifier_down(**_kwargs) -> None:
+        msg = "notification store unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(notifications, "notify_restore_completed", _notifier_down)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.status is RestoreStatus.COMPLETED
+    assert executed[-1][0] is RestoreStatus.COMPLETED
+    assert result.encrypted_delegated_credential is None
+    assert result.preflight_errors == []
+    assert notifications.failed == []
+
+
+async def test_a_failed_source_update_never_reopens_a_completed_compensation(
+    monkeypatch: pytest.MonkeyPatch,
+    executed: list[tuple[RestoreStatus, tuple, tuple]],
+) -> None:
+    async def _mark_fails(_organization_id, _operation_id) -> None:
+        msg = "database unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(RestoreExecutor, "_mark_compensated", staticmethod(_mark_fails))
+    store = _MemoryStateStore()
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=OPERATION_ID,
+            plan_hash="plan-hash",
+            compensates_operation_id=SOURCE_OPERATION_ID,
+        )
+    )
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.status is RestoreStatus.COMPENSATED
+    assert executed[-1][0] is RestoreStatus.COMPENSATED
+    assert result.encrypted_delegated_credential is None
+    assert result.preflight_errors == []
+    assert notifications.failed == []
+    assert notifications.completed == [1]
 
 
 @pytest.mark.usefixtures("executed")

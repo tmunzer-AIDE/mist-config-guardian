@@ -145,14 +145,41 @@ class RestoreExecutor:
         operation.status = RestoreStatus.COMPENSATED if compensating else RestoreStatus.COMPLETED
         operation.touch()
         await operation.save()
-        if compensating and state.compensates_operation_id is not None:
-            await self._mark_compensated(operation.organization_id, state.compensates_operation_id)
-        await self._notifications.notify_restore_completed(
-            organization_id=operation.organization_id,
-            restore_id=str(operation.id),
-            applied_count=sum(1 for action in operation.actions if action.status is RestoreActionStatus.COMPLETED),
-        )
+        await self._announce_success(operation, state.compensates_operation_id)
         return operation
+
+    async def _announce_success(
+        self,
+        operation: RestoreOperation,
+        compensates_operation_id: PydanticObjectId | None,
+    ) -> None:
+        """Run the follow-ups of a persisted success without ever undoing it.
+
+        Mist already holds the restored configuration and the success status is
+        saved, so a failing follow-up is logged rather than rewritten into a
+        failed, compensable restore.
+        """
+        if compensates_operation_id is not None:
+            try:
+                await self._mark_compensated(operation.organization_id, compensates_operation_id)
+            except Exception as exc:  # noqa: BLE001 - a persisted success must not be reopened
+                logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                    "restore_compensated_mark_failed operation=%s error_type=%s",
+                    operation.id,
+                    type(exc).__name__,
+                )
+        try:
+            await self._notifications.notify_restore_completed(
+                organization_id=operation.organization_id,
+                restore_id=str(operation.id),
+                applied_count=sum(1 for action in operation.actions if action.status is RestoreActionStatus.COMPLETED),
+            )
+        except Exception as exc:  # noqa: BLE001 - a persisted success must not be reopened
+            logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                "restore_completed_notification_lost operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
 
     async def _prepare(
         self,
@@ -380,8 +407,10 @@ class RestoreExecutor:
             )
             resulting_id = result.get("id")
             if not isinstance(resulting_id, str) or not resulting_id:
+                # Mist accepted the create, so the object may exist without an id
+                # to target: it stays possibly applied, never "not attempted".
                 msg = f"Mist did not return an id for created {action.object_type}"
-                raise MistMutationError(msg)
+                raise MistMutationError(msg, outcome_unknown=True)
             action.resulting_mist_id = resulting_id
             id_map[action.current_mist_id] = resulting_id
         elif action.action is RestoreActionType.UPDATE:
