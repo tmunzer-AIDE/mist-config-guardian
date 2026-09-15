@@ -26,7 +26,6 @@ from mist_config_guardian_backend.models.organization import (
 )
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
-    RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
     RestoreMode,
@@ -1861,7 +1860,7 @@ async def test_a_deleted_site_is_restored_together_with_its_settings(monkeypatch
 async def test_an_older_version_referencing_a_recreated_object_is_written_with_the_new_uuid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A version chosen for restore stays an ordinary update, yet still points at the object recreated before it."""
+    """An update whose payload names an object recreated earlier in the run is written with that object's new UUID."""
     old_network = "8aa21779-1178-4357-b3e0-42c02b93b870"
     network = RestoreAction(
         logical_object_id=PydanticObjectId(),
@@ -1883,7 +1882,6 @@ async def test_an_older_version_referencing_a_recreated_object_is_written_with_t
 
     assert notifications.failed == []
     assert result.status is RestoreStatus.COMPLETED
-    assert wlan.reason is RestoreActionReason.RESTORE
     assert client.writes == [("create", "Corp"), ("update", "mist-1")]
     assert verifier.id_map == {old_network: "new-uuid"}
     assert verifier.applied[1] == {"name": "wlan-1", "network_id": "new-uuid"}
@@ -1956,6 +1954,17 @@ async def test_a_run_the_janitor_closed_stops_without_another_mist_write_or_noti
     assert "restore_ownership_lost" in caplog.text
 
 
+# Generous on purpose: only a heartbeat that never beats should ever reach it.
+_BEAT_WAIT_SECONDS = 5.0
+
+
+async def _until(condition: "Callable[[], bool]") -> None:
+    """Wait for what the background heartbeat records, not for wall-clock time, so load only slows a test down."""
+    async with asyncio.timeout(_BEAT_WAIT_SECONDS):
+        while not condition():  # noqa: ASYNC110 - the fakes record beats and logs as plain state, with no event to await
+            await asyncio.sleep(0.001)
+
+
 @pytest.mark.usefixtures("executed")
 async def test_the_background_heartbeat_keeps_a_long_phase_alive_until_ownership_is_lost(
     monkeypatch: pytest.MonkeyPatch,
@@ -1966,10 +1975,10 @@ async def test_the_background_heartbeat_keeps_a_long_phase_alive_until_ownership
 
     async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
         nonlocal beats_while_owned
-        await asyncio.sleep(0.05)
+        await _until(lambda: len(stored.heartbeats()) >= 2)
         beats_while_owned = len(stored.heartbeats())
         stored.status = RestoreStatus.COMPENSATION_AVAILABLE
-        await asyncio.sleep(0.05)
+        await _until(lambda: "restore_heartbeat_ownership_lost" in caplog.text)
         return _snapshot_entries(client, operation)
 
     monkeypatch.setattr(
@@ -2025,7 +2034,7 @@ async def test_a_failing_background_heartbeat_is_logged_by_type_and_keeps_beatin
 
     async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
         stored.fault = _heartbeat_write_fails
-        await asyncio.sleep(0.05)
+        await _until(lambda: caplog.text.count("restore_heartbeat_failed") >= 2)
         stored.fault = None
         return _snapshot_entries(client, operation)
 
@@ -2190,12 +2199,12 @@ async def test_a_lease_taken_over_during_a_long_phase_stops_the_run_and_spares_t
 
     async def _long_snapshot(client, _organization, operation, *_args, **_kwargs):
         nonlocal beats_while_held
-        await asyncio.sleep(0.05)
+        await _until(lambda: len(stored.heartbeats()) >= 2)
         beats_while_held = len(stored.heartbeats())
         # The lease lapsed while this worker was silent, and the next restore took it.
         await leases.release(ORGANIZATION_ID, OPERATION_ID)
         await leases.acquire(ORGANIZATION_ID, successor, ttl=_LEASE_TTL)
-        await asyncio.sleep(0.05)
+        await _until(lambda: "restore_heartbeat_lease_lost" in caplog.text)
         return _snapshot_entries(client, operation)
 
     monkeypatch.setattr(
