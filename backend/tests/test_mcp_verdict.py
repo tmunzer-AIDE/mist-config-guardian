@@ -214,6 +214,40 @@ async def test_expiry_checkpoint_without_a_due_agent_run_finishes_incomplete(mon
     assert collection.update_one.await_args_list[-1].args[1]["$set"]["status"] == "incomplete"
 
 
+async def test_final_rule_derived_checkpoint_never_completes_the_investigation(monkeypatch):
+    checkpoint = McpCheckpoint(state="provider_error", reason="AI provider request failed.")
+    complete_rule = rule("info").model_copy(update={"coverage": "complete"})
+    assert compose_assessment("audit-one", LATER, checkpoint, complete_rule)[0].coverage == "complete"
+    service, root, collection, artifacts, _ = mcp_runtime(monkeypatch)
+    compose_domains = worker.compose_domains
+    monkeypatch.setattr(
+        worker,
+        "compose_domains",
+        lambda *args: compose_domains(*args).model_copy(update={"coverage": "complete"}),
+    )
+
+    async def fake_run(_self, _root, **_kwargs):
+        return McpCheckpoint(state="provider_error", reason="AI provider request failed; prior evidence is retained.")
+
+    monkeypatch.setattr(worker.McpImpactAgent, "run_mcp", fake_run)
+    now = NOW + timedelta(minutes=61)
+    monkeypatch.setattr(worker, "utc_now", lambda: now)
+    await service._poll(root)  # noqa: SLF001
+    final = artifacts[-1]
+    assert (final.mcp.state, final.mcp.carried) == ("provider_error", None)
+    assert final.deterministic_assessment.coverage == "complete"
+    assert (final.assessment.coverage, final.report.coverage, final.report.verdict_source) == (
+        "partial",
+        "partial",
+        "rule",
+    )
+    assert (
+        "Rule-derived verdict: the AI agent did not conclude (AI provider request failed; prior evidence is retained.)."
+        in final.assessment.gaps
+    )
+    assert collection.update_one.await_args_list[-1].args[1]["$set"]["status"] == "incomplete"
+
+
 async def test_expiry_checkpoint_with_a_due_complete_agent_run_still_completes(monkeypatch):
     service, root, collection, artifacts, _ = mcp_runtime(monkeypatch)
 

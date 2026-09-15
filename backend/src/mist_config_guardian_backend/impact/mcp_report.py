@@ -48,7 +48,11 @@ def compose_assessment(
         # Checkpoint reasons are Guardian-authored fixed texts, never provider or MCP output.
         reason = (checkpoint.reason or "Agent investigation is incomplete.")[:300]
         gap = f"Rule-derived verdict: the AI agent did not conclude ({reason})."
-        return deterministic.model_copy(update={"gaps": tuple(dict.fromkeys((*deterministic.gaps, gap)))}), "rule"
+        update: dict[str, object] = {"gaps": tuple(dict.fromkeys((*deterministic.gaps, gap)))}
+        if final and deterministic.coverage == "complete":
+            # Agent failure stays explicit: the final checkpoint cannot complete the investigation on rules alone.
+            update["coverage"] = "partial"
+        return deterministic.model_copy(update=update), "rule"
     conclusion, _, carried_from = effective
     raised = (
         deterministic.impact in {"warning", "critical"}
