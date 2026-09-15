@@ -32,7 +32,7 @@ from mist_config_guardian_backend.security.credentials import (
     CredentialDecryptionError,
     CredentialVault,
 )
-from mist_config_guardian_backend.services.approvals import compute_plan_hash
+from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
 from mist_config_guardian_backend.services.restore_outcome import possibly_applied, unconfirmed_write
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
@@ -548,6 +548,15 @@ def _plan_header(operation_id: PydanticObjectId, actions: Sequence[RestoreAction
 
 
 @dataclass
+class _Earlier:
+    """What the compensations already planned for a restore leave for the next planning."""
+
+    reusable: RestoreOperation | None = None
+    stale: list[PydanticObjectId] = field(default_factory=list)
+    already_reversed: set[int] = field(default_factory=set)
+
+
+@dataclass
 class _Reversal:
     """The inverse actions of one restore, and what must be said about them before they run."""
 
@@ -564,10 +573,12 @@ class RestoreCompensationService:
         vault: CredentialVault | None = None,
         *,
         plans: RestorePlanRepository | None = None,
+        approvals: ApprovalService | None = None,
     ) -> None:
         self._store = store or get_restore_state_store()
         self._vault = vault or CredentialVault(get_settings())
         self._plans = plans or get_restore_plan_repository()
+        self._approvals = approvals or ApprovalService()
 
     async def create_compensation_plan(
         self,
@@ -594,31 +605,12 @@ class RestoreCompensationService:
             msg = "No safety snapshot was captured for this restore, so it cannot be reversed automatically"
             raise RestoreCompensationError(msg)
 
-        already_reversed: set[int] = set()
-        stale: list[PydanticObjectId] = []
-        for earlier in reversed(await self._store.compensations_of(operation.organization_id, operation.id)):
-            plan = await self._plans.load(operation.organization_id, earlier.operation_id)
-            if plan is None:
-                continue
-            if plan.status is RestoreStatus.PLANNED:
-                if earlier.plan_hash == compute_plan_hash(plan.actions):
-                    return plan
-                # Reviewed under an earlier plan-hash formula, so execution
-                # refuses it as changed; returning it again would leave the
-                # failed restore with no compensation that can ever run. It is
-                # retired once its replacement exists.
-                stale.append(earlier.operation_id)
-                continue
-            if plan.status in {RestoreStatus.QUEUED, RestoreStatus.RUNNING}:
-                msg = "A compensation of this restore is already queued or running"
-                raise RestoreCompensationError(msg)
-            already_reversed.update(
-                action.compensates_action_order
-                for action in plan.actions
-                if action.status is RestoreActionStatus.COMPLETED and action.compensates_action_order is not None
-            )
+        earlier = await self._earlier_compensations(operation.organization_id, operation.id)
+        if earlier.reusable is not None and earlier.reusable.id is not None:
+            await self._retire_stale(operation.organization_id, earlier.stale, earlier.reusable.id)
+            return earlier.reusable
 
-        reversal = await self._reverse(operation, state, already_reversed)
+        reversal = await self._reverse(operation, state, earlier.already_reversed)
         actions = reversal.actions
 
         compensation = RestoreOperation(
@@ -649,8 +641,47 @@ class RestoreCompensationService:
         )
         state.compensation_operation_id = compensation.id
         await self._store.save(state)
-        await self._retire_stale(operation.organization_id, stale, compensation.id)
+        await self._retire_stale(operation.organization_id, earlier.stale, compensation.id)
         return compensation
+
+    async def _earlier_compensations(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> _Earlier:
+        """Read the compensations already planned for a restore, newest first.
+
+        A planned one still hashing as reviewed is reused. Every other planned
+        one is stale: reviewed under an earlier plan-hash formula, so execution
+        refuses it as changed, or a leftover of a planning that stopped before
+        retiring it. Both are retired once the plan that replaces them exists;
+        returning one again would leave the failed restore with no compensation
+        that can ever run. Once a plan is reused only leftovers matter;
+        otherwise one queued or running refuses the new planning, and the
+        reversals finished ones completed are not planned again.
+        """
+        earlier = _Earlier()
+        for state in reversed(await self._store.compensations_of(organization_id, operation_id)):
+            plan = await self._plans.load(organization_id, state.operation_id)
+            if plan is None:
+                continue
+            if plan.status is RestoreStatus.PLANNED:
+                if earlier.reusable is None and state.plan_hash == compute_plan_hash(plan.actions):
+                    earlier.reusable = plan
+                else:
+                    earlier.stale.append(state.operation_id)
+                continue
+            if earlier.reusable is not None:
+                continue
+            if plan.status in {RestoreStatus.QUEUED, RestoreStatus.RUNNING}:
+                msg = "A compensation of this restore is already queued or running"
+                raise RestoreCompensationError(msg)
+            earlier.already_reversed.update(
+                action.compensates_action_order
+                for action in plan.actions
+                if action.status is RestoreActionStatus.COMPLETED and action.compensates_action_order is not None
+            )
+        return earlier
 
     async def _retire_stale(
         self,
@@ -661,13 +692,24 @@ class RestoreCompensationService:
         """Supersede compensations that can no longer run, now that their replacement is linked.
 
         Retiring only after the replacement exists means a failure in between
-        leaves an unrunnable plan behind rather than no plan at all, and the
-        next planning retires it again.
+        leaves an unrunnable plan behind rather than no plan at all; the next
+        planning reuses the replacement and retires the leftover then. A
+        pending or granted approval on a retired plan is invalidated with it,
+        so nothing waits in the approval queue for a plan that will never run.
         """
         for stale_id in stale:
             if not await self._plans.supersede_planned(organization_id, stale_id, replacement_id):
                 # It left PLANNED meanwhile; the new plan is still the one linked.
                 logger.warning("restore_compensation_not_superseded operation_id=%s", stale_id)
+                continue
+            try:
+                await self._approvals.invalidate_superseded(organization_id, stale_id)
+            except Exception as exc:  # noqa: BLE001 - the replacement exists; a failed invalidation must not hide it
+                logger.warning(
+                    "restore_compensation_approval_not_invalidated operation_id=%s error_type=%s",
+                    stale_id,
+                    type(exc).__name__,
+                )
 
     async def _reverse(
         self,

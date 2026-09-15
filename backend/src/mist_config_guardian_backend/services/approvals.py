@@ -475,7 +475,7 @@ class ApprovalService:
         if approval.intent_hash != compute_intent_hash(
             prepared
         ) or approval.action_signature != compute_action_signature(prepared.actions):
-            await self._invalidate_if_superseded(approval, source)
+            await self._invalidate_if_superseded(approval, source.organization_id, source.id)
             return "not_carried"
         approval.restore_operation_id = prepared.id
         approval.plan_hash = compute_plan_hash(prepared.actions)
@@ -484,6 +484,17 @@ class ApprovalService:
         approval.delete_count = delete_count(prepared)
         await self._store.save(approval)
         return "carried"
+
+    async def invalidate_superseded(self, organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> None:
+        """Retire the pending or granted approval left on a plan another plan superseded.
+
+        Called by whatever superseded the plan, once it has; the stored plan is
+        still checked, so an approval on a plan that is not superseded stays.
+        """
+        approval = await self._store.find_by_operation(organization_id, operation_id)
+        if approval is None or approval.status not in {ApprovalStatus.PENDING, ApprovalStatus.APPROVED}:
+            return
+        await self._invalidate_if_superseded(approval, organization_id, operation_id)
 
     # ------------------------------------------------------------------ read
     async def get(
@@ -577,19 +588,24 @@ class ApprovalService:
         await self._announce(approval)
         return approval
 
-    async def _invalidate_if_superseded(self, approval: RestoreApproval, source: RestoreOperation) -> None:
-        """Retire an approval its superseded draft can no longer use.
+    async def _invalidate_if_superseded(
+        self,
+        approval: RestoreApproval,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId | None,
+    ) -> None:
+        """Retire an approval its superseded plan can no longer use.
 
-        A superseded draft is never prepared or executed again, so a pending or
-        granted decision left on it would sit in the queue with nothing to
-        apply to. The stored draft is read rather than the copy the caller
-        loaded before preparing: that copy predates the supersede. A draft that
-        was not superseded, because another preparation got there first, keeps
-        its approval.
+        A superseded draft or compensation is never prepared or executed again,
+        so a pending or granted decision left on it would sit in the queue with
+        nothing to apply to. The stored plan is read rather than a copy the
+        caller loaded earlier: that copy predates the supersede. A plan that
+        was not superseded, because another writer got there first, keeps its
+        approval.
         """
-        if source.id is None:
+        if operation_id is None:
             return
-        stored = await self._store.load_operation(source.organization_id, source.id)
+        stored = await self._store.load_operation(organization_id, operation_id)
         if stored is None or stored.status != RestoreStatus.SUPERSEDED:
             return
         approval.status = ApprovalStatus.INVALIDATED

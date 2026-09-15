@@ -19,6 +19,7 @@ from mist_config_guardian_backend.api.routes.restores import (
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.integrations.mist_mutation import MistMutationError
 from mist_config_guardian_backend.main import create_app
+from mist_config_guardian_backend.models.approval import ApprovalStatus, RestoreApproval
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
@@ -2009,7 +2010,9 @@ async def test_a_planned_compensation_hashed_under_an_older_formula_is_replaced(
     stale.encrypted_delegated_credential = "v1:should-not-be-here"
     await _link_earlier_compensation(store, stale, plan_hash="hashed-before-targets-and-payload-were-covered")
     plans = _MemoryPlans([operation, stale])
-    service = RestoreCompensationService(store, plans=plans)
+    service = RestoreCompensationService(
+        store, plans=plans, approvals=ApprovalService(_MemoryApprovals(plans, []), AsyncMock())
+    )
 
     plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
     plans.plans.append(plan)
@@ -2024,6 +2027,90 @@ async def test_a_planned_compensation_hashed_under_an_older_formula_is_replaced(
     linked = await service.compensation_for(operation)
     assert linked is not None
     assert linked.id == COMPENSATION_ID
+
+
+class _MemoryApprovals(_NoApprovals):
+    """Approvals bound to plans, which retiring a plan can invalidate."""
+
+    def __init__(self, plans: _MemoryPlans, items: list[RestoreApproval]) -> None:
+        self.plans = plans
+        self.items = items
+
+    async def find_by_operation(self, organization_id, restore_operation_id):
+        return next(
+            (
+                item
+                for item in self.items
+                if item.restore_operation_id == restore_operation_id and item.organization_id == organization_id
+            ),
+            None,
+        )
+
+    async def load_operation(self, organization_id, restore_operation_id):
+        return await self.plans.load(organization_id, restore_operation_id)
+
+
+def _approval_of(plan: RestoreOperation, status: ApprovalStatus) -> RestoreApproval:
+    return RestoreApproval.model_construct(
+        id=PydanticObjectId(),
+        organization_id=ORGANIZATION_ID,
+        restore_operation_id=plan.id,
+        requested_by=ADMINISTRATOR_ID,
+        requested_by_email="admin@example.com",
+        plan_hash=compute_plan_hash(plan.actions),
+        triggered_rules=[],
+        status=status,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        summary="",
+        object_count=0,
+        delete_count=0,
+    )
+
+
+_STALE_HASH = "hashed-before-targets-and-payload-were-covered"
+
+
+@pytest.mark.usefixtures("offline_documents")
+@pytest.mark.parametrize("decision", [ApprovalStatus.PENDING, ApprovalStatus.APPROVED])
+async def test_retiring_a_stale_compensation_invalidates_the_approval_left_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+    decision: ApprovalStatus,
+) -> None:
+    """A superseded plan never runs, so a decision left on it would sit in the queue with nothing to apply to."""
+    operation, store = await _applied_plan(monkeypatch)
+    stale = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, stale, plan_hash=_STALE_HASH)
+    plans = _MemoryPlans([operation, stale])
+    approvals = _MemoryApprovals(plans, [_approval_of(stale, decision)])
+    service = RestoreCompensationService(store, plans=plans, approvals=ApprovalService(approvals, AsyncMock()))
+
+    await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+
+    assert stale.status is RestoreStatus.SUPERSEDED
+    assert approvals.items[0].status is ApprovalStatus.INVALIDATED
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_stale_compensation_left_behind_is_retired_when_its_replacement_is_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planning stopped after the replacement was linked; the next planning finishes retiring what it replaced."""
+    operation, store = await _applied_plan(monkeypatch)
+    leftover = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, leftover, plan_hash=_STALE_HASH)
+    replacement = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, replacement, plan_hash=compute_plan_hash(replacement.actions))
+    plans = _MemoryPlans([operation, leftover, replacement])
+    approvals = _MemoryApprovals(plans, [_approval_of(leftover, ApprovalStatus.APPROVED)])
+    service = RestoreCompensationService(store, plans=plans, approvals=ApprovalService(approvals, AsyncMock()))
+
+    plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+
+    assert plan is replacement
+    assert replacement.status is RestoreStatus.PLANNED
+    assert leftover.status is RestoreStatus.SUPERSEDED
+    assert leftover.superseded_by == replacement.id
+    assert approvals.items[0].status is ApprovalStatus.INVALIDATED
 
 
 @pytest.mark.usefixtures("offline_documents")
