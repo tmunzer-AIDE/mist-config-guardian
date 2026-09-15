@@ -427,7 +427,11 @@ class RestoreCompensationService:
         follow_ups: list[str] = []
         actions: list[RestoreAction] = []
         for action in reversible:
-            if action.outcome_unknown and action.action is RestoreActionType.CREATE:
+            if (
+                action.status is RestoreActionStatus.FAILED
+                and action.outcome_unknown
+                and action.action is RestoreActionType.CREATE
+            ):
                 # Mist never returned an id, so there is nothing to target
                 # without guessing; a person has to look.
                 follow_ups.append(

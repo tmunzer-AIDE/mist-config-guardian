@@ -975,6 +975,25 @@ async def test_an_unattempted_action_carrying_an_inherited_unconfirmed_flag_is_n
     assert [action.object_name for action in plan.actions] == ["wlan-2", "wlan-1", "wlan-0"]
 
 
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_completed_create_carrying_an_inherited_unconfirmed_flag_is_deleted_by_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    # A compensating CREATE that ran copies the flag of the delete it reversed,
+    # but Mist answered it with an id, so it is reversed like any other create.
+    operation.actions[0].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert plan.actions[-1].action is RestoreActionType.DELETE
+    assert plan.actions[-1].current_mist_id == "new-uuid"
+    assert not any("may have been created in Mist" in warning for warning in plan.warnings)
+
+
 def test_an_inverse_create_may_find_the_object_its_unconfirmed_delete_never_removed() -> None:
     recreate = _action(0, RestoreActionType.CREATE)
     recreate.outcome_unknown = True

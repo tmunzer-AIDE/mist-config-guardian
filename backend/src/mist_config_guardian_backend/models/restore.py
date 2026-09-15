@@ -69,7 +69,9 @@ class RestoreAction(BaseModel):
     error: str | None = None
     # The write was in flight when Mist stopped answering, so it may have been
     # applied. Such an action is FAILED, and compensation treats it as possibly
-    # applied rather than as never attempted.
+    # applied rather than as never attempted. A compensation action copies the
+    # flag from the write it reverses before it runs, so on any other status
+    # it describes that original write, not this action.
     outcome_unknown: bool = False
     # On a compensation action: the order of the original action it reverses.
     compensates_action_order: int | None = None

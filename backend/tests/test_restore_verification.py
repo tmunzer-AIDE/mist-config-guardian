@@ -847,6 +847,58 @@ async def test_an_unconfirmed_delete_that_never_happened_is_not_recreated(monkey
 
 
 @pytest.mark.usefixtures("executed")
+async def test_a_compensation_that_changes_nothing_fails_despite_inherited_unconfirmed_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recreate = _action(0, RestoreActionType.CREATE)
+    rejected = _action(1, RestoreActionType.UPDATE)
+    pending = _action(2, RestoreActionType.UPDATE)
+    for action in (recreate, rejected, pending):
+        action.outcome_unknown = True
+    entry = SafetySnapshotEntry(
+        logical_object_id=recreate.logical_object_id,
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        site_mist_id="site-a",
+        existed=True,
+    )
+
+    async def _snapshot(*_args, **_kwargs):
+        return [entry]
+
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
+    store = _MemoryStateStore()
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=OPERATION_ID,
+            plan_hash="plan-hash",
+            compensates_operation_id=SOURCE_OPERATION_ID,
+        )
+    )
+    operation = _operation([recreate, rejected, pending])
+    client = _FailingClient(MistMutationStatusError("Mist failed to update wlans (400)", status_code=400))
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, store=store, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-1")]
+    assert [action.status for action in result.actions] == [
+        RestoreActionStatus.SKIPPED,
+        RestoreActionStatus.FAILED,
+        RestoreActionStatus.PENDING,
+    ]
+    assert result.actions[1].outcome_unknown is False
+    assert result.status is RestoreStatus.FAILED
+    assert result.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
+
+
+@pytest.mark.usefixtures("executed")
 async def test_an_unconfirmed_delete_that_did_happen_is_recreated(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _mark(_organization_id, _operation_id) -> None:
         return

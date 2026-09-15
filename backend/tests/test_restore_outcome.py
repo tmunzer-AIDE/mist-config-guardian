@@ -1,5 +1,6 @@
 """Which terminal status a stopped restore gets, and what happens to writes in flight."""
 
+import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.models.restore import (
@@ -44,6 +45,15 @@ def test_an_unconfirmed_write_makes_the_restore_compensable() -> None:
     actions = [_action(0, RestoreActionStatus.FAILED, outcome_unknown=True)]
 
     assert terminal_failure_status(actions) is RestoreStatus.COMPENSATION_AVAILABLE
+
+
+@pytest.mark.parametrize("status", [RestoreActionStatus.PENDING, RestoreActionStatus.SKIPPED])
+def test_an_inherited_unconfirmed_flag_on_an_unattempted_action_is_a_plain_failure(
+    status: RestoreActionStatus,
+) -> None:
+    actions = [_action(0, RestoreActionStatus.FAILED), _action(1, status, outcome_unknown=True)]
+
+    assert terminal_failure_status(actions) is RestoreStatus.FAILED
 
 
 def test_writes_in_flight_are_marked_unconfirmed() -> None:
