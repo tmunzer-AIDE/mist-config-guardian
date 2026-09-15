@@ -1389,6 +1389,51 @@ async def test_a_compensation_stopped_by_an_unexpected_error_after_a_write_fails
     assert notifications.failed == ["Restore worker error (RuntimeError)"]
 
 
+@pytest.mark.usefixtures("executed")
+@pytest.mark.parametrize(
+    ("stop", "order"),
+    [
+        # Mist applied wlan-0; recording it is what failed.
+        pytest.param("bookkeeping", 0, id="after-a-completed-write"),
+        # wlan-0 is done and wlan-1 never started: the run stopped before it.
+        pytest.param("between", 1, id="before-the-next-action"),
+        # Every action finished; no single one is where the run stopped.
+        pytest.param("verification", None, id="after-every-action"),
+    ],
+)
+async def test_an_unexpected_error_names_the_action_the_run_stopped_at(
+    monkeypatch: pytest.MonkeyPatch,
+    stop: str,
+    order: int | None,
+) -> None:
+    operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
+    executor, notifications, verifier, _ = _run(monkeypatch, operation, verified=True)
+    beats = 0
+
+    async def _beat(self, _operation) -> None:  # noqa: ARG001
+        nonlocal beats
+        beats += 1
+        # The first beat follows the snapshot, the next ones precede each action.
+        if stop == "between" and beats == 3:
+            msg = "connection reset"
+            raise RuntimeError(msg)
+
+    async def _database_gone(*_args, **_kwargs) -> None:
+        msg = "connection reset"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(RestoreExecutor, "_heartbeat", _beat)
+    if stop == "bookkeeping":
+        monkeypatch.setattr(RestoreExecutor, "_record_result", _database_gone)
+    if stop == "verification":
+        monkeypatch.setattr(verifier, "verify", _database_gone)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert notifications.failed == ["Restore worker error (RuntimeError)"]
+    assert result.failure_action_order == order
+
+
 class _UnreachableNotifications(_StubNotifications):
     """Records each failure notification, then fails to deliver it."""
 

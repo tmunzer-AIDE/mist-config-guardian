@@ -469,8 +469,8 @@ class RestoreExecutor:
     ) -> _RunOutcome:
         outcome = _RunOutcome()
         for index, action in enumerate(operation.actions):
-            await self._heartbeat(operation)
             try:
+                await self._heartbeat(operation)
                 payload = await self._execute_action(
                     client,
                     organization,
@@ -500,6 +500,16 @@ class RestoreExecutor:
                 )
                 outcome.succeeded = False
                 return outcome
+            except (RestoreLeaseLostError, RestoreOwnershipLostError):
+                # Nothing more is recorded for a run this worker no longer owns.
+                raise
+            except Exception:
+                # Named before the last-resort close saves the failure, so the
+                # run points at the action it stopped at, whether that action's
+                # write had already happened or the run never reached it.
+                if operation.failure_action_order is None:
+                    operation.failure_action_order = action.order
+                raise
         return outcome
 
     async def _notify_failure(self, operation: RestoreOperation, reason: str) -> None:

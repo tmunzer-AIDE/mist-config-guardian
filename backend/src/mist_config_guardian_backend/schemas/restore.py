@@ -125,6 +125,9 @@ class RestoreOperationResponse(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     task_id: str | None
+    # The order of the action a stopped run is halted at. A run can stop on an
+    # action that did not fail, so a client cannot find it by status alone.
+    failure_action_order: int | None = None
     approval: ApprovalResponse | None = None
     # Whether policy needs a second administrator for this plan, evaluated for
     # each response, so a draft can ask for approval before it is prepared.
@@ -171,6 +174,7 @@ class RestoreOperationResponse(BaseModel):
             completed_at=operation.completed_at,
             created_at=operation.created_at,
             task_id=operation.task_id,
+            failure_action_order=operation.failure_action_order,
         )
 
 

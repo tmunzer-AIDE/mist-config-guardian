@@ -8005,6 +8005,17 @@
             ],
             "title": "Credential Actor"
           },
+          "failure_action_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Action Order"
+          },
           "id": {
             "title": "Id",
             "type": "string"

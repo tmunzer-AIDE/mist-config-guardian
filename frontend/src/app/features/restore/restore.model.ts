@@ -100,6 +100,8 @@ export interface RestoreOperation {
   completed_at: string | null;
   created_at: string;
   task_id: string | null;
+  /** The order of the action a stopped run is halted at; null when no single action is. */
+  failure_action_order?: number | null;
   /** Null when no policy rule asked for a second administrator. */
   approval?: ApprovalRequest | null;
   /** Policy needs a second administrator for this plan, whether or not anyone has asked yet. */
@@ -304,9 +306,21 @@ export function progressPercent(operation: RestoreOperation): number {
   return Math.round((100 * appliedCount(operation)) / total);
 }
 
-/** The first action the worker could not apply, or null. */
+/**
+ * The action a stopped run is halted at, or null.
+ *
+ * A write that failed names itself. A run can also stop on an action that did
+ * not fail, such as a write that reached Mist but could not be recorded, so the
+ * order the worker recorded comes next. A run that stopped after every action
+ * finished is halted at none of them.
+ */
 export function failedAction(operation: RestoreOperation): RestoreAction | null {
-  return orderedActions(operation).find((action) => action.status === 'failed') ?? null;
+  const actions = orderedActions(operation);
+  return (
+    actions.find((action) => action.status === 'failed') ??
+    actions.find((action) => action.order === operation.failure_action_order) ??
+    null
+  );
 }
 
 /**
