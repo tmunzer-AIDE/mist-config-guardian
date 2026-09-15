@@ -533,6 +533,20 @@ def _remapped(value: object, id_map: Mapping[str, str]) -> object:
     return value
 
 
+def _plan_header(operation_id: PydanticObjectId, actions: Sequence[RestoreAction]) -> str:
+    """Say what a compensation reverses without claiming a write happened that may not have.
+
+    A reversal carries ``outcome_unknown`` only when the write it undoes may
+    never have reached Mist, so that is what is counted. Only counts are
+    stated, never configuration.
+    """
+    unconfirmed = sum(1 for action in actions if action.outcome_unknown)
+    lead = f"Compensating plan for restore {operation_id}: reverses {len(actions)}"
+    if not unconfirmed:
+        return f"{lead} applied actions in reverse dependency order"
+    return f"{lead} actions in reverse dependency order; {unconfirmed} of them may never have been applied"
+
+
 @dataclass
 class _Reversal:
     """The inverse actions of one restore, and what must be said about them before they run."""
@@ -614,13 +628,7 @@ class RestoreCompensationService:
             include_dependencies=False,
             target_at=operation.target_at,
             actions=actions,
-            warnings=[
-                (
-                    f"Compensating plan for restore {operation.id}: reverses "
-                    f"{len(actions)} applied actions in reverse dependency order"
-                ),
-                *reversal.follow_ups,
-            ],
+            warnings=[_plan_header(operation.id, actions), *reversal.follow_ups],
             # A compensation plan is reviewed like any other. It keeps a masked
             # secret on purpose when no stored version can supply one, so it is
             # exactly the plan most likely to carry one into authorization.

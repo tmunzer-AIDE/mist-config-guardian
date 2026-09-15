@@ -1836,6 +1836,26 @@ async def test_only_the_reversal_of_an_unconfirmed_update_goes_without_an_expect
     assert by_original[1].outcome_unknown is False
     assert "wlan-3 was not confirmed, so its reversal cannot check for changes made since" in plan.warnings
     assert not any(warning.startswith("wlan-1") for warning in plan.warnings)
+    # Only three of the four writes it reverses are known to have happened.
+    assert plan.warnings[0] == (
+        f"Compensating plan for restore {OPERATION_ID}: reverses 4 actions in reverse dependency order; "
+        "1 of them may never have been applied"
+    )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_compensation_of_confirmed_writes_says_every_action_it_reverses_was_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    assert plan.warnings[0] == (
+        f"Compensating plan for restore {OPERATION_ID}: reverses 3 applied actions in reverse dependency order"
+    )
 
 
 @pytest.mark.usefixtures("offline_documents")
