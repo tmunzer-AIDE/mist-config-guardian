@@ -11,6 +11,7 @@ from typing import Literal, Self, cast
 import httpx
 
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
+from mist_config_guardian_backend.integrations.mist_paging import is_last_page
 from mist_config_guardian_backend.integrations.mist_session import SESSION_PREFIX, credential_headers, logout_session
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition
@@ -187,9 +188,7 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
                 msg = f"Mist returned an invalid list for {definition.key}"
                 raise MistMutationError(msg)
             items.extend(cast("dict[str, object]", item) for item in payload if isinstance(item, dict))
-            total = self._integer_header(sent.response, "X-Page-Total")
-            limit = self._integer_header(sent.response, "X-Page-Limit") or len(payload)
-            if not payload or total is None or page * limit >= total:
+            if is_last_page(sent.response, page=page, page_items=len(payload)):
                 return items
             page += 1
 
@@ -307,14 +306,3 @@ class MistMutationClient(AbstractAsyncContextManager["MistMutationClient"]):
         except ValueError as exc:
             msg = f"Mist returned invalid JSON after {action} of {object_type}"
             raise MistMutationError(msg, outcome_unknown=write) from exc
-
-    @staticmethod
-    def _integer_header(response: httpx.Response, name: str) -> int | None:
-        """Read a paging header the way the collector does, so both walk the same pages."""
-        value = response.headers.get(name)
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except ValueError:
-            return None

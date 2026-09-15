@@ -893,6 +893,101 @@ async def test_a_listing_mist_refuses_fails_the_preflight_without_its_values(
     assert "restore_preflight_debug" in caplog.text
 
 
+async def test_the_name_check_reads_the_stored_name_without_decrypting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    create = _action(0, RestoreActionType.CREATE)
+    create.protected_configuration = {"name": "wlan-0", "psk": {"$encrypted": "not-a-ciphertext"}}
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0"}]})
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist"):
+        await capture_safety_snapshot(client, _organization(), _operation([create]), _vault())
+
+
+_CORP_COLLISION = (
+    "Corp: a wlans named 'Corp' already exists in Mist; it may have been recreated manually. "
+    "Rename or remove it, then rebuild the plan"
+)
+
+
+def _org_wlan(template_id: str | None, *, order: int = 0) -> RestoreAction:
+    configuration: dict[str, object] = {"ssid": "Corp"}
+    if template_id is not None:
+        configuration["template_id"] = template_id
+    return RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=order,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="wlans",
+        object_name="Corp",
+        current_mist_id=f"mist-{order}",
+        protected_configuration=configuration,
+    )
+
+
+def _live_org_wlan(template_id: str | None) -> dict[str, object]:
+    item: dict[str, object] = {"id": "manual-uuid", "ssid": "Corp"}
+    if template_id is not None:
+        item["template_id"] = template_id
+    return item
+
+
+@pytest.mark.parametrize(
+    ("restored", "live"),
+    [("template-a", "template-b"), (None, "template-a"), ("template-a", None)],
+)
+async def test_an_org_wlan_does_not_collide_with_the_same_ssid_in_another_template(
+    monkeypatch: pytest.MonkeyPatch,
+    restored: str | None,
+    live: str | None,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", None): [_live_org_wlan(live)]})
+
+    entries = await capture_safety_snapshot(client, _organization(), _operation([_org_wlan(restored)]), _vault())
+
+    assert [entry.order for entry in entries] == [0]
+    assert client.listed == [("wlans", None)]
+
+
+@pytest.mark.parametrize("template_id", ["template-a", None])
+async def test_an_org_wlan_collides_with_the_same_ssid_in_its_own_template(
+    monkeypatch: pytest.MonkeyPatch,
+    template_id: str | None,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", None): [_live_org_wlan(template_id)]})
+
+    with pytest.raises(MistMutationError) as error:
+        await capture_safety_snapshot(client, _organization(), _operation([_org_wlan(template_id)]), _vault())
+
+    assert str(error.value) == _CORP_COLLISION
+
+
+async def test_org_wlans_in_several_templates_share_one_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", None): [_live_org_wlan("template-c")]})
+    operation = _operation([_org_wlan("template-a"), _org_wlan("template-b", order=1)])
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert len(entries) == 2
+    assert client.listed == [("wlans", None)]
+
+
+async def test_a_site_wlan_collides_whatever_template_id_it_carries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    create = _action(0, RestoreActionType.CREATE)
+    create.protected_configuration = {"name": "wlan-0", "template_id": "template-a"}
+    client = _FakeMistClient(
+        {}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0", "template_id": "template-b"}]}
+    )
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist"):
+        await capture_safety_snapshot(client, _organization(), _operation([create]), _vault())
+
+
 async def _no_stored_version(_logical_id):
     return None
 

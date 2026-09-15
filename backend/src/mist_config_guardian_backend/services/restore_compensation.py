@@ -46,7 +46,7 @@ from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash,
     configuration_hash_matches,
 )
-from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
+from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, explicit_name, get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     SecretPath,
     find_unavailable_secrets,
@@ -161,7 +161,7 @@ async def capture_safety_snapshot(
             # A reversal that finds its object still present is skipped at
             # execution, so it creates nothing that could collide.
             if action.action is RestoreActionType.CREATE and not (action.outcome_unknown and current is not None):
-                await _refuse_name_collision(client, organization, action, definition, vault=vault, listings=listings)
+                await _refuse_name_collision(client, organization, action, definition, listings)
         except MistMutationError:
             await _log_preflight_diagnostics(operation, action, current, vault)
             raise
@@ -181,32 +181,46 @@ async def capture_safety_snapshot(
 def restore_name(definition: ObjectDefinition, configuration: Mapping[str, object]) -> str | None:
     """The explicit display name a configuration carries, if any.
 
-    ``None`` means there is nothing to compare a live object against, so no
-    collision can be established and none is claimed.
+    The collector's own reading of a name, so a collision is judged by the name
+    a backup shows. ``None`` means there is nothing to compare a live object
+    against, so no collision can be established and none is claimed.
     """
-    for field_name in definition.name_fields:
-        value = configuration.get(field_name)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    return explicit_name(configuration, definition)
 
 
-async def _refuse_name_collision(  # noqa: PLR0913 - one argument per fact the check needs
+def _same_name_group(
+    definition: ObjectDefinition,
+    configuration: Mapping[str, object],
+    item: Mapping[str, object],
+) -> bool:
+    """Whether a live object shares the namespace a created object's name must be unique in.
+
+    Organization WLANs belong to a WLAN template, and the same SSID in several
+    templates is ordinary. A WLAN without a template is grouped only with other
+    WLANs without one.
+    """
+    if definition.scope == "org" and definition.key == "wlans":
+        return configuration.get("template_id") == item.get("template_id")
+    return True
+
+
+async def _refuse_name_collision(
     client: MistMutationClient,
     organization: Organization,
     action: RestoreAction,
     definition: ObjectDefinition,
-    *,
-    vault: CredentialVault,
     listings: dict[tuple[str, str | None], list[dict[str, object]]],
 ) -> None:
     """Refuse to create an object Mist already holds under a new UUID with the same name.
 
     Someone who recreated the object by hand gave it a new UUID, so the old one
     reading as missing proves nothing. ``listings`` is shared across the pass so
-    each type is listed once per site.
+    each type is listed once per site; narrower groups are filtered in memory.
+    The name is read as stored: no name field is ever a sensitive one, so
+    nothing is decrypted to read it.
     """
-    name = restore_name(definition, reveal_configuration(action.protected_configuration, vault))
+    configuration = action.protected_configuration
+    name = restore_name(definition, configuration)
     if name is None:
         return
     scope = (definition.key, action.site_mist_id)
@@ -215,7 +229,11 @@ async def _refuse_name_collision(  # noqa: PLR0913 - one argument per fact the c
             definition, org_id=organization.mist_org_id, site_id=action.site_mist_id
         )
     for item in listings[scope]:
-        if item.get("id") != action.current_mist_id and restore_name(definition, item) == name:
+        if (
+            item.get("id") != action.current_mist_id
+            and _same_name_group(definition, configuration, item)
+            and restore_name(definition, item) == name
+        ):
             msg = (
                 f"{action.object_name}: a {definition.key} named '{name}' already exists in Mist; "
                 "it may have been recreated manually. Rename or remove it, then rebuild the plan"
