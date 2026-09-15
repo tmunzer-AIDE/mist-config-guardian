@@ -50,22 +50,35 @@ def _settings() -> Settings:
     return Settings(environment="test", credential_encryption_key="test-key")
 
 
+_DRIVER_MESSAGE = "configuration content in a driver message"
+_RECOVERY_LOGGER = "mist_config_guardian_backend.services.restore_recovery"
+
+
 class _Notifications:
-    def __init__(self) -> None:
+    def __init__(self, *, failures: int = 0) -> None:
         self.failed: list[str] = []
+        self.restore_ids: list[str] = []
+        self.failures = failures
 
     async def notify_restore_failed(self, *, organization_id, restore_id, reason, user_id=None):  # noqa: ARG002
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError(_DRIVER_MESSAGE)
         self.failed.append(reason)
+        self.restore_ids.append(restore_id)
 
 
 class _Authorization:
     """Records the logout request instead of reaching Mist."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, error: Exception | None = None) -> None:
         self.logged_out: list[dict[str, object]] = []
+        self.error = error
 
     async def logout_unused_credential(self, operation: dict[str, object]) -> None:
         self.logged_out.append(operation)
+        if self.error is not None:
+            raise self.error
 
 
 class _Updated:
@@ -79,6 +92,7 @@ class _ConditionalWrites:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict[str, object]], dict[str, object]]] = []
         self.modified = 1
+        self.errors: list[Exception | None] = []
 
 
 @pytest.fixture
@@ -91,6 +105,8 @@ def conditional_writes(monkeypatch: pytest.MonkeyPatch) -> _ConditionalWrites:
 
         async def update(self, change, *_args, **_kwargs) -> _Updated:
             writes.calls.append(([criterion.query for criterion in self.filters], change))
+            if writes.errors and (error := writes.errors.pop(0)) is not None:
+                raise error
             return _Updated(writes.modified)
 
     for name in ("id", "status", "updated_at"):
@@ -115,9 +131,9 @@ def _action(order: int, status: RestoreActionStatus) -> RestoreAction:
     )
 
 
-def _running(actions: list[RestoreAction]) -> RestoreOperation:
+def _running(actions: list[RestoreAction], *, identifier: PydanticObjectId = OPERATION_ID) -> RestoreOperation:
     return RestoreOperation.model_construct(
-        id=OPERATION_ID,
+        id=identifier,
         organization_id=ORGANIZATION_ID,
         requested_by=PydanticObjectId(),
         mode=RestoreMode.NON_DESTRUCTIVE,
@@ -190,3 +206,79 @@ async def test_the_janitor_leaves_a_run_whose_worker_wrote_first(conditional_wri
     assert len(conditional_writes.calls) == 1
     assert authorization.logged_out == []
     assert notifications.failed == []
+
+
+def _found(monkeypatch: pytest.MonkeyPatch, operations: list[RestoreOperation]) -> None:
+    class _Found:
+        async def to_list(self) -> list[RestoreOperation]:
+            return operations
+
+    monkeypatch.setattr(RestoreOperation, "find", lambda *_args, **_kwargs: _Found())
+
+
+def _two_stale(monkeypatch: pytest.MonkeyPatch) -> tuple[RestoreOperation, RestoreOperation]:
+    first = _running([_action(0, RestoreActionStatus.EXECUTING)], identifier=PydanticObjectId())
+    second = _running([_action(0, RestoreActionStatus.EXECUTING)], identifier=PydanticObjectId())
+    _found(monkeypatch, [first, second])
+    return first, second
+
+
+@pytest.mark.usefixtures("conditional_writes")
+async def test_a_lost_notification_neither_stops_recovery_nor_reaches_the_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first, second = _two_stale(monkeypatch)
+    notifications = _Notifications(failures=1)
+    authorization = _Authorization()
+    service = RestoreRecoveryService(
+        _settings(), CredentialVault(_settings()), notifications=notifications, authorization=authorization
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
+        assert await service.recover_interrupted(now=OBSERVED_AT + timedelta(minutes=20)) == 2
+
+    assert [entry["_id"] for entry in authorization.logged_out] == [first.id, second.id]
+    assert notifications.restore_ids == [str(second.id)]
+    assert f"restore_interrupt_notification_lost operation={first.id} error_type=RuntimeError" in caplog.text
+    assert _DRIVER_MESSAGE not in caplog.text
+
+
+@pytest.mark.usefixtures("conditional_writes")
+async def test_a_failed_logout_still_notifies_without_logging_its_message(caplog: pytest.LogCaptureFixture) -> None:
+    notifications = _Notifications()
+    service = RestoreRecoveryService(
+        _settings(),
+        CredentialVault(_settings()),
+        notifications=notifications,
+        authorization=_Authorization(error=RuntimeError(_DRIVER_MESSAGE)),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
+        closed = await service._interrupt(_running([_action(0, RestoreActionStatus.EXECUTING)]), OBSERVED_AT)  # noqa: SLF001
+
+    assert closed is True
+    assert notifications.failed == [INTERRUPTED_REASON]
+    assert f"restore_interrupt_logout_failed operation={OPERATION_ID} error_type=RuntimeError" in caplog.text
+    assert _DRIVER_MESSAGE not in caplog.text
+
+
+async def test_one_close_that_fails_does_not_stop_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+    conditional_writes: _ConditionalWrites,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first, second = _two_stale(monkeypatch)
+    conditional_writes.errors = [RuntimeError(_DRIVER_MESSAGE)]
+    notifications = _Notifications()
+    service = RestoreRecoveryService(
+        _settings(), CredentialVault(_settings()), notifications=notifications, authorization=_Authorization()
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
+        assert await service.recover_interrupted(now=OBSERVED_AT + timedelta(minutes=20)) == 1
+
+    assert len(conditional_writes.calls) == 2
+    assert notifications.restore_ids == [str(second.id)]
+    assert f"restore_interrupt_failed operation={first.id} error_type=RuntimeError" in caplog.text
+    assert _DRIVER_MESSAGE not in caplog.text

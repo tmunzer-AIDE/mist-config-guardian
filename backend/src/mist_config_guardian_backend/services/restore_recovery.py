@@ -48,8 +48,15 @@ class RestoreRecoveryService:
         ).to_list()
         recovered = 0
         for operation in stale:
-            if await self._interrupt(operation, instant):
-                recovered += 1
+            try:
+                if await self._interrupt(operation, instant):
+                    recovered += 1
+            except Exception as exc:  # noqa: BLE001 - one operation must not hold up the others' recovery
+                logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                    "restore_interrupt_failed operation=%s error_type=%s",
+                    operation.id,
+                    type(exc).__name__,
+                )
         return recovered
 
     async def _interrupt(self, operation: RestoreOperation, now: datetime) -> bool:
@@ -80,16 +87,32 @@ class RestoreRecoveryService:
         if result is None or result.modified_count != 1:
             return False
         logger.warning("restore_interrupted operation=%s status=%s", operation.id, status)
-        await self._authorization.logout_unused_credential(
-            {
-                "_id": operation.id,
-                "organization_id": operation.organization_id,
-                "encrypted_delegated_credential": encrypted,
-            }
-        )
-        await self._notifications.notify_restore_failed(
-            organization_id=operation.organization_id,
-            restore_id=str(operation.id),
-            reason=INTERRUPTED_REASON,
-        )
+        # The close is committed, so neither follow-up may stop the other or
+        # escape: an escaping error would lose this notification for good.
+        try:
+            await self._authorization.logout_unused_credential(
+                {
+                    "_id": operation.id,
+                    "organization_id": operation.organization_id,
+                    "encrypted_delegated_credential": encrypted,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed logout must not cost the notification
+            logger.error(  # noqa: TRY400 - a traceback could carry the credential or request content
+                "restore_interrupt_logout_failed operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
+        try:
+            await self._notifications.notify_restore_failed(
+                organization_id=operation.organization_id,
+                restore_id=str(operation.id),
+                reason=INTERRUPTED_REASON,
+            )
+        except Exception as exc:  # noqa: BLE001 - the operation is already closed; only the alert is lost
+            logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                "restore_interrupt_notification_lost operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
         return True
