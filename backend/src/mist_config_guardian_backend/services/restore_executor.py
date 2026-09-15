@@ -596,7 +596,7 @@ class RestoreExecutor:
             # Another writer closed the run and notified; a second close would overwrite it.
             logger.warning("restore_ownership_lost operation=%s", operation.id)
             return
-        except Exception as save_error:  # noqa: BLE001 - the janitor recovers an unsaved terminal state
+        except Exception as save_error:  # noqa: BLE001 - recovered later: running by the janitor, queued on credential expiry
             logger.error(  # noqa: TRY400 - a traceback could carry configuration content
                 "restore_terminal_state_unsaved operation=%s error_type=%s",
                 operation.id,
