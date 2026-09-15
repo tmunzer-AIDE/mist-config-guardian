@@ -12,7 +12,11 @@ from mist_config_guardian_backend.integrations.mist_mutation import MistMutation
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreAction, RestoreActionType
 from mist_config_guardian_backend.security.credentials import CredentialVault
-from mist_config_guardian_backend.services.restore_compensation import RestoreDriftError, build_snapshot_entry
+from mist_config_guardian_backend.services.restore_compensation import (
+    RestoreDriftError,
+    assess_live_state,
+    build_snapshot_entry,
+)
 from mist_config_guardian_backend.services.restore_planner import SafetySnapshotEntry
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash_matches
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition
@@ -25,10 +29,15 @@ class WriteCheck:
     ``recorded`` is true when the entry was taken here rather than by the
     up-front safety snapshot, so the caller must add it to the stored snapshot
     before writing: compensation can only undo what the snapshot describes.
+
+    ``skip`` is true when a reversal has nothing left to write: its object is
+    already where the reversal would leave it. The caller marks the action
+    skipped instead of writing, so it never counts as applied.
     """
 
     entry: SafetySnapshotEntry
     recorded: bool
+    skip: bool = False
 
 
 async def check_before_write(  # noqa: PLR0913 - every argument is a distinct fact about the write
@@ -48,27 +57,31 @@ async def check_before_write(  # noqa: PLR0913 - every argument is a distinct fa
 
     ``object_id`` and ``site_id`` are the identifiers after remapping, so an
     object under a site recreated earlier in the plan is read where it now is.
-    ``compensating`` keeps the relaxed semantics a compensation plan runs
-    under: the object must still exist, but it may differ from the snapshot.
+    ``compensating`` holds each reversal to what the restore it undoes wrote,
+    as the up-front capture did, and then to the safety snapshot like any
+    other write.
     """
     if entry is None and not deferred:
         msg = f"{action.object_name} has no pre-restore safety snapshot entry"
         raise RestoreDriftError(msg)
     if action.action is RestoreActionType.CREATE:
-        if entry is not None:
-            return WriteCheck(entry=entry, recorded=False)
-        current = None
-        if action.outcome_unknown:
-            # The inverse of a delete that may never have happened: its site may
-            # never have gone either, and the object still there must be found
-            # so the executor skips it instead of creating a duplicate.
-            current = await client.get_current(definition, object_id, org_id=organization.mist_org_id, site_id=site_id)
-        # Otherwise, under a site created moments ago nothing can exist yet.
-        recorded = await build_snapshot_entry(
-            action, definition, vault, current, mist_object_id=object_id, site_mist_id=site_id
+        return await _check_create(
+            client,
+            organization,
+            vault,
+            action,
+            definition,
+            object_id=object_id,
+            site_id=site_id,
+            entry=entry,
+            compensating=compensating,
         )
-        return WriteCheck(entry=recorded, recorded=True)
     live = await client.get_current(definition, object_id, org_id=organization.mist_org_id, site_id=site_id)
+    if compensating and assess_live_state(action, live, vault) == "already_reversed":
+        observed = entry or await build_snapshot_entry(
+            action, definition, vault, live, mist_object_id=object_id, site_mist_id=site_id
+        )
+        return WriteCheck(entry=observed, recorded=entry is None, skip=True)
     if live is None:
         msg = f"{action.object_name} no longer exists in Mist"
         raise RestoreDriftError(msg)
@@ -77,9 +90,41 @@ async def check_before_write(  # noqa: PLR0913 - every argument is a distinct fa
             action, definition, vault, live, mist_object_id=object_id, site_mist_id=site_id
         )
         return WriteCheck(entry=observed, recorded=True)
-    if not compensating and not configuration_hash_matches(
-        entry.configuration_hash, live, ignored_fields=definition.ignored_fields
-    ):
+    if not configuration_hash_matches(entry.configuration_hash, live, ignored_fields=definition.ignored_fields):
         msg = f"{action.object_name} changed in Mist after the pre-restore safety snapshot"
         raise RestoreDriftError(msg)
     return WriteCheck(entry=entry, recorded=False)
+
+
+async def _check_create(  # noqa: PLR0913 - the remapped identifiers are what the write targets
+    client: MistMutationClient,
+    organization: Organization,
+    vault: CredentialVault,
+    action: RestoreAction,
+    definition: ObjectDefinition,
+    *,
+    object_id: str,
+    site_id: str | None,
+    entry: SafetySnapshotEntry | None,
+    compensating: bool,
+) -> WriteCheck:
+    """Record where a CREATE lands, and skip one whose unconfirmed delete never removed the object.
+
+    Only the reversal of an unconfirmed delete carries ``outcome_unknown``
+    before it runs; the object still being there means that delete never
+    happened, and creating it again would leave two.
+    """
+    unconfirmed_reversal = compensating and action.outcome_unknown
+    if entry is not None:
+        return WriteCheck(entry=entry, recorded=False, skip=unconfirmed_reversal and entry.existed)
+    current = None
+    if unconfirmed_reversal:
+        # The inverse of a delete that may never have happened: its site may
+        # never have gone either, and the object still there must be found
+        # so the executor skips it instead of creating a duplicate.
+        current = await client.get_current(definition, object_id, org_id=organization.mist_org_id, site_id=site_id)
+    # Otherwise, under a site created moments ago nothing can exist yet.
+    recorded = await build_snapshot_entry(
+        action, definition, vault, current, mist_object_id=object_id, site_mist_id=site_id
+    )
+    return WriteCheck(entry=recorded, recorded=True, skip=unconfirmed_reversal and recorded.existed)

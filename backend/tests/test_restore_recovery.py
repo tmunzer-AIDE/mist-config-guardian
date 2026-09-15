@@ -18,6 +18,8 @@ from mist_config_guardian_backend.models.restore import (
     RestoreStatus,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services.restore_lease import MemoryRestoreLeaseStore
+from mist_config_guardian_backend.services.restore_planner import RestoreOperationState
 from mist_config_guardian_backend.services.restore_recovery import INTERRUPTED_REASON, RestoreRecoveryService
 from mist_config_guardian_backend.tasks import restores as restore_tasks
 from mist_config_guardian_backend.worker import celery_app
@@ -79,6 +81,44 @@ class _Authorization:
         self.logged_out.append(operation)
         if self.error is not None:
             raise self.error
+
+
+class _States:
+    """Plan state for the runs under test: none compensates anything unless told to."""
+
+    def __init__(self, *, compensates: PydanticObjectId | None = None, error: Exception | None = None) -> None:
+        self.compensates = compensates
+        self.error = error
+
+    async def load(self, organization_id, operation_id):
+        if self.error is not None:
+            raise self.error
+        if self.compensates is None:
+            return None
+        return RestoreOperationState(
+            organization_id=organization_id,
+            operation_id=operation_id,
+            plan_hash="plan-hash",
+            compensates_operation_id=self.compensates,
+        )
+
+
+def _service(
+    *,
+    notifications: "_Notifications | None" = None,
+    authorization: "_Authorization | None" = None,
+    leases: object | None = None,
+    store: _States | None = None,
+) -> RestoreRecoveryService:
+    """A janitor whose every collaborator is a fake, so no test reaches MongoDB or Mist."""
+    return RestoreRecoveryService(
+        _settings(),
+        CredentialVault(_settings()),
+        notifications=notifications or _Notifications(),
+        authorization=authorization or _Authorization(),
+        leases=leases or MemoryRestoreLeaseStore(),
+        store=store or _States(),
+    )
 
 
 class _Updated:
@@ -164,9 +204,7 @@ async def test_the_janitor_closes_only_the_state_it_read_and_clears_the_credenti
     assert encrypted is not None
     notifications = _Notifications()
     authorization = _Authorization()
-    service = RestoreRecoveryService(
-        _settings(), CredentialVault(_settings()), notifications=notifications, authorization=authorization
-    )
+    service = _service(notifications=notifications, authorization=authorization)
     now = OBSERVED_AT + timedelta(minutes=20)
 
     with caplog.at_level(logging.WARNING, logger="mist_config_guardian_backend.services.restore_recovery"):
@@ -197,9 +235,7 @@ async def test_the_janitor_leaves_a_run_whose_worker_wrote_first(conditional_wri
     conditional_writes.modified = 0
     notifications = _Notifications()
     authorization = _Authorization()
-    service = RestoreRecoveryService(
-        _settings(), CredentialVault(_settings()), notifications=notifications, authorization=authorization
-    )
+    service = _service(notifications=notifications, authorization=authorization)
 
     assert await service._interrupt(_running([_action(0, RestoreActionStatus.EXECUTING)]), OBSERVED_AT) is False  # noqa: SLF001
 
@@ -231,9 +267,7 @@ async def test_a_lost_notification_neither_stops_recovery_nor_reaches_the_logs(
     first, second = _two_stale(monkeypatch)
     notifications = _Notifications(failures=1)
     authorization = _Authorization()
-    service = RestoreRecoveryService(
-        _settings(), CredentialVault(_settings()), notifications=notifications, authorization=authorization
-    )
+    service = _service(notifications=notifications, authorization=authorization)
 
     with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
         assert await service.recover_interrupted(now=OBSERVED_AT + timedelta(minutes=20)) == 2
@@ -247,12 +281,7 @@ async def test_a_lost_notification_neither_stops_recovery_nor_reaches_the_logs(
 @pytest.mark.usefixtures("conditional_writes")
 async def test_a_failed_logout_still_notifies_without_logging_its_message(caplog: pytest.LogCaptureFixture) -> None:
     notifications = _Notifications()
-    service = RestoreRecoveryService(
-        _settings(),
-        CredentialVault(_settings()),
-        notifications=notifications,
-        authorization=_Authorization(error=RuntimeError(_DRIVER_MESSAGE)),
-    )
+    service = _service(notifications=notifications, authorization=_Authorization(error=RuntimeError(_DRIVER_MESSAGE)))
 
     with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
         closed = await service._interrupt(_running([_action(0, RestoreActionStatus.EXECUTING)]), OBSERVED_AT)  # noqa: SLF001
@@ -283,13 +312,7 @@ async def test_the_janitor_releases_the_lease_only_of_a_run_it_closed(
 ) -> None:
     conditional_writes.modified = modified
     leases = _Leases()
-    service = RestoreRecoveryService(
-        _settings(),
-        CredentialVault(_settings()),
-        notifications=_Notifications(),
-        authorization=_Authorization(),
-        leases=leases,
-    )
+    service = _service(leases=leases)
 
     closed = await service._interrupt(_running([_action(0, RestoreActionStatus.EXECUTING)]), OBSERVED_AT)  # noqa: SLF001
 
@@ -303,12 +326,8 @@ async def test_a_failed_lease_release_still_logs_out_and_notifies_without_loggin
 ) -> None:
     notifications = _Notifications()
     authorization = _Authorization()
-    service = RestoreRecoveryService(
-        _settings(),
-        CredentialVault(_settings()),
-        notifications=notifications,
-        authorization=authorization,
-        leases=_Leases(error=RuntimeError(_DRIVER_MESSAGE)),
+    service = _service(
+        notifications=notifications, authorization=authorization, leases=_Leases(error=RuntimeError(_DRIVER_MESSAGE))
     )
 
     with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
@@ -329,9 +348,7 @@ async def test_one_close_that_fails_does_not_stop_the_others(
     first, second = _two_stale(monkeypatch)
     conditional_writes.errors = [RuntimeError(_DRIVER_MESSAGE)]
     notifications = _Notifications()
-    service = RestoreRecoveryService(
-        _settings(), CredentialVault(_settings()), notifications=notifications, authorization=_Authorization()
-    )
+    service = _service(notifications=notifications)
 
     with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
         assert await service.recover_interrupted(now=OBSERVED_AT + timedelta(minutes=20)) == 1
@@ -339,4 +356,35 @@ async def test_one_close_that_fails_does_not_stop_the_others(
     assert len(conditional_writes.calls) == 2
     assert notifications.restore_ids == [str(second.id)]
     assert f"restore_interrupt_failed operation={first.id} error_type=RuntimeError" in caplog.text
+    assert _DRIVER_MESSAGE not in caplog.text
+
+
+async def test_an_interrupted_compensation_fails_instead_of_offering_its_own_compensation(
+    conditional_writes: _ConditionalWrites,
+) -> None:
+    service = _service(store=_States(compensates=PydanticObjectId()))
+    operation = _running([_action(0, RestoreActionStatus.COMPLETED), _action(1, RestoreActionStatus.EXECUTING)])
+
+    assert await service._interrupt(operation, OBSERVED_AT) is True  # noqa: SLF001
+
+    [(_, change)] = conditional_writes.calls
+    assert change["$set"]["status"] is RestoreStatus.FAILED
+    assert change["$set"]["actions"][1]["outcome_unknown"] is True
+
+
+async def test_a_run_whose_plan_state_cannot_be_read_is_still_closed_as_compensable(
+    conditional_writes: _ConditionalWrites,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    notifications = _Notifications()
+    service = _service(notifications=notifications, store=_States(error=RuntimeError(_DRIVER_MESSAGE)))
+    operation = _running([_action(0, RestoreActionStatus.COMPLETED), _action(1, RestoreActionStatus.EXECUTING)])
+
+    with caplog.at_level(logging.WARNING, logger=_RECOVERY_LOGGER):
+        assert await service._interrupt(operation, OBSERVED_AT) is True  # noqa: SLF001
+
+    [(_, change)] = conditional_writes.calls
+    assert change["$set"]["status"] is RestoreStatus.COMPENSATION_AVAILABLE
+    assert notifications.failed == [INTERRUPTED_REASON]
+    assert f"restore_interrupt_state_unavailable operation={OPERATION_ID} error_type=RuntimeError" in caplog.text
     assert _DRIVER_MESSAGE not in caplog.text

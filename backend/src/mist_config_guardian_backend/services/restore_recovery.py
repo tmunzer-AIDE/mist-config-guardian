@@ -18,6 +18,7 @@ from mist_config_guardian_backend.services.notifications import NotificationServ
 from mist_config_guardian_backend.services.restore_authorization import RestoreAuthorizationService
 from mist_config_guardian_backend.services.restore_lease import MongoRestoreLeaseStore, RestoreLeaseStore
 from mist_config_guardian_backend.services.restore_outcome import mark_unconfirmed, terminal_failure_status
+from mist_config_guardian_backend.services.restore_planner import RestoreStateStore, get_restore_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ INTERRUPTED_REASON = "Restore worker interrupted before the run finished; writes
 class RestoreRecoveryService:
     """Move silent running restores to the same terminal state a crash inside the executor gets."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - each collaborator is injected separately by tests and the worker task
         self,
         settings: Settings,
         vault: CredentialVault,
@@ -35,11 +36,13 @@ class RestoreRecoveryService:
         notifications: NotificationService | None = None,
         authorization: RestoreAuthorizationService | None = None,
         leases: RestoreLeaseStore | None = None,
+        store: RestoreStateStore | None = None,
     ) -> None:
         self._settings = settings
         self._notifications = notifications or NotificationService()
         self._authorization = authorization or RestoreAuthorizationService(settings, vault, MistVerificationService())
         self._leases = leases or MongoRestoreLeaseStore()
+        self._store = store or get_restore_state_store()
 
     async def recover_interrupted(self, *, now: datetime | None = None) -> int:
         """Close every running restore whose last progress write is older than the timeout."""
@@ -68,8 +71,9 @@ class RestoreRecoveryService:
             return False
         encrypted = operation.encrypted_delegated_credential
         observed = operation.updated_at
+        compensating = await self._compensating(operation)
         first = mark_unconfirmed(operation.actions, INTERRUPTED_REASON)
-        status = terminal_failure_status(operation.actions)
+        status = terminal_failure_status(operation.actions, compensating=compensating)
         changes: dict[str, object] = {
             "status": status,
             "actions": [action.model_dump() for action in operation.actions],
@@ -130,3 +134,23 @@ class RestoreRecoveryService:
                 type(exc).__name__,
             )
         return True
+
+    async def _compensating(self, operation: RestoreOperation) -> bool:
+        """Whether the silent run is a compensation, which closes failed rather than compensable.
+
+        Plan state that cannot be read must not keep the run open with its
+        credential attached, so the close goes ahead as for a restore: that
+        keeps whatever the run wrote reversible.
+        """
+        if operation.id is None:
+            return False
+        try:
+            state = await self._store.load(operation.organization_id, operation.id)
+        except Exception as exc:  # noqa: BLE001 - unreadable plan state must not keep a silent run open
+            logger.error(  # noqa: TRY400 - a traceback could carry configuration content
+                "restore_interrupt_state_unavailable operation=%s error_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
+            return False
+        return state is not None and state.compensates_operation_id is not None

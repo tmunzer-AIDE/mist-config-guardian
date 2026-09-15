@@ -117,7 +117,14 @@ class RestoreStateStore(Protocol):
         organization_id: PydanticObjectId,
         operation_id: PydanticObjectId,
     ) -> RestoreOperationState | None:
-        """Return the state of the plan that compensates this operation."""
+        """Return the state of the compensation now linked to this operation, else the newest one."""
+
+    async def compensations_of(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> list[RestoreOperationState]:
+        """Return every compensation planned for this operation, oldest first."""
 
 
 class MongoRestoreStateStore:
@@ -177,12 +184,48 @@ class MongoRestoreStateStore:
         organization_id: PydanticObjectId,
         operation_id: PydanticObjectId,
     ) -> RestoreOperationState | None:
-        """Return the state of the plan that compensates this operation."""
-        record = await RestoreOperationStateRecord.find_one(
+        """Return the state of the compensation now linked to this operation, else the newest one.
+
+        A failed compensation is planned again, so one restore can have several.
+        The source's pointer names the current one; without it, an unsorted
+        lookup could hand back an attempt that already failed.
+        """
+        source = await RestoreOperationStateRecord.find_one(
             RestoreOperationStateRecord.organization_id == organization_id,
-            RestoreOperationStateRecord.compensates_operation_id == operation_id,
+            RestoreOperationStateRecord.operation_id == operation_id,
+        )
+        if source is not None and source.compensation_operation_id is not None:
+            linked = await RestoreOperationStateRecord.find_one(
+                RestoreOperationStateRecord.organization_id == organization_id,
+                RestoreOperationStateRecord.operation_id == source.compensation_operation_id,
+            )
+            if linked is not None:
+                return _state_from_record(linked)
+        record = (
+            await RestoreOperationStateRecord.find(
+                RestoreOperationStateRecord.organization_id == organization_id,
+                RestoreOperationStateRecord.compensates_operation_id == operation_id,
+            )
+            .sort("-created_at")
+            .first_or_none()
         )
         return None if record is None else _state_from_record(record)
+
+    async def compensations_of(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> list[RestoreOperationState]:
+        """Return every compensation planned for this operation, oldest first."""
+        records = (
+            await RestoreOperationStateRecord.find(
+                RestoreOperationStateRecord.organization_id == organization_id,
+                RestoreOperationStateRecord.compensates_operation_id == operation_id,
+            )
+            .sort("created_at")
+            .to_list()
+        )
+        return [_state_from_record(record) for record in records]
 
 
 def _state_from_record(record: RestoreOperationStateRecord) -> RestoreOperationState:

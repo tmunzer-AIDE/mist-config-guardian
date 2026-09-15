@@ -104,9 +104,18 @@ async def _running(*, minutes_ago: int, actions: list[RestoreAction]) -> Restore
     return operation
 
 
+class _EmptyStates:
+    """No plan state, so none of these runs is a compensation."""
+
+    async def load(self, organization_id, operation_id):  # noqa: ARG002
+        return None
+
+
 def _service(notifications: _Notifications, leases: MemoryRestoreLeaseStore) -> RestoreRecoveryService:
     settings = _settings()
-    return RestoreRecoveryService(settings, CredentialVault(settings), notifications=notifications, leases=leases)
+    return RestoreRecoveryService(
+        settings, CredentialVault(settings), notifications=notifications, leases=leases, store=_EmptyStates()
+    )
 
 
 _LEASE_TTL = timedelta(minutes=15)

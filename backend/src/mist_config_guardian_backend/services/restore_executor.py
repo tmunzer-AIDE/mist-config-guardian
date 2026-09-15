@@ -185,9 +185,14 @@ class RestoreExecutor:
         operation = await self._load_queued(operation_id)
         ownership = _Ownership(status=operation.status)
         self._owned[operation.id] = ownership
+        compensating = False
         try:
             organization, token = await self._prepare(operation)
-            return await self._run(operation, organization, token)
+            state = await load_or_build_state(self._store, operation)
+            # Known before anything can fail after a write: a compensation that
+            # stops ends failed, where a restore that stops stays compensable.
+            compensating = state.compensates_operation_id is not None
+            return await self._run(operation, organization, token, state)
         except RestoreLeaseLostError as exc:
             logger.warning("restore_lease_lost operation=%s error_type=%s", operation.id, type(exc).__name__)
             return operation
@@ -195,10 +200,10 @@ class RestoreExecutor:
             logger.warning("restore_ownership_lost operation=%s error_type=%s", operation.id, type(exc).__name__)
             return operation
         except RestoreExecutionError as exc:
-            await self._close_failed(operation, str(exc))
+            await self._close_failed(operation, str(exc), compensating=compensating)
             raise
         except Exception as exc:  # noqa: BLE001 - every exit must end in a terminal, notified state
-            await self._fail_unexpectedly(operation, exc)
+            await self._fail_unexpectedly(operation, exc, compensating=compensating)
             return operation
         finally:
             if ownership.claimed:
@@ -207,7 +212,13 @@ class RestoreExecutor:
                 await self._release_lease(operation)
             self._owned.pop(operation.id, None)
 
-    async def _run(self, operation: RestoreOperation, organization: Organization, token: str) -> RestoreOperation:
+    async def _run(
+        self,
+        operation: RestoreOperation,
+        organization: Organization,
+        token: str,
+        state: RestoreOperationState,
+    ) -> RestoreOperation:
         """Claim the queued operation, take its organization, then keep both alive for as long as the run lasts.
 
         The claim comes before the lease, so a delivery that loses the claim
@@ -219,7 +230,6 @@ class RestoreExecutor:
         safety snapshot or a verification over many objects, which could
         otherwise outlast the janitor's timeout and the lease on a healthy run.
         """
-        state = await load_or_build_state(self._store, operation)
         operation.status = RestoreStatus.RUNNING
         operation.started_at = utc_now()
         operation.touch()
@@ -248,13 +258,7 @@ class RestoreExecutor:
             region=organization.cloud_region,
         ) as client:
             try:
-                state.safety_snapshot = await capture_safety_snapshot(
-                    client,
-                    organization,
-                    operation,
-                    self._vault,
-                    relaxed=compensating,
-                )
+                state.safety_snapshot = await capture_safety_snapshot(client, organization, operation, self._vault)
             except MistMutationError as exc:
                 await self._fail_preflight(operation, str(exc))
                 await self._notify_failure(operation, str(exc))
@@ -285,7 +289,7 @@ class RestoreExecutor:
         operation.delegated_credential_expires_at = None
         operation.completed_at = utc_now()
         if not verification.verified:
-            await self._fail_verification(operation, verification)
+            await self._fail_verification(operation, verification, compensating=compensating)
             return operation
         operation.status = RestoreStatus.COMPENSATED if compensating else RestoreStatus.COMPLETED
         operation.touch()
@@ -479,12 +483,20 @@ class RestoreExecutor:
                     outcome.applied[action.order] = payload
             except MistMutationError as exc:
                 current = operation.actions[index]
+                # A write Mist may have applied without saying so, or accepted
+                # but did not show as done, is unconfirmed either way: whether
+                # it happened is for compensation to find out from live state.
+                unconfirmed = exc.outcome_unknown and current.status in {
+                    RestoreActionStatus.EXECUTING,
+                    RestoreActionStatus.COMPLETED,
+                }
                 await self._fail_operation(
                     operation,
                     index,
                     str(exc),
-                    action_failed=current.status is not RestoreActionStatus.COMPLETED,
-                    outcome_unknown=exc.outcome_unknown and current.status is RestoreActionStatus.EXECUTING,
+                    action_failed=current.status is not RestoreActionStatus.COMPLETED or unconfirmed,
+                    outcome_unknown=unconfirmed,
+                    compensating=context.compensating,
                 )
                 outcome.succeeded = False
                 return outcome
@@ -501,6 +513,8 @@ class RestoreExecutor:
         self,
         operation: RestoreOperation,
         verification: RestoreVerificationResult,
+        *,
+        compensating: bool = False,
     ) -> None:
         """Refuse to report success while a post-restore check is failing."""
         failed = [check for check in verification.checks if check.status == "failed"]
@@ -508,13 +522,19 @@ class RestoreExecutor:
         if len(failed) > _MAX_REPORTED_CHECKS:
             listed = f"{listed}; +{len(failed) - _MAX_REPORTED_CHECKS} more"
         reason = f"Post-restore verification failed: {listed}"
-        operation.status = terminal_failure_status(operation.actions)
+        operation.status = terminal_failure_status(operation.actions, compensating=compensating)
         operation.preflight_errors.append(reason)
         operation.touch()
         await self._persist(operation)
         await self._notify_failure(operation, reason)
 
-    async def _fail_unexpectedly(self, operation: RestoreOperation, exc: Exception) -> None:
+    async def _fail_unexpectedly(
+        self,
+        operation: RestoreOperation,
+        exc: Exception,
+        *,
+        compensating: bool = False,
+    ) -> None:
         """Close a run that stopped on an error nothing else handled.
 
         Only the exception type is recorded: an arbitrary exception message can
@@ -523,9 +543,9 @@ class RestoreExecutor:
         """
         reason = str(exc) if isinstance(exc, MistMutationError) else f"Restore worker error ({type(exc).__name__})"
         logger.error("restore_execution_aborted operation=%s error_type=%s", operation.id, type(exc).__name__)
-        await self._close_failed(operation, reason)
+        await self._close_failed(operation, reason, compensating=compensating)
 
-    async def _close_failed(self, operation: RestoreOperation, reason: str) -> None:
+    async def _close_failed(self, operation: RestoreOperation, reason: str, *, compensating: bool = False) -> None:
         """Record a terminal failure and notify exactly once, even while storage or notifications fail.
 
         Shared by failed preconditions, a busy organization and unexpected
@@ -536,7 +556,7 @@ class RestoreExecutor:
         first = mark_unconfirmed(operation.actions, reason)
         if first is not None:
             operation.failure_action_order = first
-        operation.status = terminal_failure_status(operation.actions)
+        operation.status = terminal_failure_status(operation.actions, compensating=compensating)
         operation.preflight_errors.append(reason)
         operation.completed_at = utc_now()
         operation.encrypted_delegated_credential = None
@@ -709,9 +729,10 @@ class RestoreExecutor:
             context.snapshot[action.order] = check.entry
             context.state.safety_snapshot.append(check.entry)
             await self._store.save(context.state)
-        if action.outcome_unknown and action.action is RestoreActionType.CREATE and check.entry.existed:
-            # The delete this CREATE reverses never happened: the object is
-            # still there, and writing it again would duplicate it.
+        if check.skip:
+            # A reversal with nothing left to write: the object is already
+            # where it would leave it, and writing again could only duplicate
+            # or churn it. Skipped, so it never counts as applied.
             action.status = RestoreActionStatus.SKIPPED
             operation.actions[index] = action
             operation.touch()
@@ -798,7 +819,9 @@ class RestoreExecutor:
 
         A write Mist accepted but does not show is not a success: the run
         stops there, with the write already recorded as applied, so it stays
-        compensable. The error names the object, never what was read.
+        compensable. A delete Mist accepted may still take effect, so it is
+        reported as unconfirmed: compensation then recreates the object only
+        if it is gone. The error names the object, never what was read.
         """
         target = (
             action.resulting_mist_id
@@ -809,7 +832,7 @@ class RestoreExecutor:
         if action.action is RestoreActionType.DELETE:
             if current is not None:
                 msg = f"{action.object_name} still exists in Mist after the delete"
-                raise MistMutationError(msg)
+                raise MistMutationError(msg, outcome_unknown=True)
             return None
         if current is None:
             msg = f"{action.object_name} was not found in Mist after the write"
@@ -947,7 +970,7 @@ class RestoreExecutor:
             raise MistMutationError(msg)
         return incarnation.id
 
-    async def _fail_operation(
+    async def _fail_operation(  # noqa: PLR0913 - the failed action's outcome and the run's kind are separate facts
         self,
         operation: RestoreOperation,
         action_index: int,
@@ -955,6 +978,7 @@ class RestoreExecutor:
         *,
         action_failed: bool = True,
         outcome_unknown: bool = False,
+        compensating: bool = False,
     ) -> None:
         action = operation.actions[action_index]
         if action_failed:
@@ -963,7 +987,7 @@ class RestoreExecutor:
         action.error = message
         operation.actions[action_index] = action
         operation.failure_action_order = action.order
-        operation.status = terminal_failure_status(operation.actions)
+        operation.status = terminal_failure_status(operation.actions, compensating=compensating)
         operation.completed_at = utc_now()
         operation.encrypted_delegated_credential = None
         operation.delegated_credential_expires_at = None

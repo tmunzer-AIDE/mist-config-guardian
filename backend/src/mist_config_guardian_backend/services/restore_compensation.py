@@ -9,6 +9,8 @@ inverse of every planned write is known.
 
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Literal
 
 from beanie import PydanticObjectId
 
@@ -31,10 +33,13 @@ from mist_config_guardian_backend.security.credentials import (
     CredentialVault,
 )
 from mist_config_guardian_backend.services.approvals import compute_plan_hash
+from mist_config_guardian_backend.services.restore_outcome import possibly_applied, unconfirmed_write
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
+    RestorePlanRepository,
     RestoreStateStore,
     SafetySnapshotEntry,
+    get_restore_plan_repository,
     get_restore_state_store,
     latest_version,
     load_or_build_state,
@@ -123,15 +128,12 @@ async def capture_safety_snapshot(
     organization: Organization,
     operation: RestoreOperation,
     vault: CredentialVault,
-    *,
-    relaxed: bool = False,
 ) -> list[SafetySnapshotEntry]:
     """Revalidate live state and record the pre-restore state of every target.
 
-    ``relaxed`` is used when executing a compensating plan. The plan-time hash
-    of a compensation describes state Mist has already replaced, so existence
-    is enforced but equality is not: the safety snapshot, not the hash, is the
-    authority on what must be put back.
+    A compensating plan is held to the same standard: each reversal expects
+    exactly what the restore it undoes wrote, so a fix made by hand after the
+    restore failed stops the compensation instead of being overwritten.
 
     A CREATE is also refused when Mist already holds an object of its type and
     name under another UUID: the old UUID being gone does not mean the object
@@ -157,10 +159,10 @@ async def capture_safety_snapshot(
             site_id=action.site_mist_id,
         )
         try:
-            _validate_live_state(action, current, relaxed=relaxed)
-            # A reversal that finds its object still present is skipped at
+            verdict = assess_live_state(action, current, vault)
+            # A reversal that finds its work already done is skipped at
             # execution, so it creates nothing that could collide.
-            if action.action is RestoreActionType.CREATE and not (action.outcome_unknown and current is not None):
+            if action.action is RestoreActionType.CREATE and verdict == "proceed":
                 await _refuse_name_collision(client, organization, action, definition, listings)
         except MistMutationError:
             await _log_preflight_diagnostics(operation, action, current, vault)
@@ -234,9 +236,11 @@ async def _refuse_name_collision(
             and _same_name_group(definition, configuration, item)
             and restore_name(definition, item) == name
         ):
+            # A compensation is rebuilt from the restore it reverses, not re-prepared.
+            then = "plan the compensation again" if action.compensates_action_order is not None else "rebuild the plan"
             msg = (
                 f"{action.object_name}: a {definition.key} named '{name}' already exists in Mist; "
-                "it may have been recreated manually. Rename or remove it, then rebuild the plan"
+                f"it may have been recreated manually. Rename or remove it, then {then}"
             )
             raise MistMutationError(msg)
 
@@ -404,33 +408,102 @@ def _without_paths(value: object, paths: frozenset[SecretPath], *, path: SecretP
     return value
 
 
-def _validate_live_state(
+LiveAssessment = Literal["proceed", "already_reversed"]
+
+
+def assess_live_state(
     action: RestoreAction,
     current: dict[str, object] | None,
-    *,
-    relaxed: bool,
-) -> None:
-    """Abort before writes when live state differs from the reviewed plan."""
-    if action.action is RestoreActionType.CREATE:
-        # An inverse CREATE of a delete that may never have happened is allowed
-        # to find the object; the executor then skips it.
-        if current is not None and not action.outcome_unknown:
-            msg = f"{action.object_name} was recreated after this plan was reviewed"
-            raise MistMutationError(msg)
-        return
-    if current is None:
-        msg = f"{action.object_name} no longer exists"
-        raise MistMutationError(msg)
-    if relaxed:
-        return
-    if action.expected_current_hash is None:
-        msg = f"{action.object_name} was recreated after this plan was reviewed"
-        raise MistMutationError(msg)
+    vault: CredentialVault,
+) -> LiveAssessment:
+    """Decide whether live state still allows this action, raising ``RestoreDriftError`` when it does not.
+
+    A reversal is held to the same standard as a restore: it may only replace
+    what the restore wrote. Finding the object already in the state the
+    reversal would leave it in is not drift; it is a reversal with nothing left
+    to do. A missing expected state never counts as a match. Messages name the
+    object, never its values.
+    """
     definition = get_definition(action.scope, action.object_type)
     ignored = frozenset() if definition is None else definition.ignored_fields
-    if not configuration_hash_matches(action.expected_current_hash, current, ignored_fields=ignored):
-        msg = f"{action.object_name} changed after this plan was reviewed"
-        raise MistMutationError(msg)
+    reversal = action.compensates_action_order is not None
+    if action.action is RestoreActionType.CREATE:
+        if current is None:
+            return "proceed"
+        if action.outcome_unknown:
+            # The delete this CREATE reverses may never have happened.
+            return "already_reversed"
+        msg = f"{action.object_name} was recreated after this plan was reviewed"
+        raise RestoreDriftError(msg)
+    if current is None:
+        if reversal and action.action is RestoreActionType.DELETE:
+            return "already_reversed"
+        msg = f"{action.object_name} no longer exists"
+        raise RestoreDriftError(msg)
+    if action.expected_current_hash is None:
+        if reversal and action.outcome_unknown:
+            # A write that may never have happened recorded nothing to expect;
+            # the plan warns that this reversal cannot check for changes.
+            return "proceed"
+        msg = (
+            f"{action.object_name} has no record of what the restore wrote, "
+            "so its reversal cannot check for changes made since"
+            if reversal
+            else f"{action.object_name} was recreated after this plan was reviewed"
+        )
+        raise RestoreDriftError(msg)
+    if configuration_hash_matches(action.expected_current_hash, current, ignored_fields=ignored):
+        return "proceed"
+    if reversal and action.action is RestoreActionType.UPDATE and _already_written(action, current, vault, ignored):
+        return "already_reversed"
+    msg = f"{action.object_name} changed after this plan was reviewed"
+    raise RestoreDriftError(msg)
+
+
+def _already_written(
+    action: RestoreAction,
+    current: dict[str, object],
+    vault: CredentialVault,
+    ignored: frozenset[str],
+) -> bool:
+    """Whether live state already equals what this action would write.
+
+    A payload whose secrets no longer decrypt cannot be compared, so it is
+    never taken as already written.
+    """
+    try:
+        payload = reveal_configuration(action.protected_configuration, vault)
+    except CredentialDecryptionError:
+        return False
+    return canonicalize(payload, ignored_fields=ignored) == canonicalize(current, ignored_fields=ignored)
+
+
+def _validate_live_state(action: RestoreAction, current: dict[str, object] | None, vault: CredentialVault) -> None:
+    """Abort before writes when live state differs from the reviewed plan."""
+    assess_live_state(action, current, vault)
+
+
+def _unverifiable(action: RestoreAction) -> str:
+    """Why an applied write with no read-back is not reversed; names the object, never its values."""
+    if action.error is None:
+        return (
+            f"{action.object_name} was restored before writes were read back, so compensation cannot prove it is "
+            "unchanged; restore it from its history instead"
+        )
+    # The run stopped on this action after Mist accepted its write.
+    return (
+        f"{action.object_name} was not read back after the restore wrote it, so compensation cannot prove it is "
+        "unchanged; restore it from its history instead"
+    )
+
+
+@dataclass
+class _Reversal:
+    """The inverse actions of one restore, and what must be said about them before they run."""
+
+    actions: list[RestoreAction] = field(default_factory=list)
+    follow_ups: list[str] = field(default_factory=list)
+    unverifiable: list[str] = field(default_factory=list)
 
 
 class RestoreCompensationService:
@@ -440,9 +513,12 @@ class RestoreCompensationService:
         self,
         store: RestoreStateStore | None = None,
         vault: CredentialVault | None = None,
+        *,
+        plans: RestorePlanRepository | None = None,
     ) -> None:
         self._store = store or get_restore_state_store()
         self._vault = vault or CredentialVault(get_settings())
+        self._plans = plans or get_restore_plan_repository()
 
     async def create_compensation_plan(
         self,
@@ -450,7 +526,13 @@ class RestoreCompensationService:
         operation: RestoreOperation,
         requested_by: PydanticObjectId,
     ) -> RestoreOperation:
-        """Plan the reversal of every action a failed restore actually applied."""
+        """Plan the reversal of every write a failed restore applied that no earlier compensation undid.
+
+        A compensation still awaiting review is returned rather than planned
+        twice, and none is planned while one is queued or running: both would
+        reverse the same writes. After a compensation fails, only the reversals
+        it did not complete are planned again.
+        """
         if operation.id is None:
             msg = "Persisted restore operation is missing an identifier"
             raise RestoreCompensationError(msg)
@@ -463,16 +545,24 @@ class RestoreCompensationService:
             msg = "No safety snapshot was captured for this restore, so it cannot be reversed automatically"
             raise RestoreCompensationError(msg)
 
-        existing = await self._store.find_compensation_of(operation.organization_id, operation.id)
-        if existing is not None:
-            plan = await RestoreOperation.find_one(
-                RestoreOperation.id == existing.operation_id,
-                RestoreOperation.organization_id == operation.organization_id,
-            )
-            if plan is not None and plan.status is RestoreStatus.PLANNED:
+        already_reversed: set[int] = set()
+        for earlier in reversed(await self._store.compensations_of(operation.organization_id, operation.id)):
+            plan = await self._plans.load(operation.organization_id, earlier.operation_id)
+            if plan is None:
+                continue
+            if plan.status is RestoreStatus.PLANNED:
                 return plan
+            if plan.status in {RestoreStatus.QUEUED, RestoreStatus.RUNNING}:
+                msg = "A compensation of this restore is already queued or running"
+                raise RestoreCompensationError(msg)
+            already_reversed.update(
+                action.compensates_action_order
+                for action in plan.actions
+                if action.status is RestoreActionStatus.COMPLETED and action.compensates_action_order is not None
+            )
 
-        actions, follow_ups = await self._reverse(operation, state)
+        reversal = await self._reverse(operation, state, already_reversed)
+        actions = reversal.actions
 
         compensation = RestoreOperation(
             organization_id=operation.organization_id,
@@ -486,12 +576,16 @@ class RestoreCompensationService:
                     f"Compensating plan for restore {operation.id}: reverses "
                     f"{len(actions)} applied actions in reverse dependency order"
                 ),
-                *follow_ups,
+                *reversal.follow_ups,
             ],
             # A compensation plan is reviewed like any other. It keeps a masked
             # secret on purpose when no stored version can supply one, so it is
             # exactly the plan most likely to carry one into authorization.
-            preflight_errors=(validate_action_capabilities(actions) + unavailable_secret_errors(actions, self._vault)),
+            preflight_errors=(
+                reversal.unverifiable
+                + validate_action_capabilities(actions)
+                + unavailable_secret_errors(actions, self._vault)
+            ),
         )
         await compensation.insert()
         if compensation.id is None:
@@ -514,41 +608,40 @@ class RestoreCompensationService:
         self,
         operation: RestoreOperation,
         state: RestoreOperationState,
-    ) -> tuple[list[RestoreAction], list[str]]:
+        already_reversed: set[int],
+    ) -> _Reversal:
         """Invert every write that reached Mist, or may have, newest first.
 
-        Returns the inverse actions and the manual follow-ups for writes that
-        cannot be targeted safely.
+        Writes an earlier compensation already reversed are left out. A write
+        that cannot be targeted safely becomes a manual follow-up, and an
+        applied write with no read-back is named as a preflight error: nothing
+        proves the object still holds what the restore wrote.
         """
         snapshot = {entry.order: entry for entry in state.safety_snapshot}
         reversible = sorted(
             (
                 action
                 for action in operation.actions
-                # Only a write that failed while unconfirmed may have reached
-                # Mist; a pending or skipped action can carry the flag it
-                # inherited from the write it reverses without ever running.
-                if action.status is RestoreActionStatus.COMPLETED
-                or (action.status is RestoreActionStatus.FAILED and action.outcome_unknown)
+                if possibly_applied(action) and action.order not in already_reversed
             ),
             key=lambda action: action.order,
             reverse=True,
         )
         if not reversible:
-            msg = "This restore applied no changes, so there is nothing to reverse"
+            msg = (
+                "Every change this restore applied has already been reversed"
+                if already_reversed
+                else "This restore applied no changes, so there is nothing to reverse"
+            )
             raise RestoreCompensationError(msg)
 
-        follow_ups: list[str] = []
-        actions: list[RestoreAction] = []
+        reversal = _Reversal()
         for action in reversible:
-            if (
-                action.status is RestoreActionStatus.FAILED
-                and action.outcome_unknown
-                and action.action is RestoreActionType.CREATE
-            ):
+            unconfirmed = unconfirmed_write(action)
+            if unconfirmed and action.action is RestoreActionType.CREATE:
                 # Mist never returned an id, so there is nothing to target
                 # without guessing; a person has to look.
-                follow_ups.append(
+                reversal.follow_ups.append(
                     f"{action.object_name} may have been created in Mist before the worker lost contact; "
                     "check for it and delete it manually if it exists"
                 )
@@ -557,33 +650,37 @@ class RestoreCompensationService:
             if entry is None:
                 msg = f"{action.object_name} has no safety snapshot entry, so it cannot be reversed"
                 raise RestoreCompensationError(msg)
-            actions.append(await self._invert(action, entry, len(actions)))
-        if not actions:
-            msg = "; ".join(follow_ups)
+            if unconfirmed and action.action is RestoreActionType.UPDATE:
+                reversal.follow_ups.append(
+                    f"{action.object_name} was not confirmed, so its reversal cannot check for changes made since"
+                )
+            elif (
+                action.status is RestoreActionStatus.COMPLETED
+                and action.action is not RestoreActionType.DELETE
+                and action.applied_hash is None
+            ):
+                reversal.unverifiable.append(_unverifiable(action))
+            reversal.actions.append(await self._invert(action, entry, len(reversal.actions)))
+        if not reversal.actions:
+            msg = "; ".join(reversal.follow_ups)
             raise RestoreCompensationError(msg)
-        return actions, follow_ups
+        return reversal
 
     async def compensation_for(self, operation: RestoreOperation) -> RestoreOperation | None:
-        """Return the compensating plan already built for this restore."""
+        """Return the compensating plan currently linked to this restore."""
         if operation.id is None:
             return None
         state = await self._store.find_compensation_of(operation.organization_id, operation.id)
         if state is None:
             return None
-        return await RestoreOperation.find_one(
-            RestoreOperation.id == state.operation_id,
-            RestoreOperation.organization_id == operation.organization_id,
-        )
+        return await self._plans.load(operation.organization_id, state.operation_id)
 
     async def compensated_operation(self, compensation: RestoreOperation) -> RestoreOperation | None:
         """Return the failed restore a compensating plan reverses."""
         state = await load_or_build_state(self._store, compensation)
         if state.compensates_operation_id is None:
             return None
-        return await RestoreOperation.find_one(
-            RestoreOperation.id == state.compensates_operation_id,
-            RestoreOperation.organization_id == compensation.organization_id,
-        )
+        return await self._plans.load(compensation.organization_id, state.compensates_operation_id)
 
     def _describes(
         self,
@@ -660,6 +757,7 @@ class RestoreCompensationService:
         order: int,
     ) -> RestoreAction:
         """Build the single action that undoes one applied action."""
+        unconfirmed = unconfirmed_write(action)
         configuration = dict(entry.configuration)
         source_version_id = entry.pre_version_id or action.source_version_id
         if entry.pre_version_id is not None:
@@ -692,8 +790,14 @@ class RestoreCompensationService:
             # Under a site this restore recreated, the object lives at the new site.
             site_mist_id=action.resulting_site_mist_id or action.site_mist_id,
             protected_configuration=configuration,
-            expected_current_hash=None,
+            # What the restore wrote is all its reversal may replace. Recreating
+            # a deleted object has nothing to compare, and an unconfirmed write
+            # recorded nothing.
+            expected_current_hash=None if inverse is RestoreActionType.CREATE or unconfirmed else action.applied_hash,
             depends_on=[],
-            outcome_unknown=action.outcome_unknown,
+            # Only a write that may never have happened leaves its reversal's
+            # target uncertain. A flag a confirmed write inherited describes an
+            # older write, so it is not carried a second level down.
+            outcome_unknown=unconfirmed,
             compensates_action_order=action.order,
         )

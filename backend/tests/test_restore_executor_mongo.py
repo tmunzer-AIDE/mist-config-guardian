@@ -414,6 +414,13 @@ class _MemoryStateStore:
             None,
         )
 
+    async def compensations_of(self, organization_id, operation_id):
+        return [
+            state
+            for state in self.items.values()
+            if state.organization_id == organization_id and state.compensates_operation_id == operation_id
+        ]
+
 
 class _Notifications:
     def __init__(self) -> None:

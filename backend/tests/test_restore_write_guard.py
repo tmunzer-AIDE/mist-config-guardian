@@ -196,3 +196,75 @@ async def test_an_unconfirmed_create_under_a_deferred_site_still_looks_for_the_o
     assert client.reads == [("mist-0", "site-old")]
     assert check.recorded is True
     assert check.entry.existed is True
+    assert check.skip is True
+
+
+def _reversal(action_type: RestoreActionType, *, expected: str | None, payload: dict[str, object]) -> RestoreAction:
+    action = _action(action_type)
+    action.compensates_action_order = 3
+    action.expected_current_hash = expected
+    action.protected_configuration = dict(payload)
+    return action
+
+
+async def test_a_reversal_refuses_to_overwrite_a_fix_made_after_the_restore() -> None:
+    written = {"name": "Corp", "enabled": True}
+    action = _reversal(
+        RestoreActionType.UPDATE,
+        expected=configuration_hash(written, ignored_fields=WLANS.ignored_fields),
+        payload={"name": "Corp", "enabled": False},
+    )
+    client = _Client({"mist-0": {**written, "vlan": 9}})
+
+    with pytest.raises(RestoreDriftError, match="changed after this plan was reviewed"):
+        await _check(client, action, entry=_entry(action, written), compensating=True)
+
+
+async def test_a_reversal_skips_an_object_already_back_in_its_earlier_state() -> None:
+    earlier = {"name": "Corp", "enabled": False}
+    action = _reversal(RestoreActionType.UPDATE, expected="applied-hash", payload=earlier)
+
+    check = await _check(_Client({"mist-0": dict(earlier)}), action, entry=_entry(action, earlier), compensating=True)
+
+    assert check.skip is True
+
+
+async def test_a_reversal_skips_deleting_an_object_that_is_already_gone() -> None:
+    action = _reversal(RestoreActionType.DELETE, expected="applied-hash", payload={})
+
+    check = await _check(_Client({}), action, entry=_entry(action, {"name": "Corp"}), compensating=True)
+
+    assert check.skip is True
+
+
+async def test_a_reversal_skips_recreating_an_object_its_unconfirmed_delete_never_removed() -> None:
+    action = _reversal(RestoreActionType.CREATE, expected=None, payload={"name": "Corp"})
+    action.outcome_unknown = True
+
+    check = await _check(_Client({}), action, entry=_entry(action, {"name": "Corp"}), compensating=True)
+
+    assert check.skip is True
+
+
+async def test_the_reversal_of_an_unconfirmed_update_proceeds_without_an_expected_state() -> None:
+    action = _reversal(RestoreActionType.UPDATE, expected=None, payload={"name": "Corp", "enabled": False})
+    action.outcome_unknown = True
+
+    check = await _check(
+        _Client({"mist-0": {"name": "Corp", "enabled": True}}),
+        action,
+        entry=_entry(action, {"name": "Corp", "enabled": True}),
+        compensating=True,
+    )
+
+    assert check.skip is False
+
+
+async def test_a_reversal_refuses_a_change_made_between_the_safety_snapshot_and_its_write() -> None:
+    snapshot = {"name": "Corp", "enabled": True}
+    action = _reversal(RestoreActionType.UPDATE, expected=None, payload={"name": "Corp", "enabled": False})
+    action.outcome_unknown = True
+    client = _Client({"mist-0": {**snapshot, "vlan": 9}})
+
+    with pytest.raises(RestoreDriftError, match="changed in Mist after the pre-restore safety snapshot"):
+        await _check(client, action, entry=_entry(action, snapshot), compensating=True)

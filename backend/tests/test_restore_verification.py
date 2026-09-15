@@ -135,6 +135,23 @@ def _operation(
     )
 
 
+def _reversal(
+    order: int,
+    action_type: RestoreActionType,
+    *,
+    configuration: dict[str, object] | None = None,
+) -> RestoreAction:
+    """A compensating action expecting the object to hold what ``_run`` seeds the fake Mist with."""
+    assert WLAN_DEFINITION is not None
+    reversal = _action(order, action_type, configuration=configuration)
+    reversal.compensates_action_order = order
+    if action_type is not RestoreActionType.CREATE:
+        reversal.expected_current_hash = configuration_hash(
+            reversal.protected_configuration, ignored_fields=WLAN_DEFINITION.ignored_fields
+        )
+    return reversal
+
+
 class _MemoryStateStore:
     """In-memory plan-lifecycle state."""
 
@@ -861,7 +878,7 @@ async def test_a_failed_source_update_never_reopens_a_completed_compensation(
             compensates_operation_id=SOURCE_OPERATION_ID,
         )
     )
-    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    operation = _operation([_reversal(0, RestoreActionType.UPDATE)])
     executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, store=store)
 
     result = await executor.execute(OPERATION_ID)
@@ -1110,7 +1127,7 @@ async def test_a_verified_compensation_marks_both_operations_compensated(
             compensates_operation_id=SOURCE_OPERATION_ID,
         )
     )
-    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    operation = _operation([_reversal(0, RestoreActionType.UPDATE)])
     executor, _, _, _ = _run(monkeypatch, operation, verified=True, store=store)
 
     result = await executor.execute(OPERATION_ID)
@@ -1170,6 +1187,7 @@ async def test_a_compensation_that_changes_nothing_fails_despite_inherited_uncon
     pending = _action(2, RestoreActionType.UPDATE)
     for action in (recreate, rejected, pending):
         action.outcome_unknown = True
+        action.compensates_action_order = action.order
     entry = SafetySnapshotEntry(
         logical_object_id=recreate.logical_object_id,
         order=0,
@@ -1254,6 +1272,173 @@ async def test_an_unconfirmed_delete_that_did_happen_is_recreated(monkeypatch: p
     assert client.writes == [("create", "wlan-0")]
     assert result.actions[0].status is RestoreActionStatus.COMPLETED
     assert set(verifier.applied) == {0}
+
+
+async def _compensating_store() -> _MemoryStateStore:
+    store = _MemoryStateStore()
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=OPERATION_ID,
+            plan_hash="plan-hash",
+            compensates_operation_id=SOURCE_OPERATION_ID,
+        )
+    )
+    return store
+
+
+class _RefusingOneClient(_FakeClient):
+    """Applies every update except the one to a chosen object, which Mist refuses."""
+
+    def __init__(self, refused: str) -> None:
+        super().__init__()
+        self.refused = refused
+
+    async def update(self, definition, object_id, configuration, *, org_id, site_id):
+        if object_id != self.refused:
+            return await super().update(definition, object_id, configuration, org_id=org_id, site_id=site_id)
+        self.writes.append(("update", object_id))
+        msg = "Mist failed to update wlans (400)"
+        raise MistMutationStatusError(msg, status_code=400)
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_compensation_that_stops_after_a_reversal_fails_and_leaves_the_restore_compensable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marked: list[PydanticObjectId] = []
+
+    async def _mark(_organization_id, operation_id) -> None:
+        marked.append(operation_id)
+
+    monkeypatch.setattr(RestoreExecutor, "_mark_compensated", staticmethod(_mark))
+    operation = _operation([_reversal(0, RestoreActionType.UPDATE), _reversal(1, RestoreActionType.UPDATE)])
+    client = _RefusingOneClient("mist-1")
+    store = await _compensating_store()
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, store=store, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-0"), ("update", "mist-1")]
+    assert [action.status for action in result.actions] == [RestoreActionStatus.COMPLETED, RestoreActionStatus.FAILED]
+    assert result.status is RestoreStatus.FAILED
+    assert result.encrypted_delegated_credential is None
+    # The restore it reverses is left as it was: still compensable, and planned again from there.
+    assert marked == []
+    assert notifications.failed == ["wlan-1: Mist failed to update wlans (400)"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_compensation_stopped_by_an_unexpected_error_after_a_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _database_gone(*_args, **_kwargs) -> None:
+        msg = "connection reset"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(RestoreExecutor, "_record_result", _database_gone)
+    operation = _operation([_reversal(0, RestoreActionType.UPDATE), _reversal(1, RestoreActionType.UPDATE)])
+    store = await _compensating_store()
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-0")]
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert result.status is RestoreStatus.FAILED
+    assert notifications.failed == ["Restore worker error (RuntimeError)"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_compensation_that_fails_verification_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_reversal(0, RestoreActionType.UPDATE)])
+    store = await _compensating_store()
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=False, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert result.status is RestoreStatus.FAILED
+    assert len(notifications.failed) == 1
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_fix_made_after_the_failed_restore_stops_its_compensation_before_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert WLAN_DEFINITION is not None
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", capture_safety_snapshot
+    )
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(ObjectVersion, "find_one", AsyncMock(return_value=None))
+    written = {"name": "wlan-0", "enabled": True}
+    revert = _reversal(0, RestoreActionType.UPDATE, configuration={"name": "wlan-0", "enabled": False})
+    revert.expected_current_hash = configuration_hash(written, ignored_fields=WLAN_DEFINITION.ignored_fields)
+    # Someone repaired the object by hand after the restore failed.
+    client = _FakeClient({"mist-0": {**written, "vlan": 30}})
+    store = await _compensating_store()
+    executor, notifications, _, _ = _run(monkeypatch, _operation([revert]), verified=True, store=store, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert client.state["mist-0"]["vlan"] == 30
+    assert result.status is RestoreStatus.FAILED
+    assert result.actions[0].status is RestoreActionStatus.PENDING
+    assert notifications.failed == ["wlan-0 changed after this plan was reviewed"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_reversal_already_back_in_its_earlier_state_is_skipped_and_never_counted_as_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert WLAN_DEFINITION is not None
+
+    async def _mark(_organization_id, _operation_id) -> None:
+        return
+
+    monkeypatch.setattr(RestoreExecutor, "_mark_compensated", staticmethod(_mark))
+    revert = _reversal(0, RestoreActionType.UPDATE, configuration={"name": "wlan-0", "enabled": False})
+    revert.expected_current_hash = configuration_hash(
+        {"name": "wlan-0", "enabled": True}, ignored_fields=WLAN_DEFINITION.ignored_fields
+    )
+    store = await _compensating_store()
+    # ``_run`` seeds Mist with the action's own configuration: the reversal has nothing left to write.
+    executor, notifications, verifier, client = _run(monkeypatch, _operation([revert]), verified=True, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert result.actions[0].status is RestoreActionStatus.SKIPPED
+    assert verifier.applied == {}
+    assert notifications.completed == [0]
+    assert result.status is RestoreStatus.COMPENSATED
+
+
+class _StickyDeleteClient(_FakeClient):
+    """Accepts every delete, yet the object still reads back afterwards."""
+
+    async def delete(self, definition, object_id, *, org_id, site_id) -> None:  # noqa: ARG002
+        self.writes.append(("delete", object_id))
+
+
+@pytest.mark.usefixtures("executed")
+async def test_a_delete_mist_still_shows_afterwards_is_left_unconfirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation = _operation([_action(0, RestoreActionType.DELETE), _action(1, RestoreActionType.UPDATE)])
+    client = _StickyDeleteClient()
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True, client=client)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("delete", "mist-0")]
+    assert result.actions[0].status is RestoreActionStatus.FAILED
+    assert result.actions[0].outcome_unknown is True
+    assert result.actions[1].status is RestoreActionStatus.PENDING
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert notifications.failed == ["wlan-0: wlan-0 still exists in Mist after the delete"]
 
 
 @pytest.mark.usefixtures("executed")
