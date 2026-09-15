@@ -460,12 +460,14 @@ class McpImpactAgent(ModelRequestJournal):
                         try:
                             async with asyncio.timeout(min(TOOL_TIMEOUT_SECONDS, max(remaining(), 0.001))):
                                 result = await client.call_tool(action.tool, arguments)
-                            normalized = normalize_result_detail(result, secrets=secrets, changed_at=root.changed_at)
+                            # Every row a digest aggregates passes the organization check before it is summarized.
+                            normalized = normalize_result_detail(
+                                result,
+                                secrets=secrets,
+                                changed_at=root.changed_at,
+                                authority=scope.validate_response,
+                            )
                             cleaned, partial = normalized.data, normalized.partial
-                            if normalized.reduction == "digest":
-                                stats.results_digested += 1
-                            elif normalized.reduction == "omitted":
-                                stats.results_omitted += 1
                             if result.get("isError") or (
                                 isinstance(cleaned, dict)
                                 and (
@@ -478,6 +480,11 @@ class McpImpactAgent(ModelRequestJournal):
                                 raise MistMcpError(msg, detail=self._tool_error_text(cleaned))  # noqa: TRY301 - normalize tool errors
                             scope.validate_response(cleaned)
                             scope.observe(action.tool, arguments, cleaned)
+                            # Count reductions only for results kept as successful evidence.
+                            if normalized.reduction == "digest":
+                                stats.results_digested += 1
+                            elif normalized.reduction == "omitted":
+                                stats.results_omitted += 1
                             reading = McpEvidence(
                                 id=reservation.id,
                                 tool=action.tool,

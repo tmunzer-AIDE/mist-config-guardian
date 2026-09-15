@@ -7,7 +7,12 @@ from uuid import UUID, uuid4
 import pytest
 
 from mist_config_guardian_backend.impact.mcp_contracts import MAX_MCP_EVIDENCE_BYTES, McpEvidence, McpReportAction
-from mist_config_guardian_backend.impact.mcp_scope import McpScope, normalize_result, normalize_result_detail
+from mist_config_guardian_backend.impact.mcp_scope import (
+    McpScope,
+    McpScopeError,
+    normalize_result,
+    normalize_result_detail,
+)
 from mist_config_guardian_backend.services import mcp_impact_agent
 from test_impact_agent import AI_URL, ai_response, read_context
 from test_mcp_investigation import MIST_ORG, mcp_responses, mcp_runtime
@@ -228,3 +233,43 @@ async def test_result_too_large_to_digest_is_counted_as_omitted(monkeypatch, htt
     assert mcp.evidence[0].state == "partial"
     assert "omitted" in mcp.evidence[0].data
     assert (mcp.diagnostics.results_digested, mcp.diagnostics.results_omitted) == (0, 1)
+
+
+def foreign_row_beyond_shown(raw):
+    raw["results"][-5]["org_id"] = str(uuid4())
+    return raw
+
+
+def short_rows():
+    # More than 50 rows but under 12 KB: sanitize alone would cut the foreign row before today's check.
+    return {"results": [{"org_id": MIST_ORG, "site_id": SITE, "mac": f"aabbccdd{n:04x}"} for n in range(60)]}
+
+
+@pytest.mark.parametrize("raw", [foreign_row_beyond_shown(events()), foreign_row_beyond_shown(short_rows())])
+def test_foreign_organization_beyond_shown_rows_rejects_the_whole_result(raw):
+    scope = McpScope(org_id=UUID(MIST_ORG), changed_at=NOW, as_of=LATER, sites=[SITE])
+    assert normalize_result_detail({"structuredContent": raw}, changed_at=NOW).reduction == "digest"
+    with pytest.raises(McpScopeError, match="foreign organization"):
+        normalize_result_detail({"structuredContent": raw}, changed_at=NOW, authority=scope.validate_response)
+
+
+@pytest.mark.parametrize(
+    ("result", "error"),
+    [
+        (foreign_row_beyond_shown(events()), "invalid_response"),
+        ({"error": "Search backend failed.", "results": short_rows()["results"]}, "tool_error"),
+    ],
+)
+async def test_rejected_reduced_results_are_errors_and_not_counted(monkeypatch, httpx_mock, result, error):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored, result=result)
+
+    def check(data):
+        assert data is None
+
+    httpx_mock.add_callback(search_once_then_report(check), method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    mcp = artifacts[0].mcp
+    assert mcp.state == "complete", mcp.reason
+    assert (mcp.evidence[0].state, mcp.evidence[0].error, mcp.evidence[0].data) == ("error", error, None)
+    assert (mcp.diagnostics.results_digested, mcp.diagnostics.results_omitted) == (0, 0)

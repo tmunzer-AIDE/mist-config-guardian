@@ -3,7 +3,7 @@
 import json
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -93,9 +93,25 @@ def _truncated_rows(raw: Any) -> bool:
     return any(_row_list(v) and len(v) > MAX_ITEMS for v in list(container.values())[:MAX_FIELDS])
 
 
+def _sanitized_rows(raw: Any, *, secrets: tuple[str, ...]) -> list[Any]:
+    """Every row a digest could aggregate, sanitized one by one so no list truncation hides a row."""
+    container = _container(raw) or {}
+    return [
+        sanitize(row, secrets=secrets)
+        for value in list(container.values())[:MAX_FIELDS]
+        if _row_list(value)
+        for row in value
+    ]
+
+
 def normalize_result_detail(
-    result: dict, *, secrets: tuple[str, ...] = (), changed_at: datetime | None = None
+    result: dict,
+    *,
+    secrets: tuple[str, ...] = (),
+    changed_at: datetime | None = None,
+    authority: Callable[[Any], object] | None = None,
 ) -> NormalizedResult:
+    """``authority`` raises to reject the whole result; it sees every untruncated row before any digest is built."""
     raw = result.get("structuredContent")
     if raw is None:
         texts = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
@@ -107,6 +123,8 @@ def normalize_result_detail(
     size = _size(cleaned)
     # Oversized results, and row lists sanitize would silently cut, are summarized over every returned row.
     if size > MAX_MCP_EVIDENCE_BYTES or _truncated_rows(raw):
+        if authority is not None:
+            authority([cleaned, *_sanitized_rows(raw, secrets=secrets)])
         digest = digest_result(raw, secrets=secrets, changed_at=changed_at)
         if digest is not None:
             return NormalizedResult(digest, partial=True, reduction="digest")
