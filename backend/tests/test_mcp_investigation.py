@@ -1551,15 +1551,38 @@ async def test_prompt_leads_with_procedure_explicit_windows_and_playbooks(monkey
     system, context = seen[0]
     assert system.startswith("You investigate whether one recorded Mist configuration change")
     assert system.index("Procedure:") < system.index("Safety:")
+    # At +10 min both windows span exactly ten minutes around the change.
     assert context["before_window"] == {
-        "start_time": str(int((NOW - timedelta(hours=1)).timestamp())),
+        "start_time": str(int((NOW - timedelta(minutes=10)).timestamp())),
         "end_time": str(int(NOW.timestamp())),
     }
     assert context["after_window"] == {"start_time": str(int(NOW.timestamp())), "end_time": str(int(LATER.timestamp()))}
+    assert "before_window and after_window have equal duration" in system
+    assert "compare rates per window duration" in system
     assert [p["id"] for p in context["playbooks"]] == ["wlan-lifecycle.v1"]
     assert context["playbooks"][0]["instructions"].startswith("Investigate removal/disable")
     assert {r["prompt_version"] for r in stored["model_requests"]} == {"impact-mcp.v2"}
     assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+
+
+@pytest.mark.parametrize(("minutes", "before_minutes"), [(10, 10), (30, 30), (60, 60), (90, 60)])
+def test_before_window_matches_after_window_duration_capped_by_scope_start(minutes, before_minutes):
+    as_of = NOW + timedelta(minutes=minutes)
+    scope = McpScope(org_id=UUID(MIST_ORG), changed_at=NOW, as_of=as_of, sites=[SITE])
+    windows = mcp_impact_agent.McpImpactAgent._windows(scope, NOW, as_of)  # noqa: SLF001
+    before, after = windows["before_window"], windows["after_window"]
+    assert before == {
+        "start_time": str(int((NOW - timedelta(minutes=before_minutes)).timestamp())),
+        "end_time": str(int(NOW.timestamp())),
+    }
+    assert after == {"start_time": str(int(NOW.timestamp())), "end_time": str(int(as_of.timestamp()))}
+    assert int(before["start_time"]) >= int(scope.start.timestamp())
+    assert int(before["end_time"]) - int(before["start_time"]) <= 3600
+    # A model copying either window verbatim is accepted by the scope.
+    tool = next(t for t in catalog(CATALOG) if t.name == "search_mist_data")
+    for window in (before, after):
+        args = scope.arguments(tool, {"search_type": "device_events", "site_id": SITE, **window})
+        assert (args["start_time"], args["end_time"]) == (window["start_time"], window["end_time"])
 
 
 def test_system_prompt_describes_batched_calls_digests_optional_describe_and_feedback():
@@ -1586,7 +1609,7 @@ def test_system_prompt_describes_batched_calls_digests_optional_describe_and_fee
 
 def test_trimming_never_removes_explicit_windows_or_playbooks():
     windows = {
-        "before_window": {"start_time": "1757667600", "end_time": "1757671200"},
+        "before_window": {"start_time": "1757670600", "end_time": "1757671200"},
         "after_window": {"start_time": "1757671200", "end_time": "1757671800"},
         "playbooks": [{"id": "wlan-lifecycle.v1", "instructions": "Investigate removal/disable only."}],
     }

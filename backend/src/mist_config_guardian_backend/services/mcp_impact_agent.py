@@ -110,15 +110,19 @@ Procedure:
    affected sites, devices and services. Use find_mist_entity or get_mist_config only when identities are missing.
    deterministic_context is optional rule evidence, never a prerequisite or the limit of your investigation.
 2. Before: query the metric or events most likely to show this change's effect (device or client events, alarms,
-   SLE/insights, port or client statistics) with start_time/end_time from before_window.
-3. After: repeat the same query with identical arguments except start_time/end_time from after_window. Steps 2 and
-   3 fit in one tool action with two calls. On a follow-up checkpoint, re-run the queries behind
+   SLE/insights, port or client statistics) with exactly the start_time/end_time of before_window.
+   before_window and after_window have equal duration (before_window is capped at one hour before the change).
+3. After: repeat the same query with identical arguments except exactly the start_time/end_time of after_window.
+   Steps 2 and 3 fit in one tool action with two calls. On a follow-up checkpoint, re-run the queries behind
    previous_checkpoint evidence with the current windows to confirm or revise previous_report.
-4. Compare: before versus after counts, states or values for the same scope. A digested (partial) result shows its
+4. Compare: before versus after counts, states or values for the same scope; if you ever use a different window or
+   the windows differ, compare rates per window duration, not raw counts. A digested (partial) result shows its
    first rows plus <list>_summary with row_count, value_counts, numeric (all rows, not split by time), devices and,
    when rows carry timestamps, change_buckets counting each categorical value before_change/after_change relative
-   to changed_at; use change_buckets for the comparison. If a result is omitted or too coarse, narrow the query
-   (site, device, event type, filters) instead of repeating it.
+   to changed_at. One query spanning before_window.start_time..after_window.end_time returns change_buckets split
+   at the change over those equal windows (use them for the comparison), while separate before and after queries
+   each return one-sided buckets. If a result is omitted or too coarse, narrow the query (site, device, event type,
+   filters) instead of repeating it.
 5. Report: cite the observation ids behind each finding; state the investigated scope, what was compared and what
    is missing, without claiming exhaustive scope. Complete a report within remaining_model_calls, which include the
    report call, with gaps if evidence is missing.
@@ -353,14 +357,7 @@ class McpImpactAgent(ModelRequestJournal):
                             "as_of": as_of.isoformat(),
                             "allowed_start_time": str(int(scope.start.timestamp())),
                             "allowed_end_time": str(int(scope.end.timestamp())),
-                            "before_window": {
-                                "start_time": str(int(scope.start.timestamp())),
-                                "end_time": str(int(root.changed_at.timestamp())),
-                            },
-                            "after_window": {
-                                "start_time": str(int(root.changed_at.timestamp())),
-                                "end_time": str(int(as_of.timestamp())),
-                            },
+                            **self._windows(scope, root.changed_at, as_of),
                             "playbooks": [{"id": s.id, "instructions": s.instructions} for s in playbooks],
                             "tools": [
                                 {
@@ -554,6 +551,21 @@ class McpImpactAgent(ModelRequestJournal):
             "invalid_response" if feedback else "budget_exhausted",
             "No validated report was returned within the checkpoint model budget.",
         )
+
+    @staticmethod
+    def _windows(scope: McpScope, changed_at: datetime, as_of: datetime) -> dict[str, dict[str, str]]:
+        """Equal before/after windows around the change; the before window never starts before the scope."""
+        before_start = max(scope.start, changed_at - (as_of - changed_at))
+        return {
+            "before_window": {
+                "start_time": str(int(before_start.timestamp())),
+                "end_time": str(int(changed_at.timestamp())),
+            },
+            "after_window": {
+                "start_time": str(int(changed_at.timestamp())),
+                "end_time": str(int(as_of.timestamp())),
+            },
+        }
 
     @staticmethod
     def _plan_calls(
