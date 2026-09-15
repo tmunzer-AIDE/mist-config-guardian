@@ -165,11 +165,14 @@ def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: Verd
         if conclusion
         else ()
     )
-    merged = {(str(d.site_id), d.device_mac, d.service): d for d in agent_devices}
+    # Role and target handle keep distinct ports/WLAN targets and agent rows from collapsing into one row.
+    merged = {(d.role, str(d.site_id), d.device_mac, d.service, d.target_handle): d for d in agent_devices}
     if source != "mcp_agent":
         # Rule-derived and combined verdicts keep the deterministic devices that justify them.
         for device in base.impacted_devices:
-            merged.setdefault((str(device.site_id), device.device_mac, device.service), device)
+            merged.setdefault(
+                (device.role, str(device.site_id), device.device_mac, device.service, device.target_handle), device
+            )
     devices = tuple(merged.values())
     return base.model_copy(
         update={

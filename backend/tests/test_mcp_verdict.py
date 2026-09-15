@@ -14,7 +14,8 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpDispatch,
     McpEvidence,
 )
-from mist_config_guardian_backend.impact.mcp_report import compose_assessment
+from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, compose_assessment
+from mist_config_guardian_backend.impact.report import DeviceImpact, ImpactReport, ReportSection, ReportSections
 from mist_config_guardian_backend.services import impact_investigations as worker
 from test_impact_change_context import MAC
 from test_mcp_investigation import mcp_runtime
@@ -143,6 +144,78 @@ async def test_later_failed_run_keeps_the_last_agent_devices(monkeypatch):
     assert latest.report.current_impact == "warning"
     assert [d.device_mac for d in latest.report.impacted_devices] == [MAC]
     assert str(evidence.id) in {d.target_handle for d in latest.report.datasets}
+
+
+def port_row(port, impact):
+    return DeviceImpact(
+        device_mac=MAC,
+        site_id=UUID(SITE),
+        role="affected_switch_port",
+        service="port_link",
+        target_handle=f"port-handle-{port}",
+        port_id=port,
+        impact=impact,
+        current_impact=impact,
+        confidence="medium",
+    )
+
+
+def rule_report(devices):
+    section = ReportSection(state="available", explanation="Recorded in this immutable revision.")
+    return ImpactReport(
+        investigation_id="investigation-one",
+        audit_id="audit-one",
+        revision=1,
+        generated_at=LATER,
+        evidence_as_of=LATER,
+        peak_impact="critical",
+        peak_revision=1,
+        peak_confidence="medium",
+        history_complete=True,
+        current_impact="critical",
+        confidence="medium",
+        coverage="partial",
+        attribution="plausible",
+        sections=ReportSections(**dict.fromkeys(ReportSections.model_fields, section)),
+        datasets=(),
+        impacted_devices=devices,
+        gaps=(),
+    )
+
+
+@pytest.mark.parametrize("source", ["rule", "combined"])
+def test_every_rule_device_row_reaches_the_mcp_report(source):
+    rows = (port_row("ge-0/0/1", "warning"), port_row("ge-0/0/2", "critical"))
+    cited = uuid4()
+    conclusion = McpConclusion(
+        summary="Port flaps were returned.",
+        scope="Changed switch.",
+        impact="warning",
+        confidence="low",
+        coverage="partial",
+        evidence=(cited,),
+        impacted_devices=(
+            McpDeviceImpact(
+                device_mac=MAC,
+                site_id=UUID(SITE),
+                service="port_link",
+                impact="warning",
+                evidence=(cited,),
+                explanation="Same switch and service as both rule rows.",
+            ),
+        ),
+    )
+    checkpoint = (
+        McpCheckpoint(state="complete", conclusion=conclusion)
+        if source == "combined"
+        else McpCheckpoint(state="provider_error", reason="AI provider request failed.")
+    )
+    report = build_mcp_report(rule_report(rows), checkpoint, source)
+    rule_rows = [(d.port_id, d.impact) for d in report.impacted_devices if d.role == "affected_switch_port"]
+    assert rule_rows == [("ge-0/0/1", "warning"), ("ge-0/0/2", "critical")]
+    agent_rows = [d.target_handle for d in report.impacted_devices if d.role == "agent_observed_service"]
+    assert agent_rows == ([str(cited)] if source == "combined" else [])
+    assert report.omitted_device_impacts == 0
 
 
 def complete_none_run():
