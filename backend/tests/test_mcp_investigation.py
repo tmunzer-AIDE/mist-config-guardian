@@ -20,6 +20,7 @@ from bson.codec_options import CodecOptions
 from pydantic import ValidationError
 from pymongo.errors import ConnectionFailure
 
+from mist_config_guardian_backend.impact import skills
 from mist_config_guardian_backend.impact.agent import MCP_MAX_INPUT_BYTES_TOTAL, ModelRequestRecord, ModelResponseError
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import (
@@ -43,7 +44,7 @@ from mist_config_guardian_backend.impact.mcp_views import selected_rows
 from mist_config_guardian_backend.integrations.mist_mcp import MistMcpClient, MistMcpError
 from mist_config_guardian_backend.models.investigation import InvestigationRevision, ModelRequestArtifact
 from mist_config_guardian_backend.services import impact_investigations as worker
-from mist_config_guardian_backend.services import mcp_dispatch, mcp_impact_agent
+from mist_config_guardian_backend.services import mcp_dispatch, mcp_impact_agent, model_request_reads
 from mist_config_guardian_backend.services.audit_impact_reads import project_published_impact
 from mist_config_guardian_backend.services.impact_acceptance import replay_chain
 from mist_config_guardian_backend.services.mcp_request_reads import mcp_request_details
@@ -1527,3 +1528,123 @@ async def test_dispatch_denial_mid_batch_keeps_earlier_evidence(monkeypatch, htt
     assert len([c for c in calls if c["method"] == "tools/call"]) == 1
     assert [e.state for e in mcp.evidence] == ["complete"]
     assert [d["state"] for d in stored["mcp_dispatches"]] == ["complete", "complete"]
+
+
+async def test_prompt_leads_with_procedure_explicit_windows_and_playbooks(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored)
+    monkeypatch.setattr(
+        worker,
+        "mcp_playbooks",
+        lambda plan: skills.mcp_playbooks(
+            plan.model_copy(update={"mcp_context": {"changes": [{"object_type": "wlans", "attributes": []}]}})
+        ),
+    )
+    seen = []
+
+    def respond(request):
+        seen.append((json.loads(request.content)["messages"][0]["content"], read_context(request)))
+        return investigator(request)
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    system, context = seen[0]
+    assert system.startswith("You investigate whether one recorded Mist configuration change")
+    assert system.index("Procedure:") < system.index("Safety:")
+    assert context["before_window"] == {
+        "start_time": str(int((NOW - timedelta(hours=1)).timestamp())),
+        "end_time": str(int(NOW.timestamp())),
+    }
+    assert context["after_window"] == {"start_time": str(int(NOW.timestamp())), "end_time": str(int(LATER.timestamp()))}
+    assert [p["id"] for p in context["playbooks"]] == ["wlan-lifecycle.v1"]
+    assert context["playbooks"][0]["instructions"].startswith("Investigate removal/disable")
+    assert {r["prompt_version"] for r in stored["model_requests"]} == {"impact-mcp.v2"}
+    assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+
+
+def test_system_prompt_describes_batched_calls_digests_optional_describe_and_feedback():
+    system = mcp_impact_agent._SYSTEM  # noqa: SLF001
+    assert system.index("Procedure:") < system.index("Actions:") < system.index("Safety:")
+    for phrase in (
+        "before_window",
+        "after_window",
+        "calls:[{tool,arguments,purpose}]",
+        "tool_call_limit",
+        "describe is optional",
+        "change_buckets",
+        "before_change/after_change",
+        "never none",
+        "error_detail",
+        "Action rejected (category): detail",
+        "previous_report",
+        "rule-derived",
+    ):
+        assert phrase in system, phrase
+    # Safety stays a short list rather than the bulk of the prompt.
+    assert len(system[system.index("Safety:") :]) * 4 < len(system)
+
+
+def test_trimming_never_removes_explicit_windows_or_playbooks():
+    windows = {
+        "before_window": {"start_time": "1757667600", "end_time": "1757671200"},
+        "after_window": {"start_time": "1757671200", "end_time": "1757671800"},
+        "playbooks": [{"id": "wlan-lifecycle.v1", "instructions": "Investigate removal/disable only."}],
+    }
+    attributes = [{"port_config": {"before": {"ge-0/0/1": "v" * 5000}, "after": {"enabled": True}}}]
+    data = {**prompt_data(observation(8000), observation(3000), attributes=attributes), **windows}
+    result = bounded_context(data, SYSTEM, encoded_size(data) - 12_000)
+    assert result is not None
+    assert result.steps == 4  # Every degradation step ran, including the last-resort value shortening.
+    context = json.loads(result.body)
+    assert {key: context[key] for key in windows} == windows
+
+
+@pytest.mark.parametrize("version", ["impact-mcp.v1", "impact-mcp.v2"])
+async def test_stored_mcp_actions_stay_readable_for_every_mcp_prompt_version(monkeypatch, httpx_mock, version):
+    service, root, collection, _, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored)
+    httpx_mock.add_callback(investigator, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    request_id = ModelRequestRecord.model_validate(stored["model_requests"][-1]).id
+    raw = {**stored["model_requests"][-1], "prompt_version": version}
+
+    async def selected(_query, *, projection):
+        assert "model_requests" in projection
+        return {"_id": root.id, "model_requests": [raw]}
+
+    collection.find_one.side_effect = selected
+    monkeypatch.setattr(
+        ModelRequestArtifact,
+        "find_one",
+        AsyncMock(side_effect=lambda query: next((a for a in stored["model_artifacts"] if a.id == query["_id"]), None)),
+    )
+    result = await model_request_reads.model_request_details(root.organization_id, PydanticObjectId(), request_id)
+    assert result.action_state == "available"
+    assert result.action.action == "report"
+
+
+@pytest.mark.parametrize(
+    ("version", "counted"),
+    [("impact-mcp.v1", True), ("impact-mcp.v2", True), ("impact-investigator.v8", False)],
+)
+def test_unpublished_mcp_model_request_of_any_mcp_prompt_version_spends_its_band(monkeypatch, version, counted):
+    _, root, _, _, _ = mcp_runtime(monkeypatch)
+    attempt = NOW + timedelta(minutes=10, seconds=5)
+    root.mcp_dispatches = []
+    root.model_requests = [
+        ModelRequestRecord.model_validate(
+            {
+                "id": str(uuid4()),
+                "generation": root.generation,
+                "candidate_revision": root.revision + 1,
+                "prompt_version": version,
+                "reserved_at": attempt,
+                "input_hash": "0" * 64,
+                "model": "model",
+                "input_bytes": 1,
+                "output_token_limit": 1,
+            }
+        )
+    ]
+    expected = attempt if counted else None
+    assert worker.ImpactInvestigationService._unpublished_agent_attempt(root) == expected  # noqa: SLF001

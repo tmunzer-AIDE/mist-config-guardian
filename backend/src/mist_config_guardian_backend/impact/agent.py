@@ -41,6 +41,7 @@ MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
 MCP_MAX_INPUT_BYTES = 96_000
 MCP_MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MCP_MAX_INPUT_BYTES
 PROMPT_VERSION = "impact-investigator.v8"
+MCP_PROMPT_VERSION = "impact-mcp.v2"
 
 Handle = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
@@ -379,6 +380,7 @@ class ModelRequestRecord(Contract):
         "impact-investigator.v7",
         "impact-investigator.v8",
         "impact-mcp.v1",
+        "impact-mcp.v2",
     ] = PROMPT_VERSION
     input_hash: Handle
     model: str = Field(max_length=255)

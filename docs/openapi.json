@@ -5791,7 +5791,8 @@
               "impact-investigator.v6",
               "impact-investigator.v7",
               "impact-investigator.v8",
-              "impact-mcp.v1"
+              "impact-mcp.v1",
+              "impact-mcp.v2"
             ],
             "title": "Prompt Version",
             "type": "string"

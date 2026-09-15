@@ -43,6 +43,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint
 from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, compose_assessment
 from mist_config_guardian_backend.impact.mcp_schedule import agent_due, last_agent_run, prior_conclusion
 from mist_config_guardian_backend.impact.report import VerdictSource, build_report
+from mist_config_guardian_backend.impact.skills import mcp_playbooks
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_ap_evidence import MistScopedEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -165,7 +166,7 @@ class ImpactInvestigationService:
             *(
                 r.reserved_at
                 for r in root.model_requests
-                if r.candidate_revision == candidate and r.prompt_version == "impact-mcp.v1"
+                if r.candidate_revision == candidate and r.prompt_version.startswith("impact-mcp")
             ),
         ]
         return max(reserved, default=None)
@@ -340,6 +341,11 @@ class ImpactInvestigationService:
             if attempt is not None and (last_run is None or attempt > last_run):
                 last_run = attempt
             if agent_due(root.changed_at, evidence_as_of, last_run):
+                try:
+                    playbooks = mcp_playbooks(plan)
+                except (ValueError, OSError):
+                    logger.warning("MCP playbooks failed integrity validation for investigation %s", root.id)
+                    playbooks = ()
                 token = await service_token(organization, self._vault)
                 try:
                     async with asyncio.timeout(MCP_SAFETY_TIMEOUT_SECONDS):
@@ -356,6 +362,7 @@ class ImpactInvestigationService:
                             deployment=deployment.model_dump(mode="json") if deployment else {},
                             previous=previous,
                             deadline=monotonic() + MCP_RUN_SECONDS,
+                            playbooks=playbooks,
                         )
                 except TimeoutError:
                     logger.warning("MCP investigation exceeded the safety timeout for investigation %s", root.id)

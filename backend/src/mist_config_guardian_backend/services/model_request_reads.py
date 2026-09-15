@@ -61,7 +61,7 @@ async def _details(  # noqa: C901 - current artifacts and bounded legacy payload
     if record.action_artifact_id is not None:
         body = await _artifact(organization_id, root["_id"], record, "action")
         if body is not None:
-            adapter = TypeAdapter(McpAction) if record.prompt_version == "impact-mcp.v1" else ACTION_ADAPTER
+            adapter = TypeAdapter(McpAction) if record.prompt_version.startswith("impact-mcp") else ACTION_ADAPTER
             result.action, result.action_state = adapter.validate_json(body), "available"
     elif raw.get("action") is not None:
         result.action, result.action_state = ACTION_ADAPTER.validate_python(raw["action"]), "legacy"
