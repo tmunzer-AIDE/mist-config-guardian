@@ -15,8 +15,9 @@ requirements in earlier impact design documents. Deterministic coverage is optio
   time range, response size, request budget and execution fences, not the setting.
   Tool prose, object names and configuration text are untrusted evidence.
 - Deterministic evaluation runs when applicable and is supplied as cited input.
-  MCP calls can go beyond deterministic collection. The agent owns the final shadow
+  MCP calls can go beyond deterministic collection. The agent owns the shadow
   assessment; server validation checks report shape and citations, not rule agreement.
+  The published verdict is never below a rule-derived warning or critical.
 - Publication remains immutable and fenced. MCP input/output evidence is redacted,
   bounded and journalled; missing/partial responses cannot imply healthy service.
   Reports identify their source, confidence, impacted devices and limitations. The
@@ -55,18 +56,76 @@ In MCP mode, optional deterministic collection is capped at four checks per chec
 (28 across the normal seven checkpoints), leaving room for agent-selected reads.
 Missing rule checks remain explicit partial evidence; deterministic-only shadow mode
 retains its full required-check sweep.
-An individual checkpoint permits up to eight model actions, including its final report.
-Catalogue discovery reserves one slot covering its bounded initialization/list handshake;
-each operational MCP invocation reserves another slot. A MCP server can make multiple
-Mist API requests behind one invocation: these bounds are **not** an exact Mist HTTP-call
-count. Repeated identical MCP calls within a checkpoint return cached evidence.
-Exhaustion is visible and may prevent later checkpoints from reaching a conclusion.
-There is no automatic budget increase or second scheduler.
+
+Deterministic checkpoints run at +1 minute and then every 10 minutes until +60 minutes.
+The agent runs only at the first checkpoint at or after +10, +30 and +60 minutes, so an
+audit has at most three agent runs (`impact/mcp_schedule.py`). A run that fails, or a
+worker that reserved agent requests and then lost its lease, still spends its band.
+Checkpoints between runs publish `state=not_scheduled` and spend no model or MCP budget;
+they carry the last validated agent conclusion forward together with exactly the evidence
+it cites. A later run that stops without a conclusion carries it forward too.
+A run permits up to eight model actions including its report, up to three independent
+tool calls per action (`calls`) and at most eight evidence rows; calls beyond the free
+rows are rejected as `tool_call_limit`. Catalogue discovery reserves one slot covering
+its bounded initialization/list handshake; each operational MCP invocation reserves
+another. A MCP server can make multiple Mist API requests behind one invocation: these
+bounds are **not** an exact Mist HTTP-call count. Repeated identical MCP calls within a
+run return cached evidence without a new reservation. Exhaustion is visible and may
+prevent later runs from reaching a conclusion. There is no automatic budget increase.
+
+A run stops itself 140 seconds after it starts: no model turn or tool call starts with
+less than five seconds left, and every provider and tool call is bounded by the smaller
+of 20 seconds and the remaining time. It then publishes `deadline_exceeded` with its
+retained evidence. A 170-second worker safety timeout publishes an `unavailable`
+checkpoint (that run's evidence is not retained) rather than losing the revision.
+
+MCP prompts are bounded at 96 KB each; new `agent_shadow` audits reserve 21 × 96 KB,
+existing audits keep their stored limit, and the retired fixed-menu agent keeps 24 KB.
+Every prompt carries compact schemas for all discovered read tools (types, enums,
+required fields and defaults, with 300-character descriptions), so describe is optional
+and only adds one tool's full schema. Every prompt also carries explicit
+`before_window`/`after_window` epoch ranges of equal duration (the before window never
+starts earlier than one hour before the change) and pinned playbooks selected from rule
+skills and the change type, at most 6 KB. Over budget, context degrades in re-checked
+steps and stops as soon as it fits: configured-device MAC lists become counts, rule
+evidence keeps its ID and assessment, older observation payloads are hidden oldest-first
+(never the newest observation or evidence cited by the previous conclusion; hidden
+payloads stay citable), and finally long changed values are shortened with an explicit
+gap. A context that still does not fit stops the run as `budget_exhausted`.
+
+MCP results over 12 KB, or with a row list longer than 50 items, are not dropped: every
+returned row passes the organization check and is summarized into a citable `partial`
+digest. A digest keeps its first rows plus a `<list>_summary` with the row count,
+per-value counts, `change_buckets` splitting each categorical value before and after
+the change when rows carry timestamps, numeric count/min/max/average and up to 50 device
+identities. Only a result that no digest can bound to 12 KB is omitted, and omitted
+results are not citable. Output is capped at the smaller of the configured response
+limit and 4,096 tokens; a response that stops at the token limit is rejected as
+`truncated` before parsing, so no partial report or tool call executes. Rejected actions
+return `Action rejected (<category>): <detail>` (or `Call N rejected (…)` within a batch)
+with a fixed category and a bounded, redacted detail. Tool errors keep a redacted
+500-byte message that the model sees but cannot cite. Every agent run that reaches MCP
+discovery records `McpDiagnostics` counters (turns, describes, calls, cached calls,
+rejections by category, digested/omitted results, hidden observations, trim steps,
+largest prompt, finish reasons and elapsed time) on its checkpoint, and every published
+MCP checkpoint, including `not_scheduled`, logs one structured `mcp_checkpoint` line
+without prompt, tool or provider text.
+
+The published verdict is the more severe of the agent conclusion and a rule-derived
+warning or critical; a rule-only info or none never overrides the agent. A rule-raised
+verdict publishes partial coverage with a limitation. A carried conclusion counts as the
+agent conclusion with a carried-forward limitation. Without any agent conclusion the
+deterministic assessment is published with a rule-derived limitation. The final
+checkpoint cannot complete the investigation on a carried conclusion or on rules alone,
+so such investigations end `incomplete`. `report.verdict_source` records `mcp_agent`,
+`combined` or `rule`.
 
 Follow-up checkpoints retain the previous structured conclusion and bounded evidence
 summaries, including query arguments and timestamps even when no report was completed.
-They can reuse a previously observed tool when its freshly discovered schema hash is
-unchanged. Full sanitized evidence remains in immutable revisions and request artifacts;
+`previous_report` is the last validated conclusion, including one carried through
+`not_scheduled` checkpoints. Evidence cited by the previous conclusion keeps its payload
+(up to 12 KB) in the next prompt; other previous evidence keeps its payload only up to
+600 bytes. Full sanitized evidence remains in immutable revisions and request artifacts;
 it is not repeatedly copied into the root record or the entire model conversation.
 Configured device lists are grouped by site/type/outcome, preserving MACs without
 creating one agent per device. Any further prompt-size omission is explicit.
@@ -80,9 +139,13 @@ citations and failed authorization remain explicit gaps.
 Reports retain the shared section layout, impact/confidence bands and topology device
 associations, with `source=mcp_agent`. The agent must state its investigated scope.
 Findings cite recorded evidence; impacted-device identities must occur in their cited
-operational evidence. Chart proposals select existing JSON rows/fields; the server
-builds the tables, bars, observed-value histograms and timelines. The model cannot
-supply invented chart values. Snapshot datasets have no historical query window.
+operational evidence. Chart proposals select existing JSON rows/fields, including digest
+summary rows such as `change_buckets`; the server builds the tables, bars, observed-value
+histograms and timelines. The model cannot supply invented chart values. A proposal that
+does not select returned rows is dropped with a limitation instead of rejecting the report.
+Snapshot datasets have no historical query window. A `not_scheduled` or failed checkpoint
+that carries a conclusion renders that conclusion's evidence, charts and impacted devices.
+Rule-derived and combined verdicts keep the deterministic device rows that justify them.
 These validations establish provenance and shape, **not proof of causal attribution**.
 Agent conclusions remain provisional and require human evaluation before promotion.
 
@@ -92,7 +155,8 @@ unfinished records remain `reserved`. Operator request-detail reads verify organ
 audit access, journal pointers, generation, revision, request identity and content hash.
 The existing artifact retention policy applies. Logs contain bounded redacted payloads,
 never transport headers or service/provider credentials. Model errors retain fixed
-validation categories; unsuccessful untrusted provider text is not stored as a finding.
+validation categories and a bounded, redacted detail that never echoes model-supplied
+values; unsuccessful untrusted provider text is not stored as a finding.
 
 The existing deterministic acceptance replay explicitly rejects MCP-led revisions.
 It cannot certify an agent conclusion by recomputing a rule verdict. A separate reviewed
@@ -107,3 +171,13 @@ Validation at implementation completion: backend formatting/lint/type checks pas
 1,319 backend tests pass with 20 existing skips. 409 frontend component tests and the
 production build pass. Helm lint and an `agent_shadow` template render pass.
 No cluster deployment or production verdict promotion is part of this commit.
+
+Validation of the evidence-quality revision (2026-09-15): replay tests
+(`backend/tests/test_mcp_investigation_replay.py`) drive the production worker and agent
+loop with the recorded MCP catalogue schemas, 200-row event searches and 240-point
+SLE-like series through fake MCP and model clients that check the prompts they receive.
+In that harness the system prompt with its action schema measured about 10.7 KB, the
+other fixed prompt data about 6.8 KB (5.6 KB of compact tool schemas), a 200-row event
+digest about 10 KB, and a follow-up run with eight event digests plus its cited previous
+evidence exceeded 96 KB until older observations were hidden. No live Mist, MCP or model
+runs were performed for this revision; the live checks above predate it.
