@@ -2,11 +2,13 @@
 
 import json
 import re
+from collections import Counter
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
-from math import isfinite
-from typing import Any, ClassVar, get_args
+from math import fsum, isfinite
+from typing import Any, ClassVar, Literal, get_args
 
 # Dynamic JSON from MCP is validated at this boundary.
 # ruff: noqa: ANN401
@@ -54,7 +56,46 @@ def sanitize(value: Any, *, secrets: tuple[str, ...] = (), depth: int = 0) -> An
     return str(value)[:120]
 
 
-def normalize_result(result: dict, *, secrets: tuple[str, ...] = ()) -> tuple[Any, bool]:
+DIGEST_MAX_CATEGORIES = 20
+DIGEST_MAX_DEVICES = 50
+DIGEST_CONTEXT_BYTES = 4000
+DIGEST_SHOWN_ROWS = (25, 10, 5, 2, 0)
+# Last-resort summary cuts: (value/bucket entries, numeric fields, devices) per summarized list.
+_DIGEST_TRIMS = ((40, 10, 20), (10, 5, 5), (0, 0, 0))
+_TIME_FIELDS = ("timestamp", "time", "start", "_time")
+_EPOCH_MILLISECONDS = 100_000_000_000
+_MAC = re.compile(r"[0-9a-f]{12}")
+_CONTEXT_OMITTED = "Value exceeded the digest context bound."
+
+
+@dataclass(frozen=True)
+class NormalizedResult:
+    data: Any
+    partial: bool
+    reduction: Literal["none", "digest", "omitted"] = "none"
+
+
+def _size(value: Any) -> int:
+    """Same measure as the evidence bound: UTF-8 bytes of non-ASCII-escaped JSON."""
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode())
+
+
+def _row_list(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)
+
+
+def _container(raw: Any) -> dict | None:
+    return raw if isinstance(raw, dict) else {"rows": raw} if isinstance(raw, list) else None
+
+
+def _truncated_rows(raw: Any) -> bool:
+    container = _container(raw) or {}
+    return any(_row_list(v) and len(v) > MAX_ITEMS for v in list(container.values())[:MAX_FIELDS])
+
+
+def normalize_result_detail(
+    result: dict, *, secrets: tuple[str, ...] = (), changed_at: datetime | None = None
+) -> NormalizedResult:
     raw = result.get("structuredContent")
     if raw is None:
         texts = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
@@ -63,11 +104,162 @@ def normalize_result(result: dict, *, secrets: tuple[str, ...] = ()) -> tuple[An
         except ValueError:
             raw = {"text": "\n".join(texts)}
     cleaned = sanitize(raw, secrets=secrets)
+    size = _size(cleaned)
+    # Oversized results, and row lists sanitize would silently cut, are summarized over every returned row.
+    if size > MAX_MCP_EVIDENCE_BYTES or _truncated_rows(raw):
+        digest = digest_result(raw, secrets=secrets, changed_at=changed_at)
+        if digest is not None:
+            return NormalizedResult(digest, partial=True, reduction="digest")
+        if size > MAX_MCP_EVIDENCE_BYTES:
+            omitted = {"omitted": "MCP result exceeded the evidence bound; narrow the query."}
+            return NormalizedResult(omitted, partial=True, reduction="omitted")
     # Any reduction is explicit; a bounded page never establishes fleet completeness.
     partial = json.dumps(raw, default=str) != json.dumps(cleaned, default=str)
-    if len(json.dumps(cleaned, ensure_ascii=False).encode()) > MAX_MCP_EVIDENCE_BYTES:
-        return {"omitted": "MCP result exceeded the evidence bound; narrow the query."}, True
-    return cleaned, partial or _has_more(cleaned)
+    return NormalizedResult(cleaned, partial=partial or _has_more(cleaned))
+
+
+def normalize_result(
+    result: dict, *, secrets: tuple[str, ...] = (), changed_at: datetime | None = None
+) -> tuple[Any, bool]:
+    normalized = normalize_result_detail(result, secrets=secrets, changed_at=changed_at)
+    return normalized.data, normalized.partial
+
+
+def _number(value: Any) -> float | None:
+    """Finite JSON numbers only; booleans, NaN, infinities and unrepresentable integers are not measurements."""
+    if type(value) not in {int, float}:
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if isfinite(number) else None
+
+
+def _epoch(value: Any) -> float | None:
+    number = _number(value)
+    if number is None or number <= 0:
+        return None
+    return number / 1000 if number >= _EPOCH_MILLISECONDS else number
+
+
+def _summarize_rows(rows: list[dict], *, secrets: tuple[str, ...], changed_at: datetime | None) -> dict:
+    time_field = next((f for f in _TIME_FIELDS if any(_epoch(r.get(f)) is not None for r in rows)), None)
+    pivot = changed_at.timestamp() if changed_at else None
+    categories: dict[str, Counter[str]] = {}
+    high_cardinality: set[str] = set()
+    buckets: dict[tuple[str, str], list[int]] = {}
+    numeric: dict[str, list[float]] = {}
+    devices: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        instant = _epoch(row.get(time_field)) if time_field else None
+        side = None if instant is None or pivot is None else int(instant >= pivot)
+        for key, value in list(row.items())[:MAX_FIELDS]:
+            name = str(key)[:MAX_KEY]
+            if name == time_field or _SECRET.search(name):
+                continue
+            if isinstance(value, str):
+                if name in high_cardinality:
+                    continue
+                text = str(sanitize(value, secrets=secrets))[:120]
+                counts = categories.setdefault(name, Counter())
+                counts[text] += 1
+                if len(counts) > DIGEST_MAX_CATEGORIES:
+                    # Identifiers and free text are not categories; stop tracking them to bound memory.
+                    high_cardinality.add(name)
+                    del categories[name]
+                    buckets = {k: v for k, v in buckets.items() if k[0] != name}
+                elif side is not None:
+                    buckets.setdefault((name, text), [0, 0])[side] += 1
+            elif (number := _number(value)) is not None:
+                numeric.setdefault(name, []).append(number)
+        mac = str(sanitize(str(row.get("mac", "")), secrets=secrets)).replace(":", "").lower()
+        if _MAC.fullmatch(mac) and len(devices) < DIGEST_MAX_DEVICES:
+            identity = {
+                k: str(sanitize(row[k], secrets=secrets))
+                for k in ("org_id", "site_id", "type", "device_type")
+                if isinstance(row.get(k), str)
+            }
+            devices.setdefault((identity.get("site_id", ""), mac), {**identity, "mac": mac})
+    return {
+        "row_count": len(rows),
+        "time_field": time_field,
+        "changed_at": int(pivot) if pivot is not None else None,
+        "value_counts": [
+            {"field": name, "value": value, "count": count}
+            for name, counts in sorted(categories.items())
+            for value, count in counts.most_common()
+        ],
+        "change_buckets": [
+            {"field": name, "value": value, "before_change": before, "after_change": after}
+            for (name, value), (before, after) in sorted(buckets.items())
+        ],
+        "numeric": [
+            {
+                "field": name,
+                "count": len(xs),
+                "min": min(xs),
+                "max": max(xs),
+                # Divide before summing so large finite values cannot overflow to infinity.
+                "avg": round(fsum(x / len(xs) for x in xs), 3),
+            }
+            for name, xs in sorted(numeric.items())
+        ],
+        "devices": list(devices.values()),
+    }
+
+
+def _digest_context(items: list[tuple[str, Any]], lists: dict[str, Any], *, secrets: tuple[str, ...]) -> dict:
+    context = {}
+    for name, value in items:
+        if name in lists:
+            continue
+        clean = "[redacted]" if _SECRET.search(name) else sanitize(value, secrets=secrets)
+        # An oversized value stays visibly present (e.g. an ``error`` key) rather than silently disappearing.
+        context[name] = clean if _size(clean) <= DIGEST_CONTEXT_BYTES else {"omitted": _CONTEXT_OMITTED}
+    return context
+
+
+def digest_result(raw: Any, *, secrets: tuple[str, ...] = (), changed_at: datetime | None = None) -> dict | None:
+    """Summarize every returned row server-side so oversized evidence stays bounded and citable."""
+    container = _container(raw)
+    if container is None:
+        return None
+    items = [(str(k)[:MAX_KEY], v) for k, v in list(container.items())[:MAX_FIELDS]]
+    lists = {name: value for name, value in items if _row_list(value)}
+    if not lists:
+        return None
+    context = _digest_context(items, lists, secrets=secrets)
+    summaries = {k: _summarize_rows(v, secrets=secrets, changed_at=changed_at) for k, v in lists.items()}
+    header = {
+        "reason": "Result exceeded the evidence bound or row limit; Guardian summarized every returned row.",
+        "original_bytes": _size(raw),
+    }
+
+    def assemble(shown: int, extra: dict, trimmed: list[str]) -> dict:
+        body = {
+            **extra,
+            **{k: sanitize(v[:shown], secrets=secrets) for k, v in lists.items()},
+            **{f"{k}_summary": s for k, s in summaries.items()},
+        }
+        digest = {"digest": {**header, "rows_shown_per_list": shown, "trimmed": trimmed}}
+        return {**digest, **{k: v for k, v in body.items() if k != "digest"}}
+
+    for shown in DIGEST_SHOWN_ROWS:
+        if _size(digest := assemble(shown, context, [])) <= MAX_MCP_EVIDENCE_BYTES:
+            return digest
+    for entries, fields, identities in _DIGEST_TRIMS:
+        for summary in summaries.values():
+            summary.update(
+                value_counts=summary["value_counts"][:entries],
+                change_buckets=summary["change_buckets"][:entries],
+                numeric=summary["numeric"][:fields],
+                devices=summary["devices"][:identities],
+            )
+        for extra, trimmed in ((context, ["summaries"]), ({}, ["summaries", "context"])):
+            if _size(digest := assemble(0, extra, trimmed)) <= MAX_MCP_EVIDENCE_BYTES:
+                return digest
+    return None
 
 
 def _has_more(value: Any) -> bool:

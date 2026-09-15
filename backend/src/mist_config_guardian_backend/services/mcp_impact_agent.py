@@ -49,6 +49,7 @@ from mist_config_guardian_backend.impact.mcp_scope import (
     catalog,
     compact_schema,
     normalize_result,
+    normalize_result_detail,
     safe_location,
 )
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
@@ -213,7 +214,9 @@ class McpImpactAgent(ModelRequestJournal):
             e.get("check_id") != "mist-docs-attribute.v1" and e.get("state") in {"complete", "partial"}
             for e in deterministic.get("evidence", [])
         ):
-            clean, partial = normalize_result({"structuredContent": deterministic}, secrets=secrets)
+            clean, partial = normalize_result(
+                {"structuredContent": deterministic}, secrets=secrets, changed_at=root.changed_at
+            )
             deterministic_evidence = McpEvidence(
                 id=uuid5(
                     NAMESPACE_URL, f"guardian:{root.organization_id}:{root.audit_id}:{root.id}:{root.revision + 1}"
@@ -457,7 +460,12 @@ class McpImpactAgent(ModelRequestJournal):
                         try:
                             async with asyncio.timeout(min(TOOL_TIMEOUT_SECONDS, max(remaining(), 0.001))):
                                 result = await client.call_tool(action.tool, arguments)
-                            cleaned, partial = normalize_result(result, secrets=secrets)
+                            normalized = normalize_result_detail(result, secrets=secrets, changed_at=root.changed_at)
+                            cleaned, partial = normalized.data, normalized.partial
+                            if normalized.reduction == "digest":
+                                stats.results_digested += 1
+                            elif normalized.reduction == "omitted":
+                                stats.results_omitted += 1
                             if result.get("isError") or (
                                 isinstance(cleaned, dict)
                                 and (
