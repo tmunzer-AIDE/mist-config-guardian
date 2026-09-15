@@ -42,6 +42,9 @@ class RestoreLeaseStore(Protocol):
     async def release(self, organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> None:
         """Give the lease up if this operation holds it."""
 
+    async def held_by_another(self, organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> bool:
+        """Whether a live lease on the organization belongs to a different operation."""
+
 
 class MongoRestoreLeaseStore:
     """Lease backed by a unique organization document with a TTL index."""
@@ -84,6 +87,23 @@ class MongoRestoreLeaseStore:
             {"organization_id": organization_id, "holder_operation_id": operation_id}
         )
 
+    async def held_by_another(self, organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> bool:
+        """Judge expiry by the timestamp, the way ``acquire`` does.
+
+        MongoDB's TTL monitor deletes a lapsed lease only when it next runs, so
+        a document can outlive its expiry; ``acquire`` would take such a lease
+        over, and so it must not count as held.
+        """
+        lease = await RestoreLease.get_pymongo_collection().find_one(
+            {
+                "organization_id": organization_id,
+                "holder_operation_id": {"$ne": operation_id},
+                "expires_at": {"$gt": utc_now()},
+            },
+            projection={"_id": 1},
+        )
+        return lease is not None
+
 
 class MemoryRestoreLeaseStore:
     """Process-local lease with the same semantics, for tests."""
@@ -117,14 +137,31 @@ class MemoryRestoreLeaseStore:
         if held is not None and held[0] == operation_id:
             del self._leases[organization_id]
 
+    async def held_by_another(self, organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> bool:
+        """Whether a live lease on the organization belongs to a different operation."""
+        held = self._leases.get(organization_id)
+        return held is not None and held[0] != operation_id and held[1] > self._clock()
 
-async def has_active_restore(organization_id: PydanticObjectId, operation_id: PydanticObjectId) -> bool:
-    """Whether another restore of this organization is queued or running.
 
-    The operation asking is excluded, so a plan never blocks itself.
+async def has_active_restore(
+    organization_id: PydanticObjectId,
+    operation_id: PydanticObjectId,
+    *,
+    leases: RestoreLeaseStore | None = None,
+) -> bool:
+    """Whether another restore of this organization is queued, running, or still holds the lease.
+
+    The operation asking is excluded, so a plan never blocks itself. Statuses
+    alone miss a lease left behind by a restore that already ended (its
+    release failed, or its worker died after the terminal write): the executor
+    refuses to start until that lease lapses, so it counts here too, and the
+    administrator gets a conflict instead of a queued restore that fails on
+    arrival with nothing running.
     """
     count = await RestoreOperation.find(
         RestoreOperation.organization_id == organization_id,
         {"_id": {"$ne": operation_id}, "status": {"$in": [RestoreStatus.QUEUED, RestoreStatus.RUNNING]}},
     ).count()
-    return count > 0
+    if count > 0:
+        return True
+    return await (leases or MongoRestoreLeaseStore()).held_by_another(organization_id, operation_id)

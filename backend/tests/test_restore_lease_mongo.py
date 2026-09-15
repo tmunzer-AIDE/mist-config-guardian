@@ -101,3 +101,22 @@ async def test_active_restores_are_other_queued_or_running_operations() -> None:
     queued.status = RestoreStatus.COMPLETED
     await queued.save()
     assert await has_active_restore(organization, PydanticObjectId()) is False
+
+
+async def test_a_live_lease_of_another_restore_is_active_without_a_queued_operation() -> None:
+    store = MongoRestoreLeaseStore()
+    organization, holder, asking = PydanticObjectId(), PydanticObjectId(), PydanticObjectId()
+    assert await has_active_restore(organization, asking) is False
+
+    # The holder's worker died between its terminal persist and its release.
+    await store.acquire(organization, holder, ttl=TTL)
+
+    assert await store.held_by_another(organization, asking) is True
+    assert await store.held_by_another(organization, holder) is False
+    assert await has_active_restore(organization, asking) is True
+    assert await has_active_restore(organization, holder) is False
+
+    await store.release(organization, holder)
+    await store.acquire(organization, holder, ttl=-timedelta(seconds=1))
+    assert await store.held_by_another(organization, asking) is False
+    assert await has_active_restore(organization, asking) is False
