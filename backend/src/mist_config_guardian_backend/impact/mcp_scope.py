@@ -73,6 +73,14 @@ class NormalizedResult:
     data: Any
     partial: bool
     reduction: Literal["none", "digest", "omitted"] = "none"
+    # Tool-error keys detected in the full sanitized result, before any digest or omission could drop them.
+    tool_error: bool = False
+
+
+def _tool_error_signal(value: Any) -> bool:
+    return isinstance(value, dict) and bool(
+        value.get("error") or value.get("success") is False or value.get("status") == "error"
+    )
 
 
 def _size(value: Any) -> int:
@@ -93,15 +101,28 @@ def _truncated_rows(raw: Any) -> bool:
     return any(_row_list(v) and len(v) > MAX_ITEMS for v in list(container.values())[:MAX_FIELDS])
 
 
-def _sanitized_rows(raw: Any, *, secrets: tuple[str, ...]) -> list[Any]:
+_IDENTITY_KEYS = ("org_id", "site_id", "mac", "type", "device_type")
+
+
+def _row_view(row: dict, *, secrets: tuple[str, ...]) -> dict:
+    """The one sanitized copy of a row that both the authority check and the digest use.
+
+    Identity keys survive the field bound and ``$encrypted`` redaction so the organization check always sees them;
+    an encrypted row contributes nothing but its identity.
+    """
+    clean = sanitize(row, secrets=secrets)
+    identity = {key: sanitize(row[key], secrets=secrets, depth=1) for key in _IDENTITY_KEYS if key in row}
+    return {**(clean if isinstance(clean, dict) else {}), **identity}
+
+
+def _row_views(raw: Any, *, secrets: tuple[str, ...]) -> dict[str, list[dict]]:
     """Every row a digest could aggregate, sanitized one by one so no list truncation hides a row."""
     container = _container(raw) or {}
-    return [
-        sanitize(row, secrets=secrets)
-        for value in list(container.values())[:MAX_FIELDS]
+    return {
+        str(key)[:MAX_KEY]: [_row_view(row, secrets=secrets) for row in value]
+        for key, value in list(container.items())[:MAX_FIELDS]
         if _row_list(value)
-        for row in value
-    ]
+    }
 
 
 def normalize_result_detail(
@@ -111,7 +132,7 @@ def normalize_result_detail(
     changed_at: datetime | None = None,
     authority: Callable[[Any], object] | None = None,
 ) -> NormalizedResult:
-    """``authority`` raises to reject the whole result; it sees every untruncated row before any digest is built."""
+    """``authority`` raises to reject the whole result; it sees the same row copies a digest aggregates, first."""
     raw = result.get("structuredContent")
     if raw is None:
         texts = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
@@ -121,19 +142,21 @@ def normalize_result_detail(
             raw = {"text": "\n".join(texts)}
     cleaned = sanitize(raw, secrets=secrets)
     size = _size(cleaned)
+    tool_error = _tool_error_signal(cleaned)
     # Oversized results, and row lists sanitize would silently cut, are summarized over every returned row.
     if size > MAX_MCP_EVIDENCE_BYTES or _truncated_rows(raw):
+        rows = _row_views(raw, secrets=secrets)
         if authority is not None:
-            authority([cleaned, *_sanitized_rows(raw, secrets=secrets)])
-        digest = digest_result(raw, secrets=secrets, changed_at=changed_at)
+            authority([cleaned, *(row for views in rows.values() for row in views)])
+        digest = digest_result(raw, secrets=secrets, changed_at=changed_at, rows=rows)
         if digest is not None:
-            return NormalizedResult(digest, partial=True, reduction="digest")
+            return NormalizedResult(digest, partial=True, reduction="digest", tool_error=tool_error)
         if size > MAX_MCP_EVIDENCE_BYTES:
             omitted = {"omitted": "MCP result exceeded the evidence bound; narrow the query."}
-            return NormalizedResult(omitted, partial=True, reduction="omitted")
+            return NormalizedResult(omitted, partial=True, reduction="omitted", tool_error=tool_error)
     # Any reduction is explicit; a bounded page never establishes fleet completeness.
     partial = json.dumps(raw, default=str) != json.dumps(cleaned, default=str)
-    return NormalizedResult(cleaned, partial=partial or _has_more(cleaned))
+    return NormalizedResult(cleaned, partial=partial or _has_more(cleaned), tool_error=tool_error)
 
 
 def normalize_result(
@@ -161,7 +184,8 @@ def _epoch(value: Any) -> float | None:
     return number / 1000 if number >= _EPOCH_MILLISECONDS else number
 
 
-def _summarize_rows(rows: list[dict], *, secrets: tuple[str, ...], changed_at: datetime | None) -> dict:
+def _summarize_rows(rows: list[dict], *, changed_at: datetime | None) -> dict:
+    """Aggregate already-sanitized row views; nothing here reads a raw MCP value."""
     time_field = next((f for f in _TIME_FIELDS if any(_epoch(r.get(f)) is not None for r in rows)), None)
     pivot = changed_at.timestamp() if changed_at else None
     categories: dict[str, Counter[str]] = {}
@@ -172,14 +196,13 @@ def _summarize_rows(rows: list[dict], *, secrets: tuple[str, ...], changed_at: d
     for row in rows:
         instant = _epoch(row.get(time_field)) if time_field else None
         side = None if instant is None or pivot is None else int(instant >= pivot)
-        for key, value in list(row.items())[:MAX_FIELDS]:
-            name = str(key)[:MAX_KEY]
+        for name, value in row.items():
             if name == time_field or _SECRET.search(name):
                 continue
             if isinstance(value, str):
                 if name in high_cardinality:
                     continue
-                text = str(sanitize(value, secrets=secrets))[:120]
+                text = value[:120]
                 counts = categories.setdefault(name, Counter())
                 counts[text] += 1
                 if len(counts) > DIGEST_MAX_CATEGORIES:
@@ -191,14 +214,15 @@ def _summarize_rows(rows: list[dict], *, secrets: tuple[str, ...], changed_at: d
                     buckets.setdefault((name, text), [0, 0])[side] += 1
             elif (number := _number(value)) is not None:
                 numeric.setdefault(name, []).append(number)
-        mac = str(sanitize(str(row.get("mac", "")), secrets=secrets)).replace(":", "").lower()
+        mac = str(row.get("mac", "")).replace(":", "").lower()
         if _MAC.fullmatch(mac) and len(devices) < DIGEST_MAX_DEVICES:
+            # Any scalar identity is kept, so a non-string org_id still stops ``observe`` from learning the device.
             identity = {
-                k: str(sanitize(row[k], secrets=secrets))
+                k: row[k]
                 for k in ("org_id", "site_id", "type", "device_type")
-                if isinstance(row.get(k), str)
+                if row.get(k) is not None and not isinstance(row[k], (dict, list))
             }
-            devices.setdefault((identity.get("site_id", ""), mac), {**identity, "mac": mac})
+            devices.setdefault((str(identity.get("site_id", "")), mac), {**identity, "mac": mac})
     return {
         "row_count": len(rows),
         "time_field": time_field,
@@ -238,17 +262,27 @@ def _digest_context(items: list[tuple[str, Any]], lists: dict[str, Any], *, secr
     return context
 
 
-def digest_result(raw: Any, *, secrets: tuple[str, ...] = (), changed_at: datetime | None = None) -> dict | None:
-    """Summarize every returned row server-side so oversized evidence stays bounded and citable."""
+def digest_result(
+    raw: Any,
+    *,
+    secrets: tuple[str, ...] = (),
+    changed_at: datetime | None = None,
+    rows: dict[str, list[dict]] | None = None,
+) -> dict | None:
+    """Summarize every returned row server-side so oversized evidence stays bounded and citable.
+
+    ``rows`` are the sanitized row views already checked by the caller's authority; shown rows and every
+    aggregate come from exactly those copies.
+    """
     container = _container(raw)
     if container is None:
         return None
     items = [(str(k)[:MAX_KEY], v) for k, v in list(container.items())[:MAX_FIELDS]]
-    lists = {name: value for name, value in items if _row_list(value)}
+    lists = _row_views(raw, secrets=secrets) if rows is None else rows
     if not lists:
         return None
     context = _digest_context(items, lists, secrets=secrets)
-    summaries = {k: _summarize_rows(v, secrets=secrets, changed_at=changed_at) for k, v in lists.items()}
+    summaries = {k: _summarize_rows(v, changed_at=changed_at) for k, v in lists.items()}
     header = {
         "reason": "Result exceeded the evidence bound or row limit; Guardian summarized every returned row.",
         "original_bytes": _size(raw),
@@ -257,7 +291,7 @@ def digest_result(raw: Any, *, secrets: tuple[str, ...] = (), changed_at: dateti
     def assemble(shown: int, extra: dict, trimmed: list[str]) -> dict:
         body = {
             **extra,
-            **{k: sanitize(v[:shown], secrets=secrets) for k, v in lists.items()},
+            **{k: v[:shown] for k, v in lists.items()},
             **{f"{k}_summary": s for k, s in summaries.items()},
         }
         digest = {"digest": {**header, "rows_shown_per_list": shown, "trimmed": trimmed}}

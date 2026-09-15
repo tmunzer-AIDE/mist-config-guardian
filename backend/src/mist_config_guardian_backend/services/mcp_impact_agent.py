@@ -468,14 +468,8 @@ class McpImpactAgent(ModelRequestJournal):
                                 authority=scope.validate_response,
                             )
                             cleaned, partial = normalized.data, normalized.partial
-                            if result.get("isError") or (
-                                isinstance(cleaned, dict)
-                                and (
-                                    cleaned.get("error")
-                                    or cleaned.get("success") is False
-                                    or cleaned.get("status") == "error"
-                                )
-                            ):
+                            # The flag is read from the full sanitized result, so a digest cannot hide an error key.
+                            if result.get("isError") or normalized.tool_error:
                                 msg = "tool_error"
                                 raise MistMcpError(msg, detail=self._tool_error_text(cleaned))  # noqa: TRY301 - normalize tool errors
                             scope.validate_response(cleaned)

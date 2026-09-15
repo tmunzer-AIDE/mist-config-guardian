@@ -253,11 +253,49 @@ def test_foreign_organization_beyond_shown_rows_rejects_the_whole_result(raw):
         normalize_result_detail({"structuredContent": raw}, changed_at=NOW, authority=scope.validate_response)
 
 
+def home_devices(count=59):
+    return [{**row, "type": "ap"} for row in short_rows()["results"][:count]]
+
+
+def test_encrypted_row_with_foreign_organization_is_rejected_and_never_leaks():
+    raw = {"results": [*home_devices(), {"$encrypted": "blob", "org_id": "44444444-4444-4444-8444-444444444444"}]}
+    scope = McpScope(org_id=UUID(MIST_ORG), changed_at=NOW, as_of=LATER, sites=[SITE])
+    with pytest.raises(McpScopeError, match="foreign organization"):
+        normalize_result_detail({"structuredContent": raw}, authority=scope.validate_response)
+    assert "blob" not in json.dumps(normalize_result_detail({"structuredContent": raw}).data)
+
+
+def test_non_string_organization_beyond_the_field_bound_is_rejected_and_not_observed():
+    hidden = {**{f"f{i}": i for i in range(100)}, "org_id": 12345, "mac": "ffffffffffff", "site_id": SITE, "type": "ap"}
+    raw = {"results": [*home_devices(), hidden]}
+    scope = McpScope(org_id=UUID(MIST_ORG), changed_at=NOW, as_of=LATER, sites=[SITE])
+    with pytest.raises(McpScopeError, match="foreign organization"):
+        normalize_result_detail({"structuredContent": raw}, authority=scope.validate_response)
+    scope.observe(
+        "search_mist_data", {"search_type": "devices"}, normalize_result_detail({"structuredContent": raw}).data
+    )
+    assert (SITE, "aabbccdd0000") in scope.devices
+    assert (SITE, "ffffffffffff") not in scope.devices
+
+
+def error_with_large_context():
+    return {"error": "boom", **{f"ctx{i}": "y" * 1999 for i in range(98)}, "results": short_rows()["results"]}
+
+
+def test_tool_error_signal_survives_the_final_fallback():
+    normalized = normalize_result_detail({"structuredContent": error_with_large_context()})
+    assert normalized.reduction == "digest"
+    assert normalized.data["digest"]["trimmed"] == ["summaries", "context"]
+    assert normalized.tool_error
+
+
 @pytest.mark.parametrize(
     ("result", "error"),
     [
         (foreign_row_beyond_shown(events()), "invalid_response"),
+        (foreign_row_beyond_shown(short_rows()), "invalid_response"),
         ({"error": "Search backend failed.", "results": short_rows()["results"]}, "tool_error"),
+        (error_with_large_context(), "tool_error"),
     ],
 )
 async def test_rejected_reduced_results_are_errors_and_not_counted(monkeypatch, httpx_mock, result, error):
