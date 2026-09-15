@@ -242,7 +242,7 @@ class RestoreAuthorizationService:
             projection={"encrypted_delegated_credential": 1, "organization_id": 1},
         )
         if operation is not None:
-            await self._logout_unused_credential(operation)
+            await self.logout_unused_credential(operation)
 
     async def expire_stale_credentials(self) -> int:
         """Fail expired queued restores and revoke each captured Mist session."""
@@ -268,10 +268,10 @@ class RestoreAuthorizationService:
             projection={"encrypted_delegated_credential": 1, "organization_id": 1},
         ):
             count += 1
-            await self._logout_unused_credential(operation)
+            await self.logout_unused_credential(operation)
         return count
 
-    async def _logout_unused_credential(self, operation: dict[str, Any]) -> None:
+    async def logout_unused_credential(self, operation: dict[str, Any]) -> None:
         """Best-effort logout must not prevent local expiry or queue recovery."""
         encrypted = operation.get("encrypted_delegated_credential")
         if not encrypted:

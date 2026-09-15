@@ -1,5 +1,6 @@
 """Post-restore verification and the execution progress it gates."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Self
 from unittest.mock import AsyncMock
@@ -429,7 +430,30 @@ def _build_verifier(
 
 
 @pytest.fixture
-def executed(monkeypatch: pytest.MonkeyPatch) -> list[tuple[RestoreStatus, tuple, tuple]]:
+def credential_clears(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[dict[str, object]], dict[str, object]]]:
+    """Record every field-scoped write, filter and payload.
+
+    Recorded rather than asserted inside the fake: the executor swallows any
+    error raised by that write, so an assertion there could never fail a test.
+    """
+    calls: list[tuple[list[dict[str, object]], dict[str, object]]] = []
+
+    class _Recorded:
+        def __init__(self, filters: tuple) -> None:
+            self.filters = filters
+
+        async def update(self, change, *_args, **_kwargs) -> None:
+            calls.append(([criterion.query for criterion in self.filters], change))
+
+    monkeypatch.setattr(RestoreOperation, "find_one", lambda *filters, **_kwargs: _Recorded(filters))
+    return calls
+
+
+@pytest.fixture
+def executed(
+    monkeypatch: pytest.MonkeyPatch,
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],  # noqa: ARG001 - installs the write recorder
+) -> list[tuple[RestoreStatus, tuple, tuple]]:
     """Run the executor against fakes and record every persisted state."""
     saves: list[tuple[RestoreStatus, tuple, tuple]] = []
 
@@ -454,12 +478,6 @@ def executed(monkeypatch: pytest.MonkeyPatch) -> list[tuple[RestoreStatus, tuple
 
     monkeypatch.setattr(RestoreExecutor, "_record_result", _no_record_result)
     monkeypatch.setattr(RestoreOperation, "id", ExpressionField("id"), raising=False)
-
-    class _Cleared:
-        async def update(self, change, *_args, **_kwargs) -> None:
-            assert change == {"$set": {"encrypted_delegated_credential": None, "delegated_credential_expires_at": None}}
-
-    monkeypatch.setattr(RestoreOperation, "find_one", lambda *_args, **_kwargs: _Cleared())
 
     async def _snapshot(*_args, **_kwargs):
         return []
@@ -939,3 +957,71 @@ async def test_an_unconfirmed_delete_that_did_happen_is_recreated(monkeypatch: p
     assert client.writes == [("create", "wlan-0")]
     assert result.actions[0].status is RestoreActionStatus.COMPLETED
     assert set(verifier.applied) == {0}
+
+
+@pytest.mark.usefixtures("executed")
+async def test_the_worker_heartbeats_around_every_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    async def _beat(self, operation) -> None:  # noqa: ARG001
+        events.append("beat")
+
+    async def _snapshot(*_args, **_kwargs):
+        events.append("capture")
+        return []
+
+    monkeypatch.setattr(RestoreExecutor, "_heartbeat", _beat)
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, _, verifier, client = _run(monkeypatch, operation, verified=True)
+    original_update = client.update
+    original_verify = verifier.verify
+
+    async def _update(*args, **kwargs):
+        events.append("write")
+        return await original_update(*args, **kwargs)
+
+    async def _verify(*args, **kwargs):
+        events.append("verify")
+        return await original_verify(*args, **kwargs)
+
+    client.update = _update
+    verifier.verify = _verify
+
+    await executor.execute(OPERATION_ID)
+
+    assert events == ["capture", "beat", "beat", "write", "beat", "verify"]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_the_credential_is_cleared_in_the_database_when_the_terminal_state_is_not_saved(
+    monkeypatch: pytest.MonkeyPatch,
+    credential_clears: list[tuple[list[dict[str, object]], dict[str, object]]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _database_gone(*_args, **_kwargs) -> None:
+        msg = "connection reset"
+        raise RuntimeError(msg)
+
+    async def _save_until_terminal(self) -> None:
+        # Progress writes succeed; the terminal write in _fail_unexpectedly is lost.
+        if self.completed_at is not None:
+            msg = "primary stepped down"
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr(RestoreExecutor, "_record_result", _database_gone)
+    monkeypatch.setattr(RestoreOperation, "save", _save_until_terminal)
+    operation = _operation([_action(0, RestoreActionType.UPDATE)])
+    executor, notifications, _, _ = _run(monkeypatch, operation, verified=True)
+
+    with caplog.at_level(logging.ERROR, logger="mist_config_guardian_backend.services.restore_executor"):
+        await executor.execute(OPERATION_ID)
+
+    assert "restore_terminal_state_unsaved" in caplog.text
+    assert credential_clears == [
+        (
+            [{"id": OPERATION_ID}],
+            {"$set": {"encrypted_delegated_credential": None, "delegated_credential_expires_at": None}},
+        )
+    ]
+    assert notifications.failed == ["Restore worker error (RuntimeError)"]

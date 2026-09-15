@@ -13,6 +13,7 @@ from mist_config_guardian_backend.services.restore_authorization import (
     RestoreAuthorizationService,
 )
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutor
+from mist_config_guardian_backend.services.restore_recovery import RestoreRecoveryService
 from mist_config_guardian_backend.worker import celery_app
 
 
@@ -61,5 +62,21 @@ async def _expire_restore_approvals() -> int:
     await database.connect()
     try:
         return await expire_pending_approvals()
+    finally:
+        await database.close()
+
+
+@celery_app.task(name="restores.recover_interrupted")
+def recover_interrupted_restores() -> int:
+    """Close running restores whose worker stopped heartbeating."""
+    return asyncio.run(_recover_interrupted_restores())
+
+
+async def _recover_interrupted_restores() -> int:
+    settings = get_settings()
+    database = DatabaseManager(settings)
+    await database.connect()
+    try:
+        return await RestoreRecoveryService(settings, CredentialVault(settings)).recover_interrupted()
     finally:
         await database.close()

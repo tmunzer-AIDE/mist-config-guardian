@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     credential_encryption_key: SecretStr = SecretStr("development-only-encryption-key")
     webhook_max_body_bytes: int = 1_048_576
     delegated_credential_ttl_minutes: int = 15
+    # A running restore that has not written progress for this long is treated
+    # as interrupted. It must outlast the slowest single Mist call the mutation
+    # client can make (three 30 s attempts plus capped back-offs).
+    restore_worker_heartbeat_timeout_minutes: int = 15
 
     session_cookie_name: str = "cg_session"
     csrf_cookie_name: str = "cg_csrf"

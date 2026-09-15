@@ -124,6 +124,7 @@ class RestoreExecutor:
                 await self._notify_failure(operation, str(exc))
                 return operation
             await self._store.save(state)
+            await self._heartbeat(operation)
 
             outcome = await self._run_actions(
                 client,
@@ -134,6 +135,7 @@ class RestoreExecutor:
             if not outcome.succeeded:
                 await self._notify_failure(operation, _failure_reason(operation))
                 return operation
+            await self._heartbeat(operation)
             verification = await self._verifier.verify(
                 client,
                 organization,
@@ -153,6 +155,11 @@ class RestoreExecutor:
         await operation.save()
         await self._announce_success(operation, state.compensates_operation_id)
         return operation
+
+    async def _heartbeat(self, operation: RestoreOperation) -> None:
+        """Record that this worker is still alive, so the janitor leaves it alone."""
+        operation.touch()
+        await operation.save()
 
     async def _announce_success(
         self,
@@ -246,6 +253,7 @@ class RestoreExecutor:
     ) -> _RunOutcome:
         outcome = _RunOutcome()
         for index, action in enumerate(operation.actions):
+            await self._heartbeat(operation)
             try:
                 payload = await self._execute_action(
                     client,
