@@ -28,6 +28,8 @@ class RestoreStatus(StrEnum):
     FAILED = "failed"
     COMPENSATION_AVAILABLE = "compensation_available"
     COMPENSATED = "compensated"
+    # A plan replaced by the prepared plan built from its fresh backup; never executed.
+    SUPERSEDED = "superseded"
 
 
 class RestoreActionType(StrEnum):
@@ -48,6 +50,15 @@ class RestoreActionStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class RestoreActionReason(StrEnum):
+    """Why a plan contains an action."""
+
+    RESTORE = "restore"
+    # The object is not being restored; its references to an object this plan
+    # recreates must be pointed at the new UUID (spec §9.4 steps 4-5).
+    REFERENCE_REWRITE = "reference_rewrite"
+
+
 class RestoreAction(BaseModel):
     """One deterministic action in a restore plan."""
 
@@ -64,9 +75,31 @@ class RestoreAction(BaseModel):
     protected_configuration: dict[str, object]
     expected_current_hash: str | None = None
     depends_on: list[PydanticObjectId] = Field(default_factory=list)
+    reason: RestoreActionReason = RestoreActionReason.RESTORE
     status: RestoreActionStatus = RestoreActionStatus.PENDING
     resulting_mist_id: str | None = None
     error: str | None = None
+    # The write was in flight when Mist stopped answering, so it may have been
+    # applied. Such an action is FAILED, and compensation treats it as possibly
+    # applied rather than as never attempted. A compensation action copies the
+    # flag from the write it reverses before it runs, so on any other status
+    # it describes that original write, not this action.
+    outcome_unknown: bool = False
+    # On a compensation action: the order of the original action it reverses.
+    compensates_action_order: int | None = None
+    # Fingerprint of the object as Mist returned it right after this action's
+    # write: what compensation must find before it undoes the write. None for
+    # deletes and for actions that have not written yet.
+    applied_hash: str | None = None
+    # On a compensation action whose original write Mist accepted but that was
+    # never read back, so it has no ``applied_hash``: the payload that write
+    # sent, still protected and with the ids it remapped. Live state must still
+    # show it before the reversal replaces the object. None everywhere else.
+    written_configuration: dict[str, object] | None = None
+    # The site id the action was executed under when it differs from
+    # ``site_mist_id`` (the site was recreated by this restore), so later
+    # reads and reversals address the object where it now lives.
+    resulting_site_mist_id: str | None = None
 
 
 class RestoreOperationStateRecord(TimestampedModel, Document):
@@ -115,6 +148,9 @@ class RestoreOperation(TimestampedModel, Document):
     # output. Empty on operations planned before this was recorded.
     requested_version_ids: list[PydanticObjectId] = Field(default_factory=list)
     baseline_snapshot_id: PydanticObjectId | None = None
+    # On a SUPERSEDED plan: the prepared plan that replaced it, which is the one
+    # a reviewer must open instead.
+    superseded_by: PydanticObjectId | None = None
     target_at: datetime
     status: RestoreStatus = RestoreStatus.PLANNED
     actions: list[RestoreAction] = Field(default_factory=list)
@@ -134,4 +170,25 @@ class RestoreOperation(TimestampedModel, Document):
             IndexModel([("organization_id", 1), ("created_at", -1)]),
             IndexModel([("organization_id", 1), ("status", 1)]),
             IndexModel([("requested_by", 1), ("created_at", -1)]),
+        ]
+
+
+class RestoreLease(Document):
+    """The one restore allowed to write to an organization at a time (spec §9.5.1).
+
+    Its holder renews it with every heartbeat. A worker that dies stops
+    renewing, so the lease lapses on its own and MongoDB removes the document;
+    the unique organization index is what refuses a second live holder.
+    """
+
+    organization_id: PydanticObjectId
+    holder_operation_id: PydanticObjectId
+    acquired_at: datetime
+    expires_at: datetime
+
+    class Settings:
+        name = "restore_leases"
+        indexes: ClassVar[list[IndexModel]] = [
+            IndexModel([("organization_id", 1)], unique=True, name="restore_lease_organization_unique"),
+            IndexModel([("expires_at", 1)], expireAfterSeconds=0, name="restore_lease_expiry"),
         ]

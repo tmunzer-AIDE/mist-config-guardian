@@ -47,3 +47,9 @@ def test_an_operation_planned_before_inputs_were_recorded_reports_none() -> None
     response = RestoreOperationResponse.from_document(_operation())
 
     assert response.requested_version_ids == []
+
+
+def test_the_response_names_the_action_a_stopped_run_is_halted_at() -> None:
+    """A run can stop on an action that did not fail, so its status alone cannot say where."""
+    assert RestoreOperationResponse.from_document(_operation(failure_action_order=3)).failure_action_order == 3
+    assert RestoreOperationResponse.from_document(_operation()).failure_action_order is None

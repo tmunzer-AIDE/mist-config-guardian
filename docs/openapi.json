@@ -7720,6 +7720,15 @@
         "title": "ReportSections",
         "type": "object"
       },
+      "RestoreActionReason": {
+        "description": "Why a plan contains an action.",
+        "enum": [
+          "restore",
+          "reference_rewrite"
+        ],
+        "title": "RestoreActionReason",
+        "type": "string"
+      },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
         "properties": {
@@ -7779,6 +7788,15 @@
           "order": {
             "title": "Order",
             "type": "integer"
+          },
+          "outcome_unknown": {
+            "default": false,
+            "title": "Outcome Unknown",
+            "type": "boolean"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RestoreActionReason",
+            "default": "restore"
           },
           "resulting_mist_id": {
             "anyOf": [
@@ -7882,11 +7900,6 @@
                 "type": "null"
               }
             ]
-          },
-          "use_prepared_credential": {
-            "default": false,
-            "title": "Use Prepared Credential",
-            "type": "boolean"
           }
         },
         "title": "RestoreExecuteRequest",
@@ -7943,6 +7956,11 @@
               }
             ]
           },
+          "approval_required": {
+            "default": false,
+            "title": "Approval Required",
+            "type": "boolean"
+          },
           "baseline_snapshot_id": {
             "anyOf": [
               {
@@ -7986,6 +8004,17 @@
               }
             ],
             "title": "Credential Actor"
+          },
+          "failure_action_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Action Order"
           },
           "id": {
             "title": "Id",
@@ -8038,6 +8067,17 @@
           },
           "status": {
             "$ref": "#/components/schemas/RestoreStatus"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
           },
           "target_at": {
             "format": "date-time",
@@ -8118,7 +8158,8 @@
           "completed",
           "failed",
           "compensation_available",
-          "compensated"
+          "compensated",
+          "superseded"
         ],
         "title": "RestoreStatus",
         "type": "string"
@@ -15845,7 +15886,7 @@
     },
     "/api/v1/organizations/{organization_id}/restores/{operation_id}/execute": {
       "post": {
-        "description": "Verify a fresh Mist administrator and queue the reviewed plan.",
+        "description": "Queue a prepared plan with the administrator session its fresh backup retained.\n\nThere is no credential to supply: a plan reviewed against anything but a\nbackup taken with the identity that will write is not executed at all.",
         "operationId": "execute_restore_api_v1_organizations__organization_id__restores__operation_id__execute_post",
         "parameters": [
           {
@@ -15865,16 +15906,6 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RestoreExecuteRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "202": {
             "content": {

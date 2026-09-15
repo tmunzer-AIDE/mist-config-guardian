@@ -12,10 +12,13 @@ export type RestoreStatus =
   | 'completed'
   | 'failed'
   | 'compensation_available'
-  | 'compensated';
+  | 'compensated'
+  // Replaced by the prepared plan built from its fresh backup; never executed.
+  | 'superseded';
 
 export type RestoreActionKind = 'create' | 'update' | 'delete';
 export type RestoreActionStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'skipped';
+export type RestoreActionReason = 'restore' | 'reference_rewrite';
 
 export interface RestoreAction {
   logical_object_id: string;
@@ -33,6 +36,8 @@ export interface RestoreAction {
   status: RestoreActionStatus;
   resulting_mist_id: string | null;
   error: string | null;
+  outcome_unknown?: boolean;
+  reason?: RestoreActionReason;
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'invalidated';
@@ -83,6 +88,8 @@ export interface RestoreOperation {
   requested_version_ids?: string[];
   baseline_snapshot_id?: string | null;
   prepared_until?: string | null;
+  /** On a superseded draft: the prepared plan that replaced it. */
+  superseded_by?: string | null;
   target_at: string;
   status: RestoreStatus;
   actions: RestoreAction[];
@@ -93,8 +100,12 @@ export interface RestoreOperation {
   completed_at: string | null;
   created_at: string;
   task_id: string | null;
+  /** The order of the action a stopped run is halted at; null when no single action is. */
+  failure_action_order?: number | null;
   /** Null when no policy rule asked for a second administrator. */
   approval?: ApprovalRequest | null;
+  /** Policy needs a second administrator for this plan, whether or not anyone has asked yet. */
+  approval_required?: boolean;
   compensation_available?: boolean;
 }
 
@@ -167,13 +178,19 @@ export function isRestoreInFlight(status: RestoreStatus): boolean {
   return status === 'queued' || status === 'running';
 }
 
-/** True once the operation has reached a state the worker will not leave on its own. */
+/**
+ * True once the operation has reached a state the worker will not leave on its own.
+ *
+ * A superseded plan is one of them: it is never prepared or executed again, so
+ * one whose replacement is not named must not be reopened for review.
+ */
 export function isRestoreTerminal(status: RestoreStatus): boolean {
   return (
     status === 'completed' ||
     status === 'failed' ||
     status === 'compensated' ||
-    status === 'compensation_available'
+    status === 'compensation_available' ||
+    status === 'superseded'
   );
 }
 
@@ -216,6 +233,8 @@ export function restoreStatusTone(status: RestoreStatus): Tone {
   if (status === 'queued' || status === 'running') {
     return 'info';
   }
+  // Neutral: a plan still under review, or one superseded by another plan,
+  // which neither succeeded nor failed.
   return 'none';
 }
 
@@ -248,7 +267,7 @@ export function actionStatusLabel(
     case 'executing':
       return 'RUNNING';
     case 'failed':
-      return 'FAILED';
+      return action.outcome_unknown ? 'UNCONFIRMED' : 'FAILED';
     case 'skipped':
       return 'SKIPPED';
     default:
@@ -256,12 +275,12 @@ export function actionStatusLabel(
   }
 }
 
-export function actionStatusTone(status: RestoreActionStatus): Tone {
+export function actionStatusTone(status: RestoreActionStatus, outcomeUnknown = false): Tone {
   switch (status) {
     case 'completed':
       return 'ok';
     case 'failed':
-      return 'crit';
+      return outcomeUnknown ? 'warn' : 'crit';
     case 'executing':
       return 'info';
     default:
@@ -295,9 +314,21 @@ export function progressPercent(operation: RestoreOperation): number {
   return Math.round((100 * appliedCount(operation)) / total);
 }
 
-/** The first action the worker could not apply, or null. */
+/**
+ * The action a stopped run is halted at, or null.
+ *
+ * A write that failed names itself. A run can also stop on an action that did
+ * not fail, such as a write that reached Mist but could not be recorded, so the
+ * order the worker recorded comes next. A run that stopped after every action
+ * finished is halted at none of them.
+ */
 export function failedAction(operation: RestoreOperation): RestoreAction | null {
-  return orderedActions(operation).find((action) => action.status === 'failed') ?? null;
+  const actions = orderedActions(operation);
+  return (
+    actions.find((action) => action.status === 'failed') ??
+    actions.find((action) => action.order === operation.failure_action_order) ??
+    null
+  );
 }
 
 /**
@@ -340,8 +371,11 @@ export function approvalStatusTone(status: ApprovalStatus): Tone {
 }
 
 /** An approval that exists and has not been granted blocks execution. */
-export function blocksExecution(approval: ApprovalRequest | null | undefined): boolean {
-  return approval != null && approval.status !== 'approved';
+export function blocksExecution(approval: ApprovalRequest | null | undefined, required = false): boolean {
+  if (approval != null) {
+    return approval.status !== 'approved';
+  }
+  return required;
 }
 
 /** Missing or invalid expiry timestamps require a new backup. */

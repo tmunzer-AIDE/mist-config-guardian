@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
     RestoreMode,
@@ -37,21 +38,18 @@ class RestoreExecuteRequest(BaseModel):
 
     administrator_token: SecretStr | None = Field(default=None, min_length=1, max_length=2048)
     mist_login: MistLoginCredentials | None = None
-    use_prepared_credential: bool = False
 
     @model_validator(mode="after")
     def exactly_one_credential(self) -> Self:
-        if sum((self.administrator_token is not None, self.mist_login is not None, self.use_prepared_credential)) != 1:
-            msg = "Supply exactly one of administrator_token, mist_login, or use_prepared_credential=true"
+        if (self.administrator_token is None) == (self.mist_login is None):
+            msg = "Supply exactly one of administrator_token or mist_login"
             raise ValueError(msg)
         if self.administrator_token and self.administrator_token.get_secret_value().startswith("mist-session:"):
             msg = "Supply an API token, not an encoded session"
             raise ValueError(msg)
         return self
 
-    def credential(self) -> str | MistLoginCredentials | None:
-        if self.use_prepared_credential:
-            return None
+    def credential(self) -> str | MistLoginCredentials:
         if self.administrator_token is not None:
             return self.administrator_token.get_secret_value()
         if self.mist_login is None:
@@ -75,9 +73,11 @@ class RestoreActionResponse(BaseModel):
     site_mist_id: str | None
     configuration: dict[str, object]
     depends_on: list[str]
+    reason: RestoreActionReason = RestoreActionReason.RESTORE
     status: RestoreActionStatus
     resulting_mist_id: str | None
     error: str | None
+    outcome_unknown: bool = False
 
     @classmethod
     def from_model(cls, action: RestoreAction) -> "RestoreActionResponse":
@@ -95,9 +95,11 @@ class RestoreActionResponse(BaseModel):
             site_mist_id=action.site_mist_id,
             configuration=redact_configuration(action.protected_configuration),
             depends_on=[str(item) for item in action.depends_on],
+            reason=action.reason,
             status=action.status,
             resulting_mist_id=action.resulting_mist_id,
             error=action.error,
+            outcome_unknown=action.outcome_unknown,
         )
 
 
@@ -112,6 +114,7 @@ class RestoreOperationResponse(BaseModel):
     requested_version_ids: list[str] = Field(default_factory=list)
     baseline_snapshot_id: str | None = None
     prepared_until: datetime | None = None
+    superseded_by: str | None = None
     target_at: datetime
     status: RestoreStatus
     actions: list[RestoreActionResponse]
@@ -122,7 +125,13 @@ class RestoreOperationResponse(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     task_id: str | None
+    # The order of the action a stopped run is halted at. A run can stop on an
+    # action that did not fail, so a client cannot find it by status alone.
+    failure_action_order: int | None = None
     approval: ApprovalResponse | None = None
+    # Whether policy needs a second administrator for this plan, evaluated for
+    # each response, so a draft can ask for approval before it is prepared.
+    approval_required: bool = False
     compensation_available: bool = False
 
     @classmethod
@@ -131,6 +140,7 @@ class RestoreOperationResponse(BaseModel):
         operation: RestoreOperation,
         *,
         approval: ApprovalResponse | None = None,
+        approval_required: bool = False,
         compensation_available: bool | None = None,
     ) -> "RestoreOperationResponse":
         """Create an API response with no credential material."""
@@ -139,6 +149,7 @@ class RestoreOperationResponse(BaseModel):
             raise ValueError(msg)
         return cls(
             approval=approval,
+            approval_required=approval_required,
             compensation_available=(
                 operation.status is RestoreStatus.COMPENSATION_AVAILABLE
                 if compensation_available is None
@@ -152,6 +163,7 @@ class RestoreOperationResponse(BaseModel):
             if operation.baseline_snapshot_id is None
             else str(operation.baseline_snapshot_id),
             prepared_until=operation.delegated_credential_expires_at if operation.baseline_snapshot_id else None,
+            superseded_by=None if operation.superseded_by is None else str(operation.superseded_by),
             target_at=operation.target_at,
             status=operation.status,
             actions=[RestoreActionResponse.from_model(action) for action in operation.actions],
@@ -162,6 +174,7 @@ class RestoreOperationResponse(BaseModel):
             completed_at=operation.completed_at,
             created_at=operation.created_at,
             task_id=operation.task_id,
+            failure_action_order=operation.failure_action_order,
         )
 
 

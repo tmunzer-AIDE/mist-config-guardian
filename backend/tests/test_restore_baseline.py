@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
+from structlog.testing import capture_logs
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.base import utc_now
@@ -19,6 +20,7 @@ from mist_config_guardian_backend.services import restore_baseline as baseline_m
 from mist_config_guardian_backend.services.restore_authorization import (
     RestoreAuthorizationError,
     RestoreAuthorizationService,
+    RestoreConcurrencyError,
 )
 from mist_config_guardian_backend.services.restore_baseline import RestoreBaselineService
 from mist_config_guardian_backend.services.restore_planner import RestorePlanningError
@@ -30,7 +32,14 @@ from mist_config_guardian_backend.snapshots.secrets import reveal_configuration
 def capture(monkeypatch):
     vault = CredentialVault(Settings(environment="test"))
     logical_id, org_id = PydanticObjectId(), PydanticObjectId()
-    previous = SimpleNamespace(version=2, incarnation_id=PydanticObjectId(), configuration={"name": "test"})
+    previous = SimpleNamespace(
+        id=PydanticObjectId(),
+        version=2,
+        incarnation_id=PydanticObjectId(),
+        configuration={"name": "test"},
+        configuration_hash=configuration_hash({"name": "test"}),
+        is_deleted=False,
+    )
     logical = SimpleNamespace(
         scope="org",
         object_type="networktemplates",
@@ -94,6 +103,24 @@ async def test_backup_pins_admin_response_and_encrypts_root_password(capture):
     assert manifest.created_versions == 1
 
 
+async def test_an_unchanged_object_keeps_its_latest_version_as_the_baseline(capture, monkeypatch):
+    """A new row per preparation would move every baseline-derived id, and an approval keyed on them with it."""
+    service, client, org, objects, manifest, versions, _vault = capture
+    logical_id = next(iter(objects))
+    previous = await baseline_module.latest_version(logical_id)
+    previous.configuration_hash = configuration_hash(client.get_current.return_value)
+    touched = MagicMock(return_value=SimpleNamespace(update=AsyncMock()))
+    monkeypatch.setattr(baseline_module.LogicalObject, "find_one", touched)
+
+    baselines = await service._capture(client, org, objects, manifest, "admin")
+
+    assert versions == []
+    assert baselines[logical_id] is previous
+    assert manifest.created_versions == 0
+    assert manifest.unchanged_objects == 1
+    touched.assert_not_called()
+
+
 async def test_masked_backup_is_rejected_before_version_is_saved(capture):
     service, client, org, objects, manifest, versions, _vault = capture
     client.get_current.return_value["switch_mgmt"]["root_password"] = "********"
@@ -117,6 +144,35 @@ async def test_deleted_object_requires_history_refresh(capture):
     client.get_current.return_value = None
     with pytest.raises(RestorePlanningError, match="created or deleted"):
         await service._capture(client, org, objects, manifest, "admin")
+    assert versions == []
+
+
+async def test_objects_under_a_deleted_site_are_not_read(capture):
+    service, client, org, objects, manifest, versions, _vault = capture
+    organization_id = next(iter(objects.values())).organization_id
+    site_id, settings_id = PydanticObjectId(), PydanticObjectId()
+    site = SimpleNamespace(
+        scope="org",
+        object_type="sites",
+        current_mist_id="site-old",
+        site_mist_id=None,
+        is_deleted=True,
+        organization_id=organization_id,
+    )
+    settings = SimpleNamespace(
+        scope="site",
+        object_type="settings",
+        current_mist_id="site-old:settings",
+        site_mist_id="site-old",
+        is_deleted=True,
+        organization_id=organization_id,
+    )
+    client.get_current.return_value = None
+
+    baselines = await service._capture(client, org, {site_id: site, settings_id: settings}, manifest, "admin")
+
+    assert [call.args[1] for call in client.get_current.await_args_list] == ["site-old"]
+    assert set(baselines) == {site_id, settings_id}
     assert versions == []
 
 
@@ -149,7 +205,12 @@ def authorization(monkeypatch):
     monkeypatch.setattr(RestoreOperation, "find_one", MagicMock(side_effect=[load(), query]))
     mist = AsyncMock()
     mist.verify_write_token.return_value = SimpleNamespace(actor="admin")
-    return RestoreAuthorizationService(settings, vault, mist), operation, query, mist
+    return (
+        RestoreAuthorizationService(settings, vault, mist, active_restores=AsyncMock(return_value=False)),
+        operation,
+        query,
+        mist,
+    )
 
 
 async def test_execution_reuses_credential_without_extending_expiry(authorization):
@@ -177,6 +238,148 @@ async def test_duplicate_prepared_execution_cannot_reserve_twice(authorization):
     query.update.return_value.modified_count = 0
     with pytest.raises(RestoreAuthorizationError, match="another request"):
         await service.authorize(operation.organization_id, operation.id, None, "task")
+
+
+async def test_authorization_refuses_while_another_restore_is_queued_or_running(authorization):
+    service, operation, query, mist = authorization
+    service._active_restores = AsyncMock(return_value=True)
+
+    with pytest.raises(RestoreConcurrencyError, match="Another restore is running"):
+        await service.authorize(operation.organization_id, operation.id, None, "task")
+
+    service._active_restores.assert_awaited_once_with(operation.organization_id, operation.id)
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_a_pasted_credential_cannot_execute_an_ordinary_plan(authorization):
+    service, operation, query, mist = authorization
+
+    with pytest.raises(RestoreAuthorizationError, match="Prepare a fresh backup"):
+        await service.authorize(operation.organization_id, operation.id, "pasted-token", "task")
+
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_an_unprepared_plan_cannot_be_executed_without_a_credential(authorization):
+    service, operation, query, mist = authorization
+    operation.baseline_snapshot_id = None
+
+    with pytest.raises(RestoreAuthorizationError, match="capture a fresh backup"):
+        await service.authorize(operation.organization_id, operation.id, None, "task")
+
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_a_compensation_plan_is_authorized_with_a_fresh_credential(authorization):
+    service, operation, _query, mist = authorization
+    operation.baseline_snapshot_id = None
+
+    await service.authorize(operation.organization_id, operation.id, "fresh-token", "task", compensation=True)
+
+    assert mist.verify_write_token.call_args.kwargs["token"] == "fresh-token"
+
+
+async def test_a_compensation_plan_is_not_authorized_without_a_fresh_credential(authorization):
+    service, operation, query, mist = authorization
+    operation.baseline_snapshot_id = None
+
+    with pytest.raises(RestoreAuthorizationError, match="fresh administrator credential"):
+        await service.authorize(operation.organization_id, operation.id, None, "task", compensation=True)
+
+    query.update.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+async def test_a_superseded_draft_cannot_be_prepared_again():
+    service = RestoreAuthorizationService(
+        Settings(environment="test"),
+        CredentialVault(Settings(environment="test")),
+        AsyncMock(),
+        active_restores=AsyncMock(return_value=False),
+    )
+    draft = RestoreOperation.model_construct(id=PydanticObjectId(), status=RestoreStatus.SUPERSEDED)
+
+    with pytest.raises(RestoreAuthorizationError, match="replaced by a newer prepared plan"):
+        await service.prepare(SimpleNamespace(), draft, PydanticObjectId(), "token", AsyncMock())
+
+
+async def test_preparation_refuses_while_another_restore_is_queued_or_running():
+    settings = Settings(environment="test")
+    mist = AsyncMock()
+    active = AsyncMock(return_value=True)
+    service = RestoreAuthorizationService(settings, CredentialVault(settings), mist, active_restores=active)
+    operation = RestoreOperation.model_construct(
+        id=PydanticObjectId(), organization_id=PydanticObjectId(), status=RestoreStatus.FAILED
+    )
+
+    with pytest.raises(RestoreConcurrencyError, match="Another restore is running"):
+        await service.prepare(
+            SimpleNamespace(cloud_region=MistCloudRegion.GLOBAL_02),
+            operation,
+            PydanticObjectId(),
+            "admin-token",
+            AsyncMock(),
+        )
+
+    active.assert_awaited_once_with(operation.organization_id, operation.id)
+    mist.login.assert_not_awaited()
+    mist.verify_write_token.assert_not_awaited()
+
+
+def _preparing_service(monkeypatch, *, superseded: bool):
+    """An authorization service whose fresh backup returns a new plan without reading Mist."""
+    settings = Settings(environment="test")
+    mist = AsyncMock()
+    mist.verify_write_token.return_value = SimpleNamespace(actor="admin")
+    service = RestoreAuthorizationService(
+        settings, CredentialVault(settings), mist, active_restores=AsyncMock(return_value=False)
+    )
+    draft = RestoreOperation.model_construct(
+        id=PydanticObjectId(), organization_id=PydanticObjectId(), status=RestoreStatus.PLANNED
+    )
+    # A preflight error keeps the session from being retained, so nothing is saved.
+    plan = RestoreOperation.model_construct(
+        id=PydanticObjectId(), status=RestoreStatus.PLANNED, preflight_errors=["blocked"], actions=[]
+    )
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_authorization.RestoreBaselineService",
+        MagicMock(return_value=SimpleNamespace(prepare=AsyncMock(return_value=plan))),
+    )
+    supersede = AsyncMock(return_value=superseded)
+    monkeypatch.setattr(service, "supersede", supersede)
+    return service, draft, plan, supersede
+
+
+async def _prepare(service, draft):
+    return await service.prepare(
+        SimpleNamespace(mist_org_id="org", cloud_region=MistCloudRegion.GLOBAL_02),
+        draft,
+        PydanticObjectId(),
+        "admin-token",
+        AsyncMock(),
+    )
+
+
+async def test_preparing_a_draft_supersedes_it_with_the_new_plan(monkeypatch):
+    service, draft, plan, supersede = _preparing_service(monkeypatch, superseded=True)
+
+    with capture_logs() as logs:
+        assert await _prepare(service, draft) is plan
+
+    supersede.assert_awaited_once_with(draft.id, plan.id)
+    assert logs == []
+
+
+async def test_a_draft_that_could_not_be_superseded_is_reported_by_id_only(monkeypatch):
+    service, draft, plan, _supersede = _preparing_service(monkeypatch, superseded=False)
+
+    with capture_logs() as logs:
+        assert await _prepare(service, draft) is plan
+
+    assert logs == [{"event": "restore_draft_not_superseded", "log_level": "warning", "operation_id": str(draft.id)}]
 
 
 async def test_plan_uses_pinned_backup_even_if_background_history_changes(monkeypatch):
