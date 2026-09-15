@@ -616,7 +616,8 @@ class RestoreCompensationService:
             object_type=action.object_type,
             object_name=action.object_name,
             current_mist_id=target,
-            site_mist_id=action.site_mist_id,
+            # Under a site this restore recreated, the object lives at the new site.
+            site_mist_id=action.resulting_site_mist_id or action.site_mist_id,
             protected_configuration=configuration,
             expected_current_hash=None,
             depends_on=[],

@@ -242,7 +242,8 @@ class RestoreVerificationService:
                     definition,
                     action.resulting_mist_id or action.current_mist_id,
                     org_id=organization.mist_org_id,
-                    site_id=action.site_mist_id,
+                    # Where the write landed, which differs under a recreated site.
+                    site_id=action.resulting_site_mist_id or action.site_mist_id,
                 )
             except MistMutationError as exc:
                 checks.append(
@@ -307,8 +308,10 @@ class RestoreVerificationService:
 
     @staticmethod
     def _affected_sites(operation: RestoreOperation) -> set[str]:
-        return {
-            action.site_mist_id
+        # A site this restore recreated is monitored under its new id; the old one no longer exists.
+        sites = (
+            action.resulting_site_mist_id or action.site_mist_id
             for action in operation.actions
-            if action.status is RestoreActionStatus.COMPLETED and action.site_mist_id
-        }
+            if action.status is RestoreActionStatus.COMPLETED
+        )
+        return {site for site in sites if site}

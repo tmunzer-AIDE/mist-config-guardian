@@ -30,6 +30,7 @@ from mist_config_guardian_backend.models.snapshot import (
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.notifications import NotificationService
 from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot, recreated_site_ids
+from mist_config_guardian_backend.services.restore_identity import rekey_logical_object
 from mist_config_guardian_backend.services.restore_outcome import mark_unconfirmed, terminal_failure_status
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
@@ -42,6 +43,7 @@ from mist_config_guardian_backend.services.restore_planner import (
 )
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.services.restore_write_guard import check_before_write
+from mist_config_guardian_backend.services.snapshots import SnapshotService
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
@@ -569,8 +571,7 @@ class RestoreExecutor:
 
         # Remapped first, so an object under a site recreated earlier in this
         # pass is read, written and read back where it now lives.
-        site_id = rewrite_identifier(action.site_mist_id, id_map)
-        object_id = rewrite_identifier(action.current_mist_id, id_map) or action.current_mist_id
+        site_id, object_id = remap_target(action, id_map)
         check = await check_before_write(
             client,
             organization,
@@ -661,13 +662,7 @@ class RestoreExecutor:
         operation.touch()
         await self._persist(operation)
 
-        await self._record_result(
-            operation,
-            action,
-            definition.sensitive_fields,
-            result or payload,
-            site_id=site_id,
-        )
+        await self._record_result(operation, action, definition, result or payload, readback=readback, site_id=site_id)
         return payload
 
     @staticmethod
@@ -724,48 +719,39 @@ class RestoreExecutor:
         msg = "Restore target history could not be extended"
         raise MistMutationError(msg)
 
-    async def _record_result(
+    async def _record_result(  # noqa: PLR0913 - the write, its read-back, and where it landed
         self,
         operation: RestoreOperation,
         action: RestoreAction,
-        sensitive_fields: frozenset[str],
-        configuration: dict[str, object],
+        definition: ObjectDefinition,
+        written: dict[str, object],
         *,
+        readback: dict[str, object] | None,
         site_id: str | None,
     ) -> None:
+        """Append the restored version under the identity the next capture will look for.
+
+        The id comes from the read-back, derived exactly as the collector
+        derives it from the same response, and the source key moves with it:
+        otherwise a recreated object, or anything written under a recreated
+        site, would start a second history on the next backup.
+        """
         logical = await LogicalObject.get(action.logical_object_id)
         if logical is None or logical.id is None:
             msg = "Restore target logical object no longer exists"
             raise MistMutationError(msg)
         logical_id = logical.id
         deleted = action.action is RestoreActionType.DELETE
-        resulting_id = action.resulting_mist_id or action.current_mist_id
+        object_id = action.resulting_mist_id or action.current_mist_id
+        if readback is not None:
+            object_id = SnapshotService.object_id(readback, definition, site_id)
+        incarnation_id = await self._incarnation_for(
+            operation, logical_id, action, object_id=object_id, site_id=site_id
+        )
 
-        if action.action is RestoreActionType.CREATE:
-            previous = (
-                await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == logical_id)
-                .sort("-ordinal")
-                .first_or_none()
-            )
-            incarnation = ObjectIncarnation(
-                organization_id=operation.organization_id,
-                logical_object_id=logical_id,
-                mist_object_id=resulting_id,
-                site_mist_id=site_id,
-                ordinal=1 if previous is None else previous.ordinal + 1,
-            )
-            await incarnation.insert()
-        else:
-            current = await latest_version(logical_id)
-            incarnation = None if current is None else await ObjectIncarnation.get(current.incarnation_id)
-        if incarnation is None or incarnation.id is None:
-            msg = "Restore target incarnation is unavailable"
-            raise MistMutationError(msg)
-        incarnation_id = incarnation.id
-
-        restored_configuration = dict(configuration)
-        if not deleted:
-            restored_configuration["id"] = resulting_id
+        restored_configuration = dict(written)
+        if not deleted and definition.is_list:
+            restored_configuration["id"] = object_id
 
         def build(latest: ObjectVersion) -> ObjectVersion:
             return ObjectVersion(
@@ -777,7 +763,9 @@ class RestoreExecutor:
                 configuration=(
                     latest.configuration
                     if deleted
-                    else protect_configuration(restored_configuration, self._vault, sensitive_fields=sensitive_fields)
+                    else protect_configuration(
+                        restored_configuration, self._vault, sensitive_fields=definition.sensitive_fields
+                    )
                 ),
                 configuration_hash=(
                     latest.configuration_hash if deleted else configuration_hash(restored_configuration)
@@ -789,12 +777,56 @@ class RestoreExecutor:
             )
 
         version = await self._insert_next_version(logical_id, build)
-        logical.current_mist_id = resulting_id
+        if not deleted:
+            source_key = SnapshotService.source_key(definition, site_id, object_id)
+            if source_key != logical.source_key:
+                await rekey_logical_object(
+                    logical,
+                    source_key=source_key,
+                    restore_started_at=operation.started_at,
+                    incarnation_id=incarnation_id,
+                )
+        logical.current_mist_id = object_id
         logical.site_mist_id = site_id
         logical.current_version = max(logical.current_version, version.version)
         logical.is_deleted = deleted
         logical.touch()
         await logical.save()
+
+    @staticmethod
+    async def _incarnation_for(
+        operation: RestoreOperation,
+        logical_id: PydanticObjectId,
+        action: RestoreAction,
+        *,
+        object_id: str,
+        site_id: str | None,
+    ) -> PydanticObjectId:
+        """Reuse the current incarnation unless the object came back under a new id or site."""
+        current = (
+            await ObjectIncarnation.find(ObjectIncarnation.logical_object_id == logical_id)
+            .sort("-ordinal")
+            .first_or_none()
+        )
+        unchanged = current is not None and current.mist_object_id == object_id and current.site_mist_id == site_id
+        if (
+            current is not None
+            and current.id is not None
+            and (action.action is RestoreActionType.DELETE or (action.action is RestoreActionType.UPDATE and unchanged))
+        ):
+            return current.id
+        incarnation = ObjectIncarnation(
+            organization_id=operation.organization_id,
+            logical_object_id=logical_id,
+            mist_object_id=object_id,
+            site_mist_id=site_id,
+            ordinal=1 if current is None else current.ordinal + 1,
+        )
+        await incarnation.insert()
+        if incarnation.id is None:
+            msg = "Restore target incarnation is unavailable"
+            raise MistMutationError(msg)
+        return incarnation.id
 
     async def _fail_operation(
         self,
@@ -852,3 +884,17 @@ def rewrite_value(value: object, id_map: dict[str, str]) -> object:
 def rewrite_identifier(value: str | None, id_map: dict[str, str]) -> str | None:
     """Rewrite an optional object or site identifier."""
     return None if value is None else id_map.get(value, value)
+
+
+def remap_target(action: RestoreAction, id_map: dict[str, str]) -> tuple[str | None, str]:
+    """Return the site and object ids an action addresses once earlier recreations are applied.
+
+    A changed site is recorded on the action before anything is written, so
+    verification and compensation address the object at the new site even if
+    the run stops right after this write.
+    """
+    site_id = rewrite_identifier(action.site_mist_id, id_map)
+    object_id = rewrite_identifier(action.current_mist_id, id_map) or action.current_mist_id
+    if site_id != action.site_mist_id:
+        action.resulting_site_mist_id = site_id
+    return site_id, object_id

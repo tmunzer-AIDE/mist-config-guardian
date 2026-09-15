@@ -857,6 +857,23 @@ async def test_compensation_replays_the_captured_configuration(monkeypatch: pyte
 
 
 @pytest.mark.usefixtures("offline_documents")
+async def test_a_child_created_under_a_recreated_site_is_reversed_at_the_new_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    operation.actions[0].resulting_site_mist_id = "site-new"
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    reverse_create = next(action for action in plan.actions if action.compensates_action_order == 0)
+    assert reverse_create.site_mist_id == "site-new"
+    assert next(action for action in plan.actions if action.compensates_action_order == 1).site_mist_id == "site-a"
+
+
+@pytest.mark.usefixtures("offline_documents")
 async def test_compensation_names_a_masked_secret_in_its_own_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

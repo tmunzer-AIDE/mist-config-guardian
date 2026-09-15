@@ -35,6 +35,7 @@ from mist_config_guardian_backend.models.snapshot import (
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutionError, RestoreExecutor
+from mist_config_guardian_backend.services.restore_identity import RestoreIdentityConflictError
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     RestoreVerificationResult,
@@ -447,6 +448,46 @@ async def test_verification_read_reports_an_unexecuted_plan() -> None:
 
     assert result.verified is False
     assert result.checks[0].status == "skipped"
+
+
+async def test_read_after_write_reads_where_the_object_now_lives() -> None:
+    action = _action(0, RestoreActionType.CREATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="new-uuid")
+    action.resulting_site_mist_id = "site-b"
+    client = _FakeClient({"new-uuid": {"name": "wlan-0", "enabled": True}})
+
+    await _build_verifier().verify(
+        client, _organization(), _operation([action]), id_map={}, applied={0: {"name": "wlan-0", "enabled": True}}
+    )
+
+    assert client.reads == [("new-uuid", "site-b")]
+
+
+async def test_monitoring_reopens_at_the_site_the_object_now_lives_in() -> None:
+    moved = _action(0, RestoreActionType.CREATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="new-uuid")
+    moved.resulting_site_mist_id = "site-b"
+    stayed = _action(1, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED, resulting_mist_id="mist-1")
+    reopened: list[set[str]] = []
+
+    async def _reopen(_organization_id, site_ids):
+        reopened.append(set(site_ids))
+        return []
+
+    service = RestoreVerificationService(
+        _MemoryStateStore(),
+        stale_references=AsyncMock(return_value=[]),
+        queue_snapshot=lambda _organization_id: None,
+        reopen_monitoring=_reopen,
+    )
+
+    await service.verify(
+        _FakeClient({"new-uuid": {"name": "wlan-0"}, "mist-1": {"name": "wlan-1"}}),
+        _organization(),
+        _operation([moved, stayed]),
+        id_map={},
+        applied={},
+    )
+
+    assert reopened == [{"site-a", "site-b"}]
 
 
 def _build_verifier(
@@ -1331,6 +1372,29 @@ async def test_a_write_mist_does_not_show_afterwards_stops_the_run(monkeypatch: 
     assert result.actions[0].status is RestoreActionStatus.COMPLETED
     assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
     assert "was not found in Mist after the write" in notifications.failed[0]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_identity_conflict_after_the_write_stops_the_run_as_compensable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _conflict(*_args, **_kwargs) -> None:
+        msg = "another recorded identity already owns this object's key; history needs manual review"
+        raise RestoreIdentityConflictError(msg)
+
+    monkeypatch.setattr(RestoreExecutor, "_record_result", _conflict)
+    operation = _operation([_action(0, RestoreActionType.UPDATE), _action(1, RestoreActionType.UPDATE)])
+    executor, notifications, _, client = _run(monkeypatch, operation, verified=True)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("update", "mist-0")]
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert "already owns" in (result.actions[0].error or "")
+    assert result.actions[1].status is RestoreActionStatus.PENDING
+    assert result.status is RestoreStatus.COMPENSATION_AVAILABLE
+    assert result.encrypted_delegated_credential is None
+    assert len(notifications.failed) == 1
 
 
 @pytest.mark.usefixtures("executed")

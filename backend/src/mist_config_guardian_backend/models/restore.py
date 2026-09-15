@@ -79,6 +79,10 @@ class RestoreAction(BaseModel):
     # write: what compensation must find before it undoes the write. None for
     # deletes and for actions that have not written yet.
     applied_hash: str | None = None
+    # The site id the action was executed under when it differs from
+    # ``site_mist_id`` (the site was recreated by this restore), so later
+    # reads and reversals address the object where it now lives.
+    resulting_site_mist_id: str | None = None
 
 
 class RestoreOperationStateRecord(TimestampedModel, Document):

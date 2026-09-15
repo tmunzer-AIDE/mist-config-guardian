@@ -208,6 +208,11 @@ class SnapshotService:
                 sites = objects
         return sites
 
+    @staticmethod
+    def source_key(definition: ObjectDefinition, site_id: str | None, mist_object_id: str) -> str:
+        """The identity key the collector matches objects by; a restore must record the same one."""
+        return f"{site_id or 'org'}:{definition.key}:{mist_object_id}"
+
     async def capture_configuration(
         self,
         organization_id: PydanticObjectId,
@@ -217,7 +222,7 @@ class SnapshotService:
     ) -> bool:
         """Append a version when authoritative configuration changed."""
         mist_object_id = self.object_id(configuration, definition, context.site_id)
-        source_key = f"{context.site_id or 'org'}:{definition.key}:{mist_object_id}"
+        source_key = self.source_key(definition, context.site_id, mist_object_id)
         logical = await LogicalObject.find_one(
             LogicalObject.organization_id == organization_id,
             LogicalObject.scope == definition.scope,
