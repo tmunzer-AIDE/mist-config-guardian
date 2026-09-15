@@ -298,7 +298,9 @@ def _validate_live_state(
 ) -> None:
     """Abort before writes when live state differs from the reviewed plan."""
     if action.action is RestoreActionType.CREATE:
-        if current is not None:
+        # An inverse CREATE of a delete that may never have happened is allowed
+        # to find the object; the executor then skips it.
+        if current is not None and not action.outcome_unknown:
             msg = f"{action.object_name} was recreated after this plan was reviewed"
             raise MistMutationError(msg)
         return
@@ -356,23 +358,7 @@ class RestoreCompensationService:
             if plan is not None and plan.status is RestoreStatus.PLANNED:
                 return plan
 
-        snapshot = {entry.order: entry for entry in state.safety_snapshot}
-        applied = sorted(
-            (action for action in operation.actions if action.status is RestoreActionStatus.COMPLETED),
-            key=lambda action: action.order,
-            reverse=True,
-        )
-        if not applied:
-            msg = "This restore applied no changes, so there is nothing to reverse"
-            raise RestoreCompensationError(msg)
-
-        actions: list[RestoreAction] = []
-        for index, action in enumerate(applied):
-            entry = snapshot.get(action.order)
-            if entry is None:
-                msg = f"{action.object_name} has no safety snapshot entry, so it cannot be reversed"
-                raise RestoreCompensationError(msg)
-            actions.append(await self._invert(action, entry, index))
+        actions, follow_ups = await self._reverse(operation, state)
 
         compensation = RestoreOperation(
             organization_id=operation.organization_id,
@@ -386,6 +372,7 @@ class RestoreCompensationService:
                     f"Compensating plan for restore {operation.id}: reverses "
                     f"{len(actions)} applied actions in reverse dependency order"
                 ),
+                *follow_ups,
             ],
             # A compensation plan is reviewed like any other. It keeps a masked
             # secret on purpose when no stored version can supply one, so it is
@@ -408,6 +395,55 @@ class RestoreCompensationService:
         state.compensation_operation_id = compensation.id
         await self._store.save(state)
         return compensation
+
+    async def _reverse(
+        self,
+        operation: RestoreOperation,
+        state: RestoreOperationState,
+    ) -> tuple[list[RestoreAction], list[str]]:
+        """Invert every write that reached Mist, or may have, newest first.
+
+        Returns the inverse actions and the manual follow-ups for writes that
+        cannot be targeted safely.
+        """
+        snapshot = {entry.order: entry for entry in state.safety_snapshot}
+        reversible = sorted(
+            (
+                action
+                for action in operation.actions
+                # Only a write that failed while unconfirmed may have reached
+                # Mist; a pending or skipped action can carry the flag it
+                # inherited from the write it reverses without ever running.
+                if action.status is RestoreActionStatus.COMPLETED
+                or (action.status is RestoreActionStatus.FAILED and action.outcome_unknown)
+            ),
+            key=lambda action: action.order,
+            reverse=True,
+        )
+        if not reversible:
+            msg = "This restore applied no changes, so there is nothing to reverse"
+            raise RestoreCompensationError(msg)
+
+        follow_ups: list[str] = []
+        actions: list[RestoreAction] = []
+        for action in reversible:
+            if action.outcome_unknown and action.action is RestoreActionType.CREATE:
+                # Mist never returned an id, so there is nothing to target
+                # without guessing; a person has to look.
+                follow_ups.append(
+                    f"{action.object_name} may have been created in Mist before the worker lost contact; "
+                    "check for it and delete it manually if it exists"
+                )
+                continue
+            entry = snapshot.get(action.order)
+            if entry is None:
+                msg = f"{action.object_name} has no safety snapshot entry, so it cannot be reversed"
+                raise RestoreCompensationError(msg)
+            actions.append(await self._invert(action, entry, len(actions)))
+        if not actions:
+            msg = "; ".join(follow_ups)
+            raise RestoreCompensationError(msg)
+        return actions, follow_ups
 
     async def compensation_for(self, operation: RestoreOperation) -> RestoreOperation | None:
         """Return the compensating plan already built for this restore."""
@@ -539,4 +575,6 @@ class RestoreCompensationService:
             protected_configuration=configuration,
             expected_current_hash=None,
             depends_on=[],
+            outcome_unknown=action.outcome_unknown,
+            compensates_action_order=action.order,
         )

@@ -35,6 +35,7 @@ from mist_config_guardian_backend.services.restore_executor import RestoreExecut
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     RestoreVerificationResult,
+    SafetySnapshotEntry,
     VerificationCheck,
 )
 from mist_config_guardian_backend.services.restore_verification import (
@@ -801,3 +802,88 @@ async def test_a_verified_compensation_marks_both_operations_compensated(
 
     assert result.status is RestoreStatus.COMPENSATED
     assert marked == [SOURCE_OPERATION_ID]
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_unconfirmed_delete_that_never_happened_is_not_recreated(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _mark(_organization_id, _operation_id) -> None:
+        return
+
+    monkeypatch.setattr(RestoreExecutor, "_mark_compensated", staticmethod(_mark))
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.outcome_unknown = True
+    entry = SafetySnapshotEntry(
+        logical_object_id=recreate.logical_object_id,
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        site_mist_id="site-a",
+        existed=True,
+    )
+
+    async def _snapshot(*_args, **_kwargs):
+        return [entry]
+
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
+    store = _MemoryStateStore()
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=OPERATION_ID,
+            plan_hash="plan-hash",
+            compensates_operation_id=SOURCE_OPERATION_ID,
+        )
+    )
+    operation = _operation([recreate])
+    executor, _, _, client = _run(monkeypatch, operation, verified=True, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == []
+    assert result.actions[0].status is RestoreActionStatus.SKIPPED
+
+
+@pytest.mark.usefixtures("executed")
+async def test_an_unconfirmed_delete_that_did_happen_is_recreated(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _mark(_organization_id, _operation_id) -> None:
+        return
+
+    monkeypatch.setattr(RestoreExecutor, "_mark_compensated", staticmethod(_mark))
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.outcome_unknown = True
+    entry = SafetySnapshotEntry(
+        logical_object_id=recreate.logical_object_id,
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="site",
+        object_type="wlans",
+        object_name="wlan-0",
+        mist_object_id="mist-0",
+        site_mist_id="site-a",
+        existed=False,
+    )
+
+    async def _snapshot(*_args, **_kwargs):
+        return [entry]
+
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_executor.capture_safety_snapshot", _snapshot)
+    store = _MemoryStateStore()
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=OPERATION_ID,
+            plan_hash="plan-hash",
+            compensates_operation_id=SOURCE_OPERATION_ID,
+        )
+    )
+    operation = _operation([recreate])
+    executor, _, verifier, client = _run(monkeypatch, operation, verified=True, store=store)
+
+    result = await executor.execute(OPERATION_ID)
+
+    assert client.writes == [("create", "wlan-0")]
+    assert result.actions[0].status is RestoreActionStatus.COMPLETED
+    assert set(verifier.applied) == {0}

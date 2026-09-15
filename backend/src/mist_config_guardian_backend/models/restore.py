@@ -71,6 +71,8 @@ class RestoreAction(BaseModel):
     # applied. Such an action is FAILED, and compensation treats it as possibly
     # applied rather than as never attempted.
     outcome_unknown: bool = False
+    # On a compensation action: the order of the original action it reverses.
+    compensates_action_order: int | None = None
 
 
 class RestoreOperationStateRecord(TimestampedModel, Document):

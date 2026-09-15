@@ -892,6 +892,100 @@ async def test_compensation_refuses_a_restore_without_a_safety_snapshot() -> Non
         )
 
 
+@pytest.mark.usefixtures("offline_documents")
+async def test_an_unconfirmed_update_is_reversed_from_its_safety_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    operation.actions[3].status = RestoreActionStatus.FAILED
+    operation.actions[3].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert [action.object_name for action in plan.actions] == ["wlan-3", "wlan-2", "wlan-1", "wlan-0"]
+    assert plan.actions[0].action is RestoreActionType.UPDATE
+    assert plan.actions[0].outcome_unknown is True
+    assert plan.actions[0].compensates_action_order == 3
+    assert plan.actions[0].protected_configuration["name"] == "Guest"
+    assert [action.compensates_action_order for action in plan.actions] == [3, 2, 1, 0]
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_an_unconfirmed_create_is_left_for_manual_follow_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    create = operation.actions[0]
+    create.status = RestoreActionStatus.FAILED
+    create.outcome_unknown = True
+    create.resulting_mist_id = None
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert "wlan-0" not in [action.object_name for action in plan.actions]
+    assert any(warning.startswith("wlan-0 may have been created in Mist") for warning in plan.warnings)
+
+
+async def test_a_restore_whose_only_change_is_an_unconfirmed_create_cannot_be_reversed_automatically() -> None:
+    create = _action(0, RestoreActionType.CREATE, status=RestoreActionStatus.FAILED)
+    create.outcome_unknown = True
+    operation = _operation([create])
+    store = _MemoryStateStore()
+    await store.save(
+        _snapshot_state(
+            [
+                SafetySnapshotEntry(
+                    logical_object_id=create.logical_object_id,
+                    order=0,
+                    action=RestoreActionType.CREATE,
+                    scope="site",
+                    object_type="wlans",
+                    object_name="wlan-0",
+                    mist_object_id="mist-0",
+                    site_mist_id="site-a",
+                    existed=False,
+                )
+            ]
+        )
+    )
+
+    with pytest.raises(RestoreCompensationError, match="wlan-0 may have been created in Mist"):
+        await RestoreCompensationService(store).create_compensation_plan(
+            operation=operation,
+            requested_by=ADMINISTRATOR_ID,
+        )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_an_unattempted_action_carrying_an_inherited_unconfirmed_flag_is_not_reversed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    # A compensation action copies the flag of the write it reverses; until it
+    # runs and fails, nothing about this action itself reached Mist.
+    operation.actions[3].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert [action.object_name for action in plan.actions] == ["wlan-2", "wlan-1", "wlan-0"]
+
+
+def test_an_inverse_create_may_find_the_object_its_unconfirmed_delete_never_removed() -> None:
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.outcome_unknown = True
+
+    _validate_live_state(recreate, dict(GUEST_WLAN), relaxed=True)
+
+    recreate.outcome_unknown = False
+    with pytest.raises(MistMutationError, match="was recreated"):
+        _validate_live_state(recreate, dict(GUEST_WLAN), relaxed=True)
+
+
 # ------------------------------------------------------------------------ api
 
 

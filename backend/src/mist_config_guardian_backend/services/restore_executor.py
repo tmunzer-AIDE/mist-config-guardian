@@ -33,6 +33,7 @@ from mist_config_guardian_backend.services.restore_outcome import mark_unconfirm
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreStateStore,
     RestoreVerificationResult,
+    SafetySnapshotEntry,
     get_restore_state_store,
     latest_version,
     load_or_build_state,
@@ -124,7 +125,12 @@ class RestoreExecutor:
                 return operation
             await self._store.save(state)
 
-            outcome = await self._run_actions(client, organization, operation)
+            outcome = await self._run_actions(
+                client,
+                organization,
+                operation,
+                snapshot={entry.order: entry for entry in state.safety_snapshot},
+            )
             if not outcome.succeeded:
                 await self._notify_failure(operation, _failure_reason(operation))
                 return operation
@@ -235,17 +241,22 @@ class RestoreExecutor:
         client: MistMutationClient,
         organization: Organization,
         operation: RestoreOperation,
+        *,
+        snapshot: dict[int, SafetySnapshotEntry],
     ) -> _RunOutcome:
         outcome = _RunOutcome()
         for index, action in enumerate(operation.actions):
             try:
-                outcome.applied[action.order] = await self._execute_action(
+                payload = await self._execute_action(
                     client,
                     organization,
                     operation,
                     index,
                     outcome.id_map,
+                    snapshot=snapshot,
                 )
+                if payload is not None:
+                    outcome.applied[action.order] = payload
             except MistMutationError as exc:
                 current = operation.actions[index]
                 await self._fail_operation(
@@ -366,14 +377,16 @@ class RestoreExecutor:
         operation.touch()
         await operation.save()
 
-    async def _execute_action(
+    async def _execute_action(  # noqa: PLR0913 - the pre-write snapshot decides whether a write is still needed
         self,
         client: MistMutationClient,
         organization: Organization,
         operation: RestoreOperation,
         index: int,
         id_map: dict[str, str],
-    ) -> dict[str, object]:
+        *,
+        snapshot: dict[int, SafetySnapshotEntry],
+    ) -> dict[str, object] | None:
         action = operation.actions[index]
         definition = get_definition(action.scope, action.object_type)
         if definition is None:
@@ -382,6 +395,16 @@ class RestoreExecutor:
         if not definition.supports_restore_action(action.action):
             msg = f"Unsupported {action.action} for {action.scope}:{action.object_type}"
             raise MistMutationError(msg)
+
+        entry = snapshot.get(action.order)
+        if action.outcome_unknown and action.action is RestoreActionType.CREATE and entry is not None and entry.existed:
+            # The delete this CREATE reverses never happened: the object is
+            # still there, and writing it again would duplicate it.
+            action.status = RestoreActionStatus.SKIPPED
+            operation.actions[index] = action
+            operation.touch()
+            await operation.save()
+            return None
 
         action.status = RestoreActionStatus.EXECUTING
         operation.actions[index] = action
