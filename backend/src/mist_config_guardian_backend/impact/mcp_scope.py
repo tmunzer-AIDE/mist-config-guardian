@@ -321,6 +321,28 @@ def _local_references(value: Any) -> None:
             _local_references(child)
 
 
+_SCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
+_SCHEMA_PROSE = frozenset({"description", "examples", "title", "$comment"})
+
+
+def compact_schema(schema: Any, *, names: bool = False) -> Any:
+    """Keep types, enums, required fields and defaults; full property documentation stays in describe.
+
+    Keys inside ``properties``-like maps are argument names, so a property called ``description`` survives.
+    """
+    if isinstance(schema, dict):
+        if names:
+            return {key: compact_schema(value) for key, value in schema.items()}
+        return {
+            key: compact_schema(value, names=key in _SCHEMA_MAPS)
+            for key, value in schema.items()
+            if key not in _SCHEMA_PROSE
+        }
+    if isinstance(schema, list):
+        return [compact_schema(value) for value in schema]
+    return schema
+
+
 def has_omissions(value: Any, depth: int = 0) -> bool:
     """Distinguish truncation from expected credential redaction in configuration context."""
     if depth > MAX_DEPTH:

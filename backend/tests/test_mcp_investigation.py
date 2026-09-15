@@ -28,7 +28,13 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpReportAction,
     McpView,
 )
-from mist_config_guardian_backend.impact.mcp_scope import McpScope, McpScopeError, catalog, normalize_result
+from mist_config_guardian_backend.impact.mcp_scope import (
+    McpScope,
+    McpScopeError,
+    catalog,
+    compact_schema,
+    normalize_result,
+)
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
 from mist_config_guardian_backend.integrations.mist_mcp import MistMcpClient, MistMcpError
 from mist_config_guardian_backend.models.investigation import InvestigationRevision, ModelRequestArtifact
@@ -92,7 +98,7 @@ def mcp_runtime(monkeypatch, attribute="stp_config"):
     return service, root, collection, artifacts, stored
 
 
-def mcp_responses(httpx_mock, stored, *, result=None, error=False):
+def mcp_responses(httpx_mock, stored, *, result=None, error=False, tools=None):
     calls = []
 
     def respond(request):
@@ -106,7 +112,7 @@ def mcp_responses(httpx_mock, stored, *, result=None, error=False):
             assert stored["mcp_dispatches"][-1]["state"] == "reserved"
             payload = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}}
         elif body["method"] == "tools/list":
-            payload = {"tools": CATALOG}
+            payload = {"tools": CATALOG if tools is None else tools}
         else:
             assert stored["mcp_dispatches"][-1]["state"] == "reserved"
             assert body["params"]["arguments"]["org_id"] == MIST_ORG
@@ -534,7 +540,7 @@ async def test_followup_reuses_verified_tool_schema_and_historical_context(monke
         context = read_context(request)
         if context["previous_checkpoint"] and not context["observations"]:
             assert context["previous_checkpoint"]["source_revision"] == root.revision
-            assert "search_mist_data" in context["known_tool_names"]
+            assert "search_mist_data" in {t["name"] for t in context["tools"]}
             args = context["previous_checkpoint"]["evidence"][0]["arguments"]
             return ai_response(
                 {
@@ -981,3 +987,99 @@ async def test_mcp_prompts_use_their_own_input_bound(monkeypatch, httpx_mock):
     assert all("results" in row["data"] for row in contexts[-1]["observations"])
     assert max(r["input_bytes"] for r in stored["model_requests"]) > 24_000
     assert artifacts[0].mcp.diagnostics.observations_hidden_in_prompt == 0
+
+
+def test_compact_schema_keeps_types_enums_defaults_and_a_property_named_description():
+    schema = {
+        "type": "object",
+        "title": "Tool",
+        "description": "Long prose.",
+        "properties": {
+            "description": {
+                "type": "string",
+                "description": "A property literally named description.",
+                "examples": ["x"],
+            },
+            "kind": {"type": "string", "enum": ["a", "b"], "default": "a", "title": "Kind"},
+        },
+        "required": ["kind"],
+    }
+    assert compact_schema(schema) == {
+        "type": "object",
+        "properties": {
+            "description": {"type": "string"},
+            "kind": {"type": "string", "enum": ["a", "b"], "default": "a"},
+        },
+        "required": ["kind"],
+    }
+
+
+def test_all_real_compact_schemas_fit_every_prompt():
+    tools = catalog(CATALOG)
+    compact = {t.name: compact_schema(t.input_schema) for t in tools}
+    assert len(json.dumps(compact).encode()) < 8000  # measured at 5.6 KB with 300-char summaries
+    assert "device_events" in compact["search_mist_data"]["properties"]["search_type"]["enum"]
+    assert compact["get_mist_insights"]["required"] == ["insight_type"]
+
+
+async def test_tool_can_be_called_without_describe(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+
+    def respond(request):
+        context = read_context(request)
+        assert "known_tool_names" not in context
+        assert {t["name"] for t in context["tools"]} == {t.name for t in catalog(CATALOG)}
+        assert all(len(t["description"]) <= 300 for t in context["tools"])
+        if context["observations"]:
+            return ai_response(report(context))
+        return ai_response(
+            {
+                "action": "tool",
+                "tool": "search_mist_data",
+                "arguments": {"search_type": "device_events", "site_id": SITE, "filters": {"mac": MAC}},
+                "purpose": "Check for operational transitions after the change.",
+            }
+        )
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+    assert len(artifacts[0].mcp.request_ids) == 2
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 1
+
+
+async def test_undiscovered_tool_is_rejected_with_its_category(monkeypatch, httpx_mock):
+    service, root, _, _, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored, tools=[t for t in CATALOG if t["name"] != "get_mist_insights"])
+    feedback = []
+
+    def respond(request):
+        context = read_context(request)
+        feedback.append(context["feedback"])
+        if len(feedback) == 1:
+            return ai_response(
+                {
+                    "action": "tool",
+                    "tool": "get_mist_insights",
+                    "arguments": {"insight_type": "sle"},
+                    "purpose": "Compare SLE before and after.",
+                }
+            )
+        return investigator(request)
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    first = ModelRequestRecord.model_validate(stored["model_requests"][0])
+    assert first.response_error == ModelResponseError.TOOL_NOT_DISCOVERED
+    assert feedback[1] == "Action rejected (tool_not_discovered): Only discovered read tools are available."
+
+
+def test_scope_sites_include_configured_device_and_deployment_sites():
+    deployed = "44444444-4444-4444-8444-444444444444"
+    configured = "55555555-5555-4555-8555-555555555555"
+    sites = mcp_impact_agent.McpImpactAgent._scope_sites(  # noqa: SLF001
+        {"sites": [SITE], "devices": [{"site_id": configured, "device_mac": MAC}]},
+        {"devices": [{"site_id": deployed, "device_mac": MAC}, {"site_id": "not-a-uuid"}]},
+    )
+    assert sites == {SITE, deployed, configured}
