@@ -21,7 +21,12 @@ from pydantic import ValidationError
 from pymongo.errors import ConnectionFailure
 
 from mist_config_guardian_backend.impact import skills
-from mist_config_guardian_backend.impact.agent import MCP_MAX_INPUT_BYTES_TOTAL, ModelRequestRecord, ModelResponseError
+from mist_config_guardian_backend.impact.agent import (
+    MCP_MAX_INPUT_BYTES_TOTAL,
+    MCP_MAX_OUTPUT_TOKENS,
+    ModelRequestRecord,
+    ModelResponseError,
+)
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
 from mist_config_guardian_backend.impact.mcp_contracts import (
     McpCheckpoint,
@@ -43,8 +48,9 @@ from mist_config_guardian_backend.impact.mcp_scope import (
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
 from mist_config_guardian_backend.integrations.mist_mcp import MistMcpClient, MistMcpError
 from mist_config_guardian_backend.models.investigation import InvestigationRevision, ModelRequestArtifact
+from mist_config_guardian_backend.services import impact_agent, mcp_dispatch, mcp_impact_agent, model_request_reads
 from mist_config_guardian_backend.services import impact_investigations as worker
-from mist_config_guardian_backend.services import mcp_dispatch, mcp_impact_agent, model_request_reads
+from mist_config_guardian_backend.services.application_configuration import AiRuntimeConfiguration
 from mist_config_guardian_backend.services.audit_impact_reads import project_published_impact
 from mist_config_guardian_backend.services.impact_acceptance import replay_chain
 from mist_config_guardian_backend.services.mcp_request_reads import mcp_request_details
@@ -1671,3 +1677,59 @@ def test_unpublished_mcp_model_request_of_any_mcp_prompt_version_spends_its_band
     ]
     expected = attempt if counted else None
     assert worker.ImpactInvestigationService._unpublished_agent_attempt(root) == expected  # noqa: SLF001
+
+
+async def test_truncated_completion_is_rejected_with_shorter_action_feedback(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    configuration = AiRuntimeConfiguration(
+        "https://ai.example.test/v1", "test-model", "test-provider-key", 8000, automatic_summaries=False
+    )
+    monkeypatch.setattr(
+        impact_agent.ApplicationConfigurationService, "ai_runtime", AsyncMock(return_value=configuration)
+    )
+    mcp_responses(httpx_mock, stored)
+    contexts = []
+
+    def respond(request):
+        contexts.append(read_context(request))
+        assert json.loads(request.content)["max_tokens"] == MCP_MAX_OUTPUT_TOKENS
+        if len(contexts) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"content": '{"action":"report","report":{"summary":"cut'},
+                            "finish_reason": "length",
+                        }
+                    ]
+                },
+            )
+        return investigator(request)
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    first = ModelRequestRecord.model_validate(stored["model_requests"][0])
+    assert first.output_token_limit == MCP_MAX_OUTPUT_TOKENS
+    assert first.response_error == ModelResponseError.TRUNCATED
+    assert contexts[1]["feedback"].startswith("Action rejected (truncated): Response stopped at the output token limit")
+    assert artifacts[0].mcp.diagnostics.finish_reasons[0] == "length"
+    assert artifacts[0].mcp.diagnostics.rejected_actions == {"truncated": 1}
+    assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+
+
+def test_request_record_accepts_the_mcp_output_token_bound():
+    record = ModelRequestRecord(
+        id=uuid4(),
+        generation=1,
+        candidate_revision=1,
+        reserved_at=LATER,
+        prompt_version="impact-mcp.v2",
+        input_hash="0" * 64,
+        model="test-model",
+        input_bytes=1,
+        output_token_limit=MCP_MAX_OUTPUT_TOKENS,
+    )
+    assert record.output_token_limit == MCP_MAX_OUTPUT_TOKENS
+    with pytest.raises(ValidationError):
+        ModelRequestRecord.model_validate({**record.model_dump(), "output_token_limit": MCP_MAX_OUTPUT_TOKENS + 1})

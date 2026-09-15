@@ -20,9 +20,9 @@ from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.impact.agent import (
     MAX_MODEL_CALLS,
     MAX_OUTPUT_BYTES,
-    MAX_OUTPUT_TOKENS,
     MCP_MAX_INPUT_BYTES,
     MCP_MAX_INPUT_BYTES_TOTAL,
+    MCP_MAX_OUTPUT_TOKENS,
     MCP_PROMPT_VERSION,
     ModelRequestRecord,
     ModelResponseError,
@@ -52,6 +52,7 @@ from mist_config_guardian_backend.impact.mcp_scope import (
     McpScopeError,
     McpToolCallLimitError,
     McpToolNotDiscoveredError,
+    McpTruncatedError,
     bounded_text,
     catalog,
     compact_schema,
@@ -408,7 +409,7 @@ class McpImpactAgent(ModelRequestJournal):
                             input_bytes=len((system + body).encode()),
                             input_artifact_id=PydanticObjectId(),
                             input_context_hash=sha256(body.encode()).hexdigest(),
-                            output_token_limit=min(runtime.max_response_tokens, MAX_OUTPUT_TOKENS),
+                            output_token_limit=min(runtime.max_response_tokens, MCP_MAX_OUTPUT_TOKENS),
                         )
                         await self._artifact(root, record, "input", body, record.input_artifact_id)
                         denial = await self._reserve(
@@ -440,6 +441,12 @@ class McpImpactAgent(ModelRequestJournal):
                         planned: list[tuple[int, McpToolCall, dict, str]] = []
                         rejected: list[tuple[int, McpScopeError]] = []
                         try:
+                            if completion.finish_reason == "length":
+                                msg = (
+                                    "Response stopped at the output token limit; return a shorter action with "
+                                    "fewer findings, devices, views or calls and briefer text."
+                                )
+                                raise McpTruncatedError(msg)
                             if len(completion.content.encode()) > MAX_OUTPUT_BYTES:
                                 msg = "Model output exceeds its byte limit; return a shorter action."
                                 raise McpOutputTooLargeError(msg)

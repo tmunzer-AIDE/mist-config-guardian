@@ -35,6 +35,8 @@ MAX_MODEL_CALLS = 21
 MAX_CHECKPOINT_CALLS = 3
 MAX_INPUT_BYTES = 24_000
 MAX_OUTPUT_TOKENS = 1500
+# MCP reports with findings, devices and views need more room; the retired agent keeps 1500.
+MCP_MAX_OUTPUT_TOKENS = 4096
 MAX_OUTPUT_BYTES = 16_000
 MAX_INPUT_BYTES_TOTAL = MAX_MODEL_CALLS * MAX_INPUT_BYTES
 # MCP-led prompts carry tool schemas and real results; the retired fixed-menu agent keeps 24 KB.
@@ -385,7 +387,7 @@ class ModelRequestRecord(Contract):
     input_hash: Handle
     model: str = Field(max_length=255)
     input_bytes: int = Field(ge=1, le=MCP_MAX_INPUT_BYTES)
-    output_token_limit: int = Field(ge=1, le=MAX_OUTPUT_TOKENS)
+    output_token_limit: int = Field(ge=1, le=MCP_MAX_OUTPUT_TOKENS)
     input_artifact_id: PydanticObjectId | None = None
     input_context_hash: Handle | None = None
     state: Literal["reserved", "complete", "invalid_response", "provider_error"] = "reserved"

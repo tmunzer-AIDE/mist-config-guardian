@@ -5775,7 +5775,7 @@
             "type": "string"
           },
           "output_token_limit": {
-            "maximum": 1500.0,
+            "maximum": 4096.0,
             "minimum": 1.0,
             "title": "Output Token Limit",
             "type": "integer"
