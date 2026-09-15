@@ -20,6 +20,7 @@ Text = Annotated[str, Field(min_length=1, max_length=500)]
 Band = Literal["none", "info", "warning", "critical"]
 MAX_MCP_CHECKPOINT_CALLS = 8
 MAX_MCP_EVIDENCE_BYTES = 12_000
+MAX_MCP_ERROR_DETAIL_BYTES = 500
 
 
 class McpTool(Contract):
@@ -53,6 +54,8 @@ class McpEvidence(Contract):
     captured_at: datetime
     schema_hash: str
     error: Literal["transport", "invalid_response", "tool_error", "response_limit"] | None = None
+    # Redacted, byte-bounded tool error text. Untrusted data: shown to the model, never citable.
+    error_detail: str | None = Field(default=None, max_length=MAX_MCP_ERROR_DETAIL_BYTES)
 
 
 class McpFinding(Contract):

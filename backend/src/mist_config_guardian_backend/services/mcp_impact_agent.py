@@ -21,6 +21,7 @@ from mist_config_guardian_backend.impact.agent import (
     ModelResponseError,
 )
 from mist_config_guardian_backend.impact.mcp_contracts import (
+    MAX_MCP_ERROR_DETAIL_BYTES,
     McpAction,
     McpCheckpoint,
     McpConclusion,
@@ -339,17 +340,17 @@ class McpImpactAgent(ModelRequestJournal):
                             return stopped("dispatch_denied", str(exc))
                         try:
                             result = await client.call_tool(action.tool, arguments)
-                            if result.get("isError"):
-                                msg = "tool_error"
-                                raise MistMcpError(msg)  # noqa: TRY301 - fixed safe transport category
                             cleaned, partial = normalize_result(result, secrets=secrets)
-                            if isinstance(cleaned, dict) and (
-                                cleaned.get("error")
-                                or cleaned.get("success") is False
-                                or cleaned.get("status") == "error"
+                            if result.get("isError") or (
+                                isinstance(cleaned, dict)
+                                and (
+                                    cleaned.get("error")
+                                    or cleaned.get("success") is False
+                                    or cleaned.get("status") == "error"
+                                )
                             ):
                                 msg = "tool_error"
-                                raise MistMcpError(msg)  # noqa: TRY301 - normalize application-level errors
+                                raise MistMcpError(msg, detail=self._tool_error_text(cleaned))  # noqa: TRY301 - normalize tool errors
                             scope.validate_response(cleaned)
                             scope.observe(action.tool, arguments, cleaned)
                             reading = McpEvidence(
@@ -366,12 +367,25 @@ class McpImpactAgent(ModelRequestJournal):
                                 reservation,
                                 arguments,
                                 exc.code if isinstance(exc, MistMcpError) else "invalid_response",
+                                detail=bounded_text(
+                                    exc.detail if isinstance(exc, MistMcpError) else str(exc),
+                                    secrets=secrets,
+                                    max_bytes=MAX_MCP_ERROR_DETAIL_BYTES,
+                                ),
                             )
                         await journal.finish(reservation, reading)
                         observations.append(reading)
                         cache[cache_key] = str(reading.id)
         except MistMcpError as exc:
-            await journal.finish(discovery, self._error(discovery, {}, exc.code))
+            await journal.finish(
+                discovery,
+                self._error(
+                    discovery,
+                    {},
+                    exc.code,
+                    detail=bounded_text(exc.detail, secrets=secrets, max_bytes=MAX_MCP_ERROR_DETAIL_BYTES),
+                ),
+            )
             return stopped(
                 "unavailable",
                 "MCP connection or authentication failed; check the worker endpoint and organization service token.",
@@ -427,7 +441,7 @@ class McpImpactAgent(ModelRequestJournal):
         }
 
     @staticmethod
-    def _error(record: McpDispatch, args: dict, error: str) -> McpEvidence:
+    def _error(record: McpDispatch, args: dict, error: str, detail: str = "") -> McpEvidence:
         return McpEvidence.model_validate(
             {
                 "id": record.id,
@@ -436,10 +450,23 @@ class McpImpactAgent(ModelRequestJournal):
                 "data": None,
                 "state": "error",
                 "error": error,
+                "error_detail": detail or None,
                 "captured_at": utc_now(),
                 "schema_hash": "",
             }
         )
+
+    @staticmethod
+    def _tool_error_text(cleaned: object) -> str:
+        """Pick the server's error message from a sanitized tool payload; never the whole payload."""
+        if isinstance(cleaned, dict):
+            for key in ("error", "message", "detail", "text"):
+                value = cleaned.get(key)
+                if isinstance(value, dict):
+                    value = value.get("message") or value.get("detail")
+                if isinstance(value, str) and value:
+                    return value
+        return cleaned if isinstance(cleaned, str) else ""
 
     @staticmethod
     def _bounded_context(data: dict, system: str) -> str | None:

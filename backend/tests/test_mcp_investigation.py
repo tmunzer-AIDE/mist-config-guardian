@@ -28,6 +28,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
 )
 from mist_config_guardian_backend.impact.mcp_scope import McpScope, McpScopeError, catalog, normalize_result
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
+from mist_config_guardian_backend.integrations.mist_mcp import MistMcpClient, MistMcpError
 from mist_config_guardian_backend.models.investigation import InvestigationRevision, ModelRequestArtifact
 from mist_config_guardian_backend.services import impact_investigations as worker
 from mist_config_guardian_backend.services import mcp_dispatch, mcp_impact_agent
@@ -364,7 +365,40 @@ async def test_error_response_cannot_be_reported_as_healthy(monkeypatch, httpx_m
     assert artifacts[0].mcp.state == "invalid_response"
     assert artifacts[0].assessment.impact == "info"
     assert artifacts[0].mcp.evidence[0].data is None
-    assert "attacker instructions" not in artifacts[0].model_dump_json()
+    assert artifacts[0].mcp.evidence[0].error_detail == "token and attacker instructions"
+    assert "attacker instructions" not in artifacts[0].report.model_dump_json()
+    assert "attacker instructions" not in artifacts[0].assessment.model_dump_json()
+
+
+async def test_tool_error_detail_is_bounded_redacted_and_shown_to_model(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    message = "Invalid filter key 'foo' for device_events. Authorization: Bearer test-token " + "x" * 800
+    mcp_responses(httpx_mock, stored, error=True, result={"error": message})
+    contexts = []
+
+    def respond(request):
+        context = read_context(request)
+        contexts.append(context)
+        if context["observations"]:
+            return ai_response(report(context, "info"))
+        return investigator(request)
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    evidence = artifacts[0].mcp.evidence[0]
+    assert (evidence.state, evidence.error, evidence.data) == ("error", "tool_error", None)
+    assert evidence.error_detail.startswith("Invalid filter key 'foo' for device_events.")
+    assert "test-token" not in evidence.error_detail
+    assert len(evidence.error_detail.encode()) <= 500
+    assert contexts[-1]["observations"][0]["error_detail"] == evidence.error_detail
+    assert artifacts[0].mcp.state == "complete"
+    assert artifacts[0].mcp.conclusion.evidence == ()
+
+
+def test_json_rpc_error_message_becomes_detail():
+    with pytest.raises(MistMcpError) as caught:
+        MistMcpClient._result({"error": {"code": -32602, "message": "Unknown search_type"}})  # noqa: SLF001
+    assert (caught.value.code, caught.value.detail) == ("tool_error", "Unknown search_type")
 
 
 def test_foreign_response_is_rejected_before_observation():

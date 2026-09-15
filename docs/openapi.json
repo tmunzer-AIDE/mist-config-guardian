@@ -4804,6 +4804,18 @@
             ],
             "title": "Error"
           },
+          "error_detail": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Detail"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
