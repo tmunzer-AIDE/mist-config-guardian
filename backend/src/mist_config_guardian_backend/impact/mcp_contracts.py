@@ -31,6 +31,7 @@ Band = Literal["none", "info", "warning", "critical"]
 MAX_MCP_CHECKPOINT_CALLS = 8
 MAX_MCP_EVIDENCE_BYTES = 12_000
 MAX_MCP_ERROR_DETAIL_BYTES = 500
+MAX_MCP_BATCH_CALLS = 3
 
 
 class McpTool(Contract):
@@ -118,11 +119,36 @@ class McpConclusion(Contract):
         return self
 
 
-class McpToolAction(Contract):
-    action: Literal["tool"]
+class McpToolCall(Contract):
     tool: McpToolName
     arguments: dict[str, JsonValue]
     purpose: Text
+
+
+class McpToolAction(Contract):
+    """Single-call form (historical) or up to three independent calls in one model turn."""
+
+    action: Literal["tool"]
+    tool: McpToolName | None = None
+    arguments: dict[str, JsonValue] | None = None
+    purpose: Text | None = None
+    calls: tuple[McpToolCall, ...] = Field(default=(), max_length=MAX_MCP_BATCH_CALLS)
+
+    @model_validator(mode="after")
+    def one_form(self) -> "McpToolAction":
+        single = (self.tool, self.arguments, self.purpose)
+        if self.calls and any(value is not None for value in single):
+            msg = "Use either tool/arguments/purpose or calls, not both"
+            raise ValueError(msg)
+        if not self.calls and any(value is None for value in single):
+            msg = "A tool action requires tool, arguments and purpose, or a calls list"
+            raise ValueError(msg)
+        return self
+
+    def requested_calls(self) -> tuple[McpToolCall, ...]:
+        if self.calls:
+            return self.calls
+        return (McpToolCall.model_validate({"tool": self.tool, "arguments": self.arguments, "purpose": self.purpose}),)
 
 
 class McpDescribeAction(Contract):

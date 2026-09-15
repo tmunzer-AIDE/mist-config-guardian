@@ -3,9 +3,10 @@
 import asyncio
 import json
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha256
 from time import monotonic
 from typing import Literal
@@ -26,6 +27,7 @@ from mist_config_guardian_backend.impact.agent import (
     ModelResponseError,
 )
 from mist_config_guardian_backend.impact.mcp_contracts import (
+    MAX_MCP_CHECKPOINT_CALLS,
     MAX_MCP_ERROR_DETAIL_BYTES,
     MAX_MCP_EVIDENCE_BYTES,
     McpAction,
@@ -39,6 +41,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpEvidence,
     McpReportAction,
     McpToolAction,
+    McpToolCall,
 )
 from mist_config_guardian_backend.impact.mcp_schedule import cited_ids, prior_conclusion
 from mist_config_guardian_backend.impact.mcp_scope import (
@@ -46,6 +49,7 @@ from mist_config_guardian_backend.impact.mcp_scope import (
     McpOutputTooLargeError,
     McpScope,
     McpScopeError,
+    McpToolCallLimitError,
     McpToolNotDiscoveredError,
     bounded_text,
     catalog,
@@ -121,6 +125,8 @@ observed in cited operational results; configuration/deployment membership alone
 Previous reports are historical context, not new evidence. Remaining calls include the final report call.
 If a response is omitted, narrow the query. Evidence tables are generated from returned values; never
 invent measurements. Complete a report within the remaining model calls, including gaps if necessary.
+A tool action may request up to three independent calls as calls:[{tool,arguments,purpose}]; each call is
+validated separately.
 """
 
 
@@ -389,8 +395,9 @@ class McpImpactAgent(ModelRequestJournal):
                                 return stopped("deadline_exceeded", expired)
                             return stopped("provider_error", "AI provider request failed; prior evidence is retained.")
                         stats.finish_reasons.append(completion.finish_reason or "unreported")
+                        planned: list[tuple[int, McpToolCall, dict, str]] = []
+                        rejected: list[tuple[int, McpScopeError]] = []
                         try:
-                            arguments: dict = {}
                             if len(completion.content.encode()) > MAX_OUTPUT_BYTES:
                                 msg = "Model output exceeds its byte limit; return a shorter action."
                                 raise McpOutputTooLargeError(msg)
@@ -407,10 +414,10 @@ class McpImpactAgent(ModelRequestJournal):
                                     msg = "Only discovered read tools are available."
                                     raise McpToolNotDiscoveredError(msg)
                             elif isinstance(action, McpToolAction):
-                                if action.tool not in menu:
-                                    msg = "Only discovered read tools are available."
-                                    raise McpToolNotDiscoveredError(msg)
-                                arguments = scope.arguments(menu[action.tool], action.arguments)
+                                planned, rejected = self._plan_calls(action, menu, scope, observations, cache)
+                                if not planned:
+                                    # Every call is invalid: reject the whole action with the first call's category.
+                                    raise rejected[0][1]
                         except (ValidationError, ValueError, TypeError) as exc:
                             category, detail = self._rejection(exc, secrets)
                             stats.reject(category)
@@ -445,73 +452,45 @@ class McpImpactAgent(ModelRequestJournal):
                             show_schema = True
                             continue
                         show_schema = False
-                        cache_key = json.dumps([action.tool, arguments], sort_keys=True)
-                        if cache_key in cache:
-                            stats.cached_calls += 1
-                            cached = next(e for e in observations if str(e.id) == cache[cache_key])
-                            observations.remove(cached)
-                            observations.append(cached)
-                            feedback = f"Cached evidence ID: {cache[cache_key]}; repeated request issued no MCP call."
-                            continue
-                        if remaining() < MIN_TURN_SECONDS:
-                            return stopped("deadline_exceeded", expired)
-                        try:
-                            reservation = await journal.reserve(action.tool, arguments)
-                        except McpDispatchDeniedError as exc:
-                            return stopped("dispatch_denied", str(exc))
-                        stats.tool_calls += 1
-                        try:
-                            async with asyncio.timeout(min(TOOL_TIMEOUT_SECONDS, max(remaining(), 0.001))):
-                                result = await client.call_tool(action.tool, arguments)
-                            # Every row a digest aggregates passes the organization check before it is summarized.
-                            normalized = normalize_result_detail(
-                                result,
-                                secrets=secrets,
-                                changed_at=root.changed_at,
-                                authority=scope.validate_response,
-                            )
-                            cleaned, partial = normalized.data, normalized.partial
-                            # The flag is read from the full sanitized result, so a digest cannot hide an error key.
-                            if result.get("isError") or normalized.tool_error:
-                                msg = "tool_error"
-                                raise MistMcpError(msg, detail=self._tool_error_text(cleaned))  # noqa: TRY301 - normalize tool errors
-                            scope.validate_response(cleaned)
-                            scope.observe(action.tool, arguments, cleaned)
-                            # Count reductions only for results kept as successful evidence.
-                            if normalized.reduction == "digest":
-                                stats.results_digested += 1
-                            elif normalized.reduction == "omitted":
-                                stats.results_omitted += 1
-                            reading = McpEvidence(
-                                id=reservation.id,
-                                tool=action.tool,
+                        notes = []
+                        # Invalid calls create no reservation and no evidence row; the journal stays one-to-one.
+                        for index, exc in rejected:
+                            category, detail = self._rejection(exc, secrets)
+                            stats.reject(category)
+                            notes.append(f"Call {index} rejected ({category.value}): {detail}")
+                        for index, call, arguments, cache_key in planned:
+                            if cache_key in cache:
+                                cached = next(e for e in observations if str(e.id) == cache[cache_key])
+                                observations.remove(cached)
+                                observations.append(cached)
+                                stats.cached_calls += 1
+                                notes.append(
+                                    f"Call {index}: cached evidence ID {cache[cache_key]}; "
+                                    "repeated request issued no MCP call."
+                                )
+                                continue
+                            if remaining() < MIN_TURN_SECONDS:
+                                return stopped("deadline_exceeded", expired)
+                            try:
+                                reservation = await journal.reserve(call.tool, arguments)
+                            except McpDispatchDeniedError as exc:
+                                return stopped("dispatch_denied", str(exc))
+                            stats.tool_calls += 1
+                            reading = await self._invoke(
+                                client,
+                                reservation,
+                                menu=menu,
+                                scope=scope,
+                                tool=call.tool,
                                 arguments=arguments,
-                                data=cleaned,
-                                state="partial" if partial else "complete",
-                                captured_at=utc_now(),
-                                schema_hash=menu[action.tool].schema_hash,
+                                secrets=secrets,
+                                remaining=remaining,
+                                stats=stats,
                             )
-                        except TimeoutError:
-                            reading = self._error(
-                                reservation,
-                                arguments,
-                                "transport",
-                                detail="Tool call exceeded the remaining checkpoint time.",
-                            )
-                        except (MistMcpError, McpScopeError) as exc:
-                            reading = self._error(
-                                reservation,
-                                arguments,
-                                exc.code if isinstance(exc, MistMcpError) else "invalid_response",
-                                detail=bounded_text(
-                                    exc.detail if isinstance(exc, MistMcpError) else str(exc),
-                                    secrets=secrets,
-                                    max_bytes=MAX_MCP_ERROR_DETAIL_BYTES,
-                                ),
-                            )
-                        await journal.finish(reservation, reading)
-                        observations.append(reading)
-                        cache[cache_key] = str(reading.id)
+                            await journal.finish(reservation, reading)
+                            observations.append(reading)
+                            cache[cache_key] = str(reading.id)
+                        feedback = " ".join(notes) or None
         except MistMcpError as exc:
             await journal.finish(
                 discovery,
@@ -530,6 +509,97 @@ class McpImpactAgent(ModelRequestJournal):
             "invalid_response" if feedback else "budget_exhausted",
             "No validated report was returned within the checkpoint model budget.",
         )
+
+    @staticmethod
+    def _plan_calls(
+        action: McpToolAction,
+        menu: dict,
+        scope: McpScope,
+        observations: list[McpEvidence],
+        cache: dict[str, str],
+    ) -> tuple[list[tuple[int, McpToolCall, dict, str]], list[tuple[int, McpScopeError]]]:
+        """Validate each requested call on its own; only new (uncached) calls spend an evidence slot."""
+        planned: list[tuple[int, McpToolCall, dict, str]] = []
+        rejected: list[tuple[int, McpScopeError]] = []
+        slots = MAX_MCP_CHECKPOINT_CALLS - len(observations)
+        for index, call in enumerate(action.requested_calls(), start=1):
+            try:
+                if call.tool not in menu:
+                    msg = "Only discovered read tools are available."
+                    raise McpToolNotDiscoveredError(msg)
+                arguments = scope.arguments(menu[call.tool], call.arguments)
+                key = json.dumps([call.tool, arguments], sort_keys=True)
+                new = key not in cache and key not in {item[3] for item in planned}
+                if new and slots <= 0:
+                    msg = "This checkpoint's evidence slots are full; report with the retained evidence."
+                    raise McpToolCallLimitError(msg)
+                slots -= int(new)
+            except McpScopeError as exc:
+                rejected.append((index, exc))
+                continue
+            planned.append((index, call, arguments, key))
+        return planned, rejected
+
+    @staticmethod
+    async def _invoke(  # noqa: PLR0913 - one journalled MCP call with its scope, redaction and timing
+        client: MistMcpClient,
+        reservation: McpDispatch,
+        *,
+        menu: dict,
+        scope: McpScope,
+        tool: str,
+        arguments: dict,
+        secrets: tuple[str, ...],
+        remaining: Callable[[], float],
+        stats: _RunStats,
+    ) -> McpEvidence:
+        try:
+            async with asyncio.timeout(min(TOOL_TIMEOUT_SECONDS, max(remaining(), 0.001))):
+                result = await client.call_tool(tool, arguments)
+            # Every row a digest aggregates passes the organization check before it is summarized.
+            normalized = normalize_result_detail(
+                result,
+                secrets=secrets,
+                # McpScope.start is changed_at - 1 h, so this is the change timestamp.
+                changed_at=scope.start + timedelta(hours=1),
+                authority=scope.validate_response,
+            )
+            cleaned, partial = normalized.data, normalized.partial
+            # The flag is read from the full sanitized result, so a digest cannot hide an error key.
+            if result.get("isError") or normalized.tool_error:
+                msg = "tool_error"
+                raise MistMcpError(msg, detail=McpImpactAgent._tool_error_text(cleaned))  # noqa: TRY301 - normalize tool errors
+            scope.validate_response(cleaned)
+            scope.observe(tool, arguments, cleaned)
+            # Count reductions only for results kept as successful evidence.
+            if normalized.reduction == "digest":
+                stats.results_digested += 1
+            elif normalized.reduction == "omitted":
+                stats.results_omitted += 1
+            return McpEvidence(
+                id=reservation.id,
+                tool=tool,
+                arguments=arguments,
+                data=cleaned,
+                state="partial" if partial else "complete",
+                captured_at=utc_now(),
+                schema_hash=menu[tool].schema_hash,
+            )
+        except TimeoutError:
+            return McpImpactAgent._error(
+                reservation, arguments, "transport", detail="Tool call exceeded the remaining checkpoint time."
+            )
+        except (MistMcpError, McpScopeError) as exc:
+            return McpImpactAgent._error(
+                reservation,
+                arguments,
+                exc.code if isinstance(exc, MistMcpError) else "invalid_response",
+                detail=bounded_text(
+                    exc.detail if isinstance(exc, MistMcpError) else str(exc),
+                    secrets=secrets,
+                    max_bytes=MAX_MCP_ERROR_DETAIL_BYTES,
+                ),
+            )
 
     @staticmethod
     def _deployment_summary(deployment: dict) -> dict:

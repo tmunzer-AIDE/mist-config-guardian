@@ -5067,12 +5067,78 @@
       },
       "McpToolAction": {
         "additionalProperties": false,
+        "description": "Single-call form (historical) or up to three independent calls in one model turn.",
         "properties": {
           "action": {
             "const": "tool",
             "title": "Action",
             "type": "string"
           },
+          "arguments": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments"
+          },
+          "calls": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpToolCall"
+            },
+            "maxItems": 3,
+            "title": "Calls",
+            "type": "array"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "enum": [
+                  "find_mist_entity",
+                  "get_mist_config",
+                  "get_mist_constants",
+                  "get_mist_insights",
+                  "get_mist_stats",
+                  "search_mist_data"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "McpToolAction",
+        "type": "object"
+      },
+      "McpToolCall": {
+        "additionalProperties": false,
+        "properties": {
           "arguments": {
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
@@ -5100,12 +5166,11 @@
           }
         },
         "required": [
-          "action",
           "tool",
           "arguments",
           "purpose"
         ],
-        "title": "McpToolAction",
+        "title": "McpToolCall",
         "type": "object"
       },
       "McpView": {

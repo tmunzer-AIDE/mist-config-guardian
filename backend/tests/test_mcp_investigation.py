@@ -28,6 +28,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpDispatch,
     McpEvidence,
     McpReportAction,
+    McpToolAction,
     McpView,
 )
 from mist_config_guardian_backend.impact.mcp_schedule import agent_due, last_agent_run, prior_conclusion
@@ -1320,3 +1321,209 @@ def test_next_agent_run_sees_carried_conclusion_and_its_evidence():
         4,
     )
     assert [row["id"] for row in summary["evidence"]] == [str(evidence.id)]
+
+
+def test_tool_action_accepts_single_or_batched_form_only():
+    single = {"action": "tool", "tool": "search_mist_data", "arguments": {}, "purpose": "One call."}
+    call = {"tool": "search_mist_data", "arguments": {}, "purpose": "Batched call."}
+    assert len(McpToolAction.model_validate(single).requested_calls()) == 1
+    assert len(McpToolAction.model_validate({"action": "tool", "calls": [call] * 3}).requested_calls()) == 3
+    for invalid in (
+        {"action": "tool", "calls": [call] * 4},
+        {**single, "calls": [call]},
+        {"action": "tool", "tool": "search_mist_data"},
+        {"action": "tool"},
+    ):
+        with pytest.raises(ValidationError):
+            McpToolAction.model_validate(invalid)
+
+
+async def test_batched_calls_execute_valid_calls_and_reject_only_the_invalid_one(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+    contexts = []
+
+    def respond(request):
+        context = read_context(request)
+        contexts.append(context)
+        if context["observations"]:
+            return ai_response(report(context))
+        return ai_response(
+            {
+                "action": "tool",
+                "calls": [
+                    {
+                        "tool": "search_mist_data",
+                        "arguments": {"search_type": "device_events", "site_id": SITE},
+                        "purpose": "Events for the changed site.",
+                    },
+                    {
+                        "tool": "search_mist_data",
+                        "arguments": {"search_type": "device_events", "site_id": str(uuid4())},
+                        "purpose": "An undiscovered site.",
+                    },
+                    {
+                        "tool": "search_mist_data",
+                        "arguments": {"search_type": "alarms", "site_id": SITE},
+                        "purpose": "Alarms for the changed site.",
+                    },
+                ],
+            }
+        )
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 2
+    assert len(stored["mcp_dispatches"]) == 3  # discovery plus two calls
+    assert len(artifacts[0].mcp.evidence) == 2
+    assert contexts[1]["feedback"].startswith("Call 2 rejected (argument_out_of_scope): ")
+    assert ModelRequestRecord.model_validate(stored["model_requests"][0]).state == "complete"
+    assert artifacts[0].mcp.diagnostics.rejected_actions == {"argument_out_of_scope": 1}
+    assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+
+
+async def test_batched_calls_beyond_evidence_slots_are_rejected(monkeypatch, httpx_mock):
+    service, root, _, _, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+    monkeypatch.setattr(mcp_impact_agent, "MAX_MCP_CHECKPOINT_CALLS", 2)
+    contexts = []
+
+    def respond(request):
+        context = read_context(request)
+        contexts.append(context)
+        if context["observations"]:
+            return ai_response(report(context))
+        return ai_response(
+            {
+                "action": "tool",
+                "calls": [
+                    {
+                        "tool": "search_mist_data",
+                        "arguments": {"search_type": kind, "site_id": SITE},
+                        "purpose": f"Query {kind}.",
+                    }
+                    for kind in ("device_events", "alarms", "client_sessions")
+                ],
+            }
+        )
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 2
+    assert contexts[1]["feedback"].startswith("Call 3 rejected (tool_call_limit): ")
+
+
+def batch_call(kind="device_events", site=SITE):
+    return {
+        "tool": "search_mist_data",
+        "arguments": {"search_type": kind, "site_id": site},
+        "purpose": f"Query {kind}.",
+    }
+
+
+async def test_duplicate_call_in_one_batch_is_cached_and_uses_no_evidence_slot(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+    monkeypatch.setattr(mcp_impact_agent, "MAX_MCP_CHECKPOINT_CALLS", 1)
+    contexts = []
+
+    def respond(request):
+        context = read_context(request)
+        contexts.append(context)
+        if context["observations"]:
+            return ai_response(report(context))
+        return ai_response({"action": "tool", "calls": [batch_call(), batch_call(), batch_call(site=str(uuid4()))]})
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    mcp = artifacts[0].mcp
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 1
+    assert len(stored["mcp_dispatches"]) == 2  # discovery plus one call
+    assert len(mcp.evidence) == 1
+    feedback = contexts[1]["feedback"]
+    assert feedback.startswith("Call 3 rejected (argument_out_of_scope): ")
+    assert f"Call 2: cached evidence ID {mcp.evidence[0].id}; repeated request issued no MCP call." in feedback
+    diagnostics = mcp.diagnostics
+    assert (diagnostics.tool_calls, diagnostics.cached_calls) == (1, 1)
+    assert diagnostics.rejected_actions == {"argument_out_of_scope": 1}
+    assert mcp.state == "complete", mcp.reason
+
+
+async def test_batch_with_only_invalid_calls_is_one_rejected_action(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+    contexts = []
+
+    def respond(request):
+        context = read_context(request)
+        contexts.append(context)
+        if len(contexts) == 1:
+            foreign = [batch_call(site=str(uuid4())), batch_call("alarms", str(uuid4()))]
+            return ai_response({"action": "tool", "calls": foreign})
+        if context["observations"]:
+            return ai_response(report(context))
+        return ai_response({"action": "tool", **batch_call()})
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    first = ModelRequestRecord.model_validate(stored["model_requests"][0])
+    assert (first.state, first.response_error) == ("invalid_response", ModelResponseError.ARGUMENT_OUT_OF_SCOPE)
+    assert contexts[1]["feedback"].startswith("Action rejected (argument_out_of_scope): ")
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 1
+    assert artifacts[0].mcp.diagnostics.rejected_actions == {"argument_out_of_scope": 1}
+    assert artifacts[0].mcp.state == "complete", artifacts[0].mcp.reason
+
+
+async def test_deadline_mid_batch_finishes_the_call_in_flight_and_keeps_its_evidence(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+    clock = FakeClock()
+    monkeypatch.setattr(worker, "monotonic", clock)
+    monkeypatch.setattr(mcp_impact_agent, "monotonic", clock)
+    normalize = mcp_impact_agent.normalize_result_detail
+
+    def slow_normalize(*args, **kwargs):
+        clock.now += 200  # The first call of the batch consumes the checkpoint budget.
+        return normalize(*args, **kwargs)
+
+    monkeypatch.setattr(mcp_impact_agent, "normalize_result_detail", slow_normalize)
+    httpx_mock.add_callback(
+        lambda _request: ai_response({"action": "tool", "calls": [batch_call(), batch_call("alarms")]}),
+        method="POST",
+        url=AI_URL,
+        is_reusable=True,
+    )
+    await service._poll(root)  # noqa: SLF001
+    mcp = artifacts[0].mcp
+    assert mcp.state == "deadline_exceeded"
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 1
+    assert [e.state for e in mcp.evidence] == ["complete"]
+    assert [d["state"] for d in stored["mcp_dispatches"]] == ["complete", "complete"]
+    assert mcp.diagnostics.tool_calls == 1
+
+
+async def test_dispatch_denial_mid_batch_keeps_earlier_evidence(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    calls = mcp_responses(httpx_mock, stored)
+    normal = worker.Organization.get
+
+    async def organization(identity):
+        result = await normal(identity)
+        if any(c["method"] == "tools/call" for c in calls):
+            return SimpleNamespace(status=result.status, encrypted_service_token="rotated")
+        return result
+
+    monkeypatch.setattr(worker.Organization, "get", AsyncMock(side_effect=organization))
+    httpx_mock.add_callback(
+        lambda _request: ai_response({"action": "tool", "calls": [batch_call(), batch_call("alarms")]}),
+        method="POST",
+        url=AI_URL,
+        is_reusable=True,
+    )
+    await service._poll(root)  # noqa: SLF001
+    mcp = artifacts[0].mcp
+    assert mcp.state == "dispatch_denied"
+    assert "credential changed" in mcp.reason
+    assert len([c for c in calls if c["method"] == "tools/call"]) == 1
+    assert [e.state for e in mcp.evidence] == ["complete"]
+    assert [d["state"] for d in stored["mcp_dispatches"]] == ["complete", "complete"]
