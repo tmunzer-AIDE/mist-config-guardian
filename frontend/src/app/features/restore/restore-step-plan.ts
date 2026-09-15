@@ -59,6 +59,8 @@ function detailOf(action: RestoreAction): string {
     parts.push('Deleted — absent at the target moment');
   } else if (action.action === 'create') {
     parts.push(`Recreated from version ${shortOperationId(action.source_version_id)}`);
+  } else if (action.reason === 'reference_rewrite') {
+    parts.push('Updates references to a recreated object');
   } else {
     parts.push(`Updated to version ${shortOperationId(action.source_version_id)}`);
   }

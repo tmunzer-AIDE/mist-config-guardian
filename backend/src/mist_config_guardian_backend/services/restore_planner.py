@@ -9,7 +9,7 @@ outside the model would be erased by the executor's own progress writes.
 
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
 
@@ -20,6 +20,7 @@ from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.approval import ApprovalPolicy, TriggeredRule
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionType,
     RestoreMode,
     RestoreOperation,
@@ -357,6 +358,7 @@ class PlanningContext:
     force_delete: set[PydanticObjectId]
     target_at: datetime
     mode: RestoreMode
+    reference_rewrites: set[PydanticObjectId] = field(default_factory=set)
 
 
 class RestorePlanner:
@@ -414,18 +416,17 @@ class RestorePlanner:
             logical_objects[version.logical_object_id] = logical
 
         target_at = min(version.observed_at for version in selected.values())
+        context = PlanningContext(
+            organization_id=organization_id,
+            selected=selected,
+            requested_logical_ids=frozenset(selected),
+            logical_objects=logical_objects,
+            force_delete=force_delete,
+            target_at=target_at,
+            mode=mode,
+        )
         if include_dependencies:
-            await self._expand_dependencies(
-                PlanningContext(
-                    organization_id=organization_id,
-                    selected=selected,
-                    requested_logical_ids=frozenset(selected),
-                    logical_objects=logical_objects,
-                    force_delete=force_delete,
-                    target_at=target_at,
-                    mode=mode,
-                )
-            )
+            await self._expand_dependencies(context)
 
         if self._baseline_reader is not None:
             self._baselines = await self._baseline_reader(logical_objects)
@@ -434,6 +435,7 @@ class RestorePlanner:
             selected,
             logical_objects,
             force_delete,
+            frozenset(context.reference_rewrites),
         )
         self._add_containment_delete_dependencies(actions)
         actions = order_restore_actions(actions)
@@ -502,9 +504,11 @@ class RestorePlanner:
                 for dependent, current_version in reverse_dependents:
                     if dependent.id is None or dependent.id in context.selected:
                         continue
+                    # Re-pointed at the recreated UUID, not restored: its own
+                    # references are current and are not expanded further.
                     context.selected[dependent.id] = current_version
                     context.logical_objects[dependent.id] = dependent
-                    pending.append(current_version)
+                    context.reference_rewrites.add(dependent.id)
 
     async def _related_logical_objects(
         self,
@@ -578,30 +582,42 @@ class RestorePlanner:
         selected: dict[PydanticObjectId, ObjectVersion],
         logical_objects: dict[PydanticObjectId, LogicalObject],
         force_delete: set[PydanticObjectId],
+        reference_rewrites: frozenset[PydanticObjectId] = frozenset(),
     ) -> list[RestoreAction]:
         actions: list[RestoreAction] = []
-        for logical_id, target in selected.items():
+        for logical_id, selected_version in selected.items():
             logical = logical_objects[logical_id]
             latest = self._baselines.get(logical_id) or await self._latest_version(logical_id)
-            if latest is None or target.id is None:
+            if latest is None or selected_version.id is None:
                 continue
             definition = get_definition(logical.scope, logical.object_type)
-            if (
-                logical_id in self._baselines
-                and not logical.is_deleted
-                and not target.is_deleted
-                and logical_id not in force_delete
-                and definition is not None
-                and target.configuration_hash == latest.configuration_hash
-            ):
-                continue
-            action_type = self._action_type(
-                logical,
-                target,
-                latest,
-                force_delete=logical_id in force_delete,
-            )
-            if action_type is None:
+            rewrite = logical_id in reference_rewrites
+            target = selected_version
+            action_type: RestoreActionType | None
+            if rewrite:
+                # The live configuration is written back unchanged except for
+                # the UUIDs the executor remaps, so the source is the current
+                # (freshly backed-up) version, never an older one. Both no-op
+                # skips below would drop it, because nothing else differs.
+                target = latest
+                action_type = RestoreActionType.UPDATE
+            else:
+                if (
+                    logical_id in self._baselines
+                    and not logical.is_deleted
+                    and not target.is_deleted
+                    and logical_id not in force_delete
+                    and definition is not None
+                    and target.configuration_hash == latest.configuration_hash
+                ):
+                    continue
+                action_type = self._action_type(
+                    logical,
+                    target,
+                    latest,
+                    force_delete=logical_id in force_delete,
+                )
+            if action_type is None or target.id is None:
                 continue
             dependencies = await self._action_dependencies(
                 organization_id,
@@ -631,6 +647,7 @@ class RestorePlanner:
                     else target.configuration,
                     expected_current_hash=(None if logical.is_deleted else latest.configuration_hash),
                     depends_on=dependencies,
+                    reason=RestoreActionReason.REFERENCE_REWRITE if rewrite else RestoreActionReason.RESTORE,
                 )
             )
         return actions

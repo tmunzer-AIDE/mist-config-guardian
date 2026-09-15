@@ -8,7 +8,7 @@ from beanie import PydanticObjectId
 from beanie.odm.fields import ExpressionField
 
 from mist_config_guardian_backend.config import Settings
-from mist_config_guardian_backend.models.restore import RestoreActionType, RestoreMode
+from mist_config_guardian_backend.models.restore import RestoreActionReason, RestoreActionType, RestoreMode
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
     ObjectIncarnation,
@@ -17,7 +17,11 @@ from mist_config_guardian_backend.models.snapshot import (
     VersionEvent,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
-from mist_config_guardian_backend.services.restore_planner import PlanningContext, RestorePlanner
+from mist_config_guardian_backend.services.restore_planner import (
+    PlanningContext,
+    RestorePlanner,
+    order_restore_actions,
+)
 
 
 def _logical(
@@ -269,7 +273,11 @@ async def test_inferred_containers_do_not_expand_their_contents(
 
     assert container.id in context.selected
     assert child.id not in context.selected
-    assert (container_type, False) in containment_flags
+    if arrival == "forward_reference":
+        assert (container_type, False) in containment_flags
+    else:
+        # A reverse dependent is only re-pointed, so it is not expanded at all.
+        assert container_type not in {object_type for object_type, _ in containment_flags}
 
 
 @pytest.mark.parametrize("container_type", ["data", "sites"])
@@ -378,3 +386,68 @@ async def test_legacy_inventory_tag_does_not_create_action_ordering_dependency(
 
     assert dependencies == []
     find_one.assert_not_awaited()
+
+
+async def test_a_reverse_dependent_of_a_recreated_object_gets_a_reference_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization_id = PydanticObjectId()
+    wlan_uuid = "8aa21779-1178-4357-b3e0-42c02b93b870"
+    wlan = _logical(organization_id, object_type="wlans", mist_id=wlan_uuid, is_deleted=True)
+    device = _logical(organization_id, object_type="devices", mist_id="device-1")
+    assert wlan.id is not None
+    assert device.id is not None
+    wlan_target = _version(organization_id, wlan)
+    wlan_tombstone = ObjectVersion.model_construct(
+        **{**wlan_target.model_dump(), "id": PydanticObjectId(), "is_deleted": True}
+    )
+    device_current = _version(
+        organization_id,
+        device,
+        references=[ObjectReference(target_mist_id=wlan_uuid, field_path="port_config.eth0.wlan_id")],
+    )
+    planner = _planner()
+    related = AsyncMock(return_value=[])
+    monkeypatch.setattr(planner, "_related_logical_objects", related)
+    monkeypatch.setattr(planner, "_reverse_dependents", AsyncMock(return_value=[(device, device_current)]))
+    context = PlanningContext(
+        organization_id=organization_id,
+        selected={wlan.id: wlan_target},
+        requested_logical_ids=frozenset({wlan.id}),
+        logical_objects={wlan.id: wlan},
+        force_delete=set(),
+        target_at=datetime(2026, 1, 1, tzinfo=UTC),
+        mode=RestoreMode.NON_DESTRUCTIVE,
+    )
+
+    await planner._expand_dependencies(context)  # noqa: SLF001
+
+    assert context.reference_rewrites == {device.id}
+    related.assert_awaited_once()
+
+    latest = {wlan.id: wlan_tombstone, device.id: device_current}
+    monkeypatch.setattr(planner, "_latest_version", AsyncMock(side_effect=lambda logical_id: latest[logical_id]))
+    monkeypatch.setattr(
+        planner,
+        "_action_dependencies",
+        AsyncMock(side_effect=lambda _org, target, *_args: [wlan.id] if target.logical_object_id == device.id else []),
+    )
+
+    actions = order_restore_actions(
+        await planner._build_actions(  # noqa: SLF001
+            organization_id,
+            context.selected,
+            context.logical_objects,
+            context.force_delete,
+            frozenset(context.reference_rewrites),
+        )
+    )
+
+    assert [(action.object_type, action.action, action.reason) for action in actions] == [
+        ("wlans", RestoreActionType.CREATE, RestoreActionReason.RESTORE),
+        ("devices", RestoreActionType.UPDATE, RestoreActionReason.REFERENCE_REWRITE),
+    ]
+    rewrite = actions[1]
+    assert rewrite.source_version_id == device_current.id
+    assert rewrite.expected_current_hash == device_current.configuration_hash
+    assert rewrite.depends_on == [wlan.id]

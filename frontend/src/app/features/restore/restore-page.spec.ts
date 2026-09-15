@@ -1452,4 +1452,21 @@ describe('RestorePage', () => {
 
     expect(all('.step-button--on')[0].textContent).toContain('3 · Execute');
   });
+
+  it('explains an update that only re-points references at a recreated object', async () => {
+    await plan({
+      actions: [
+        action({ action: 'create', object_name: 'Corp WLAN' }),
+        action({
+          logical_object_id: 'lo-2',
+          order: 1,
+          object_name: 'Lobby-AP',
+          reason: 'reference_rewrite',
+          depends_on: ['lo-1'],
+        }),
+      ],
+    });
+
+    expect(text()).toContain('Updates references to a recreated object');
+  });
 });

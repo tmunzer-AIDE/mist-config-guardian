@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionStatus,
     RestoreActionType,
     RestoreMode,
@@ -75,6 +76,7 @@ class RestoreActionResponse(BaseModel):
     site_mist_id: str | None
     configuration: dict[str, object]
     depends_on: list[str]
+    reason: RestoreActionReason = RestoreActionReason.RESTORE
     status: RestoreActionStatus
     resulting_mist_id: str | None
     error: str | None
@@ -96,6 +98,7 @@ class RestoreActionResponse(BaseModel):
             site_mist_id=action.site_mist_id,
             configuration=redact_configuration(action.protected_configuration),
             depends_on=[str(item) for item in action.depends_on],
+            reason=action.reason,
             status=action.status,
             resulting_mist_id=action.resulting_mist_id,
             error=action.error,

@@ -48,6 +48,15 @@ class RestoreActionStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class RestoreActionReason(StrEnum):
+    """Why a plan contains an action."""
+
+    RESTORE = "restore"
+    # The object is not being restored; its references to an object this plan
+    # recreates must be pointed at the new UUID (spec §9.4 steps 4-5).
+    REFERENCE_REWRITE = "reference_rewrite"
+
+
 class RestoreAction(BaseModel):
     """One deterministic action in a restore plan."""
 
@@ -64,6 +73,7 @@ class RestoreAction(BaseModel):
     protected_configuration: dict[str, object]
     expected_current_hash: str | None = None
     depends_on: list[PydanticObjectId] = Field(default_factory=list)
+    reason: RestoreActionReason = RestoreActionReason.RESTORE
     status: RestoreActionStatus = RestoreActionStatus.PENDING
     resulting_mist_id: str | None = None
     error: str | None = None

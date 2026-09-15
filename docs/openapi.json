@@ -7720,6 +7720,15 @@
         "title": "ReportSections",
         "type": "object"
       },
+      "RestoreActionReason": {
+        "description": "Why a plan contains an action.",
+        "enum": [
+          "restore",
+          "reference_rewrite"
+        ],
+        "title": "RestoreActionReason",
+        "type": "string"
+      },
       "RestoreActionResponse": {
         "description": "Safe review representation for one planned action.",
         "properties": {
@@ -7784,6 +7793,10 @@
             "default": false,
             "title": "Outcome Unknown",
             "type": "boolean"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RestoreActionReason",
+            "default": "restore"
           },
           "resulting_mist_id": {
             "anyOf": [

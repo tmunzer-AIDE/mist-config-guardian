@@ -16,6 +16,7 @@ export type RestoreStatus =
 
 export type RestoreActionKind = 'create' | 'update' | 'delete';
 export type RestoreActionStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'skipped';
+export type RestoreActionReason = 'restore' | 'reference_rewrite';
 
 export interface RestoreAction {
   logical_object_id: string;
@@ -34,6 +35,7 @@ export interface RestoreAction {
   resulting_mist_id: string | null;
   error: string | null;
   outcome_unknown?: boolean;
+  reason?: RestoreActionReason;
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'invalidated';
