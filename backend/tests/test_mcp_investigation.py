@@ -1,5 +1,6 @@
 """Production MCP loop with real advertised tool schemas, independent of rule coverage."""
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -792,3 +793,52 @@ async def test_rejections_are_counted_by_category(monkeypatch, httpx_mock):
     diagnostics = artifacts[0].mcp.diagnostics
     assert diagnostics.rejected_actions == {"invalid_json": 8}
     assert diagnostics.final_state == "invalid_response"
+
+
+class FakeClock:
+    """Monotonic stand-in shared by the worker and the agent; tests advance it explicitly."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_deadline_stops_with_retained_evidence_and_publishes(monkeypatch, httpx_mock):
+    service, root, collection, artifacts, stored = mcp_runtime(monkeypatch)
+    mcp_responses(httpx_mock, stored)
+    clock = FakeClock()
+    monkeypatch.setattr(worker, "monotonic", clock)
+    monkeypatch.setattr(mcp_impact_agent, "monotonic", clock)
+
+    def respond(request):
+        context = read_context(request)
+        if context["observations"]:
+            clock.now += 200  # The worker budget is spent while the model reasons.
+            return ai_response({"action": "describe", "tools": ["get_mist_stats"]})
+        return investigator(request)
+
+    httpx_mock.add_callback(respond, method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    mcp = artifacts[0].mcp
+    assert mcp.state == "deadline_exceeded"
+    assert [e.state for e in mcp.evidence] == ["complete"]
+    assert len(mcp.request_ids) == 3
+    assert mcp.diagnostics.final_state == "deadline_exceeded"
+    publication = collection.update_one.await_args_list[-1].args[1]["$set"]
+    assert publication["report_id"] == artifacts[0].id
+
+
+async def test_safety_timeout_publishes_unavailable_checkpoint(monkeypatch):
+    service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
+
+    async def stall(*_args, **_kwargs):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(worker.McpImpactAgent, "run_mcp", stall)
+    monkeypatch.setattr(worker, "MCP_SAFETY_TIMEOUT_SECONDS", 0.01)
+    await service._poll(root)  # noqa: SLF001
+    assert len(artifacts) == 1
+    assert artifacts[0].mcp.state == "unavailable"
+    assert "safety timeout" in artifacts[0].mcp.reason

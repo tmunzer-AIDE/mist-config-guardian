@@ -4462,7 +4462,8 @@
               "budget_exhausted",
               "invalid_response",
               "provider_error",
-              "dispatch_denied"
+              "dispatch_denied",
+              "deadline_exceeded"
             ],
             "title": "State",
             "type": "string"

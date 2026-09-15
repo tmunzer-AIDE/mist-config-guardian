@@ -16,6 +16,15 @@ McpToolName = Literal[
     "get_mist_stats",
     "search_mist_data",
 ]
+McpCheckpointState = Literal[
+    "complete",
+    "unavailable",
+    "budget_exhausted",
+    "invalid_response",
+    "provider_error",
+    "dispatch_denied",
+    "deadline_exceeded",
+]
 Text = Annotated[str, Field(min_length=1, max_length=500)]
 Band = Literal["none", "info", "warning", "critical"]
 MAX_MCP_CHECKPOINT_CALLS = 8
@@ -148,9 +157,7 @@ class McpDiagnostics(Contract):
 
 class McpCheckpoint(Contract):
     source: Literal["mcp_agent"] = "mcp_agent"
-    state: Literal[
-        "complete", "unavailable", "budget_exhausted", "invalid_response", "provider_error", "dispatch_denied"
-    ]
+    state: McpCheckpointState
     reason: str = Field(default="", max_length=500)
     conclusion: McpConclusion | None = None
     evidence: tuple[McpEvidence, ...] = Field(default=(), max_length=MAX_MCP_CHECKPOINT_CALLS)

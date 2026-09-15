@@ -1,5 +1,6 @@
 """MCP-led investigation of arbitrary configuration changes, with optional rule evidence."""
 
+import asyncio
 import json
 from collections import Counter
 from copy import deepcopy
@@ -27,6 +28,7 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     MAX_MCP_ERROR_DETAIL_BYTES,
     McpAction,
     McpCheckpoint,
+    McpCheckpointState,
     McpConclusion,
     McpDescribeAction,
     McpDiagnostics,
@@ -59,6 +61,10 @@ from mist_config_guardian_backend.services.mcp_dispatch import McpDispatchDenied
 
 MAX_PREVIOUS_EVIDENCE_BYTES = 600
 MAX_REJECTION_DETAIL_BYTES = 300
+PROVIDER_TIMEOUT_SECONDS = 20.0
+TOOL_TIMEOUT_SECONDS = 20.0
+MIN_TURN_SECONDS = 5.0
+DEFAULT_RUN_SECONDS = 140.0
 ADAPTER = TypeAdapter(McpAction)
 _SYSTEM = """Investigate the supplied configuration change using the existing Mist MCP read tools.
 Deterministic findings are optional evidence, never a prerequisite or the scope of your investigation.
@@ -139,7 +145,14 @@ class McpImpactAgent(ModelRequestJournal):
         deterministic: dict,
         deployment: dict,
         previous: InvestigationRevision | Literal[False] | None,
+        deadline: float | None = None,
     ) -> McpCheckpoint:
+        deadline = monotonic() + DEFAULT_RUN_SECONDS if deadline is None else deadline
+
+        def remaining() -> float:
+            return deadline - monotonic()
+
+        expired = "Checkpoint time budget reached; retained evidence is published."
         endpoint = get_settings().mist_mcp_url
         if not endpoint:
             return McpCheckpoint(state="unavailable", reason="MIST_MCP_URL is not configured for the worker.")
@@ -191,9 +204,7 @@ class McpImpactAgent(ModelRequestJournal):
         stats = _RunStats()
 
         def stopped(
-            state: Literal[
-                "complete", "unavailable", "budget_exhausted", "invalid_response", "provider_error", "dispatch_denied"
-            ],
+            state: McpCheckpointState,
             reason: str = "",
             conclusion: McpConclusion | None = None,
         ) -> McpCheckpoint:
@@ -219,7 +230,8 @@ class McpImpactAgent(ModelRequestJournal):
                 url=endpoint, token=token, cloud=urlsplit(REGION_HOSTS[organization.cloud_region]).hostname or ""
             ) as client:
                 try:
-                    listing = await client.list_tools()
+                    async with asyncio.timeout(min(TOOL_TIMEOUT_SECONDS, max(remaining(), 0.001))):
+                        listing = await client.list_tools()
                     menu = {t.name: t for t in catalog(listing.get("tools", []))}
                     if not menu:
                         msg = "invalid_response"
@@ -237,7 +249,7 @@ class McpImpactAgent(ModelRequestJournal):
                             schema_hash=digest,
                         ),
                     )
-                except (MistMcpError, ValueError, TypeError):
+                except (MistMcpError, ValueError, TypeError, TimeoutError):
                     await journal.finish(discovery, self._error(discovery, {}, "invalid_response"))
                     return stopped("unavailable", "MCP tool discovery failed or returned an invalid catalogue.")
                 described = {
@@ -258,6 +270,8 @@ class McpImpactAgent(ModelRequestJournal):
                     max_response_bytes=65_536,
                 ) as provider:
                     for turn in range(8):
+                        if remaining() < MIN_TURN_SECONDS:
+                            return stopped("deadline_exceeded", expired)
                         data = {
                             "organization_id": str(organization.mist_org_id),
                             "configuration_changes": context,
@@ -311,13 +325,16 @@ class McpImpactAgent(ModelRequestJournal):
                         stats.turns += 1
                         stats.max_prompt_bytes = max(stats.max_prompt_bytes, record.input_bytes)
                         try:
-                            completion = await provider.complete(
-                                [AiMessage(role="system", content=system), AiMessage(role="user", content=body)],
-                                max_tokens=record.output_token_limit,
-                                json_object=True,
-                            )
+                            async with asyncio.timeout(min(PROVIDER_TIMEOUT_SECONDS, max(remaining(), 0.001))):
+                                completion = await provider.complete(
+                                    [AiMessage(role="system", content=system), AiMessage(role="user", content=body)],
+                                    max_tokens=record.output_token_limit,
+                                    json_object=True,
+                                )
                         except (AiProviderError, TimeoutError):
                             await self._finish(root, record, "provider_error")
+                            if remaining() < MIN_TURN_SECONDS:
+                                return stopped("deadline_exceeded", expired)
                             return stopped("provider_error", "AI provider request failed; prior evidence is retained.")
                         stats.finish_reasons.append(completion.finish_reason or "unreported")
                         try:
@@ -384,13 +401,16 @@ class McpImpactAgent(ModelRequestJournal):
                             observations.append(cached)
                             feedback = f"Cached evidence ID: {cache[cache_key]}; repeated request issued no MCP call."
                             continue
+                        if remaining() < MIN_TURN_SECONDS:
+                            return stopped("deadline_exceeded", expired)
                         try:
                             reservation = await journal.reserve(action.tool, arguments)
                         except McpDispatchDeniedError as exc:
                             return stopped("dispatch_denied", str(exc))
                         stats.tool_calls += 1
                         try:
-                            result = await client.call_tool(action.tool, arguments)
+                            async with asyncio.timeout(min(TOOL_TIMEOUT_SECONDS, max(remaining(), 0.001))):
+                                result = await client.call_tool(action.tool, arguments)
                             cleaned, partial = normalize_result(result, secrets=secrets)
                             if result.get("isError") or (
                                 isinstance(cleaned, dict)
@@ -412,6 +432,13 @@ class McpImpactAgent(ModelRequestJournal):
                                 state="partial" if partial else "complete",
                                 captured_at=utc_now(),
                                 schema_hash=menu[action.tool].schema_hash,
+                            )
+                        except TimeoutError:
+                            reading = self._error(
+                                reservation,
+                                arguments,
+                                "transport",
+                                detail="Tool call exceeded the remaining checkpoint time.",
                             )
                         except (MistMcpError, McpScopeError) as exc:
                             reading = self._error(

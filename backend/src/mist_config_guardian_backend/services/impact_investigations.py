@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from functools import partial
 from hashlib import sha256
+from time import monotonic
 from uuid import UUID, uuid4
 
 from beanie import PydanticObjectId
@@ -33,6 +34,7 @@ from mist_config_guardian_backend.impact.domain_evaluation import compose_domain
 from mist_config_guardian_backend.impact.knowledge import describe_attribute, documentation_plan
 from mist_config_guardian_backend.impact.limits import MAX_OPTIONAL_RULE_CHECKS, MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
+from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint
 from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, mcp_assessment
 from mist_config_guardian_backend.impact.report import build_report
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
@@ -58,6 +60,10 @@ _LEASE = timedelta(minutes=5)
 _INTERVAL = timedelta(minutes=10)
 _DURATION = timedelta(hours=1)
 _MAX_RETENTION_DAYS = 36_500
+# The agent stops itself at MCP_RUN_SECONDS; the outer bound only catches a stuck transport.
+# 120 s deterministic collection + 170 s stays inside the 5-minute lease.
+MCP_RUN_SECONDS = 140.0
+MCP_SAFETY_TIMEOUT_SECONDS = 170.0
 
 
 class ImpactInvestigationService:
@@ -301,19 +307,29 @@ class ImpactInvestigationService:
             and plan.mcp_context.get("changes")
         ):
             token = await service_token(organization, self._vault)
-            async with asyncio.timeout(150):
-                mcp = await McpImpactAgent(self._vault).run_mcp(
-                    root,
-                    organization=organization,
-                    token=token,
-                    context=plan.mcp_context,
-                    as_of=evidence_as_of,
-                    deterministic={
-                        "assessment": assessment.model_dump(mode="json"),
-                        "evidence": [e.model_dump(mode="json") for e in evidence],
-                    },
-                    deployment=deployment.model_dump(mode="json") if deployment else {},
-                    previous=previous,
+            try:
+                async with asyncio.timeout(MCP_SAFETY_TIMEOUT_SECONDS):
+                    mcp = await McpImpactAgent(self._vault).run_mcp(
+                        root,
+                        organization=organization,
+                        token=token,
+                        context=plan.mcp_context,
+                        as_of=evidence_as_of,
+                        deterministic={
+                            "assessment": assessment.model_dump(mode="json"),
+                            "evidence": [e.model_dump(mode="json") for e in evidence],
+                        },
+                        deployment=deployment.model_dump(mode="json") if deployment else {},
+                        previous=previous,
+                        deadline=monotonic() + MCP_RUN_SECONDS,
+                    )
+            except TimeoutError:
+                logger.warning("MCP investigation exceeded the safety timeout for investigation %s", root.id)
+                mcp = McpCheckpoint(
+                    state="unavailable",
+                    reason=(
+                        "MCP investigation exceeded the worker safety timeout; this run's evidence was not retained."
+                    ),
                 )
             assessment = mcp_assessment(root.audit_id, evidence_as_of, mcp)
             logger.info(
