@@ -73,6 +73,21 @@ MCP_RUN_SECONDS = 140.0
 MCP_SAFETY_TIMEOUT_SECONDS = 170.0
 
 
+def _not_scheduled_reason(*, expired: bool, carried: bool, last_run: datetime | None) -> str:
+    """Guardian-authored text for a checkpoint without a new agent run; never promises a run that cannot happen."""
+    if expired:
+        return (
+            "The investigation window has closed; the last agent conclusion is carried forward."
+            if carried
+            else "The investigation window has closed without an agent conclusion."
+        )
+    if carried:
+        return "The AI agent runs at +10, +30 and +60 minutes; the last agent conclusion is carried forward."
+    if last_run is None:
+        return "The AI agent first runs 10 minutes after the change."
+    return "The AI agent runs at +10, +30 and +60 minutes; no earlier agent conclusion is available."
+
+
 class ImpactInvestigationService:
     """One root per audit; no provisional investigations and no device-agent fan-out."""
 
@@ -327,9 +342,10 @@ class ImpactInvestigationService:
         finished = now >= root.expires_at or any(
             item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
         )
+        # Expiry stops a new MCP call, never the carry-forward and verdict composition that publish
+        # an earlier agent conclusion; a late final checkpoint must not revert to the rule verdict.
         if (
             get_settings().impact_engine_mode == "agent_shadow"
-            and not expired
             and organization is not None
             and organization.status is OrganizationStatus.VERIFIED
             and plan.mcp_context.get("changes")
@@ -340,7 +356,7 @@ class ImpactInvestigationService:
             attempt = self._unpublished_agent_attempt(root)
             if attempt is not None and (last_run is None or attempt > last_run):
                 last_run = attempt
-            if agent_due(root.changed_at, evidence_as_of, last_run):
+            if not expired and agent_due(root.changed_at, evidence_as_of, last_run):
                 try:
                     playbooks = mcp_playbooks(plan)
                 except (ValueError, OSError):
@@ -377,15 +393,12 @@ class ImpactInvestigationService:
                     update={"agent_as_of": evidence_as_of, "carried": None if mcp.state == "complete" else carried}
                 )
             else:
-                if carried:
-                    reason = (
-                        "The AI agent runs at +10, +30 and +60 minutes; the last agent conclusion is carried forward."
-                    )
-                elif last_run is None:
-                    reason = "The AI agent first runs 10 minutes after the change."
-                else:
-                    reason = "The AI agent runs at +10, +30 and +60 minutes; no earlier agent conclusion is available."
-                mcp = McpCheckpoint(state="not_scheduled", reason=reason, carried=carried, agent_as_of=last_run)
+                mcp = McpCheckpoint(
+                    state="not_scheduled",
+                    reason=_not_scheduled_reason(expired=expired, carried=carried is not None, last_run=last_run),
+                    carried=carried,
+                    agent_as_of=last_run,
+                )
             assessment, verdict_source = compose_assessment(
                 root.audit_id, evidence_as_of, mcp, deterministic_assessment, final=finished
             )

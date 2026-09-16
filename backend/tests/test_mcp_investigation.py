@@ -1289,6 +1289,69 @@ async def test_not_scheduled_checkpoint_spends_no_model_or_mcp_budget(monkeypatc
     assert not httpx_mock.get_requests()
 
 
+def warning_run(summary="Port flaps were returned."):
+    """A concluded agent warning with the evidence row its citation needs to carry forward."""
+    evidence = McpEvidence(
+        id=uuid4(),
+        tool="search_mist_data",
+        arguments={"search_type": "device_events", "site_id": SITE},
+        data={"results": [{"type": "SW_PORT_DOWN"}]},
+        state="complete",
+        captured_at=LATER,
+        schema_hash="test",
+    )
+    conclusion = McpConclusion(
+        summary=summary,
+        scope="Changed switch.",
+        impact="warning",
+        confidence="low",
+        coverage="partial",
+        evidence=(evidence.id,),
+        gaps=("A coincident fault has not been excluded.",),
+    )
+    return McpCheckpoint(state="complete", conclusion=conclusion, evidence=(evidence,))
+
+
+async def test_late_final_poll_publishes_the_carried_agent_warning(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    runs = []
+    counting_agent(monkeypatch, runs, warning_run())
+    await poll_at(monkeypatch, service, root, artifacts, 30)
+    tokens = worker.service_token.await_count
+    # The grace window closed before this poll: no new run, but the conclusion still governs the verdict.
+    await poll_at(monkeypatch, service, root, artifacts, 63)
+    assert runs == [NOW + timedelta(minutes=30)]
+    final = artifacts[-1]
+    assert final.mcp is not None
+    assert (final.mcp.state, final.mcp.agent_as_of) == ("not_scheduled", NOW + timedelta(minutes=30))
+    assert final.mcp.carried.conclusion.summary == "Port flaps were returned."
+    assert final.mcp.carried.source_revision == artifacts[0].revision
+    assert (final.assessment.impact, final.assessment.policy_version) == ("warning", "mcp-agent.v1")
+    assert (final.report.current_impact, final.report.verdict_source) == ("warning", "mcp_agent")
+    assert (stored["model_calls_used"], stored["calls_used"], stored["mcp_dispatches"]) == (0, 0, [])
+    # An expired investigation spends no credential, MCP or model budget.
+    assert worker.service_token.await_count == tokens
+    assert not httpx_mock.get_requests()
+
+
+async def test_late_poll_without_a_carried_conclusion_still_publishes(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    runs = []
+    counting_agent(monkeypatch, runs)
+    await poll_at(monkeypatch, service, root, artifacts, 63)
+    assert runs == []
+    final = artifacts[-1]
+    assert (final.mcp.state, final.mcp.carried) == ("not_scheduled", None)
+    assert final.report.verdict_source == "rule"
+    # Rules alone never publish a clean outcome without complete coverage.
+    assert (final.assessment.impact, final.assessment.coverage) == ("info", "unmapped")
+    assert final.report.current_impact == "info"
+    # The window is closed; the reason must not promise a run that can no longer happen.
+    assert "+10, +30 and +60" not in final.mcp.reason
+    assert (stored["model_calls_used"], stored["calls_used"], stored["mcp_dispatches"]) == (0, 0, [])
+    assert not httpx_mock.get_requests()
+
+
 @pytest.mark.parametrize("mode", ["legacy", "shadow"])
 async def test_non_agent_modes_publish_no_mcp_checkpoint(monkeypatch, mode):
     service, root, _, artifacts, _ = mcp_runtime(monkeypatch)
