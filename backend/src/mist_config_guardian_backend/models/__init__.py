@@ -23,7 +23,7 @@ from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.neighbor_binding import NeighborBinding
 from mist_config_guardian_backend.models.notification import Notification
 from mist_config_guardian_backend.models.organization import Organization
-from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreOperationStateRecord
+from mist_config_guardian_backend.models.restore import RestoreLease, RestoreOperation, RestoreOperationStateRecord
 from mist_config_guardian_backend.models.session import UserSession
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
@@ -56,6 +56,7 @@ def document_models() -> list[type[Document]]:
         AuditChangeGroup,
         RestoreOperation,
         RestoreOperationStateRecord,
+        RestoreLease,
         RestoreApproval,
         MonitoringSession,
         ImpactAdjudication,
@@ -80,6 +81,7 @@ __all__ = [
     "Organization",
     "PendingTotpEnrollment",
     "RestoreApproval",
+    "RestoreLease",
     "RestoreOperation",
     "RestoreOperationStateRecord",
     "SnapshotManifest",

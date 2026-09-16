@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import httpx
+import structlog
 from beanie import PydanticObjectId
 from celery.exceptions import CeleryError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -35,14 +36,17 @@ from mist_config_guardian_backend.schemas.restore import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import (
+    APPROVAL_NOT_CARRIED,
     ApprovalError,
     ApprovalService,
+    evaluate_approval_policy,
     organization_policy,
 )
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
 from mist_config_guardian_backend.services.restore_authorization import (
     RestoreAuthorizationError,
     RestoreAuthorizationService,
+    RestoreConcurrencyError,
 )
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
@@ -64,6 +68,8 @@ from mist_config_guardian_backend.services.restore_targets import (
 )
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.worker import celery_app
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/organizations/{organization_id}/restores")
 
@@ -118,7 +124,11 @@ async def create_restore_plan(  # noqa: PLR0913, PLR0917 - each argument is a se
         )
     except RestorePlanningError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    return RestoreOperationResponse.from_document(operation)
+    # A new draft says whether it will need a second administrator, so approval
+    # can be asked for before the minutes-long prepared session begins.
+    return RestoreOperationResponse.from_document(
+        operation, approval_required=_approval_required(organization, operation)
+    )
 
 
 @router.get("/targets")
@@ -150,9 +160,9 @@ async def list_restore_targets(  # noqa: PLR0913, PLR0917 - filters and paginati
 
 
 @router.get("")
-async def list_restore_operations(
+async def list_restore_operations(  # noqa: PLR0913, PLR0917 - dependencies and pagination are separate parameters
     organization_id: PydanticObjectId,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
     _operator: Annotated[User, Depends(require_operator)],
@@ -162,7 +172,7 @@ async def list_restore_operations(
     """List restore operations newest first."""
     operations, total = await plans.page(organization_id, skip=skip, limit=limit)
     return RestoreOperationListResponse(
-        items=[await _operation_response(item, approvals) for item in operations],
+        items=[await _operation_response(item, approvals, organization) for item in operations],
         total=total,
     )
 
@@ -171,14 +181,14 @@ async def list_restore_operations(
 async def get_restore_operation(
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
     _operator: Annotated[User, Depends(require_operator)],
 ) -> RestoreOperationResponse:
     """Return one restore operation, including live per-action progress."""
     operation = await _load(plans, organization_id, operation_id)
-    return await _operation_response(operation, approvals)
+    return await _operation_response(operation, approvals, organization)
 
 
 @router.get("/{operation_id}/verification")
@@ -199,28 +209,30 @@ async def get_restore_verification(
 async def execute_restore(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
-    request: RestoreExecuteRequest,
     organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     authorization: Annotated[RestoreAuthorizationService, Depends(get_restore_authorization_service)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
     store: Annotated[RestoreStateStore, Depends(get_plan_state_store)],
-    _administrator: Annotated[User, Depends(require_administrator)],
+    administrator: Annotated[User, Depends(require_administrator)],
     _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
 ) -> RestoreOperationResponse:
-    """Verify a fresh Mist administrator and queue the reviewed plan."""
+    """Queue a prepared plan with the administrator session its fresh backup retained.
+
+    There is no credential to supply: a plan reviewed against anything but a
+    backup taken with the identity that will write is not executed at all.
+    """
     operation = await _load(plans, organization_id, operation_id)
-    if request.use_prepared_credential and operation.requested_by != _administrator.id:
+    if operation.baseline_snapshot_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Prepare a fresh backup of this plan before executing it",
+        )
+    if operation.requested_by != administrator.id:
         raise HTTPException(status_code=403, detail="Only the administrator who prepared this plan can use its session")
     await _assert_plan_current(store, operation)
     await _assert_approved(organization, operation, approvals)
-    return await _authorize_and_queue(
-        organization_id,
-        operation,
-        authorization,
-        approvals,
-        request.credential(),
-    )
+    return await _authorize_and_queue(organization_id, organization, operation, authorization, approvals, None)
 
 
 @router.post("/{operation_id}/prepare", status_code=status.HTTP_201_CREATED)
@@ -239,8 +251,11 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
     """Back up live state and return a new plan for review; never queue writes."""
     operation = await _load(plans, organization_id, operation_id)
     credential = request.credential()
-    if credential is None or administrator.id is None:
-        raise HTTPException(status_code=422, detail="Fresh administrator credentials are required to prepare a backup")
+    if administrator.id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authenticated administrator is missing an identifier",
+        )
     state = await store.load(organization_id, operation_id)
     if state is not None and state.compensates_operation_id is not None:
         raise HTTPException(status_code=409, detail="Compensation must use its original safety backup")
@@ -248,6 +263,8 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         plan = await authorization.prepare(organization, operation, administrator.id, credential, store)
     except MistMfaRequiredError as exc:
         raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
+    except RestoreConcurrencyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RestoreAuthorizationError, RestorePlanningError, MistVerificationError, MistMutationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DuplicateKeyError as exc:
@@ -256,14 +273,48 @@ async def prepare_restore(  # noqa: PLR0913, PLR0917 - one dependency per collab
         ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail="Mist is unavailable; no restore was queued") from exc
-    return await _operation_response(plan, approvals)
+    await _carry_approval(approvals, plans, operation, plan)
+    return await _operation_response(plan, approvals, organization)
+
+
+async def _carry_approval(
+    approvals: ApprovalService,
+    plans: RestorePlanRepository,
+    draft: RestoreOperation,
+    plan: RestoreOperation,
+) -> None:
+    """Move the draft's approval to its prepared plan, or say on the plan why it did not follow.
+
+    The approval was asked for before this backup existed; it follows the new
+    plan only when the backup left what would be done unchanged, and only when
+    this plan is the one the stored draft names as its replacement. Two
+    preparations of one draft can both finish, and the approval belongs with
+    the plan that actually retired the draft, not with the one that lost.
+
+    A failure anywhere here must not fail the request: the prepared plan and
+    its session already exist. Logs carry ids and the error type only.
+    """
+    try:
+        stored = None if draft.id is None else await plans.load(draft.organization_id, draft.id)
+        if stored is None or stored.superseded_by != plan.id:
+            logger.info("restore_approval_carry_skipped", operation_id=str(draft.id), prepared_id=str(plan.id))
+            return
+        carried = await approvals.carry_to_prepared(stored, plan)
+        if carried == "not_carried":
+            plan.warnings.append(APPROVAL_NOT_CARRIED)
+            await plan.save()
+    except Exception as exc:  # noqa: BLE001 - the prepared plan and its session already exist and must be returned
+        # The response reads the approval from the store, so it shows wherever
+        # the approval actually is. Only the type is logged: the message could
+        # hold database detail.
+        logger.warning("restore_approval_carry_failed", operation_id=str(plan.id), error_type=type(exc).__name__)
 
 
 @router.post("/{operation_id}/compensation", status_code=status.HTTP_201_CREATED)
 async def create_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency per collaborating service
     organization_id: PydanticObjectId,
     operation_id: PydanticObjectId,
-    _organization: Annotated[Organization, Depends(require_organization)],
+    organization: Annotated[Organization, Depends(require_organization)],
     plans: Annotated[RestorePlanRepository, Depends(get_restore_plans)],
     compensation: Annotated[RestoreCompensationService, Depends(get_restore_compensation_service)],
     approvals: Annotated[ApprovalService, Depends(get_approval_service)],
@@ -283,7 +334,7 @@ async def create_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency p
         )
     except RestoreCompensationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return await _operation_response(plan, approvals, compensation_available=False)
+    return await _operation_response(plan, approvals, organization, compensation_available=False)
 
 
 @router.post("/{operation_id}/compensation/execute", status_code=status.HTTP_202_ACCEPTED)
@@ -320,10 +371,12 @@ async def execute_compensation_plan(  # noqa: PLR0913, PLR0917 - one dependency 
     await _assert_approved(organization, plan, approvals)
     return await _authorize_and_queue(
         organization_id,
+        organization,
         plan,
         authorization,
         approvals,
         request.credential(),
+        compensation=True,
     )
 
 
@@ -339,17 +392,24 @@ async def _load(
     return operation
 
 
+def _approval_required(organization: Organization, operation: RestoreOperation) -> bool:
+    """Whether the organization's policy needs a second administrator for this plan."""
+    return bool(evaluate_approval_policy(organization_policy(organization), operation.actions, operation.mode))
+
+
 async def _operation_response(
     operation: RestoreOperation,
     approvals: ApprovalService,
+    organization: Organization,
     *,
     compensation_available: bool | None = None,
 ) -> RestoreOperationResponse:
-    """Render one operation with its approval and compensation availability."""
+    """Render one operation with its approval, whether policy needs one, and compensation availability."""
     approval = await approvals.for_operation(operation)
     return RestoreOperationResponse.from_document(
         operation,
         approval=None if approval is None else ApprovalResponse.from_document(approval),
+        approval_required=_approval_required(organization, operation),
         compensation_available=(
             operation.status is RestoreStatus.COMPENSATION_AVAILABLE
             if compensation_available is None
@@ -381,12 +441,15 @@ async def _assert_approved(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-async def _authorize_and_queue(
+async def _authorize_and_queue(  # noqa: PLR0913, PLR0917 - one argument per collaborator; the compensation flag is named
     organization_id: PydanticObjectId,
+    organization: Organization,
     operation: RestoreOperation,
     authorization: RestoreAuthorizationService,
     approvals: ApprovalService,
     credential: str | MistLoginCredentials | None,
+    *,
+    compensation: bool = False,
 ) -> RestoreOperationResponse:
     """Reserve the plan with a delegated credential and hand it to the worker."""
     if operation.id is None:
@@ -401,9 +464,12 @@ async def _authorize_and_queue(
             operation.id,
             credential,
             task_id,
+            compensation=compensation,
         )
     except MistMfaRequiredError as exc:
         raise HTTPException(status_code=409, detail={"code": "mist_mfa_required", "message": str(exc)}) from exc
+    except RestoreConcurrencyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (RestoreAuthorizationError, MistVerificationError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if reserved.id is None:
@@ -419,4 +485,4 @@ async def _authorize_and_queue(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Restore worker queue is unavailable",
         ) from exc
-    return await _operation_response(reserved, approvals)
+    return await _operation_response(reserved, approvals, organization)

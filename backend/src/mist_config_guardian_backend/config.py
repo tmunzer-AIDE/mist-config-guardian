@@ -7,6 +7,10 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# A running restore beats once a minute; the timeout has to leave several beats'
+# room, or the janitor would close healthy runs and release their organization.
+_MIN_RESTORE_HEARTBEAT_TIMEOUT_MINUTES = 5
+
 
 class Settings(BaseSettings):
     """Environment-backed application settings."""
@@ -51,6 +55,10 @@ class Settings(BaseSettings):
     credential_encryption_key: SecretStr = SecretStr("development-only-encryption-key")
     webhook_max_body_bytes: int = 1_048_576
     delegated_credential_ttl_minutes: int = 15
+    # A running restore that has not written progress for this long is treated
+    # as interrupted. It must outlast the slowest single Mist call the mutation
+    # client can make (three 30 s attempts plus capped back-offs).
+    restore_worker_heartbeat_timeout_minutes: int = 15
 
     session_cookie_name: str = "cg_session"
     csrf_cookie_name: str = "cg_csrf"
@@ -122,6 +130,20 @@ class Settings(BaseSettings):
             "development-only"
         ):
             msg = "BOOTSTRAP_ADMIN_TOKEN must be replaced in production"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def keep_restore_heartbeat_timeout_above_the_interval(self) -> "Settings":
+        """Refuse a heartbeat timeout a healthy restore worker could outlast.
+
+        The janitor closes a running restore that has not beaten within this
+        timeout, and the organization lease lasts exactly as long. A value near
+        the one-minute heartbeat would close runs that are still writing and
+        let the next restore take their organization mid-write.
+        """
+        if self.restore_worker_heartbeat_timeout_minutes < _MIN_RESTORE_HEARTBEAT_TIMEOUT_MINUTES:
+            msg = f"RESTORE_WORKER_HEARTBEAT_TIMEOUT_MINUTES must be at least {_MIN_RESTORE_HEARTBEAT_TIMEOUT_MINUTES}"
             raise ValueError(msg)
         return self
 

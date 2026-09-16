@@ -65,6 +65,8 @@ export class RestoreStepAuthorize {
   readonly readOnly = input.required<boolean>();
   readonly busy = input.required<boolean>();
   readonly approval = input<ApprovalRequest | null>(null);
+  /** Policy needs a second administrator, so the draft invites asking before its fresh backup. */
+  readonly approvalRequired = input(false);
   readonly blockedByApproval = input(false);
   /** Reverses an applied restore rather than authorizing a new one. */
   readonly compensation = input(false);
@@ -96,6 +98,13 @@ export class RestoreStepAuthorize {
   protected readonly count = computed(() => this.actions().length);
   protected readonly deleteCount = computed(
     () => this.actions().filter((action) => action.action === 'delete').length,
+  );
+  /**
+   * A compensation plan has no review step of its own, so what it warns about,
+   * a manual follow-up among it, is read here before the credential is given.
+   */
+  protected readonly compensationWarnings = computed(() =>
+    this.compensation() ? (this.operation().warnings ?? []) : [],
   );
 
   protected readonly title = computed(() =>

@@ -1,5 +1,6 @@
 """Restorable Mist configuration object registry."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -456,12 +457,24 @@ SITE_OBJECTS: tuple[ObjectDefinition, ...] = (
 )
 
 
-def object_name(configuration: dict[str, object], definition: ObjectDefinition) -> str:
-    """Extract a stable display name from an object."""
+def explicit_name(configuration: Mapping[str, object], definition: ObjectDefinition) -> str | None:
+    """The first filled-in name field of an object, if it has one.
+
+    Shared by display naming and the restore name-collision check, so the two
+    can never disagree about what an object is called.
+    """
     for field_name in definition.name_fields:
         value = configuration.get(field_name)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return None
+
+
+def object_name(configuration: dict[str, object], definition: ObjectDefinition) -> str:
+    """Extract a stable display name from an object."""
+    name = explicit_name(configuration, definition)
+    if name is not None:
+        return name
     object_id = configuration.get("id")
     return str(object_id)[:12] if object_id else definition.label
 

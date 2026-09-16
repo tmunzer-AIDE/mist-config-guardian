@@ -7,6 +7,9 @@
   } @else {
     <p class="lead">Authorize the compensating plan with a fresh administrator credential.</p>
   }
+  @if (needsPreparation() && approvalRequired() && !approval()) {
+    <p class="lead">A second administrator must approve this restore. Ask now: the approval carries over to the prepared plan when the fresh backup leaves the actions unchanged.</p>
+  }
 
   @if (deleteCount() > 0) {
     <p class="destructive" role="note">
@@ -15,6 +18,17 @@
       {{ deleteCount() === 1 ? 'object' : 'objects' }} in Mist. Deletion is not reversible from Mist;
       only compensation, planned from the recorded configuration, can put them back.
     </p>
+  }
+
+  @if (compensationWarnings().length > 0) {
+    <section class="notice notice--warn">
+      <p class="cg-label notice-label">PLAN WARNINGS</p>
+      <ul class="notice-list">
+        @for (warning of compensationWarnings(); track $index) {
+          <li>{{ warning }}</li>
+        }
+      </ul>
+    </section>
   }
 
   @if (!compensation()) {
@@ -70,8 +84,9 @@
       }
       @if (approval.pending) {
         <p class="approval-wait">
-          Execution stays closed until a second administrator approves this exact plan. Rebuilding
-          the plan invalidates the request.
+          Execution stays closed until a second administrator approves this restore. The approval
+          carries over to the prepared plan when the fresh backup leaves the actions unchanged;
+          rebuilding the plan invalidates it.
         </p>
         <button
           class="cg-btn cg-btn--sm"

@@ -13,6 +13,7 @@ import { TimeContextService } from '../../core/time-context.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { RestorePage } from './restore-page';
 import {
+  ApprovalRequest,
   RestoreAction,
   RestoreOperation,
   RestoreStatus,
@@ -110,6 +111,26 @@ function operation(overrides: Partial<RestoreOperation> = {}): RestoreOperation 
     task_id: null,
     approval: null,
     compensation_available: false,
+    ...overrides,
+  };
+}
+
+function approvalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: 'ap-1',
+    restore_operation_id: 'op-1',
+    status: 'pending',
+    triggered_rules: [{ rule: 'organization_scope', detail: 'NW-Corp is organization-scoped.' }],
+    requested_by_email: 's.kaur@northwind.example',
+    decided_by_email: null,
+    decided_at: null,
+    decision_reason: null,
+    expires_at: '2026-09-08T14:22:00Z',
+    plan_hash: 'abc',
+    summary: '2 objects restored to their 02 SEP state.',
+    object_count: 2,
+    delete_count: 0,
+    created_at: '2026-09-07T14:22:00Z',
     ...overrides,
   };
 }
@@ -648,7 +669,7 @@ describe('RestorePage', () => {
     button('Execute reviewed plan')!.click();
     await tick();
     const execution = httpMock.expectOne(`${OPERATIONS_URL}/op-2/execute`);
-    expect(execution.request.body).toEqual({ use_prepared_credential: true });
+    expect(execution.request.body).toEqual({});
     execution.flush(operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString(), status: 'queued' }));
     await settle();
     // Both the draft and the freshly prepared plan get their own URLs.
@@ -1370,8 +1391,22 @@ describe('RestorePage', () => {
     await tick();
     httpMock
       .expectOne(`${OPERATIONS_URL}/op-1/compensation`)
-      .flush(operation({ id: 'op-2', status: 'planned', actions: [action({ action: 'update' })] }));
+      .flush(
+        operation({
+          id: 'op-2',
+          status: 'planned',
+          actions: [action({ action: 'update' })],
+          warnings: [
+            'Compensating plan for restore op-1: reverses 1 applied actions in reverse dependency order',
+            'SEA-Voice may have been created in Mist before the worker lost contact; check for it and delete it manually if it exists',
+          ],
+        }),
+      );
     await settle();
+
+    // A manual follow-up is part of what is authorized, so it is read before the credential is asked for.
+    expect(text()).toContain('reverses 1 applied actions in reverse dependency order');
+    expect(text()).toContain('check for it and delete it manually if it exists');
 
     // Compensation reuses the credential form; the token is asked for again.
     expect(all('app-restore-step-authorize').length).toBe(1);
@@ -1451,5 +1486,122 @@ describe('RestorePage', () => {
     await settle();
 
     expect(all('.step-button--on')[0].textContent).toContain('3 · Execute');
+  });
+
+  it('explains an update that only re-points references at a recreated object', async () => {
+    await plan({
+      actions: [
+        action({ action: 'create', object_name: 'Corp WLAN' }),
+        action({
+          logical_object_id: 'lo-2',
+          order: 1,
+          object_name: 'Lobby-AP',
+          reason: 'reference_rewrite',
+          depends_on: ['lo-1'],
+        }),
+      ],
+    });
+
+    expect(text()).toContain('Updates references to a recreated object');
+  });
+
+  it('offers no backup comparison for a reference rewrite, whose backup is its own target', async () => {
+    await plan({
+      actions: [
+        action({ baseline_version_id: 'v-backup' }),
+        action({
+          logical_object_id: 'lo-2',
+          order: 1,
+          object_name: 'Lobby-AP',
+          reason: 'reference_rewrite',
+          source_version_id: 'v-lobby',
+          baseline_version_id: 'v-lobby',
+        }),
+      ],
+    });
+
+    const links = all<HTMLAnchorElement>('a').filter((node) =>
+      (node.textContent ?? '').includes('Compare backup with target'),
+    );
+    expect(links.length).toBe(1);
+    expect(links[0].getAttribute('href')).toContain('a=v-backup');
+  });
+
+  it('opens the prepared plan in place of the draft it superseded', async () => {
+    await boot(targetList([NW_CORP]), [operation({ id: 'op-1', status: 'superseded', superseded_by: 'op-2' })]);
+
+    all('.entry')[0].click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ id: 'op-1', status: 'superseded', superseded_by: 'op-2' }));
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-2`).flush(
+      operation({ id: 'op-2', baseline_snapshot_id: 'backup-1', prepared_until: new Date(Date.now() + 60_000).toISOString() }),
+    );
+    await settle();
+
+    expect(button('Execute reviewed plan')).toBeTruthy();
+    expect(JSON.stringify(navigations.at(-1))).toContain('"operation":"op-2"');
+  });
+
+  it('never reopens a superseded plan for review when its replacement is not named', async () => {
+    await boot(targetList([NW_CORP]), [operation({ id: 'op-1', status: 'superseded', superseded_by: null })]);
+
+    all('.entry')[0].click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation({ id: 'op-1', status: 'superseded', superseded_by: null }));
+    await settle();
+
+    expect(all('app-restore-step-plan').length).toBe(0);
+    expect(all('app-restore-step-execute').length).toBe(1);
+    expect(text()).toContain('SUPERSEDED');
+  });
+
+  it('lets a second administrator review the draft before the fresh backup and keeps that approval', async () => {
+    await plan({ approval_required: true });
+    expect(text()).toContain('carries over to the prepared plan');
+
+    button('Ask a second administrator to review')!.click();
+    await tick();
+    const request = httpMock.expectOne(`${BASE}/approvals`);
+    expect(request.request.body).toEqual({ restore_operation_id: 'op-1' });
+    request.flush(approvalRequest());
+    await settle();
+
+    const token = element().querySelector<HTMLInputElement>('.token-input')!;
+    token.value = 'a-fresh-administrator-token';
+    token.dispatchEvent(new Event('input'));
+    await settle();
+    expect(button('Capture backup and review new plan')!.disabled).toBe(false);
+    button('Capture backup and review new plan')!.click();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1/prepare`).flush(
+      operation({
+        id: 'op-2',
+        approval_required: true,
+        baseline_snapshot_id: 'backup-1',
+        prepared_until: new Date(Date.now() + 60_000).toISOString(),
+        approval: approvalRequest({
+          restore_operation_id: 'op-2',
+          status: 'approved',
+          decided_by_email: 'a.osei@northwind.example',
+          decided_at: '2026-09-07T15:00:00Z',
+        }),
+      }),
+    );
+    await settle();
+
+    expect(text()).toContain('APPROVED');
+    expect(button('Execute reviewed plan')!.disabled).toBe(false);
+  });
+
+  it('withholds a prepared plan that needs an approval it does not have', async () => {
+    await plan({
+      approval_required: true,
+      baseline_snapshot_id: 'backup-1',
+      prepared_until: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    expect(button('Execute reviewed plan')!.disabled).toBe(true);
+    expect(button('Ask a second administrator to review')).toBeTruthy();
   });
 });

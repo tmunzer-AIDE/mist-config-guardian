@@ -43,14 +43,27 @@ export function actionRows(operation: RestoreOperation): ActionRow[] {
     detail: detailOf(action),
     kind: kindOf(action),
     status: actionStatusLabel(action, operation.status),
-    statusTone: actionStatusTone(action.status),
+    statusTone: actionStatusTone(action.status, action.outcome_unknown === true),
     error: action.error,
     running: action.status === 'executing',
     failed: action.status === 'failed',
-    comparisonUrl: action.baseline_version_id ? '/history?' + new URLSearchParams({
-      object: action.logical_object_id, a: action.baseline_version_id, b: action.source_version_id,
-    }).toString() : null,
+    comparisonUrl: comparisonUrlOf(action),
   }));
+}
+
+/**
+ * The backup-versus-target diff, when there are two versions to compare.
+ *
+ * A reference rewrite writes the object's own backup with new references, so
+ * its baseline and source are the same version and the diff would be empty.
+ */
+function comparisonUrlOf(action: RestoreAction): string | null {
+  if (!action.baseline_version_id || action.reason === 'reference_rewrite') {
+    return null;
+  }
+  return '/history?' + new URLSearchParams({
+    object: action.logical_object_id, a: action.baseline_version_id, b: action.source_version_id,
+  }).toString();
 }
 
 function detailOf(action: RestoreAction): string {
@@ -59,6 +72,8 @@ function detailOf(action: RestoreAction): string {
     parts.push('Deleted — absent at the target moment');
   } else if (action.action === 'create') {
     parts.push(`Recreated from version ${shortOperationId(action.source_version_id)}`);
+  } else if (action.reason === 'reference_rewrite') {
+    parts.push('Updates references to a recreated object');
   } else {
     parts.push(`Updated to version ${shortOperationId(action.source_version_id)}`);
   }
