@@ -6,6 +6,12 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { MistCloudRegion, MIST_REGIONS, regionLabel } from '../../core/organization.model';
 import { AuthService } from '../../core/auth.service';
 import { SystemHealthService } from '../../core/system-health.service';
+import {
+  ceremonyDismissed,
+  toAssertedCredential,
+  toRequestOptions,
+  webauthnSupported,
+} from '../../core/webauthn';
 
 type Mode = 'login' | 'bootstrap' | 'mfa';
 
@@ -40,7 +46,7 @@ export class LoginPage {
   protected readonly busy = signal(false);
   protected readonly error = signal('');
   protected readonly notice = signal('');
-  protected readonly passkeySupported = signal(typeof PublicKeyCredential !== 'undefined');
+  protected readonly passkeySupported = signal(webauthnSupported('get'));
 
   protected readonly mistMode = signal(false);
   protected readonly regions = MIST_REGIONS;
@@ -137,6 +143,49 @@ export class LoginPage {
         return;
       }
       this.loginForm.controls.password.reset();
+      await this.land();
+    });
+  }
+
+  /**
+   * Sign in with a passkey, naming no account.
+   *
+   * The challenge is anonymous, so the authenticator offers whichever
+   * discoverable credential it holds for this deployment and the assertion is
+   * what says who signed in — there is nothing to type first. A device that
+   * verified the user covers both factors; one that only proved possession
+   * lands on the same second-factor form the password flow uses.
+   */
+  protected async signInWithPasskey(): Promise<void> {
+    if (!this.passkeySupported() || this.busy()) {
+      return;
+    }
+    await this.attempt(async () => {
+      this.notice.set('');
+      const { challenge_token, options } = await this.auth.passkeyChallenge();
+      let asserted: Credential | null;
+      try {
+        asserted = await navigator.credentials.get({ publicKey: toRequestOptions(options) });
+      } catch (cause) {
+        if (!ceremonyDismissed(cause)) {
+          throw cause;
+        }
+        this.notice.set('No passkey was used. The request was dismissed on your device.');
+        return;
+      }
+      if (asserted === null) {
+        this.notice.set('No passkey was used: your device returned no credential.');
+        return;
+      }
+      const result = await this.auth.completePasskey(
+        challenge_token,
+        toAssertedCredential(asserted as PublicKeyCredential),
+      );
+      if (result.mfa_required) {
+        this.challengeToken.set(result.challenge_token);
+        this.mode.set('mfa');
+        return;
+      }
       await this.land();
     });
   }

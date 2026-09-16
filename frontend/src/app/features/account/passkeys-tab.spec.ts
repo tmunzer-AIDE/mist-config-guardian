@@ -3,8 +3,9 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { AuthService, CurrentUser } from '../../core/auth.service';
+import { base64UrlToBytes } from '../../core/webauthn';
 import { Passkey } from './account.model';
-import { AccountService, base64UrlToBytes, webauthnAvailable } from './account.service';
+import { AccountService, webauthnAvailable } from './account.service';
 import { PasskeysTab } from './passkeys-tab';
 
 const USER: CurrentUser = {
