@@ -114,6 +114,7 @@
             [readOnly]="readOnly()"
             [busy]="busy()"
             [approval]="approval()"
+            [approvalRequired]="operation.approval_required === true"
             [blockedByApproval]="blockedByApproval()"
             (authorized)="execute($event)"
             (cancelled)="backToTargets()"

@@ -19,6 +19,7 @@ from mist_config_guardian_backend.api.routes.restores import (
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.integrations.mist_mutation import MistMutationError
 from mist_config_guardian_backend.main import create_app
+from mist_config_guardian_backend.models.approval import ApprovalStatus, RestoreApproval
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
@@ -37,16 +38,21 @@ from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.approvals import ApprovalService, compute_plan_hash
 from mist_config_guardian_backend.services.mfa import require_fresh_mfa
+from mist_config_guardian_backend.services.restore_authorization import RestoreConcurrencyError
 from mist_config_guardian_backend.services.restore_compensation import (
     RestoreCompensationError,
     RestoreCompensationService,
+    RestoreDriftError,
     _switch_management_differences,
     _validate_live_state,
+    assess_live_state,
     capture_safety_snapshot,
 )
+from mist_config_guardian_backend.services.restore_lease import ANOTHER_RESTORE_RUNNING
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreOperationState,
     SafetySnapshotEntry,
+    assert_plan_current,
 )
 from mist_config_guardian_backend.snapshots.canonical import (
     configuration_hash,
@@ -141,13 +147,23 @@ def _operation(
 class _FakeMistClient:
     """Returns canned live state for every plan target."""
 
-    def __init__(self, live: dict[str, dict[str, object] | None]) -> None:
+    def __init__(
+        self,
+        live: dict[str, dict[str, object] | None],
+        listing: dict[tuple[str, str | None], list[dict[str, object]]] | None = None,
+    ) -> None:
         self.live = live
         self.reads: list[str] = []
+        self.listing = listing or {}
+        self.listed: list[tuple[str, str | None]] = []
 
     async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
         self.reads.append(object_id)
         return self.live.get(object_id)
+
+    async def list_objects(self, definition, *, org_id, site_id):  # noqa: ARG002
+        self.listed.append((definition.key, site_id))
+        return [dict(item) for item in self.listing.get((definition.key, site_id), [])]
 
 
 class _MemoryStateStore:
@@ -163,14 +179,24 @@ class _MemoryStateStore:
         self.items[(state.organization_id, state.operation_id)] = state
 
     async def find_compensation_of(self, organization_id, operation_id):
-        return next(
-            (
-                state
-                for state in self.items.values()
-                if state.organization_id == organization_id and state.compensates_operation_id == operation_id
-            ),
-            None,
-        )
+        source = self.items.get((organization_id, operation_id))
+        if source is not None and source.compensation_operation_id is not None:
+            linked = self.items.get((organization_id, source.compensation_operation_id))
+            if linked is not None:
+                return linked
+        matches = [
+            state
+            for state in self.items.values()
+            if state.organization_id == organization_id and state.compensates_operation_id == operation_id
+        ]
+        return matches[-1] if matches else None
+
+    async def compensations_of(self, organization_id, operation_id):
+        return [
+            state
+            for state in self.items.values()
+            if state.organization_id == organization_id and state.compensates_operation_id == operation_id
+        ]
 
 
 @pytest.fixture
@@ -267,10 +293,10 @@ def test_a_rotated_mist_read_only_url_does_not_invalidate_the_plan(
     action.scope = scope
     action.object_type = object_type
 
-    _validate_live_state(action, live, relaxed=False)
+    _validate_live_state(action, live, _vault())
 
     with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
-        _validate_live_state(action, {**live, "name": "Different configuration"}, relaxed=False)
+        _validate_live_state(action, {**live, "name": "Different configuration"}, _vault())
 
 
 async def test_preflight_debug_reports_fields_without_values(monkeypatch, caplog):
@@ -332,19 +358,25 @@ async def test_a_deleted_live_object_aborts_before_any_write(monkeypatch: pytest
         await capture_safety_snapshot(_FakeMistClient({}), _organization(), operation, _vault())
 
 
-async def test_relaxed_capture_accepts_the_state_a_restore_already_replaced(
+async def test_compensation_capture_accepts_what_the_restore_wrote_and_nothing_else(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "mist_config_guardian_backend.services.restore_compensation.latest_version",
-        _no_stored_version,
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    revert = _action(
+        0, RestoreActionType.UPDATE, expected_current_hash=configuration_hash(GUEST_WLAN, ignored_fields=IGNORED)
     )
-    operation = _operation([_action(0, RestoreActionType.UPDATE, expected_current_hash=None)])
-    client = _FakeMistClient({"mist-0": dict(GUEST_WLAN)})
+    revert.compensates_action_order = 4
+    revert.protected_configuration = dict(CORP_WLAN)
 
-    entries = await capture_safety_snapshot(client, _organization(), operation, _vault(), relaxed=True)
-
+    entries = await capture_safety_snapshot(
+        _FakeMistClient({"mist-0": dict(GUEST_WLAN)}), _organization(), _operation([revert]), _vault()
+    )
     assert entries[0].existed is True
+
+    with pytest.raises(MistMutationError, match="changed after this plan was reviewed"):
+        await capture_safety_snapshot(
+            _FakeMistClient({"mist-0": {**GUEST_WLAN, "vlan": 30}}), _organization(), _operation([revert]), _vault()
+        )
 
 
 def _stored_version(configuration: dict[str, object], digest: str) -> ObjectVersion:
@@ -737,6 +769,247 @@ async def test_a_stored_version_that_has_drifted_is_not_paired_with(
     assert entries[0].configuration_hash == live
 
 
+async def test_capture_leaves_objects_under_a_site_this_plan_recreates_for_later(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mist_config_guardian_backend.services.restore_compensation.latest_version",
+        _no_stored_version,
+    )
+    site = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="sites",
+        object_name="Lab",
+        current_mist_id="site-old",
+        protected_configuration={"name": "Lab"},
+    )
+    settings = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=1,
+        action=RestoreActionType.UPDATE,
+        scope="site",
+        object_type="settings",
+        object_name="Lab settings",
+        current_mist_id="site-old:settings",
+        site_mist_id="site-old",
+        protected_configuration={"vlan": 5},
+    )
+    client = _FakeMistClient({})
+
+    entries = await capture_safety_snapshot(client, _organization(), _operation([site, settings]), _vault())
+
+    assert client.reads == ["site-old"]
+    assert [entry.order for entry in entries] == [0]
+
+
+async def test_a_create_is_refused_when_mist_already_has_an_object_with_that_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0"}]})
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist") as error:
+        await capture_safety_snapshot(
+            client, _organization(), _operation([_action(0, RestoreActionType.CREATE)]), _vault()
+        )
+
+    assert str(error.value) == (
+        "wlan-0: a wlans named 'wlan-0' already exists in Mist; it may have been recreated manually. "
+        "Rename or remove it, then rebuild the plan"
+    )
+
+
+async def test_a_create_with_a_free_name_lists_its_scope_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "other", "name": "Guest"}]})
+    operation = _operation([_action(0, RestoreActionType.CREATE), _action(1, RestoreActionType.CREATE)])
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert len(entries) == 2
+    assert client.listed == [("wlans", "site-a")]
+
+
+async def test_a_reversal_that_finds_its_object_still_present_is_not_a_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.outcome_unknown = True
+    client = _FakeMistClient(
+        {"mist-0": {"id": "mist-0", "name": "wlan-0"}},
+        listing={("wlans", "site-a"): [{"id": "mist-0", "name": "wlan-0"}]},
+    )
+
+    await capture_safety_snapshot(client, _organization(), _operation([recreate]), _vault())
+
+    assert client.listed == []
+
+
+async def test_the_object_a_create_targets_is_not_its_own_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "mist-0", "name": "wlan-0"}]})
+
+    entries = await capture_safety_snapshot(
+        client, _organization(), _operation([_action(0, RestoreActionType.CREATE)]), _vault()
+    )
+
+    assert [entry.order for entry in entries] == [0]
+
+
+async def test_a_create_without_an_explicit_name_cannot_be_checked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    unnamed = _action(0, RestoreActionType.CREATE)
+    unnamed.protected_configuration = {"name": "   ", "enabled": True}
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "   "}]})
+
+    await capture_safety_snapshot(client, _organization(), _operation([unnamed]), _vault())
+
+    assert client.listed == []
+
+
+async def test_a_create_under_a_site_this_plan_recreates_is_not_checked_at_the_old_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    site = RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="sites",
+        object_name="Lab",
+        current_mist_id="site-old",
+        protected_configuration={"name": "Lab"},
+    )
+    wlan = _action(1, RestoreActionType.CREATE)
+    wlan.site_mist_id = "site-old"
+    client = _FakeMistClient({}, listing={("wlans", "site-old"): [{"id": "manual-uuid", "name": "wlan-1"}]})
+
+    entries = await capture_safety_snapshot(client, _organization(), _operation([site, wlan]), _vault())
+
+    assert client.listed == [("sites", None)]
+    assert [entry.order for entry in entries] == [0]
+
+
+async def test_a_listing_mist_refuses_fails_the_preflight_without_its_values(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    monkeypatch.setattr(ObjectVersion, "find_one", AsyncMock(return_value=None))
+    client = _FakeMistClient({})
+    client.list_objects = AsyncMock(side_effect=MistMutationError("Mist failed to list wlans (403)"))
+
+    with pytest.raises(MistMutationError, match=r"list wlans \(403\)"):
+        await capture_safety_snapshot(
+            client, _organization(), _operation([_action(0, RestoreActionType.CREATE)]), _vault()
+        )
+
+    assert "restore_preflight_debug" in caplog.text
+
+
+async def test_the_name_check_reads_the_stored_name_without_decrypting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    create = _action(0, RestoreActionType.CREATE)
+    create.protected_configuration = {"name": "wlan-0", "psk": {"$encrypted": "not-a-ciphertext"}}
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0"}]})
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist"):
+        await capture_safety_snapshot(client, _organization(), _operation([create]), _vault())
+
+
+_CORP_COLLISION = (
+    "Corp: a wlans named 'Corp' already exists in Mist; it may have been recreated manually. "
+    "Rename or remove it, then rebuild the plan"
+)
+
+
+def _org_wlan(template_id: str | None, *, order: int = 0) -> RestoreAction:
+    configuration: dict[str, object] = {"ssid": "Corp"}
+    if template_id is not None:
+        configuration["template_id"] = template_id
+    return RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=order,
+        action=RestoreActionType.CREATE,
+        scope="org",
+        object_type="wlans",
+        object_name="Corp",
+        current_mist_id=f"mist-{order}",
+        protected_configuration=configuration,
+    )
+
+
+def _live_org_wlan(template_id: str | None) -> dict[str, object]:
+    item: dict[str, object] = {"id": "manual-uuid", "ssid": "Corp"}
+    if template_id is not None:
+        item["template_id"] = template_id
+    return item
+
+
+@pytest.mark.parametrize(
+    ("restored", "live"),
+    [("template-a", "template-b"), (None, "template-a"), ("template-a", None)],
+)
+async def test_an_org_wlan_does_not_collide_with_the_same_ssid_in_another_template(
+    monkeypatch: pytest.MonkeyPatch,
+    restored: str | None,
+    live: str | None,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", None): [_live_org_wlan(live)]})
+
+    entries = await capture_safety_snapshot(client, _organization(), _operation([_org_wlan(restored)]), _vault())
+
+    assert [entry.order for entry in entries] == [0]
+    assert client.listed == [("wlans", None)]
+
+
+@pytest.mark.parametrize("template_id", ["template-a", None])
+async def test_an_org_wlan_collides_with_the_same_ssid_in_its_own_template(
+    monkeypatch: pytest.MonkeyPatch,
+    template_id: str | None,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", None): [_live_org_wlan(template_id)]})
+
+    with pytest.raises(MistMutationError) as error:
+        await capture_safety_snapshot(client, _organization(), _operation([_org_wlan(template_id)]), _vault())
+
+    assert str(error.value) == _CORP_COLLISION
+
+
+async def test_org_wlans_in_several_templates_share_one_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    client = _FakeMistClient({}, listing={("wlans", None): [_live_org_wlan("template-c")]})
+    operation = _operation([_org_wlan("template-a"), _org_wlan("template-b", order=1)])
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert len(entries) == 2
+    assert client.listed == [("wlans", None)]
+
+
+async def test_a_site_wlan_collides_whatever_template_id_it_carries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    create = _action(0, RestoreActionType.CREATE)
+    create.protected_configuration = {"name": "wlan-0", "template_id": "template-a"}
+    client = _FakeMistClient(
+        {}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0", "template_id": "template-b"}]}
+    )
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist"):
+        await capture_safety_snapshot(client, _organization(), _operation([create]), _vault())
+
+
 async def _no_stored_version(_logical_id):
     return None
 
@@ -768,13 +1041,16 @@ async def _applied_plan(
         _action(3, RestoreActionType.UPDATE, status=RestoreActionStatus.PENDING),
     ]
     operation = _operation(actions)
-    client = _FakeMistClient(
-        live or {"mist-1": dict(CORP_WLAN), "mist-2": dict(GUEST_WLAN), "mist-3": dict(GUEST_WLAN)}
-    )
+    live_state = live or {"mist-1": dict(CORP_WLAN), "mist-2": dict(GUEST_WLAN), "mist-3": dict(GUEST_WLAN)}
+    client = _FakeMistClient(live_state)
     for action in actions:
         if action.action is not RestoreActionType.CREATE:
-            action.expected_current_hash = None
-    entries = await capture_safety_snapshot(client, _organization(), operation, _vault(), relaxed=True)
+            action.expected_current_hash = configuration_hash(
+                live_state[action.current_mist_id], ignored_fields=IGNORED
+            )
+        if action.status is RestoreActionStatus.COMPLETED and action.action is not RestoreActionType.DELETE:
+            action.applied_hash = f"applied-{action.order}"
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
     store = _MemoryStateStore()
     await store.save(_snapshot_state(entries))
     return operation, store
@@ -816,6 +1092,23 @@ async def test_compensation_replays_the_captured_configuration(monkeypatch: pyte
     assert revert.protected_configuration["name"] == "Corp"
     assert is_protected(revert.protected_configuration["psk"])
     assert plan.actions[2].protected_configuration == {}
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_child_created_under_a_recreated_site_is_reversed_at_the_new_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    operation.actions[0].resulting_site_mist_id = "site-new"
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    reverse_create = next(action for action in plan.actions if action.compensates_action_order == 0)
+    assert reverse_create.site_mist_id == "site-new"
+    assert next(action for action in plan.actions if action.compensates_action_order == 1).site_mist_id == "site-a"
 
 
 @pytest.mark.usefixtures("offline_documents")
@@ -892,6 +1185,119 @@ async def test_compensation_refuses_a_restore_without_a_safety_snapshot() -> Non
         )
 
 
+@pytest.mark.usefixtures("offline_documents")
+async def test_an_unconfirmed_update_is_reversed_from_its_safety_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    operation.actions[3].status = RestoreActionStatus.FAILED
+    operation.actions[3].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert [action.object_name for action in plan.actions] == ["wlan-3", "wlan-2", "wlan-1", "wlan-0"]
+    assert plan.actions[0].action is RestoreActionType.UPDATE
+    assert plan.actions[0].outcome_unknown is True
+    assert plan.actions[0].compensates_action_order == 3
+    assert plan.actions[0].protected_configuration["name"] == "Guest"
+    assert [action.compensates_action_order for action in plan.actions] == [3, 2, 1, 0]
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_an_unconfirmed_create_is_left_for_manual_follow_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    create = operation.actions[0]
+    create.status = RestoreActionStatus.FAILED
+    create.outcome_unknown = True
+    create.resulting_mist_id = None
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert "wlan-0" not in [action.object_name for action in plan.actions]
+    assert any(warning.startswith("wlan-0 may have been created in Mist") for warning in plan.warnings)
+
+
+async def test_a_restore_whose_only_change_is_an_unconfirmed_create_cannot_be_reversed_automatically() -> None:
+    create = _action(0, RestoreActionType.CREATE, status=RestoreActionStatus.FAILED)
+    create.outcome_unknown = True
+    operation = _operation([create])
+    store = _MemoryStateStore()
+    await store.save(
+        _snapshot_state(
+            [
+                SafetySnapshotEntry(
+                    logical_object_id=create.logical_object_id,
+                    order=0,
+                    action=RestoreActionType.CREATE,
+                    scope="site",
+                    object_type="wlans",
+                    object_name="wlan-0",
+                    mist_object_id="mist-0",
+                    site_mist_id="site-a",
+                    existed=False,
+                )
+            ]
+        )
+    )
+
+    with pytest.raises(RestoreCompensationError, match="wlan-0 may have been created in Mist"):
+        await RestoreCompensationService(store).create_compensation_plan(
+            operation=operation,
+            requested_by=ADMINISTRATOR_ID,
+        )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_an_unattempted_action_carrying_an_inherited_unconfirmed_flag_is_not_reversed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    # A compensation action copies the flag of the write it reverses; until it
+    # runs and fails, nothing about this action itself reached Mist.
+    operation.actions[3].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert [action.object_name for action in plan.actions] == ["wlan-2", "wlan-1", "wlan-0"]
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_completed_create_carrying_an_inherited_unconfirmed_flag_is_deleted_by_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    # A compensating CREATE that ran copies the flag of the delete it reversed,
+    # but Mist answered it with an id, so it is reversed like any other create.
+    operation.actions[0].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation,
+        requested_by=ADMINISTRATOR_ID,
+    )
+
+    assert plan.actions[-1].action is RestoreActionType.DELETE
+    assert plan.actions[-1].current_mist_id == "new-uuid"
+    assert not any("may have been created in Mist" in warning for warning in plan.warnings)
+
+
+def test_an_inverse_create_may_find_the_object_its_unconfirmed_delete_never_removed() -> None:
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.outcome_unknown = True
+
+    _validate_live_state(recreate, dict(GUEST_WLAN), _vault())
+
+    recreate.outcome_unknown = False
+    with pytest.raises(MistMutationError, match="was recreated"):
+        _validate_live_state(recreate, dict(GUEST_WLAN), _vault())
+
+
 # ------------------------------------------------------------------------ api
 
 
@@ -899,12 +1305,14 @@ class _RecordingAuthorization:
     """Captures the delegated credential the route hands to authorization."""
 
     def __init__(self) -> None:
-        self.credentials: list[str] = []
+        self.credentials: list[str | None] = []
         self.operations: list[PydanticObjectId] = []
+        self.compensation: list[bool] = []
 
-    async def authorize(self, organization_id, operation_id, credential, task_id):  # noqa: ARG002
+    async def authorize(self, organization_id, operation_id, credential, task_id, *, compensation=False):  # noqa: ARG002
         self.credentials.append(credential)
         self.operations.append(operation_id)
+        self.compensation.append(compensation)
         return _operation([], status=RestoreStatus.QUEUED, identifier=operation_id)
 
     async def release(self, operation_id, task_id) -> None:  # noqa: ARG002
@@ -933,22 +1341,52 @@ def _administrator() -> User:
     )
 
 
-def _app(compensation: _StubCompensation, authorization: _RecordingAuthorization):
+def _app(
+    compensation: _StubCompensation,
+    authorization: _RecordingAuthorization,
+    *,
+    plans: list[RestoreOperation] | None = None,
+    states: _MemoryStateStore | None = None,
+):
     from mist_config_guardian_backend.api.dependencies import (  # noqa: PLC0415
         get_restore_authorization_service,
     )
 
+    shared_states = states or _MemoryStateStore()
+    listed = (
+        plans
+        if plans is not None
+        else [_operation([_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED)])]
+    )
     app = create_app(Settings(environment="test", database_enabled=False))
     app.dependency_overrides[get_current_user] = _administrator
     app.dependency_overrides[require_organization] = _organization
     app.dependency_overrides[get_restore_compensation_service] = lambda: compensation
     app.dependency_overrides[get_restore_authorization_service] = lambda: authorization
-    app.dependency_overrides[get_plan_state_store] = _MemoryStateStore
-    app.dependency_overrides[get_restore_plans] = lambda: _MemoryPlans(
-        [_operation([_action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED)])]
-    )
+    app.dependency_overrides[get_plan_state_store] = lambda: shared_states
+    app.dependency_overrides[get_restore_plans] = lambda: _MemoryPlans(listed)
     app.dependency_overrides[get_approval_service] = lambda: ApprovalService(_NoApprovals())
     return app
+
+
+async def _reviewed(states: _MemoryStateStore, plan: RestoreOperation) -> _MemoryStateStore:
+    """Record the plan hash a reviewer saw, as planning does."""
+    assert plan.id is not None
+    await states.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID, operation_id=plan.id, plan_hash=compute_plan_hash(plan.actions)
+        )
+    )
+    return states
+
+
+def _prepared(**overrides: object) -> RestoreOperation:
+    """A plan built from a fresh backup, as preparation leaves it."""
+    plan = _operation([_action(0, RestoreActionType.UPDATE)], status=RestoreStatus.PLANNED)
+    plan.baseline_snapshot_id = PydanticObjectId()
+    for field, value in overrides.items():
+        setattr(plan, field, value)
+    return plan
 
 
 class _NoApprovals:
@@ -989,6 +1427,17 @@ class _MemoryPlans:
         matched = [plan for plan in self.plans if plan.organization_id == organization_id]
         return matched[skip : skip + limit], len(matched)
 
+    async def supersede_planned(self, organization_id, operation_id, replacement_id):
+        """The same conditional retire MongoDB performs: only a plan that never started."""
+        plan = await self.load(organization_id, operation_id)
+        if plan is None or plan.status is not RestoreStatus.PLANNED or plan.started_at is not None:
+            return False
+        plan.status = RestoreStatus.SUPERSEDED
+        plan.superseded_by = replacement_id
+        plan.encrypted_delegated_credential = None
+        plan.delegated_credential_expires_at = None
+        return True
+
 
 @pytest.fixture(name="routed")
 def _routed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -1027,7 +1476,9 @@ async def test_compensation_execution_requires_a_fresh_step_up() -> None:
 async def test_compensation_execution_uses_the_delegated_administrator_credential(routed: list[str]) -> None:
     plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
     authorization = _RecordingAuthorization()
-    transport = httpx.ASGITransport(app=_app(_StubCompensation(plan), authorization))
+    transport = httpx.ASGITransport(
+        app=_app(_StubCompensation(plan), authorization, states=await _reviewed(_MemoryStateStore(), plan))
+    )
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -1038,8 +1489,94 @@ async def test_compensation_execution_uses_the_delegated_administrator_credentia
     assert response.status_code == 202
     assert authorization.credentials == ["fresh-admin-token"]
     assert authorization.operations == [COMPENSATION_ID]
+    assert authorization.compensation == [True]
     assert len(routed) == 1
     assert "fresh-admin-token" not in response.text
+
+
+async def test_a_plan_without_a_fresh_backup_cannot_be_executed(routed: list[str]) -> None:
+    draft = _operation([_action(0, RestoreActionType.UPDATE)], status=RestoreStatus.PLANNED)
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[draft], states=await _reviewed(_MemoryStateStore(), draft)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute", json={}
+        )
+
+    assert response.status_code == 409
+    assert "Prepare a fresh backup" in response.json()["detail"]
+    assert authorization.operations == []
+    assert routed == []
+
+
+async def test_a_prepared_plan_is_queued_with_its_retained_session(routed: list[str]) -> None:
+    prepared = _prepared()
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute", json={}
+        )
+
+    assert response.status_code == 202
+    assert authorization.credentials == [None]
+    assert authorization.compensation == [False]
+    assert len(routed) == 1
+
+
+async def test_a_pasted_credential_on_execute_is_ignored_rather_than_used(routed: list[str]) -> None:
+    prepared = _prepared()
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute",
+            json={"administrator_token": "pasted-token"},
+        )
+
+    assert response.status_code == 202
+    assert authorization.credentials == [None]
+    assert len(routed) == 1
+
+
+async def test_only_the_administrator_who_prepared_a_plan_can_execute_it(routed: list[str]) -> None:
+    prepared = _prepared(requested_by=PydanticObjectId())
+    authorization = _RecordingAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute")
+
+    assert response.status_code == 403
+    assert authorization.operations == []
+    assert routed == []
+
+
+@pytest.mark.usefixtures("routed")
+async def test_compensation_still_requires_a_fresh_credential() -> None:
+    plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
+    authorization = _RecordingAuthorization()
+    app = _app(_StubCompensation(plan), authorization)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/compensation/execute",
+            json={"use_prepared_credential": True},
+        )
+
+    assert response.status_code == 422
+    assert authorization.credentials == []
 
 
 @pytest.mark.usefixtures("routed")
@@ -1055,3 +1592,581 @@ async def test_compensation_execution_refuses_a_plan_that_was_never_created() ->
 
     assert response.status_code == 409
     assert authorization.credentials == []
+
+
+class _BusyAuthorization(_RecordingAuthorization):
+    """Another restore of the organization holds the queue."""
+
+    async def authorize(self, organization_id, operation_id, credential, task_id, **_kwargs):  # noqa: ARG002
+        self.credentials.append(credential)
+        raise RestoreConcurrencyError(ANOTHER_RESTORE_RUNNING)
+
+    async def prepare(self, organization, operation, requested_by, credential, store):  # noqa: ARG002
+        self.credentials.append(credential)
+        raise RestoreConcurrencyError(ANOTHER_RESTORE_RUNNING)
+
+
+async def test_compensation_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
+    plan = _operation([], status=RestoreStatus.PLANNED, identifier=COMPENSATION_ID)
+    transport = httpx.ASGITransport(
+        app=_app(_StubCompensation(plan), _BusyAuthorization(), states=await _reviewed(_MemoryStateStore(), plan))
+    )
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/compensation/execute",
+            json={"administrator_token": "fresh-admin-token"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ANOTHER_RESTORE_RUNNING
+    assert routed == []
+
+
+async def test_a_prepared_plan_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
+    prepared = _prepared()
+    authorization = _BusyAuthorization()
+    app = _app(
+        _StubCompensation(None), authorization, plans=[prepared], states=await _reviewed(_MemoryStateStore(), prepared)
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/execute")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ANOTHER_RESTORE_RUNNING
+    assert authorization.credentials == [None]
+    assert routed == []
+
+
+async def test_preparation_is_refused_with_a_conflict_while_another_restore_runs(routed: list[str]) -> None:
+    authorization = _BusyAuthorization()
+    transport = httpx.ASGITransport(app=_app(_StubCompensation(None), authorization))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/organizations/{ORGANIZATION_ID}/restores/{OPERATION_ID}/prepare",
+            json={"administrator_token": "fresh-admin-token"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ANOTHER_RESTORE_RUNNING
+    assert authorization.credentials == ["fresh-admin-token"]
+    assert routed == []
+
+
+# ------------------------------------------------ strict reversal and retrying it
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_reversals_expect_exactly_what_the_restore_wrote(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    by_original = {action.compensates_action_order: action for action in plan.actions}
+    assert by_original[0].expected_current_hash == "applied-0"
+    assert by_original[1].expected_current_hash == "applied-1"
+    assert by_original[2].expected_current_hash is None
+
+
+async def _plan_without_read_back(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    error: str | None = None,
+    written: dict[str, object] | None = None,
+) -> RestoreAction:
+    """Compensate a restore whose update of wlan-1 Mist accepted but that was never read back; return its reversal."""
+    operation, store = await _applied_plan(monkeypatch)
+    # How the executor leaves a write whose read-back failed (``error`` set), and how a
+    # restore recorded before writes were read back at all looks (no error).
+    operation.actions[1].applied_hash = None
+    operation.actions[1].error = error
+    if written is not None:
+        operation.actions[1].protected_configuration = written
+
+    plan = await RestoreCompensationService(store, _vault()).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    # One unread write no longer blocks every other reversal of the restore.
+    assert plan.preflight_errors == []
+    assert sorted(action.compensates_action_order for action in plan.actions) == [0, 1, 2]
+    return next(action for action in plan.actions if action.compensates_action_order == 1)
+
+
+@pytest.mark.usefixtures("offline_documents")
+@pytest.mark.parametrize("error", [None, "wlan-1 was not found in Mist after the write"])
+async def test_a_write_never_read_back_is_reversed_while_the_object_holds_what_the_restore_wrote(
+    monkeypatch: pytest.MonkeyPatch,
+    error: str | None,
+) -> None:
+    revert = await _plan_without_read_back(monkeypatch, error=error)
+
+    assert revert.expected_current_hash is None
+    assert revert.written_configuration == {"name": "wlan-1"}
+    # Mist echoes fields the payload never carried; only what was written has to agree.
+    assert assess_live_state(revert, {"id": "mist-1", "name": "wlan-1", "enabled": True}, _vault()) == "proceed"
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_whose_object_changed_since_is_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    revert = await _plan_without_read_back(monkeypatch)
+    changed = {"id": "mist-1", "name": "renamed-by-hand", "enabled": True}
+
+    with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed") as error:
+        assess_live_state(revert, changed, _vault())
+
+    assert "renamed-by-hand" not in str(error.value)
+    # The check a compensation run makes before its first write stops it the same way.
+    with pytest.raises(MistMutationError, match="wlan-1 changed after this plan was reviewed"):
+        await capture_safety_snapshot(
+            _FakeMistClient({"mist-1": changed}), _organization(), _operation([revert]), _vault()
+        )
+    # Back where the reversal would leave it is not drift: there is nothing left to do.
+    assert assess_live_state(revert, {**CORP_WLAN, "psk": "********"}, _vault()) == "already_reversed"
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_is_compared_through_the_secret_mist_masks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written = protect_configuration(
+        {"id": "mist-1", "name": "wlan-1", "psk": "restored-secret"}, _vault(), sensitive_fields=frozenset({"psk"})
+    )
+    revert = await _plan_without_read_back(monkeypatch, written=written)
+
+    assert revert.written_configuration is not None
+    assert "restored-secret" not in str(revert.written_configuration)
+    assert assess_live_state(revert, {"id": "mist-1", "name": "wlan-1", "psk": "********"}, _vault()) == "proceed"
+    with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed") as error:
+        assess_live_state(revert, {"id": "mist-1", "name": "wlan-1", "psk": "rotated-by-hand"}, _vault())
+    assert "rotated-by-hand" not in str(error.value)
+    assert "restored-secret" not in str(error.value)
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_is_compared_with_the_uuids_the_restore_remapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # wlan-0 was recreated first and Mist gave it "new-uuid"; wlan-1 referenced its old id.
+    revert = await _plan_without_read_back(monkeypatch, written={"name": "wlan-1", "network_id": "mist-0"})
+
+    assert revert.written_configuration == {"name": "wlan-1", "network_id": "new-uuid"}
+    assert assess_live_state(revert, {"name": "wlan-1", "network_id": "new-uuid"}, _vault()) == "proceed"
+    with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed"):
+        assess_live_state(revert, {"name": "wlan-1", "network_id": "mist-0"}, _vault())
+
+
+def test_a_reversal_whose_written_payload_no_longer_decrypts_is_never_taken_as_unchanged() -> None:
+    revert = _reversal(0, RestoreActionType.UPDATE, expected=None)
+    revert.written_configuration = {"name": "wlan-0", "psk": {"$encrypted": "v1:not-for-this-key"}}
+
+    with pytest.raises(RestoreDriftError, match="wlan-0 has no record of what the restore wrote") as error:
+        assess_live_state(revert, {"name": "wlan-0", "psk": "********"}, _vault())
+
+    assert "not-for-this-key" not in str(error.value)
+
+
+def _reversal(order: int, action: RestoreActionType, *, expected: str | None) -> RestoreAction:
+    reversal = _action(order, action, expected_current_hash=expected)
+    reversal.compensates_action_order = order
+    return reversal
+
+
+def test_a_reversal_proceeds_while_the_object_still_holds_what_the_restore_wrote() -> None:
+    revert = _reversal(0, RestoreActionType.UPDATE, expected=configuration_hash(GUEST_WLAN, ignored_fields=IGNORED))
+    revert.protected_configuration = dict(CORP_WLAN)
+
+    assert assess_live_state(revert, {**GUEST_WLAN, "modified_time": 5}, _vault()) == "proceed"
+
+
+def test_a_reversal_without_a_record_of_what_the_restore_wrote_is_never_taken_as_unchanged() -> None:
+    revert = _reversal(0, RestoreActionType.UPDATE, expected=None)
+    revert.protected_configuration = dict(GUEST_WLAN)
+
+    with pytest.raises(RestoreDriftError, match="wlan-0 has no record of what the restore wrote") as error:
+        assess_live_state(revert, dict(GUEST_WLAN), _vault())
+
+    assert "Guest" not in str(error.value)
+
+
+def _reverting_to_corp() -> RestoreAction:
+    """A reversal back to CORP_WLAN, stored protected, whose restore left something else behind."""
+    revert = _reversal(0, RestoreActionType.UPDATE, expected="applied-hash-of-what-the-restore-wrote")
+    revert.protected_configuration = protect_configuration(CORP_WLAN, _vault(), sensitive_fields=frozenset({"psk"}))
+    return revert
+
+
+def test_a_reversal_whose_object_only_masks_the_secret_it_would_write_is_already_reversed() -> None:
+    """Mist returns the secret it holds as a mask, so the mask alone is not a change made since."""
+    live = {**CORP_WLAN, "psk": "********", "modified_time": 7}
+
+    assert assess_live_state(_reverting_to_corp(), live, _vault()) == "already_reversed"
+
+
+def test_a_reversal_behind_a_masked_secret_still_sees_a_real_change() -> None:
+    live = {**CORP_WLAN, "psk": "********", "enabled": False}
+
+    with pytest.raises(RestoreDriftError, match="wlan-0 changed after this plan was reviewed") as error:
+        assess_live_state(_reverting_to_corp(), live, _vault())
+
+    assert "super-secret" not in str(error.value)
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_only_the_reversal_of_an_unconfirmed_update_goes_without_an_expected_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    operation.actions[3].status = RestoreActionStatus.FAILED
+    operation.actions[3].outcome_unknown = True
+    # Copied from the write an earlier compensation reversed; Mist confirmed this update.
+    operation.actions[1].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    by_original = {action.compensates_action_order: action for action in plan.actions}
+    assert by_original[3].expected_current_hash is None
+    assert by_original[3].outcome_unknown is True
+    assert by_original[1].expected_current_hash == "applied-1"
+    assert by_original[1].outcome_unknown is False
+    assert "wlan-3 was not confirmed, so its reversal cannot check for changes made since" in plan.warnings
+    assert not any(warning.startswith("wlan-1") for warning in plan.warnings)
+    # Only three of the four writes it reverses are known to have happened.
+    assert plan.warnings[0] == (
+        f"Compensating plan for restore {OPERATION_ID}: reverses 4 actions in reverse dependency order; "
+        "1 of them may never have been applied"
+    )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_compensation_of_confirmed_writes_says_every_action_it_reverses_was_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    assert plan.warnings[0] == (
+        f"Compensating plan for restore {OPERATION_ID}: reverses 3 applied actions in reverse dependency order"
+    )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_confirmed_delete_carrying_an_inherited_flag_is_not_mistaken_for_an_unconfirmed_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compensation of a compensation: the flag describes the write the first one reversed, not this delete."""
+    operation, store = await _applied_plan(monkeypatch)
+    operation.actions[2].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    recreate = next(action for action in plan.actions if action.compensates_action_order == 2)
+    assert recreate.action is RestoreActionType.CREATE
+    assert recreate.outcome_unknown is False
+    assert assess_live_state(recreate, None, _vault()) == "proceed"
+    with pytest.raises(RestoreDriftError, match="wlan-2 was recreated after this plan was reviewed"):
+        assess_live_state(recreate, dict(GUEST_WLAN), _vault())
+    with pytest.raises(MistMutationError, match="wlan-2 was recreated after this plan was reviewed"):
+        await capture_safety_snapshot(
+            _FakeMistClient({"mist-2": dict(GUEST_WLAN)}), _organization(), _operation([recreate]), _vault()
+        )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_delete_mist_still_showed_afterwards_is_recreated_only_if_it_did_happen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    # How the executor records a delete Mist accepted but still showed on read-back.
+    operation.actions[2].status = RestoreActionStatus.FAILED
+    operation.actions[2].outcome_unknown = True
+
+    plan = await RestoreCompensationService(store).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    recreate = next(action for action in plan.actions if action.compensates_action_order == 2)
+    assert recreate.action is RestoreActionType.CREATE
+    assert recreate.outcome_unknown is True
+    assert assess_live_state(recreate, dict(GUEST_WLAN), _vault()) == "already_reversed"
+    assert assess_live_state(recreate, None, _vault()) == "proceed"
+
+
+def _reversal_of(order: int, *, status: RestoreActionStatus) -> RestoreAction:
+    action = _action(order, RestoreActionType.UPDATE, status=status)
+    action.compensates_action_order = order
+    return action
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_failed_compensation_can_be_planned_again_without_repeating_reversed_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    earlier_id = PydanticObjectId()
+    earlier = _operation(
+        [
+            _reversal_of(2, status=RestoreActionStatus.COMPLETED),
+            _reversal_of(1, status=RestoreActionStatus.FAILED),
+        ],
+        status=RestoreStatus.FAILED,
+        identifier=earlier_id,
+    )
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=earlier_id,
+            plan_hash="earlier",
+            compensates_operation_id=OPERATION_ID,
+        )
+    )
+    source = await store.load(ORGANIZATION_ID, OPERATION_ID)
+    assert source is not None
+    source.compensation_operation_id = earlier_id
+    await store.save(source)
+    plans = _MemoryPlans([operation, earlier])
+    service = RestoreCompensationService(store, plans=plans)
+
+    plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+    plans.plans.append(plan)
+
+    assert [action.compensates_action_order for action in plan.actions] == [1, 0]
+    linked = await service.compensation_for(operation)
+    assert linked is not None
+    assert linked.id == COMPENSATION_ID
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_compensation_already_running_is_not_planned_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    running = _operation([], status=RestoreStatus.RUNNING, identifier=PydanticObjectId())
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=running.id,
+            plan_hash="running",
+            compensates_operation_id=OPERATION_ID,
+        )
+    )
+
+    with pytest.raises(RestoreCompensationError, match="already queued or running"):
+        await RestoreCompensationService(store, plans=_MemoryPlans([operation, running])).create_compensation_plan(
+            operation=operation, requested_by=ADMINISTRATOR_ID
+        )
+
+
+async def _link_earlier_compensation(
+    store: _MemoryStateStore, operation: RestoreOperation, *, plan_hash: str = "earlier"
+) -> None:
+    """Record ``operation`` as the compensation last planned for the failed restore."""
+    assert operation.id is not None
+    await store.save(
+        RestoreOperationState(
+            organization_id=ORGANIZATION_ID,
+            operation_id=operation.id,
+            plan_hash=plan_hash,
+            compensates_operation_id=OPERATION_ID,
+        )
+    )
+    source = await store.load(ORGANIZATION_ID, OPERATION_ID)
+    assert source is not None
+    source.compensation_operation_id = operation.id
+    await store.save(source)
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_planned_compensation_is_reused_rather_than_planned_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    planned = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, planned, plan_hash=compute_plan_hash(planned.actions))
+
+    plan = await RestoreCompensationService(store, plans=_MemoryPlans([operation, planned])).create_compensation_plan(
+        operation=operation, requested_by=ADMINISTRATOR_ID
+    )
+
+    assert plan is planned
+    assert planned.status is RestoreStatus.PLANNED
+    assert planned.superseded_by is None
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_planned_compensation_hashed_under_an_older_formula_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its reviewed record can never match again, so reusing it would leave the failed restore stuck."""
+    operation, store = await _applied_plan(monkeypatch)
+    stale = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    stale.encrypted_delegated_credential = "v1:should-not-be-here"
+    await _link_earlier_compensation(store, stale, plan_hash="hashed-before-targets-and-payload-were-covered")
+    plans = _MemoryPlans([operation, stale])
+    service = RestoreCompensationService(
+        store, plans=plans, approvals=ApprovalService(_MemoryApprovals(plans, []), AsyncMock())
+    )
+
+    plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+    plans.plans.append(plan)
+
+    assert plan is not stale
+    assert plan.id == COMPENSATION_ID
+    assert [action.compensates_action_order for action in plan.actions] == [2, 1, 0]
+    assert stale.status is RestoreStatus.SUPERSEDED
+    assert stale.superseded_by == COMPENSATION_ID
+    assert stale.encrypted_delegated_credential is None
+    assert await assert_plan_current(store, plan) == compute_plan_hash(plan.actions)
+    linked = await service.compensation_for(operation)
+    assert linked is not None
+    assert linked.id == COMPENSATION_ID
+
+
+class _MemoryApprovals(_NoApprovals):
+    """Approvals bound to plans, which retiring a plan can invalidate."""
+
+    def __init__(self, plans: _MemoryPlans, items: list[RestoreApproval]) -> None:
+        self.plans = plans
+        self.items = items
+
+    async def find_by_operation(self, organization_id, restore_operation_id):
+        return next(
+            (
+                item
+                for item in self.items
+                if item.restore_operation_id == restore_operation_id and item.organization_id == organization_id
+            ),
+            None,
+        )
+
+    async def load_operation(self, organization_id, restore_operation_id):
+        return await self.plans.load(organization_id, restore_operation_id)
+
+
+def _approval_of(plan: RestoreOperation, status: ApprovalStatus) -> RestoreApproval:
+    return RestoreApproval.model_construct(
+        id=PydanticObjectId(),
+        organization_id=ORGANIZATION_ID,
+        restore_operation_id=plan.id,
+        requested_by=ADMINISTRATOR_ID,
+        requested_by_email="admin@example.com",
+        plan_hash=compute_plan_hash(plan.actions),
+        triggered_rules=[],
+        status=status,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        summary="",
+        object_count=0,
+        delete_count=0,
+    )
+
+
+_STALE_HASH = "hashed-before-targets-and-payload-were-covered"
+
+
+@pytest.mark.usefixtures("offline_documents")
+@pytest.mark.parametrize("decision", [ApprovalStatus.PENDING, ApprovalStatus.APPROVED])
+async def test_retiring_a_stale_compensation_invalidates_the_approval_left_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+    decision: ApprovalStatus,
+) -> None:
+    """A superseded plan never runs, so a decision left on it would sit in the queue with nothing to apply to."""
+    operation, store = await _applied_plan(monkeypatch)
+    stale = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, stale, plan_hash=_STALE_HASH)
+    plans = _MemoryPlans([operation, stale])
+    approvals = _MemoryApprovals(plans, [_approval_of(stale, decision)])
+    service = RestoreCompensationService(store, plans=plans, approvals=ApprovalService(approvals, AsyncMock()))
+
+    await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+
+    assert stale.status is RestoreStatus.SUPERSEDED
+    assert approvals.items[0].status is ApprovalStatus.INVALIDATED
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_stale_compensation_left_behind_is_retired_when_its_replacement_is_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planning stopped after the replacement was linked; the next planning finishes retiring what it replaced."""
+    operation, store = await _applied_plan(monkeypatch)
+    leftover = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, leftover, plan_hash=_STALE_HASH)
+    replacement = _operation([], status=RestoreStatus.PLANNED, identifier=PydanticObjectId())
+    await _link_earlier_compensation(store, replacement, plan_hash=compute_plan_hash(replacement.actions))
+    plans = _MemoryPlans([operation, leftover, replacement])
+    approvals = _MemoryApprovals(plans, [_approval_of(leftover, ApprovalStatus.APPROVED)])
+    service = RestoreCompensationService(store, plans=plans, approvals=ApprovalService(approvals, AsyncMock()))
+
+    plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+
+    assert plan is replacement
+    assert replacement.status is RestoreStatus.PLANNED
+    assert leftover.status is RestoreStatus.SUPERSEDED
+    assert leftover.superseded_by == replacement.id
+    assert approvals.items[0].status is ApprovalStatus.INVALIDATED
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_restore_whose_every_change_was_already_reversed_is_not_planned_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation, store = await _applied_plan(monkeypatch)
+    finished = _operation(
+        [_reversal_of(order, status=RestoreActionStatus.COMPLETED) for order in (2, 1, 0)],
+        status=RestoreStatus.FAILED,
+        identifier=PydanticObjectId(),
+    )
+    await _link_earlier_compensation(store, finished)
+
+    with pytest.raises(RestoreCompensationError, match="Every change this restore applied has already been reversed"):
+        await RestoreCompensationService(store, plans=_MemoryPlans([operation, finished])).create_compensation_plan(
+            operation=operation, requested_by=ADMINISTRATOR_ID
+        )
+
+
+async def test_a_reversal_refused_for_a_name_collision_says_to_plan_the_compensation_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    recreate = _action(0, RestoreActionType.CREATE)
+    recreate.compensates_action_order = 2
+    client = _FakeMistClient({}, listing={("wlans", "site-a"): [{"id": "manual-uuid", "name": "wlan-0"}]})
+
+    with pytest.raises(MistMutationError) as error:
+        await capture_safety_snapshot(client, _organization(), _operation([recreate]), _vault())
+
+    assert str(error.value) == (
+        "wlan-0: a wlans named 'wlan-0' already exists in Mist; it may have been recreated manually. "
+        "Rename or remove it, then plan the compensation again"
+    )
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_compensation_refused_before_its_first_write_can_be_planned_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name collision fails a compensation at its preflight; once the name is freed it is planned anew."""
+    operation, store = await _applied_plan(monkeypatch)
+    refused = _operation(
+        [_reversal_of(order, status=RestoreActionStatus.PENDING) for order in (2, 1, 0)],
+        status=RestoreStatus.FAILED,
+        identifier=PydanticObjectId(),
+    )
+    await _link_earlier_compensation(store, refused)
+    plans = _MemoryPlans([operation, refused])
+    service = RestoreCompensationService(store, plans=plans)
+
+    plan = await service.create_compensation_plan(operation=operation, requested_by=ADMINISTRATOR_ID)
+    plans.plans.append(plan)
+
+    assert [action.compensates_action_order for action in plan.actions] == [2, 1, 0]
+    linked = await service.compensation_for(operation)
+    assert linked is not None
+    assert linked.id == COMPENSATION_ID

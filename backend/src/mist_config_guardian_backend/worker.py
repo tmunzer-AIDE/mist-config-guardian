@@ -35,6 +35,12 @@ celery_app.conf.update(
             "task": "restores.expire_credentials",
             "schedule": 60.0,
         },
+        # A worker lost mid-restore leaves its operation running with a live
+        # delegated credential; this closes it like an executor crash would.
+        "recover-interrupted-restores": {
+            "task": "restores.recover_interrupted",
+            "schedule": 60.0,
+        },
         "expire-restore-approvals": {
             "task": "restores.expire_approvals",
             "schedule": 300.0,

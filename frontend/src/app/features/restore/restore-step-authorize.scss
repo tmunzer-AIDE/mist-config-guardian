@@ -41,6 +41,38 @@
   margin: 18px 0 8px;
 }
 
+// A compensation plan's warnings, drawn as the plan step draws a restore's.
+.notice {
+  margin: 14px 0 0;
+  border-radius: var(--radius-xl);
+  padding: 14px 16px;
+  border: 1px solid var(--tone-none-line);
+  border-left: 3px solid var(--ink-muted);
+  background: var(--surface-sunken);
+}
+
+.notice--warn {
+  border-color: rgba(138, 83, 6, 0.22);
+  border-left-color: var(--tone-warning-ink);
+  background: linear-gradient(180deg, rgba(251, 243, 226, 0.94), rgba(253, 251, 244, 0.8));
+  box-shadow: 0 10px 26px -16px rgba(138, 83, 6, 0.3);
+}
+
+.notice-label {
+  margin: 0 0 9px;
+  color: var(--tone-warning-ink);
+}
+
+.notice-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 // ----------------------------------------------------------------- mode cards
 .modes {
   display: flex;

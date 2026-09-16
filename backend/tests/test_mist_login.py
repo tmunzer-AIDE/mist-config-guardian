@@ -121,6 +121,7 @@ async def test_site_admin_cannot_authorize_whole_org(httpx_mock):
         {},
         {"administrator_token": "token", "mist_login": {"email": EMAIL, "password": "p"}},
         {"administrator_token": "mist-session:{}"},
+        {"use_prepared_credential": True},
     ],
 )
 def test_restore_rejects_ambiguous_or_internal_credentials(payload):
@@ -229,9 +230,12 @@ async def test_restore_authorization_uses_saved_region_and_encrypts_only_session
     mist.login.return_value = ("mist-session:opaque", {"email": EMAIL})
     mist.verify_write_token.return_value = SimpleNamespace(actor=EMAIL)
     vault.encrypt_for_context.return_value = "encrypted-session"
-    service = module.RestoreAuthorizationService(Settings(environment="test"), vault, mist)
+    service = module.RestoreAuthorizationService(
+        Settings(environment="test"), vault, mist, active_restores=AsyncMock(return_value=False)
+    )
     supplied = credentials()
-    await service.authorize(organization_id, operation_id, supplied, "task")
+    # Only compensation takes a fresh login at execution; a restore uses its prepared session.
+    await service.authorize(organization_id, operation_id, supplied, "task", compensation=True)
     mist.login.assert_awaited_once_with(supplied, MistCloudRegion.EMEA_01, retain_session=True)
     mist.verify_write_token.assert_awaited_once_with(
         token="mist-session:opaque", org_id="org-1", region=MistCloudRegion.EMEA_01

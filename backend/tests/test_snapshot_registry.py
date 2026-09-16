@@ -5,8 +5,11 @@ import pytest
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
     GENERATED_DEVICE_IMAGE_FIELDS,
+    ORG_OBJECTS,
     READ_ONLY_URL_FIELDS,
     SITE_OBJECTS,
+    ObjectDefinition,
+    explicit_name,
     get_definition,
     object_name,
 )
@@ -21,6 +24,22 @@ def test_object_name_uses_first_available_name_field() -> None:
     wlan = next(definition for definition in SITE_OBJECTS if definition.key == "wlans")
 
     assert object_name({"id": "object-id", "ssid": "Corporate"}, wlan) == "Corporate"
+
+
+def test_explicit_name_is_absent_when_no_name_field_is_filled_in() -> None:
+    wlan = next(definition for definition in SITE_OBJECTS if definition.key == "wlans")
+
+    assert explicit_name({"id": "object-id", "ssid": " Corporate "}, wlan) == "Corporate"
+    assert explicit_name({"id": "object-id", "ssid": "  ", "name": ""}, wlan) is None
+    assert object_name({"id": "object-id", "ssid": "  "}, wlan) == "object-id"
+
+
+@pytest.mark.parametrize(
+    "definition", [*ORG_OBJECTS, *SITE_OBJECTS], ids=lambda definition: f"{definition.scope}:{definition.key}"
+)
+def test_no_name_field_is_ever_stored_encrypted(definition: ObjectDefinition) -> None:
+    """The restore name check reads names from protected configurations without decrypting them."""
+    assert not {field.lower() for field in definition.name_fields} & definition.sensitive_fields
 
 
 def test_reference_extraction_ignores_identity_fields() -> None:

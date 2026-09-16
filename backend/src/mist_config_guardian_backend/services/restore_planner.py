@@ -9,7 +9,7 @@ outside the model would be erased by the executor's own progress writes.
 
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
 
@@ -18,12 +18,15 @@ from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.config import get_settings
 from mist_config_guardian_backend.models.approval import ApprovalPolicy, TriggeredRule
+from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.restore import (
     RestoreAction,
+    RestoreActionReason,
     RestoreActionType,
     RestoreMode,
     RestoreOperation,
     RestoreOperationStateRecord,
+    RestoreStatus,
 )
 from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
@@ -35,6 +38,7 @@ from mist_config_guardian_backend.services.approvals import (
     compute_plan_hash,
     evaluate_approval_policy,
 )
+from mist_config_guardian_backend.snapshots.fingerprint import equivalent
 from mist_config_guardian_backend.snapshots.references import is_restore_reference
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
@@ -116,7 +120,14 @@ class RestoreStateStore(Protocol):
         organization_id: PydanticObjectId,
         operation_id: PydanticObjectId,
     ) -> RestoreOperationState | None:
-        """Return the state of the plan that compensates this operation."""
+        """Return the state of the compensation now linked to this operation, else the newest one."""
+
+    async def compensations_of(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> list[RestoreOperationState]:
+        """Return every compensation planned for this operation, oldest first."""
 
 
 class MongoRestoreStateStore:
@@ -176,12 +187,48 @@ class MongoRestoreStateStore:
         organization_id: PydanticObjectId,
         operation_id: PydanticObjectId,
     ) -> RestoreOperationState | None:
-        """Return the state of the plan that compensates this operation."""
-        record = await RestoreOperationStateRecord.find_one(
+        """Return the state of the compensation now linked to this operation, else the newest one.
+
+        A failed compensation is planned again, so one restore can have several.
+        The source's pointer names the current one; without it, an unsorted
+        lookup could hand back an attempt that already failed.
+        """
+        source = await RestoreOperationStateRecord.find_one(
             RestoreOperationStateRecord.organization_id == organization_id,
-            RestoreOperationStateRecord.compensates_operation_id == operation_id,
+            RestoreOperationStateRecord.operation_id == operation_id,
+        )
+        if source is not None and source.compensation_operation_id is not None:
+            linked = await RestoreOperationStateRecord.find_one(
+                RestoreOperationStateRecord.organization_id == organization_id,
+                RestoreOperationStateRecord.operation_id == source.compensation_operation_id,
+            )
+            if linked is not None:
+                return _state_from_record(linked)
+        record = (
+            await RestoreOperationStateRecord.find(
+                RestoreOperationStateRecord.organization_id == organization_id,
+                RestoreOperationStateRecord.compensates_operation_id == operation_id,
+            )
+            .sort("-created_at")
+            .first_or_none()
         )
         return None if record is None else _state_from_record(record)
+
+    async def compensations_of(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+    ) -> list[RestoreOperationState]:
+        """Return every compensation planned for this operation, oldest first."""
+        records = (
+            await RestoreOperationStateRecord.find(
+                RestoreOperationStateRecord.organization_id == organization_id,
+                RestoreOperationStateRecord.compensates_operation_id == operation_id,
+            )
+            .sort("created_at")
+            .to_list()
+        )
+        return [_state_from_record(record) for record in records]
 
 
 def _state_from_record(record: RestoreOperationStateRecord) -> RestoreOperationState:
@@ -219,6 +266,14 @@ class RestorePlanRepository(Protocol):
     ) -> tuple[list[RestoreOperation], int]:
         """Return one newest-first page of restore operations and its total."""
 
+    async def supersede_planned(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+        replacement_id: PydanticObjectId,
+    ) -> bool:
+        """Retire a plan that never started in favour of its replacement; ``False`` if it had moved on."""
+
 
 class BeanieRestorePlanRepository:
     """MongoDB-backed restore plan reads."""
@@ -246,6 +301,38 @@ class BeanieRestorePlanRepository:
         total = await query.count()
         items = await query.sort("-created_at").skip(skip).limit(limit).to_list()
         return items, total
+
+    async def supersede_planned(
+        self,
+        organization_id: PydanticObjectId,
+        operation_id: PydanticObjectId,
+        replacement_id: PydanticObjectId,
+    ) -> bool:
+        """Retire a plan that never started in favour of its replacement; ``False`` if it had moved on.
+
+        One conditional update, so a plan queued or started between the read
+        that found it stale and this write is left alone. A session is not
+        expected on such a plan, but one would be cleared in the same write so
+        a retired plan never holds a credential.
+        """
+        result = await RestoreOperation.get_pymongo_collection().update_one(
+            {
+                "_id": operation_id,
+                "organization_id": organization_id,
+                "status": RestoreStatus.PLANNED,
+                "started_at": None,
+            },
+            {
+                "$set": {
+                    "status": RestoreStatus.SUPERSEDED,
+                    "superseded_by": replacement_id,
+                    "encrypted_delegated_credential": None,
+                    "delegated_credential_expires_at": None,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+        return result.modified_count == 1
 
 
 def get_restore_plan_repository() -> RestorePlanRepository:
@@ -286,7 +373,12 @@ async def assert_plan_current(
         raise RestorePlanningError(msg)
     current = compute_plan_hash(operation.actions)
     state = await store.load(operation.organization_id, operation.id)
-    if state is not None and state.plan_hash != current:
+    if state is None:
+        # Planning records what was reviewed; a plan without that record was
+        # never reviewed through it, so nothing vouches for it.
+        msg = "This restore plan has no reviewed plan record; create a new plan"
+        raise RestorePlanningError(msg)
+    if state.plan_hash != current:
         msg = "This restore plan changed after it was reviewed; create a new plan"
         raise RestorePlanningError(msg)
     return current
@@ -357,6 +449,7 @@ class PlanningContext:
     force_delete: set[PydanticObjectId]
     target_at: datetime
     mode: RestoreMode
+    reference_rewrites: set[PydanticObjectId] = field(default_factory=set)
 
 
 class RestorePlanner:
@@ -414,18 +507,18 @@ class RestorePlanner:
             logical_objects[version.logical_object_id] = logical
 
         target_at = min(version.observed_at for version in selected.values())
+        context = PlanningContext(
+            organization_id=organization_id,
+            selected=selected,
+            requested_logical_ids=frozenset(selected),
+            logical_objects=logical_objects,
+            force_delete=force_delete,
+            target_at=target_at,
+            mode=mode,
+        )
         if include_dependencies:
-            await self._expand_dependencies(
-                PlanningContext(
-                    organization_id=organization_id,
-                    selected=selected,
-                    requested_logical_ids=frozenset(selected),
-                    logical_objects=logical_objects,
-                    force_delete=force_delete,
-                    target_at=target_at,
-                    mode=mode,
-                )
-            )
+            await self._expand_dependencies(context)
+        await self._mark_selected_reference_rewrites(context)
 
         if self._baseline_reader is not None:
             self._baselines = await self._baseline_reader(logical_objects)
@@ -434,6 +527,7 @@ class RestorePlanner:
             selected,
             logical_objects,
             force_delete,
+            frozenset(context.reference_rewrites),
         )
         self._add_containment_delete_dependencies(actions)
         actions = order_restore_actions(actions)
@@ -502,9 +596,81 @@ class RestorePlanner:
                 for dependent, current_version in reverse_dependents:
                     if dependent.id is None or dependent.id in context.selected:
                         continue
+                    # Re-pointed at the recreated UUID, not restored: its own
+                    # references are current and are not expanded further.
                     context.selected[dependent.id] = current_version
                     context.logical_objects[dependent.id] = dependent
-                    pending.append(current_version)
+                    context.reference_rewrites.add(dependent.id)
+
+    async def _mark_selected_reference_rewrites(self, context: PlanningContext) -> None:
+        """Re-point objects the plan holds at their current version at the objects it recreates.
+
+        Such an object has nothing to restore, so ``_build_actions`` would drop
+        it as a no-op and leave it referencing the old UUID. It is in the plan
+        whether or not dependencies were expanded, so this does not rely on
+        expansion. An object held at any other version stays an ordinary
+        restore, whose payload the executor remaps.
+        """
+        recreated = self._recreated_mist_ids(context.selected, context.logical_objects, context.force_delete)
+        if not recreated:
+            return
+        for logical_id, version in context.selected.items():
+            if logical_id in context.reference_rewrites or logical_id in context.force_delete:
+                continue
+            logical = context.logical_objects[logical_id]
+            if logical.is_deleted or version.is_deleted or not self._references_any(version, recreated):
+                continue
+            current = await self._latest_version(logical_id)
+            if current is not None and (current.id == version.id or self._records_again(logical, version, current)):
+                context.reference_rewrites.add(logical_id)
+
+    def _records_again(self, logical: LogicalObject, selected: ObjectVersion, latest: ObjectVersion) -> bool:
+        """Whether the newest version is the selected one read again with the secrets it masked.
+
+        A fresh backup reads with an administrator's rights, so Mist returns
+        the secrets the collector's read masked, and the backup records that
+        read as a new version. The version chosen as current is then no longer
+        the newest, yet the object has not changed: it is still only re-pointed,
+        however many times the plan is prepared.
+
+        Only that exact shape counts: masks on the selected version, none on the
+        newest, and every other field the same. An older version that merely
+        holds the same configuration, as a reverted change leaves it, stays an
+        ordinary restore. A version whose secrets do not decrypt cannot be
+        compared, so it does not count either.
+        """
+        definition = get_definition(logical.scope, logical.object_type)
+        if definition is None or latest.is_deleted:
+            return False
+        try:
+            chosen = reveal_configuration(selected.configuration, self._vault)
+            newest = reveal_configuration(latest.configuration, self._vault)
+        except CredentialDecryptionError:
+            return False
+        return (
+            bool(find_unavailable_secrets(chosen, definition.sensitive_fields))
+            and not find_unavailable_secrets(newest, definition.sensitive_fields)
+            and equivalent(definition, chosen, newest)
+        )
+
+    @staticmethod
+    def _recreated_mist_ids(
+        selected: dict[PydanticObjectId, ObjectVersion],
+        logical_objects: dict[PydanticObjectId, LogicalObject],
+        force_delete: set[PydanticObjectId],
+    ) -> frozenset[str]:
+        """The old ids of objects this plan brings back, which Mist will give new UUIDs."""
+        return frozenset(
+            logical_objects[logical_id].current_mist_id
+            for logical_id, version in selected.items()
+            if logical_objects[logical_id].is_deleted and not version.is_deleted and logical_id not in force_delete
+        )
+
+    @staticmethod
+    def _references_any(version: ObjectVersion, mist_ids: frozenset[str]) -> bool:
+        return any(
+            reference.target_mist_id in mist_ids and is_restore_reference(reference) for reference in version.references
+        )
 
     async def _related_logical_objects(
         self,
@@ -578,30 +744,46 @@ class RestorePlanner:
         selected: dict[PydanticObjectId, ObjectVersion],
         logical_objects: dict[PydanticObjectId, LogicalObject],
         force_delete: set[PydanticObjectId],
+        reference_rewrites: frozenset[PydanticObjectId] = frozenset(),
     ) -> list[RestoreAction]:
         actions: list[RestoreAction] = []
-        for logical_id, target in selected.items():
+        recreated = self._recreated_mist_ids(selected, logical_objects, force_delete)
+        for logical_id, selected_version in selected.items():
             logical = logical_objects[logical_id]
             latest = self._baselines.get(logical_id) or await self._latest_version(logical_id)
-            if latest is None or target.id is None:
+            if latest is None or selected_version.id is None:
                 continue
             definition = get_definition(logical.scope, logical.object_type)
-            if (
-                logical_id in self._baselines
-                and not logical.is_deleted
-                and not target.is_deleted
-                and logical_id not in force_delete
-                and definition is not None
-                and target.configuration_hash == latest.configuration_hash
-            ):
-                continue
-            action_type = self._action_type(
-                logical,
-                target,
-                latest,
-                force_delete=logical_id in force_delete,
-            )
-            if action_type is None:
+            rewrite = logical_id in reference_rewrites
+            target = selected_version
+            action_type: RestoreActionType | None
+            if rewrite:
+                # The live configuration is written back unchanged except for
+                # the UUIDs the executor remaps, so the source is the current
+                # (freshly backed-up) version, never an older one. Both no-op
+                # skips below would drop it, because nothing else differs.
+                target = latest
+                action_type = RestoreActionType.UPDATE
+            else:
+                if (
+                    logical_id in self._baselines
+                    and not logical.is_deleted
+                    and not target.is_deleted
+                    and logical_id not in force_delete
+                    and definition is not None
+                    and target.configuration_hash == latest.configuration_hash
+                    # Not a no-op while it points at an object this plan
+                    # recreates: the executor remaps that UUID in its payload.
+                    and not self._references_any(target, recreated)
+                ):
+                    continue
+                action_type = self._action_type(
+                    logical,
+                    target,
+                    latest,
+                    force_delete=logical_id in force_delete,
+                )
+            if action_type is None or target.id is None:
                 continue
             dependencies = await self._action_dependencies(
                 organization_id,
@@ -631,6 +813,7 @@ class RestorePlanner:
                     else target.configuration,
                     expected_current_hash=(None if logical.is_deleted else latest.configuration_hash),
                     depends_on=dependencies,
+                    reason=RestoreActionReason.REFERENCE_REWRITE if rewrite else RestoreActionReason.RESTORE,
                 )
             )
         return actions

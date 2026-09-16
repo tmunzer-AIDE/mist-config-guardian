@@ -10,6 +10,7 @@ from typing import Self, cast
 import httpx
 
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
+from mist_config_guardian_backend.integrations.mist_paging import is_last_page
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition
 
@@ -92,9 +93,7 @@ class MistConfigurationClient(AbstractAsyncContextManager["MistConfigurationClie
                 if isinstance(item, dict):
                     yield cast("dict[str, object]", item)
 
-            total = self._integer_header(response, "X-Page-Total")
-            limit = self._integer_header(response, "X-Page-Limit") or len(payload)
-            if not payload or total is None or page * limit >= total:
+            if is_last_page(response, page=page, page_items=len(payload)):
                 return
             page += 1
 
@@ -139,13 +138,3 @@ class MistConfigurationClient(AbstractAsyncContextManager["MistConfigurationClie
         except (httpx.HTTPError, ValueError) as exc:
             msg = f"Unable to read {object_type} from Mist"
             raise MistReadError(msg) from exc
-
-    @staticmethod
-    def _integer_header(response: httpx.Response, name: str) -> int | None:
-        value = response.headers.get(name)
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except ValueError:
-            return None

@@ -22,7 +22,8 @@ from mist_config_guardian_backend.services.restore_planner import (
     RestoreStateStore,
     latest_version,
 )
-from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields, configuration_hash
+from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.fingerprint import fingerprint
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
@@ -105,12 +106,23 @@ class RestoreBaselineService:
         actor: str | None,
     ) -> dict[PydanticObjectId, ObjectVersion]:
         baselines = {}
+        deleted_sites = {
+            logical.current_mist_id
+            for logical in objects.values()
+            if logical.object_type == "sites" and logical.is_deleted
+        }
         for logical_id, logical in objects.items():
             definition = get_definition(logical.scope, logical.object_type)
             previous = await latest_version(logical_id)
             if definition is None or previous is None:
                 msg = "A restore target has no supported baseline"
                 raise RestorePlanningError(msg)
+            if logical.site_mist_id is not None and logical.site_mist_id in deleted_sites:
+                # Nothing under a deleted site can be read back; its recorded
+                # history is the only baseline there is.
+                baselines[logical_id] = previous
+                manifest.unchanged_objects += 1
+                continue
             current = await client.get_current(
                 definition,
                 logical.current_mist_id,
@@ -127,6 +139,15 @@ class RestoreBaselineService:
             if find_unavailable_secrets(current, definition.sensitive_fields):
                 msg = "The administrator response contains unavailable secrets; a recoverable backup cannot be made"
                 raise RestorePlanningError(msg)
+            current_hash = fingerprint(definition, current)
+            if not previous.is_deleted and previous.configuration_hash == current_hash:
+                # Mist holds exactly what history already records, secrets
+                # included, so that version is the recoverable backup. A copy of
+                # it would move every id the plan takes from its baseline on each
+                # preparation, and with them the approval bound to those ids.
+                baselines[logical_id] = previous
+                manifest.unchanged_objects += 1
+                continue
             version = ObjectVersion(
                 organization_id=logical.organization_id,
                 logical_object_id=logical_id,
@@ -135,7 +156,7 @@ class RestoreBaselineService:
                 version=previous.version + 1,
                 event=VersionEvent.UPDATED,
                 configuration=protect_configuration(current, self._vault, sensitive_fields=definition.sensitive_fields),
-                configuration_hash=configuration_hash(current, ignored_fields=definition.ignored_fields),
+                configuration_hash=fingerprint(definition, current),
                 changed_fields=changed_top_level_fields(
                     reveal_configuration(previous.configuration, self._vault), current
                 ),

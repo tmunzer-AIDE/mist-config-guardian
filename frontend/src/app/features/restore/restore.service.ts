@@ -57,18 +57,11 @@ export class RestoreService {
     return this.authorize(orgPath(organizationId, `/restores/${operationId}/prepare`), credential);
   }
 
+  /** Queue a prepared plan with the administrator session its fresh backup retained. */
   executePrepared(organizationId: string, operationId: string): Promise<RestoreOperation> {
-    return firstValueFrom(this.http.post<RestoreOperation>(
-      orgPath(organizationId, `/restores/${operationId}/execute`), { use_prepared_credential: true },
-    ));
-  }
-
-  execute(
-    organizationId: string,
-    operationId: string,
-    administratorToken: RestoreCredential,
-  ): Promise<RestoreOperation> {
-    return this.authorize(orgPath(organizationId, `/restores/${operationId}/execute`), administratorToken);
+    return firstValueFrom(
+      this.http.post<RestoreOperation>(orgPath(organizationId, `/restores/${operationId}/execute`), {}),
+    );
   }
 
   /**
