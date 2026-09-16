@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { API_ROOT } from '../../core/api';
 import { AuthService } from '../../core/auth.service';
 import { ClockPreference } from '../../core/format';
+import { base64UrlToBytes, bytesToBase64Url, webauthnSupported } from '../../core/webauthn';
 import {
   AccountProfile,
   AccountSession,
@@ -313,39 +314,7 @@ export function detailOf(cause: unknown): string {
 
 /** True when this browser can run a WebAuthn registration ceremony. */
 export function webauthnAvailable(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.PublicKeyCredential !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    typeof navigator.credentials?.create === 'function'
-  );
-}
-
-/**
- * Decode base64url into bytes.
- *
- * The buffer is allocated as a plain `ArrayBuffer` rather than left to the
- * `Uint8Array(length)` overload, whose `ArrayBufferLike` buffer type is not a
- * `BufferSource`: a `SharedArrayBuffer` cannot be handed to `credentials
- * .create()`. Naming the concrete buffer type keeps that guarantee in the type
- * system instead of asserting it away.
- */
-export function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
-  const binary = atob(padded.padEnd(padded.length + ((4 - (padded.length % 4)) % 4), '='));
-  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-export function bytesToBase64Url(buffer: ArrayBuffer): string {
-  let binary = '';
-  for (const byte of new Uint8Array(buffer)) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return webauthnSupported('create');
 }
 
 /** Turn the JSON transport form into the binary form `create()` requires. */

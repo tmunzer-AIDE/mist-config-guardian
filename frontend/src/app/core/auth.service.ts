@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { MistMfaService } from './mist-mfa.service';
 import { API_ROOT } from './api';
 import { MistCloudRegion } from './organization.model';
+import { AssertedCredentialJson, PasskeyRequestOptionsJson } from './webauthn';
 
 export interface MistLoginCredentials {
   email: string;
@@ -46,6 +47,12 @@ export interface LoginSuccess {
 }
 
 export type LoginResult = LoginSuccess | LoginChallenge;
+
+/** A started passwordless sign-in: the server's challenge, and the token naming it. */
+export interface PasskeyChallenge {
+  challenge_token: string;
+  options: PasskeyRequestOptionsJson;
+}
 
 export interface BootstrapAdministrator {
   email: string;
@@ -146,6 +153,42 @@ export class AuthService {
     this.sessionState.update((value) => value + 1);
     this.resolvedState.set(true);
     return response.user;
+  }
+
+  /**
+   * Start a passwordless sign-in.
+   *
+   * No account is named: the challenge is anonymous, and the assertion the
+   * authenticator returns is what identifies the person. That also means this
+   * runs before any session exists, like the bootstrap gate.
+   */
+  async passkeyChallenge(): Promise<PasskeyChallenge> {
+    return firstValueFrom(this.http.post<PasskeyChallenge>(`${API_ROOT}/auth/passkey/options`, {}));
+  }
+
+  /**
+   * Finish a passwordless sign-in with the assertion the authenticator signed.
+   *
+   * Answers with the same envelope as `/auth/login`: an assertion the device
+   * marked user-verified is both factors at once, while one that only proves
+   * possession still owes a second factor when the account has one enrolled.
+   */
+  async completePasskey(
+    challengeToken: string,
+    credential: AssertedCredentialJson,
+  ): Promise<LoginResult> {
+    const response = await firstValueFrom(
+      this.http.post<LoginResult>(`${API_ROOT}/auth/passkey/verify`, {
+        challenge_token: challengeToken,
+        credential,
+      }),
+    );
+    if (!response.mfa_required) {
+      this.userState.set(response.user);
+      this.sessionState.update((value) => value + 1);
+      this.resolvedState.set(true);
+    }
+    return response;
   }
 
   /**

@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 
 import { formatDate, formatInstant } from '../../core/format';
+import { ceremonyDismissed } from '../../core/webauthn';
 import { Passkey } from './account.model';
 import {
   AccountService,
@@ -9,19 +10,6 @@ import {
   toRegisteredCredential,
   webauthnAvailable,
 } from './account.service';
-
-/**
- * The ceremony was dismissed rather than failing.
- *
- * A user who closes the system prompt has not hit an error, so this is reported
- * as a plain note; only a genuine failure gets the error treatment.
- */
-function wasDismissed(cause: unknown): boolean {
-  return (
-    cause instanceof DOMException &&
-    (cause.name === 'NotAllowedError' || cause.name === 'AbortError')
-  );
-}
 
 @Component({
   selector: 'app-passkeys-tab',
@@ -102,7 +90,7 @@ export class PasskeysTab {
       );
       this.notice.set(`Added ${passkey.name}. You can rename it below.`);
     } catch (cause) {
-      if (wasDismissed(cause)) {
+      if (ceremonyDismissed(cause)) {
         this.notice.set(
           'No passkey was added. The request was dismissed on your device, or the device was already registered.',
         );

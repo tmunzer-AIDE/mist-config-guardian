@@ -67,19 +67,25 @@
           </form>
 
           <div class="alt">
-            <button class="cg-btn cg-btn--lg alt-btn" type="button" disabled title="Passkey sign-in is not enabled yet">
+            <button
+              class="cg-btn cg-btn--lg alt-btn"
+              type="button"
+              [disabled]="busy() || !passkeySupported()"
+              [title]="
+                passkeySupported()
+                  ? 'Sign in with a passkey on this device'
+                  : 'This browser cannot use passkeys'
+              "
+              (click)="signInWithPasskey()"
+            >
               Use a passkey
             </button>
             <button class="cg-btn cg-btn--lg alt-btn" type="button" [disabled]="busy()" (click)="toggleMist()">
               {{ mistMode() ? 'Use local account' : 'Sign in with Mist' }}
             </button>
-            <p class="alt-note">
-              @if (!passkeySupported()) {
-                This browser does not support passkeys.
-              } @else {
-                Passkey sign-in is planned.
-              }
-            </p>
+            @if (!passkeySupported()) {
+              <p class="alt-note">This browser cannot use passkeys.</p>
+            }
           </div>
         }
 
