@@ -73,11 +73,13 @@ class NormalizedResult:
     data: Any
     partial: bool
     reduction: Literal["none", "digest", "omitted"] = "none"
-    # Tool-error keys detected in the full sanitized result, before any digest or omission could drop them.
+    # Tool-error flags read from the MCP envelope and the raw result, before bounding, redaction, a digest
+    # or an omission could drop them. The flags only; error text comes from the sanitized payload.
     tool_error: bool = False
 
 
 def _tool_error_signal(value: Any) -> bool:
+    """Structural error flags only; no untrusted text is read, so this is safe on an unredacted result."""
     return isinstance(value, dict) and bool(
         value.get("error") or value.get("success") is False or value.get("status") == "error"
     )
@@ -142,7 +144,10 @@ def normalize_result_detail(
             raw = {"text": "\n".join(texts)}
     cleaned = sanitize(raw, secrets=secrets)
     size = _size(cleaned)
-    tool_error = _tool_error_signal(cleaned)
+    # Read from the envelope and the unbounded result: sanitize keeps only the first MAX_FIELDS fields, so a
+    # later error key would otherwise vanish and the result would be offered as successful, citable evidence.
+    # Only the three structural flags are read here; every error text still comes from the sanitized copy.
+    tool_error = bool(result.get("isError")) or _tool_error_signal(raw)
     # Oversized results, and row lists sanitize would silently cut, are summarized over every returned row.
     if size > MAX_MCP_EVIDENCE_BYTES or _truncated_rows(raw):
         rows = _row_views(raw, secrets=secrets)

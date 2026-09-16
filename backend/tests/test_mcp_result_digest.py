@@ -8,6 +8,7 @@ import pytest
 
 from mist_config_guardian_backend.impact.mcp_contracts import MAX_MCP_EVIDENCE_BYTES, McpEvidence, McpReportAction
 from mist_config_guardian_backend.impact.mcp_scope import (
+    MAX_FIELDS,
     McpScope,
     McpScopeError,
     normalize_result,
@@ -289,6 +290,55 @@ def test_tool_error_signal_survives_the_final_fallback():
     assert normalized.tool_error
 
 
+def beyond_the_field_bound(key, value, *, rows=None):
+    """A structural error flag sanitize's 100-field bound drops, so only the raw result still carries it."""
+    return {**({"results": rows} if rows else {}), **{f"ctx{i}": i for i in range(MAX_FIELDS)}, key: value}
+
+
+ERROR_FLAGS = [("error", "Search backend failed."), ("success", False), ("status", "error")]
+
+
+@pytest.mark.parametrize(("key", "value"), ERROR_FLAGS)
+def test_error_flag_past_the_field_bound_is_still_a_tool_error(key, value):
+    normalized = normalize_result_detail({"structuredContent": beyond_the_field_bound(key, value)})
+    # Redaction dropped the flag itself; the detection must not depend on what survived the bound.
+    assert (normalized.reduction, normalized.partial) == ("none", True)
+    assert key not in normalized.data
+    assert normalized.tool_error
+
+
+@pytest.mark.parametrize(("key", "value"), ERROR_FLAGS)
+def test_error_flag_past_the_field_bound_survives_the_digest(key, value):
+    raw = beyond_the_field_bound(key, value, rows=short_rows()["results"])
+    normalized = normalize_result_detail({"structuredContent": raw}, changed_at=NOW)
+    assert normalized.reduction == "digest"
+    assert normalized.tool_error
+
+
+def test_envelope_error_flag_reaches_the_normalized_result():
+    assert normalize_result_detail({"isError": True, "structuredContent": {"results": []}}).tool_error
+    assert not normalize_result_detail({"isError": False, "structuredContent": {"results": []}}).tool_error
+
+
+async def test_error_text_past_the_field_bound_is_never_stored_unredacted(monkeypatch, httpx_mock):
+    service, root, _, artifacts, stored = mcp_runtime(monkeypatch)
+    message = "Search backend failed. Authorization: Bearer test-token " + "z" * 900
+    mcp_responses(httpx_mock, stored, result=beyond_the_field_bound("error", message))
+
+    def unread(_data):
+        return None
+
+    httpx_mock.add_callback(search_once_then_report(unread), method="POST", url=AI_URL, is_reusable=True)
+    await service._poll(root)  # noqa: SLF001
+    evidence = artifacts[0].mcp.evidence[0]
+    assert (evidence.state, evidence.error, evidence.data) == ("error", "tool_error", None)
+    # Error text only ever comes from the sanitized payload, so a flag past the bound carries no detail.
+    assert evidence.error_detail is None
+    body = artifacts[0].model_dump_json()
+    assert "test-token" not in body
+    assert "zzzz" not in body
+
+
 @pytest.mark.parametrize(
     ("result", "error"),
     [
@@ -296,6 +346,10 @@ def test_tool_error_signal_survives_the_final_fallback():
         (foreign_row_beyond_shown(short_rows()), "invalid_response"),
         ({"error": "Search backend failed.", "results": short_rows()["results"]}, "tool_error"),
         (error_with_large_context(), "tool_error"),
+        (beyond_the_field_bound("error", "Search backend failed."), "tool_error"),
+        (beyond_the_field_bound("success", value=False), "tool_error"),
+        (beyond_the_field_bound("status", "error"), "tool_error"),
+        (beyond_the_field_bound("error", "boom", rows=short_rows()["results"]), "tool_error"),
     ],
 )
 async def test_rejected_reduced_results_are_errors_and_not_counted(monkeypatch, httpx_mock, result, error):
