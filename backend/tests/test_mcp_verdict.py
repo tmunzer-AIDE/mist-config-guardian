@@ -16,7 +16,13 @@ from mist_config_guardian_backend.impact.mcp_contracts import (
     McpEvidence,
 )
 from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, compose_assessment
-from mist_config_guardian_backend.impact.report import DeviceImpact, ImpactReport, ReportSection, ReportSections
+from mist_config_guardian_backend.impact.report import (
+    MAX_DEVICE_IMPACTS,
+    DeviceImpact,
+    ImpactReport,
+    ReportSection,
+    ReportSections,
+)
 from mist_config_guardian_backend.services import impact_investigations as worker
 from test_impact_change_context import MAC
 from test_mcp_investigation import mcp_runtime
@@ -217,6 +223,80 @@ def test_every_rule_device_row_reaches_the_mcp_report(source):
     agent_rows = [d.target_handle for d in report.impacted_devices if d.role == "agent_observed_service"]
     assert agent_rows == ([str(cited)] if source == "combined" else [])
     assert report.omitted_device_impacts == 0
+
+
+def agent_conclusion_rows(count, cited, impact="warning"):
+    """One agent row per device, all citing the same evidence, so every row is a distinct merge key."""
+    return McpConclusion(
+        summary="Agent summary.",
+        scope="Changed switch.",
+        impact=impact,
+        confidence="low",
+        coverage="partial",
+        evidence=(cited,),
+        impacted_devices=tuple(
+            McpDeviceImpact(
+                device_mac=f"aabbccdd{n:04x}",
+                site_id=UUID(SITE),
+                service="port_link",
+                impact=impact,
+                evidence=(cited,),
+                explanation="Observed on the changed switch.",
+            )
+            for n in range(count)
+        ),
+    )
+
+
+def capped_rule_rows():
+    return tuple(port_row(f"ge-0/0/{n}", "critical") for n in range(MAX_DEVICE_IMPACTS))
+
+
+@pytest.mark.parametrize("source", ["rule", "combined"])
+def test_rule_rows_win_the_device_cap_and_dropped_agent_rows_are_counted(source):
+    checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(50, uuid4()))
+    report = build_mcp_report(rule_report(capped_rule_rows()), checkpoint, source)
+    # A rule-derived verdict is justified by its own rows; lower-severity agent rows never evict them.
+    assert [d.port_id for d in report.impacted_devices] == [f"ge-0/0/{n}" for n in range(MAX_DEVICE_IMPACTS)]
+    assert report.omitted_device_impacts == 50
+
+
+def test_reported_omissions_include_the_base_report_count():
+    base = rule_report(capped_rule_rows()).model_copy(update={"omitted_device_impacts": 7})
+    checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(50, uuid4()))
+    report = build_mcp_report(base, checkpoint, "combined")
+    assert report.omitted_device_impacts == 57
+    assert build_mcp_report(base, checkpoint, "mcp_agent").omitted_device_impacts == 7
+
+
+def test_agent_verdict_keeps_its_own_rows():
+    checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(50, uuid4()))
+    report = build_mcp_report(rule_report(capped_rule_rows()), checkpoint, "mcp_agent")
+    assert len(report.impacted_devices) == 50
+    assert {d.role for d in report.impacted_devices} == {"agent_observed_service"}
+    assert report.omitted_device_impacts == 0
+
+
+def test_same_key_from_both_sources_yields_one_row_from_the_verdict_source():
+    cited = uuid4()
+    same_key = DeviceImpact(
+        device_mac="aabbccdd0000",
+        site_id=UUID(SITE),
+        role="agent_observed_service",
+        service="port_link",
+        target_handle=str(cited),
+        impact="critical",
+        current_impact="critical",
+        confidence="medium",
+    )
+    checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(1, cited))
+    report = build_mcp_report(rule_report((same_key,)), checkpoint, "combined")
+    assert len(report.impacted_devices) == 1
+    # The combined verdict publishes the rule-derived severity, so the rule row is the one kept.
+    assert report.impacted_devices[0].impact == "critical"
+    assert report.omitted_device_impacts == 0
+    agent_only = build_mcp_report(rule_report((same_key,)), checkpoint, "mcp_agent")
+    assert [d.impact for d in agent_only.impacted_devices] == ["warning"]
 
 
 def complete_none_run():

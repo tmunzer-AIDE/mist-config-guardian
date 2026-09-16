@@ -104,6 +104,11 @@ def compose_assessment(
     return _no_clean_outcome_without_coverage(assessment, explained=explained), "combined" if raised else "mcp_agent"
 
 
+def _merge_key(device: DeviceImpact) -> tuple[str, str, str, str, str]:
+    """Role and target handle keep distinct ports/WLAN targets and agent rows from collapsing into one row."""
+    return (device.role, str(device.site_id), device.device_mac, device.service, device.target_handle)
+
+
 def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: VerdictSource) -> ImpactReport:
     effective = effective_conclusion(checkpoint)
     conclusion = effective[0] if effective else None
@@ -178,14 +183,15 @@ def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: Verd
         if conclusion
         else ()
     )
-    # Role and target handle keep distinct ports/WLAN targets and agent rows from collapsing into one row.
-    merged = {(d.role, str(d.site_id), d.device_mac, d.service, d.target_handle): d for d in agent_devices}
-    if source != "mcp_agent":
-        # Rule-derived and combined verdicts keep the deterministic devices that justify them.
-        for device in base.impacted_devices:
-            merged.setdefault(
-                (device.role, str(device.site_id), device.device_mac, device.service, device.target_handle), device
-            )
+    if source == "mcp_agent":
+        merged = {_merge_key(d): d for d in agent_devices}
+    else:
+        # Rule-derived and combined verdicts are justified by their deterministic devices: those rows are
+        # seeded first, so the device bound drops agent rows instead of the rows that set the published
+        # verdict, and a key both sources claim keeps the rule row the verdict rests on.
+        merged = {_merge_key(d): d for d in base.impacted_devices}
+        for device in agent_devices:
+            merged.setdefault(_merge_key(device), device)
     devices = tuple(merged.values())
     current = conclusion.impact if source == "mcp_agent" and conclusion else base.current_impact
     if base.coverage != "complete" and current == "none":
@@ -205,7 +211,8 @@ def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: Verd
                 )
             ),
             "impacted_devices": devices[:MAX_DEVICE_IMPACTS],
-            "omitted_device_impacts": max(0, len(devices) - MAX_DEVICE_IMPACTS),
+            # Rows the base report already omitted stay omitted; this merge's own cut is added to them.
+            "omitted_device_impacts": base.omitted_device_impacts + max(0, len(devices) - MAX_DEVICE_IMPACTS),
         }
     )
 
