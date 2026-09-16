@@ -1,10 +1,12 @@
 """Bounded deterministic shadow investigations driven by the existing worker tick."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from functools import partial
 from hashlib import sha256
+from time import monotonic
 from uuid import UUID, uuid4
 
 from beanie import PydanticObjectId
@@ -13,7 +15,12 @@ from pymongo import ReturnDocument
 from pymongo.errors import PyMongoError
 
 from mist_config_guardian_backend.config import get_settings
-from mist_config_guardian_backend.impact.agent import CheckCapability, capabilities
+from mist_config_guardian_backend.impact.agent import (
+    MAX_INPUT_BYTES_TOTAL,
+    MCP_MAX_INPUT_BYTES_TOTAL,
+    CheckCapability,
+    capabilities,
+)
 from mist_config_guardian_backend.impact.contracts import (
     ApEvidence,
     AuthEvidence,
@@ -32,8 +39,11 @@ from mist_config_guardian_backend.impact.domain_evaluation import compose_domain
 from mist_config_guardian_backend.impact.knowledge import describe_attribute, documentation_plan
 from mist_config_guardian_backend.impact.limits import MAX_OPTIONAL_RULE_CHECKS, MAX_PUBLISHED_CHECKPOINTS
 from mist_config_guardian_backend.impact.mcp_context import configuration_context
-from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, mcp_assessment
-from mist_config_guardian_backend.impact.report import build_report
+from mist_config_guardian_backend.impact.mcp_contracts import McpCheckpoint
+from mist_config_guardian_backend.impact.mcp_report import build_mcp_report, compose_assessment
+from mist_config_guardian_backend.impact.mcp_schedule import agent_due, last_agent_run, prior_conclusion
+from mist_config_guardian_backend.impact.report import VerdictSource, build_report
+from mist_config_guardian_backend.impact.skills import mcp_playbooks
 from mist_config_guardian_backend.impact.wlan_removal import compile_wlan_removal, evaluate_wlan_removal
 from mist_config_guardian_backend.integrations.mist_ap_evidence import MistScopedEvidenceClient
 from mist_config_guardian_backend.models.base import utc_now
@@ -57,6 +67,25 @@ _LEASE = timedelta(minutes=5)
 _INTERVAL = timedelta(minutes=10)
 _DURATION = timedelta(hours=1)
 _MAX_RETENTION_DAYS = 36_500
+# The agent stops itself at MCP_RUN_SECONDS; the outer bound only catches a stuck transport.
+# 120 s deterministic collection + 170 s stays inside the 5-minute lease.
+MCP_RUN_SECONDS = 140.0
+MCP_SAFETY_TIMEOUT_SECONDS = 170.0
+
+
+def _not_scheduled_reason(*, expired: bool, carried: bool, last_run: datetime | None) -> str:
+    """Guardian-authored text for a checkpoint without a new agent run; never promises a run that cannot happen."""
+    if expired:
+        return (
+            "The investigation window has closed; the last agent conclusion is carried forward."
+            if carried
+            else "The investigation window has closed without an agent conclusion."
+        )
+    if carried:
+        return "The AI agent runs at +10, +30 and +60 minutes; the last agent conclusion is carried forward."
+    if last_run is None:
+        return "The AI agent first runs 10 minutes after the change."
+    return "The AI agent runs at +10, +30 and +60 minutes; no earlier agent conclusion is available."
 
 
 class ImpactInvestigationService:
@@ -97,6 +126,9 @@ class ImpactInvestigationService:
             first_due_at=due,
             expires_at=changed_at + _DURATION,
             next_poll_at=due,
+            model_input_bytes_limit=MCP_MAX_INPUT_BYTES_TOTAL
+            if get_settings().impact_engine_mode == "agent_shadow"
+            else MAX_INPUT_BYTES_TOTAL,
         )
         await ImpactInvestigation.get_pymongo_collection().update_one(
             {"organization_id": organization_id, "audit_id": audit_id},
@@ -139,6 +171,20 @@ class ImpactInvestigationService:
             "generation": root.generation,
             "lease_until": {"$gt": now},
         }
+
+    @staticmethod
+    def _unpublished_agent_attempt(root: ImpactInvestigation) -> datetime | None:
+        """An agent run for this candidate that never published (crash or lost lease) still spent its band."""
+        candidate = root.revision + 1
+        reserved = [
+            *(d.reserved_at for d in root.mcp_dispatches if d.candidate_revision == candidate),
+            *(
+                r.reserved_at
+                for r in root.model_requests
+                if r.candidate_revision == candidate and r.prompt_version.startswith("impact-mcp")
+            ),
+        ]
+        return max(reserved, default=None)
 
     async def _stop(self, root: ImpactInvestigation, reason: str) -> None:
         await ImpactInvestigation.get_pymongo_collection().update_one(
@@ -292,29 +338,82 @@ class ImpactInvestigationService:
         )
         assessment = compose_domains(plan, evidence, assessment)
         deterministic_assessment = assessment
+        verdict_source: VerdictSource = "rule"
+        finished = now >= root.expires_at or any(
+            item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
+        )
+        # Expiry stops a new MCP call, never the carry-forward and verdict composition that publish
+        # an earlier agent conclusion; a late final checkpoint must not revert to the rule verdict.
         if (
             get_settings().impact_engine_mode == "agent_shadow"
-            and not expired
             and organization is not None
             and organization.status is OrganizationStatus.VERIFIED
             and plan.mcp_context.get("changes")
         ):
-            token = await service_token(organization, self._vault)
-            async with asyncio.timeout(150):
-                mcp = await McpImpactAgent(self._vault).run_mcp(
-                    root,
-                    organization=organization,
-                    token=token,
-                    context=plan.mcp_context,
-                    as_of=evidence_as_of,
-                    deterministic={
-                        "assessment": assessment.model_dump(mode="json"),
-                        "evidence": [e.model_dump(mode="json") for e in evidence],
-                    },
-                    deployment=deployment.model_dump(mode="json") if deployment else {},
-                    previous=previous,
+            published = previous if isinstance(previous, InvestigationRevision) else None
+            carried = prior_conclusion(published.mcp, published.revision) if published else None
+            last_run = last_agent_run(published.mcp, published.assessment.evaluated_at) if published else None
+            attempt = self._unpublished_agent_attempt(root)
+            if attempt is not None and (last_run is None or attempt > last_run):
+                last_run = attempt
+            if not expired and agent_due(root.changed_at, evidence_as_of, last_run):
+                try:
+                    playbooks = mcp_playbooks(plan)
+                except (ValueError, OSError):
+                    logger.warning("MCP playbooks failed integrity validation for investigation %s", root.id)
+                    playbooks = ()
+                token = await service_token(organization, self._vault)
+                try:
+                    async with asyncio.timeout(MCP_SAFETY_TIMEOUT_SECONDS):
+                        mcp = await McpImpactAgent(self._vault).run_mcp(
+                            root,
+                            organization=organization,
+                            token=token,
+                            context=plan.mcp_context,
+                            as_of=evidence_as_of,
+                            deterministic={
+                                "assessment": assessment.model_dump(mode="json"),
+                                "evidence": [e.model_dump(mode="json") for e in evidence],
+                            },
+                            deployment=deployment.model_dump(mode="json") if deployment else {},
+                            previous=previous,
+                            deadline=monotonic() + MCP_RUN_SECONDS,
+                            playbooks=playbooks,
+                        )
+                except TimeoutError:
+                    logger.warning("MCP investigation exceeded the safety timeout for investigation %s", root.id)
+                    mcp = McpCheckpoint(
+                        state="unavailable",
+                        reason=(
+                            "MCP investigation exceeded the worker safety timeout; "
+                            "this run's evidence was not retained."
+                        ),
+                    )
+                mcp = mcp.model_copy(
+                    update={"agent_as_of": evidence_as_of, "carried": None if mcp.state == "complete" else carried}
                 )
-            assessment = mcp_assessment(root.audit_id, evidence_as_of, mcp)
+            else:
+                mcp = McpCheckpoint(
+                    state="not_scheduled",
+                    reason=_not_scheduled_reason(expired=expired, carried=carried is not None, last_run=last_run),
+                    carried=carried,
+                    agent_as_of=last_run,
+                )
+            assessment, verdict_source = compose_assessment(
+                root.audit_id, evidence_as_of, mcp, deterministic_assessment, final=finished
+            )
+            logger.info(
+                "mcp_checkpoint %s",
+                json.dumps(
+                    {
+                        "investigation_id": str(root.id),
+                        "candidate_revision": root.revision + 1,
+                        "state": mcp.state,
+                        **(mcp.diagnostics.model_dump(mode="json") if mcp.diagnostics else {}),
+                    },
+                    sort_keys=True,
+                ),
+            )
         if root.id is None:
             msg = "Persisted investigation has no identity"
             raise ValueError(msg)
@@ -344,11 +443,8 @@ class ImpactInvestigationService:
             history_available=previous is not False and (root.revision == 0 or bool(previous and previous.report)),
         )
         if mcp is not None:
-            artifact.report = build_mcp_report(artifact.report, mcp)
+            artifact.report = build_mcp_report(artifact.report, mcp, verdict_source)
         await artifact.insert()
-        finished = now >= root.expires_at or any(
-            item.state in {"budget_exhausted", "dispatch_denied"} for item in evidence
-        )
         if finished:
             status = "completed" if assessment.coverage == "complete" else "incomplete"
             next_poll = None

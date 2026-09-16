@@ -2,11 +2,13 @@
 
 import json
 import re
-from collections.abc import Iterable
+from collections import Counter
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
-from math import isfinite
-from typing import Any, get_args
+from math import fsum, isfinite
+from typing import Any, ClassVar, Literal, get_args
 
 # Dynamic JSON from MCP is validated at this boundary.
 # ruff: noqa: ANN401
@@ -54,7 +56,85 @@ def sanitize(value: Any, *, secrets: tuple[str, ...] = (), depth: int = 0) -> An
     return str(value)[:120]
 
 
-def normalize_result(result: dict, *, secrets: tuple[str, ...] = ()) -> tuple[Any, bool]:
+DIGEST_MAX_CATEGORIES = 20
+DIGEST_MAX_DEVICES = 50
+DIGEST_CONTEXT_BYTES = 4000
+DIGEST_SHOWN_ROWS = (25, 10, 5, 2, 0)
+# Last-resort summary cuts: (value/bucket entries, numeric fields, devices) per summarized list.
+_DIGEST_TRIMS = ((40, 10, 20), (10, 5, 5), (0, 0, 0))
+_TIME_FIELDS = ("timestamp", "time", "start", "_time")
+_EPOCH_MILLISECONDS = 100_000_000_000
+_MAC = re.compile(r"[0-9a-f]{12}")
+_CONTEXT_OMITTED = "Value exceeded the digest context bound."
+
+
+@dataclass(frozen=True)
+class NormalizedResult:
+    data: Any
+    partial: bool
+    reduction: Literal["none", "digest", "omitted"] = "none"
+    # Tool-error flags read from the MCP envelope and the raw result, before bounding, redaction, a digest
+    # or an omission could drop them. The flags only; error text comes from the sanitized payload.
+    tool_error: bool = False
+
+
+def _tool_error_signal(value: Any) -> bool:
+    """Structural error flags only; no untrusted text is read, so this is safe on an unredacted result."""
+    return isinstance(value, dict) and bool(
+        value.get("error") or value.get("success") is False or value.get("status") == "error"
+    )
+
+
+def _size(value: Any) -> int:
+    """Same measure as the evidence bound: UTF-8 bytes of non-ASCII-escaped JSON."""
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode())
+
+
+def _row_list(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)
+
+
+def _container(raw: Any) -> dict | None:
+    return raw if isinstance(raw, dict) else {"rows": raw} if isinstance(raw, list) else None
+
+
+def _truncated_rows(raw: Any) -> bool:
+    container = _container(raw) or {}
+    return any(_row_list(v) and len(v) > MAX_ITEMS for v in list(container.values())[:MAX_FIELDS])
+
+
+_IDENTITY_KEYS = ("org_id", "site_id", "mac", "type", "device_type")
+
+
+def _row_view(row: dict, *, secrets: tuple[str, ...]) -> dict:
+    """The one sanitized copy of a row that both the authority check and the digest use.
+
+    Identity keys survive the field bound and ``$encrypted`` redaction so the organization check always sees them;
+    an encrypted row contributes nothing but its identity.
+    """
+    clean = sanitize(row, secrets=secrets)
+    identity = {key: sanitize(row[key], secrets=secrets, depth=1) for key in _IDENTITY_KEYS if key in row}
+    return {**(clean if isinstance(clean, dict) else {}), **identity}
+
+
+def _row_views(raw: Any, *, secrets: tuple[str, ...]) -> dict[str, list[dict]]:
+    """Every row a digest could aggregate, sanitized one by one so no list truncation hides a row."""
+    container = _container(raw) or {}
+    return {
+        str(key)[:MAX_KEY]: [_row_view(row, secrets=secrets) for row in value]
+        for key, value in list(container.items())[:MAX_FIELDS]
+        if _row_list(value)
+    }
+
+
+def normalize_result_detail(
+    result: dict,
+    *,
+    secrets: tuple[str, ...] = (),
+    changed_at: datetime | None = None,
+    authority: Callable[[Any], object] | None = None,
+) -> NormalizedResult:
+    """``authority`` raises to reject the whole result; it sees the same row copies a digest aggregates, first."""
     raw = result.get("structuredContent")
     if raw is None:
         texts = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
@@ -63,11 +143,180 @@ def normalize_result(result: dict, *, secrets: tuple[str, ...] = ()) -> tuple[An
         except ValueError:
             raw = {"text": "\n".join(texts)}
     cleaned = sanitize(raw, secrets=secrets)
+    size = _size(cleaned)
+    # Read from the envelope and the unbounded result: sanitize keeps only the first MAX_FIELDS fields, so a
+    # later error key would otherwise vanish and the result would be offered as successful, citable evidence.
+    # Only the three structural flags are read here; every error text still comes from the sanitized copy.
+    tool_error = bool(result.get("isError")) or _tool_error_signal(raw)
+    # Oversized results, and row lists sanitize would silently cut, are summarized over every returned row.
+    if size > MAX_MCP_EVIDENCE_BYTES or _truncated_rows(raw):
+        rows = _row_views(raw, secrets=secrets)
+        if authority is not None:
+            authority([cleaned, *(row for views in rows.values() for row in views)])
+        digest = digest_result(raw, secrets=secrets, changed_at=changed_at, rows=rows)
+        if digest is not None:
+            return NormalizedResult(digest, partial=True, reduction="digest", tool_error=tool_error)
+        if size > MAX_MCP_EVIDENCE_BYTES:
+            omitted = {"omitted": "MCP result exceeded the evidence bound; narrow the query."}
+            return NormalizedResult(omitted, partial=True, reduction="omitted", tool_error=tool_error)
     # Any reduction is explicit; a bounded page never establishes fleet completeness.
     partial = json.dumps(raw, default=str) != json.dumps(cleaned, default=str)
-    if len(json.dumps(cleaned, ensure_ascii=False).encode()) > MAX_MCP_EVIDENCE_BYTES:
-        return {"omitted": "MCP result exceeded the evidence bound; narrow the query."}, True
-    return cleaned, partial or _has_more(cleaned)
+    return NormalizedResult(cleaned, partial=partial or _has_more(cleaned), tool_error=tool_error)
+
+
+def normalize_result(
+    result: dict, *, secrets: tuple[str, ...] = (), changed_at: datetime | None = None
+) -> tuple[Any, bool]:
+    normalized = normalize_result_detail(result, secrets=secrets, changed_at=changed_at)
+    return normalized.data, normalized.partial
+
+
+def _number(value: Any) -> float | None:
+    """Finite JSON numbers only; booleans, NaN, infinities and unrepresentable integers are not measurements."""
+    if type(value) not in {int, float}:
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if isfinite(number) else None
+
+
+def _epoch(value: Any) -> float | None:
+    number = _number(value)
+    if number is None or number <= 0:
+        return None
+    return number / 1000 if number >= _EPOCH_MILLISECONDS else number
+
+
+def _summarize_rows(rows: list[dict], *, changed_at: datetime | None) -> dict:
+    """Aggregate already-sanitized row views; nothing here reads a raw MCP value."""
+    time_field = next((f for f in _TIME_FIELDS if any(_epoch(r.get(f)) is not None for r in rows)), None)
+    pivot = changed_at.timestamp() if changed_at else None
+    categories: dict[str, Counter[str]] = {}
+    high_cardinality: set[str] = set()
+    buckets: dict[tuple[str, str], list[int]] = {}
+    numeric: dict[str, list[float]] = {}
+    devices: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        instant = _epoch(row.get(time_field)) if time_field else None
+        side = None if instant is None or pivot is None else int(instant >= pivot)
+        for name, value in row.items():
+            if name == time_field or _SECRET.search(name):
+                continue
+            if isinstance(value, str):
+                if name in high_cardinality:
+                    continue
+                text = value[:120]
+                counts = categories.setdefault(name, Counter())
+                counts[text] += 1
+                if len(counts) > DIGEST_MAX_CATEGORIES:
+                    # Identifiers and free text are not categories; stop tracking them to bound memory.
+                    high_cardinality.add(name)
+                    del categories[name]
+                    buckets = {k: v for k, v in buckets.items() if k[0] != name}
+                elif side is not None:
+                    buckets.setdefault((name, text), [0, 0])[side] += 1
+            elif (number := _number(value)) is not None:
+                numeric.setdefault(name, []).append(number)
+        mac = str(row.get("mac", "")).replace(":", "").lower()
+        if _MAC.fullmatch(mac) and len(devices) < DIGEST_MAX_DEVICES:
+            # Any scalar identity is kept, so a non-string org_id still stops ``observe`` from learning the device.
+            identity = {
+                k: row[k]
+                for k in ("org_id", "site_id", "type", "device_type")
+                if row.get(k) is not None and not isinstance(row[k], (dict, list))
+            }
+            devices.setdefault((str(identity.get("site_id", "")), mac), {**identity, "mac": mac})
+    return {
+        "row_count": len(rows),
+        "time_field": time_field,
+        "changed_at": int(pivot) if pivot is not None else None,
+        "value_counts": [
+            {"field": name, "value": value, "count": count}
+            for name, counts in sorted(categories.items())
+            for value, count in counts.most_common()
+        ],
+        "change_buckets": [
+            {"field": name, "value": value, "before_change": before, "after_change": after}
+            for (name, value), (before, after) in sorted(buckets.items())
+        ],
+        "numeric": [
+            {
+                "field": name,
+                "count": len(xs),
+                "min": min(xs),
+                "max": max(xs),
+                # Divide before summing so large finite values cannot overflow to infinity.
+                "avg": round(fsum(x / len(xs) for x in xs), 3),
+            }
+            for name, xs in sorted(numeric.items())
+        ],
+        "devices": list(devices.values()),
+    }
+
+
+def _digest_context(items: list[tuple[str, Any]], lists: dict[str, Any], *, secrets: tuple[str, ...]) -> dict:
+    context = {}
+    for name, value in items:
+        if name in lists:
+            continue
+        clean = "[redacted]" if _SECRET.search(name) else sanitize(value, secrets=secrets)
+        # An oversized value stays visibly present (e.g. an ``error`` key) rather than silently disappearing.
+        context[name] = clean if _size(clean) <= DIGEST_CONTEXT_BYTES else {"omitted": _CONTEXT_OMITTED}
+    return context
+
+
+def digest_result(
+    raw: Any,
+    *,
+    secrets: tuple[str, ...] = (),
+    changed_at: datetime | None = None,
+    rows: dict[str, list[dict]] | None = None,
+) -> dict | None:
+    """Summarize every returned row server-side so oversized evidence stays bounded and citable.
+
+    ``rows`` are the sanitized row views already checked by the caller's authority; shown rows and every
+    aggregate come from exactly those copies.
+    """
+    container = _container(raw)
+    if container is None:
+        return None
+    items = [(str(k)[:MAX_KEY], v) for k, v in list(container.items())[:MAX_FIELDS]]
+    lists = _row_views(raw, secrets=secrets) if rows is None else rows
+    if not lists:
+        return None
+    context = _digest_context(items, lists, secrets=secrets)
+    summaries = {k: _summarize_rows(v, changed_at=changed_at) for k, v in lists.items()}
+    header = {
+        "reason": "Result exceeded the evidence bound or row limit; Guardian summarized every returned row.",
+        "original_bytes": _size(raw),
+    }
+
+    def assemble(shown: int, extra: dict, trimmed: list[str]) -> dict:
+        body = {
+            **extra,
+            **{k: v[:shown] for k, v in lists.items()},
+            **{f"{k}_summary": s for k, s in summaries.items()},
+        }
+        digest = {"digest": {**header, "rows_shown_per_list": shown, "trimmed": trimmed}}
+        return {**digest, **{k: v for k, v in body.items() if k != "digest"}}
+
+    for shown in DIGEST_SHOWN_ROWS:
+        if _size(digest := assemble(shown, context, [])) <= MAX_MCP_EVIDENCE_BYTES:
+            return digest
+    for entries, fields, identities in _DIGEST_TRIMS:
+        for summary in summaries.values():
+            summary.update(
+                value_counts=summary["value_counts"][:entries],
+                change_buckets=summary["change_buckets"][:entries],
+                numeric=summary["numeric"][:fields],
+                devices=summary["devices"][:identities],
+            )
+        for extra, trimmed in ((context, ["summaries"]), ({}, ["summaries", "context"])):
+            if _size(digest := assemble(0, extra, trimmed)) <= MAX_MCP_EVIDENCE_BYTES:
+                return digest
+    return None
 
 
 def _has_more(value: Any) -> bool:
@@ -111,7 +360,45 @@ def catalog(rows: list[dict]) -> tuple[McpTool, ...]:
 
 
 class McpScopeError(ValueError):
-    pass
+    """Guardian-authored rejection text; ``category`` is a ModelResponseError value."""
+
+    category: ClassVar[str] = "argument_out_of_scope"
+
+
+class McpToolNotDiscoveredError(McpScopeError):
+    category: ClassVar[str] = "tool_not_discovered"
+
+
+class McpCitationError(McpScopeError):
+    category: ClassVar[str] = "citation_invalid"
+
+
+class McpOutputTooLargeError(McpScopeError):
+    category: ClassVar[str] = "output_too_large"
+
+
+class McpToolCallLimitError(McpScopeError):
+    category: ClassVar[str] = "tool_call_limit"
+
+
+class McpTruncatedError(McpScopeError):
+    category: ClassVar[str] = "truncated"
+
+
+_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
+_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
+
+
+def bounded_text(value: str, *, secrets: tuple[str, ...] = (), max_bytes: int) -> str:
+    """Redact credentials and bearer values, then cut to a UTF-8 byte bound."""
+    text = _BEARER.sub("Bearer [redacted]", str(sanitize(str(value), secrets=secrets)))
+    return text.encode()[:max_bytes].decode(errors="ignore")
+
+
+def safe_location(parts: Iterable[object]) -> str:
+    """Render a validation path; model-authored key names that are not plain identifiers are masked."""
+    rendered = [str(part) if isinstance(part, int) or _LOCATION.fullmatch(str(part)) else "?" for part in parts]
+    return ".".join(rendered) or "<root>"
 
 
 class McpScope:
@@ -178,8 +465,11 @@ class McpScope:
                 raise McpScopeError(msg) from None
         try:
             Draft202012Validator(tool.input_schema).validate(args)
-        except ValidationError:
-            msg = "Arguments do not match the discovered MCP schema"
+        except ValidationError as exc:
+            msg = (
+                f"Arguments do not match the discovered MCP schema at {safe_location(exc.absolute_path)}: "
+                f"'{exc.validator}' constraint"
+            )
             raise McpScopeError(msg) from None
         return args
 
@@ -286,6 +576,28 @@ def _local_references(value: Any) -> None:
     elif isinstance(value, list):
         for child in value:
             _local_references(child)
+
+
+_SCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
+_SCHEMA_PROSE = frozenset({"description", "examples", "title", "$comment"})
+
+
+def compact_schema(schema: Any, *, names: bool = False) -> Any:
+    """Keep types, enums, required fields and defaults; full property documentation stays in describe.
+
+    Keys inside ``properties``-like maps are argument names, so a property called ``description`` survives.
+    """
+    if isinstance(schema, dict):
+        if names:
+            return {key: compact_schema(value) for key, value in schema.items()}
+        return {
+            key: compact_schema(value, names=key in _SCHEMA_MAPS)
+            for key, value in schema.items()
+            if key not in _SCHEMA_PROSE
+        }
+    if isinstance(schema, list):
+        return [compact_schema(value) for value in schema]
+    return schema
 
 
 def has_omissions(value: Any, depth: int = 0) -> bool:

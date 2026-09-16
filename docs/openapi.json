@@ -4130,6 +4130,22 @@
             ],
             "title": "Source",
             "type": "string"
+          },
+          "verdict_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mcp_agent",
+                  "rule",
+                  "combined"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict Source"
           }
         },
         "required": [
@@ -4380,9 +4396,60 @@
         "title": "ManagedNeighbor",
         "type": "object"
       },
+      "McpCarriedConclusion": {
+        "additionalProperties": false,
+        "description": "The last validated agent conclusion plus exactly the evidence it cites, from an earlier revision.",
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/McpConclusion"
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpEvidence"
+            },
+            "maxItems": 9,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "source_revision": {
+            "minimum": 1.0,
+            "title": "Source Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_revision",
+          "conclusion"
+        ],
+        "title": "McpCarriedConclusion",
+        "type": "object"
+      },
       "McpCheckpoint": {
         "additionalProperties": false,
         "properties": {
+          "agent_as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent As Of"
+          },
+          "carried": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpCarriedConclusion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "catalogue_hash": {
             "anyOf": [
               {
@@ -4408,6 +4475,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/McpEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpDiagnostics"
               },
               {
                 "type": "null"
@@ -4452,7 +4529,9 @@
               "budget_exhausted",
               "invalid_response",
               "provider_error",
-              "dispatch_denied"
+              "dispatch_denied",
+              "deadline_exceeded",
+              "not_scheduled"
             ],
             "title": "State",
             "type": "string"
@@ -4654,6 +4733,99 @@
         "title": "McpDeviceImpact",
         "type": "object"
       },
+      "McpDiagnostics": {
+        "additionalProperties": false,
+        "description": "Counters only: no prompt, tool or provider text beyond bounded finish-reason tokens.",
+        "properties": {
+          "cached_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Cached Calls",
+            "type": "integer"
+          },
+          "describes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Describes",
+            "type": "integer"
+          },
+          "elapsed_ms": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Elapsed Ms",
+            "type": "integer"
+          },
+          "final_state": {
+            "maxLength": 40,
+            "title": "Final State",
+            "type": "string"
+          },
+          "finish_reasons": {
+            "default": [],
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Finish Reasons",
+            "type": "array"
+          },
+          "max_prompt_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Max Prompt Bytes",
+            "type": "integer"
+          },
+          "observations_hidden_in_prompt": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Observations Hidden In Prompt",
+            "type": "integer"
+          },
+          "prompt_trim_steps": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Prompt Trim Steps",
+            "type": "integer"
+          },
+          "rejected_actions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Rejected Actions",
+            "type": "object"
+          },
+          "results_digested": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Results Digested",
+            "type": "integer"
+          },
+          "results_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Results Omitted",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "turns": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "final_state"
+        ],
+        "title": "McpDiagnostics",
+        "type": "object"
+      },
       "McpDispatch": {
         "additionalProperties": false,
         "properties": {
@@ -4804,6 +4976,18 @@
             ],
             "title": "Error"
           },
+          "error_detail": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Detail"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -4899,12 +5083,78 @@
       },
       "McpToolAction": {
         "additionalProperties": false,
+        "description": "Single-call form (historical) or up to three independent calls in one model turn.",
         "properties": {
           "action": {
             "const": "tool",
             "title": "Action",
             "type": "string"
           },
+          "arguments": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments"
+          },
+          "calls": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpToolCall"
+            },
+            "maxItems": 3,
+            "title": "Calls",
+            "type": "array"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "enum": [
+                  "find_mist_entity",
+                  "get_mist_config",
+                  "get_mist_constants",
+                  "get_mist_insights",
+                  "get_mist_stats",
+                  "search_mist_data"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "McpToolAction",
+        "type": "object"
+      },
+      "McpToolCall": {
+        "additionalProperties": false,
+        "properties": {
           "arguments": {
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
@@ -4932,12 +5182,11 @@
           }
         },
         "required": [
-          "action",
           "tool",
           "arguments",
           "purpose"
         ],
-        "title": "McpToolAction",
+        "title": "McpToolCall",
         "type": "object"
       },
       "McpView": {
@@ -5382,7 +5631,7 @@
           "input_json": {
             "anyOf": [
               {
-                "maxLength": 24000,
+                "maxLength": 96000,
                 "type": "string"
               },
               {
@@ -5498,7 +5747,7 @@
             ]
           },
           "input_bytes": {
-            "maximum": 24000.0,
+            "maximum": 96000.0,
             "minimum": 1.0,
             "title": "Input Bytes",
             "type": "integer"
@@ -5526,7 +5775,7 @@
             "type": "string"
           },
           "output_token_limit": {
-            "maximum": 1500.0,
+            "maximum": 4096.0,
             "minimum": 1.0,
             "title": "Output Token Limit",
             "type": "integer"
@@ -5542,7 +5791,8 @@
               "impact-investigator.v6",
               "impact-investigator.v7",
               "impact-investigator.v8",
-              "impact-mcp.v1"
+              "impact-mcp.v1",
+              "impact-mcp.v2"
             ],
             "title": "Prompt Version",
             "type": "string"
@@ -5563,6 +5813,18 @@
             "format": "date-time",
             "title": "Reserved At",
             "type": "string"
+          },
+          "response_detail": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Detail"
           },
           "response_error": {
             "anyOf": [
@@ -5618,7 +5880,12 @@
           "output_too_large",
           "empty_collection",
           "unknown_or_repeated_check",
-          "unobserved_or_foreign_evidence"
+          "unobserved_or_foreign_evidence",
+          "tool_not_discovered",
+          "argument_out_of_scope",
+          "citation_invalid",
+          "truncated",
+          "tool_call_limit"
         ],
         "title": "ModelResponseError",
         "type": "string"
