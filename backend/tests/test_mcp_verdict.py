@@ -266,15 +266,38 @@ def test_reported_omissions_include_the_base_report_count():
     checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(50, uuid4()))
     report = build_mcp_report(base, checkpoint, "combined")
     assert report.omitted_device_impacts == 57
-    assert build_mcp_report(base, checkpoint, "mcp_agent").omitted_device_impacts == 7
+    # An agent verdict merges the same two sources, so its own cut is added to the base count the same way.
+    assert build_mcp_report(base, checkpoint, "mcp_agent").omitted_device_impacts == 57
 
 
-def test_agent_verdict_keeps_its_own_rows():
+def test_agent_rows_win_the_device_cap_and_dropped_rule_rows_are_counted():
+    """An agent verdict keeps its own rows first, but rule rows still reach the report until the bound bites."""
     checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(50, uuid4()))
     report = build_mcp_report(rule_report(capped_rule_rows()), checkpoint, "mcp_agent")
-    assert len(report.impacted_devices) == 50
-    assert {d.role for d in report.impacted_devices} == {"agent_observed_service"}
+    assert len(report.impacted_devices) == MAX_DEVICE_IMPACTS
+    # The agent conclusion is the published verdict, so its rows are seeded first and rule rows fill the rest.
+    assert [d.role for d in report.impacted_devices[:50]] == ["agent_observed_service"] * 50
+    assert [d.port_id for d in report.impacted_devices[50:]] == [f"ge-0/0/{n}" for n in range(MAX_DEVICE_IMPACTS - 50)]
+    assert report.omitted_device_impacts == 50
+
+
+def test_agent_verdict_publishes_the_rule_rows_beside_its_own():
+    """A more severe agent conclusion never hides the devices the deterministic assessment identified."""
+    cited = uuid4()
+    checkpoint = McpCheckpoint(state="complete", conclusion=agent_conclusion_rows(3, cited, impact="critical"))
+    assessment, source = compose_assessment("audit-one", LATER, checkpoint, rule("warning"))
+    assert (assessment.impact, source) == ("critical", "mcp_agent")
+    base = rule_report((port_row("ge-0/0/1", "warning"), port_row("ge-0/0/2", "warning"))).model_copy(
+        update={"current_impact": "warning"}
+    )
+    report = build_mcp_report(base, checkpoint, source)
+    assert [d.role for d in report.impacted_devices] == ["agent_observed_service"] * 3 + ["affected_switch_port"] * 2
+    assert [d.port_id for d in report.impacted_devices if d.role == "affected_switch_port"] == [
+        "ge-0/0/1",
+        "ge-0/0/2",
+    ]
     assert report.omitted_device_impacts == 0
+    assert report.current_impact == "critical"
 
 
 def test_same_key_from_both_sources_yields_one_row_from_the_verdict_source():

@@ -183,15 +183,16 @@ def build_mcp_report(base: ImpactReport, checkpoint: McpCheckpoint, source: Verd
         if conclusion
         else ()
     )
-    if source == "mcp_agent":
-        merged = {_merge_key(d): d for d in agent_devices}
-    else:
-        # Rule-derived and combined verdicts are justified by their deterministic devices: those rows are
-        # seeded first, so the device bound drops agent rows instead of the rows that set the published
-        # verdict, and a key both sources claim keeps the rule row the verdict rests on.
-        merged = {_merge_key(d): d for d in base.impacted_devices}
-        for device in agent_devices:
-            merged.setdefault(_merge_key(device), device)
+    # Every verdict source publishes both sets of rows; only the seeding order differs. The source the
+    # published verdict rests on comes first (the agent conclusion for mcp_agent, the deterministic devices
+    # for rule and combined), so the device bound drops the other source's rows instead of the rows that
+    # justify the verdict, and a key both sources claim keeps the row of that same source.
+    leading, trailing = (
+        (agent_devices, base.impacted_devices) if source == "mcp_agent" else (base.impacted_devices, agent_devices)
+    )
+    merged = {_merge_key(d): d for d in leading}
+    for device in trailing:
+        merged.setdefault(_merge_key(device), device)
     devices = tuple(merged.values())
     current = conclusion.impact if source == "mcp_agent" and conclusion else base.current_impact
     if base.coverage != "complete" and current == "none":
