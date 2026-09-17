@@ -27,6 +27,7 @@ from mist_config_guardian_backend.schemas.application_configuration import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.application_configuration import (
+    AiRequestRecord,
     ApplicationConfigurationError,
     ApplicationConfigurationService,
     structured_output_mode,
@@ -185,6 +186,14 @@ def _provider_configuration(**overrides) -> ApplicationConfiguration:
     return ApplicationConfiguration.model_construct(**(values | overrides))
 
 
+class _FakeRecorder:
+    def __init__(self) -> None:
+        self.audits: list[AiRequestRecord] = []
+
+    async def record(self, record: AiRequestRecord) -> None:
+        self.audits.append(record)
+
+
 def _service(
     provider: _FakeProvider, configuration: ApplicationConfiguration, monkeypatch: pytest.MonkeyPatch
 ) -> ApplicationConfigurationService:
@@ -341,3 +350,44 @@ def test_the_runtime_configuration_carries_the_proved_mode(monkeypatch: pytest.M
 
     assert runtime.structured_output == "json_object"
     assert runtime.api_key == ""
+
+
+async def test_every_outbound_request_of_a_test_gets_its_own_audit_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(replies={"json_schema": "Sure! Here is the report.", "json_object": REPORT})
+    configuration = _provider_configuration()
+    recorder = _FakeRecorder()
+
+    await _service(provider, configuration, monkeypatch).test_ai_connection(recorder)
+
+    assert [audit.purpose for audit in recorder.audits] == [
+        "connection_test",
+        "capability_probe",
+        "capability_probe",
+    ]
+    assert [audit.succeeded for audit in recorder.audits] == [True, False, True]
+    assert recorder.audits[1].error is not None
+    assert recorder.audits[2].error is None
+    assert all(audit.duration_ms >= 0 for audit in recorder.audits)
+    assert all(audit.model == "test-model" for audit in recorder.audits)
+
+
+async def test_a_failed_connection_audits_one_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(replies={"json_schema": REPORT}, connected=False)
+    recorder = _FakeRecorder()
+
+    await _service(provider, _provider_configuration(), monkeypatch).test_ai_connection(recorder)
+
+    assert [audit.purpose for audit in recorder.audits] == ["connection_test"]
+    assert recorder.audits[0].succeeded is False
+    assert recorder.audits[0].error is not None
+
+
+async def test_a_rejected_probe_request_is_audited_as_its_own_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    error = AiProviderError("The provider rejected the request (HTTP 400).")
+    provider = _FakeProvider(replies={"json_schema": error, "json_object": REPORT})
+    recorder = _FakeRecorder()
+
+    await _service(provider, _provider_configuration(), monkeypatch).test_ai_connection(recorder)
+
+    assert [audit.succeeded for audit in recorder.audits] == [True, False, True]
+    assert "HTTP 400" in (recorder.audits[1].error or "")

@@ -162,7 +162,7 @@ decisions:
     observed_at: "2026-09-17T13:52:26+00:00"
     fixtures:
       - path: backend/tests/fixtures/guardian/mcp_allowlist.json
-        sha256: cecabdd661f50c180aaf52764eed78e2e56dedf9fb852be7f073bee8bf16f76f
+        sha256: 58a619c7ba52a61ba662f77b57426fcc4c7f324e00031d630f81c7b58905ef21
       - path: backend/tests/fixtures/mist_mcp_catalog.json
         sha256: 8531cc4c9f7d1e846fdfd7cc4fdf5feb4ef6420229d92b0b1ca5ff7cf7077294
     notes: >-
@@ -171,7 +171,10 @@ decisions:
       detection searches are not clearly classifiable and stay unavailable, as do get_mist_self and
       find_mist_entity. The secret-bearing configuration objects psks and webhooks are excluded for minimal
       exposure; they carry no investigation value (controller ruling R13). Each allowlisted tool's input schema
-      hash is frozen with the normalization named in the fixture.
+      hash is frozen with the normalization named in the fixture. Each tool also freezes the scope facts the
+      Reader's guards depend on - requires_org, site_scopable and time_ranged, derived from the recorded input
+      schema (controller ruling R28) - so a server that drops one of those arguments from what it advertises is
+      rejected at discovery instead of disabling organization injection, the site rule or the window rule.
 
   - id: structured_output_capability
     question: Does the configured provider honor response_format json_schema for the Guardian action schema?

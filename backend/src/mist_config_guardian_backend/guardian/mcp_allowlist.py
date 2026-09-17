@@ -110,26 +110,68 @@ _SEARCHES = (
 
 @dataclass(frozen=True, slots=True)
 class AllowedTool:
-    """One allowlisted read-only tool and the evidence kind of each of its discriminator values."""
+    """One allowlisted read-only tool: the evidence kind of each discriminator value, and its frozen scope facts.
+
+    ``requires_org``, ``site_scopable`` and ``time_ranged`` are frozen from the recorded input schema. The Reader
+    injects the organization, applies the site rule and demands one fixed window from these, never from what a
+    server advertises, and it rejects a discovered tool whose schema contradicts them: a server that drops
+    ``org_id`` or ``site_id`` from its schema would otherwise disable the guard that uses it.
+    """
 
     name: str
     discriminator: str
     kinds: Mapping[str, EvidenceKind]
+    requires_org: bool
+    site_scopable: bool
+    time_ranged: bool
 
 
-def _tool(name: str, discriminator: str, values: tuple[str, ...], kind: EvidenceKind) -> AllowedTool:
-    return AllowedTool(name, discriminator, MappingProxyType(dict.fromkeys(values, kind)))
+def _tool(  # noqa: PLR0913 - one frozen fact about the tool per argument
+    name: str,
+    discriminator: str,
+    values: tuple[str, ...],
+    kind: EvidenceKind,
+    *,
+    requires_org: bool,
+    site_scopable: bool,
+    time_ranged: bool,
+) -> AllowedTool:
+    return AllowedTool(
+        name,
+        discriminator,
+        MappingProxyType(dict.fromkeys(values, kind)),
+        requires_org=requires_org,
+        site_scopable=site_scopable,
+        time_ranged=time_ranged,
+    )
 
 
+_SCOPED = {"requires_org": True, "site_scopable": True, "time_ranged": True}
 ALLOWLIST: Mapping[str, AllowedTool] = MappingProxyType(
     {
         tool.name: tool
         for tool in (
-            _tool("get_mist_config", "resource_type", _CONFIGURATION_OBJECTS, "configuration"),
-            _tool("get_mist_constants", "constant_type", _CONSTANTS, "reference"),
-            _tool("get_mist_insights", "insight_type", _INSIGHTS, "service_health"),
-            _tool("get_mist_stats", "stats_type", _STATISTICS, "service_health"),
-            _tool("search_mist_data", "search_type", _SEARCHES, "service_health"),
+            _tool(
+                "get_mist_config",
+                "resource_type",
+                _CONFIGURATION_OBJECTS,
+                "configuration",
+                requires_org=True,
+                site_scopable=True,
+                time_ranged=False,
+            ),
+            _tool(
+                "get_mist_constants",
+                "constant_type",
+                _CONSTANTS,
+                "reference",
+                requires_org=False,
+                site_scopable=False,
+                time_ranged=False,
+            ),
+            _tool("get_mist_insights", "insight_type", _INSIGHTS, "service_health", **_SCOPED),
+            _tool("get_mist_stats", "stats_type", _STATISTICS, "service_health", **_SCOPED),
+            _tool("search_mist_data", "search_type", _SEARCHES, "service_health", **_SCOPED),
         )
     }
 )

@@ -16,6 +16,9 @@
     "get_mist_config": {
       "input_schema_sha256": "b31c334b71aebc3105707d491476bb3c6f14bb24a4d63ace8486b476fbfb730f",
       "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": false,
       "discriminator": "resource_type",
       "rule": "Configuration reads are configuration, except secret-bearing objects.",
       "kinds": {
@@ -55,6 +58,9 @@
     "get_mist_constants": {
       "input_schema_sha256": "b000ae291a01026c1ebad86a414f4195ada4ed754a270c3136f38f0f91258cb7",
       "read_only_hint": true,
+      "requires_org": false,
+      "site_scopable": false,
+      "time_ranged": false,
       "discriminator": "constant_type",
       "rule": "Platform constants are reference.",
       "kinds": {
@@ -91,6 +97,9 @@
     "get_mist_insights": {
       "input_schema_sha256": "62aeb5b8db5efd518ac272c2a8d20951e0fbc73c8ef1d58b78f9f55fd50d56d5",
       "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": true,
       "discriminator": "insight_type",
       "rule": "Insights and SLE analytics are service_health.",
       "kinds": {
@@ -104,6 +113,9 @@
     "get_mist_stats": {
       "input_schema_sha256": "b04e19914a7419793044065612b33db4ef8d0b9fb12ef87cb416b02322008def",
       "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": true,
       "discriminator": "stats_type",
       "rule": "Statistics are service_health.",
       "kinds": {
@@ -128,6 +140,9 @@
     "search_mist_data": {
       "input_schema_sha256": "b586f8eb861b995f6dfca7ff239e591e9f07d1df481eb8ae02a9b7b201a5a206",
       "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": true,
       "discriminator": "search_type",
       "rule": "Events, alarms and operational client/device/session searches are service_health.",
       "kinds": {
@@ -157,5 +172,6 @@
   "excluded_tools": {
     "find_mist_entity": "Cross-type entity lookup with no discriminating argument; it is not an event, statistics, SLE, insight, configuration, schema, constants or documentation read under the kind rules.",
     "get_mist_self": "Identity and organization discovery; Guardian injects org_id and the tool reads no evidence."
-  }
+  },
+  "scope_flags": "Per-tool scope facts frozen from the recorded catalogue: requires_org (the tool takes org_id, which Guardian injects), site_scopable (the tool takes site_id) and time_ranged (the tool takes start_time and end_time, so it must be asked for one fixed window). A discovered schema that contradicts a flag is rejected, so a server cannot disable a guard by dropping an argument from what it advertises."
 }

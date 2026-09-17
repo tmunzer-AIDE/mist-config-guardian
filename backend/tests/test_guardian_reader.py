@@ -157,6 +157,9 @@ def test_the_src_allowlist_is_the_frozen_fixture() -> None:
         assert tool.discriminator == entry["discriminator"]
         assert dict(tool.kinds) == entry["kinds"]
         assert set(entry["excluded"]).isdisjoint(tool.kinds)
+        assert tool.requires_org == entry["requires_org"]
+        assert tool.site_scopable == entry["site_scopable"]
+        assert tool.time_ranged == entry["time_ranged"]
     assert set(fixture["excluded_tools"]).isdisjoint(allowlist.ALLOWLIST)
 
 
@@ -235,6 +238,43 @@ async def test_discovery_keeps_only_read_only_allowlisted_tools_with_local_schem
     assert "reference" in catalogue.rejected["get_mist_config"]
     assert "read-only" in catalogue.rejected["get_mist_constants"]
     assert "schema" in catalogue.rejected["get_mist_stats"]
+
+
+@pytest.mark.parametrize(
+    ("properties", "missing"),
+    [
+        ({"search_type": {"type": "string"}, "site_id": {}, "start_time": {}, "end_time": {}}, "org_id"),
+        ({"search_type": {"type": "string"}, "org_id": {}, "start_time": {}, "end_time": {}}, "site_id"),
+        ({"search_type": {"type": "string"}, "org_id": {}, "site_id": {}}, "start_time"),
+    ],
+)
+async def test_a_schema_that_contradicts_the_frozen_allowlist_is_rejected(properties: dict, missing: str) -> None:
+    rows = [
+        {
+            "name": "search_mist_data",
+            "inputSchema": {"type": "object", "properties": properties},
+            "annotations": {"readOnlyHint": True},
+        }
+    ]
+    guard = reader(mcp=FakeMcp(tools=rows))
+
+    catalogue = await guard.tools()
+
+    assert catalogue.tools == {}
+    assert missing in catalogue.rejected["search_mist_data"]
+    assert "frozen allowlist" in catalogue.rejected["search_mist_data"]
+    with pytest.raises(ReadRejectedError) as rejection:
+        await guard.call("search_mist_data", search())
+    assert rejection.value.category == "tool_not_allowed"
+
+
+async def test_the_guards_read_the_frozen_facts_and_not_the_advertised_schema() -> None:
+    catalogue = await reader().tools()
+
+    assert [catalogue.tools[name].requires_org for name in sorted(catalogue.tools)] == [True, False, True, True, True]
+    assert catalogue.tools["get_mist_constants"].site_scopable is False
+    assert catalogue.tools["get_mist_config"].time_ranged is False
+    assert catalogue.tools["search_mist_data"].time_ranged is True
 
 
 async def test_the_prompt_catalogue_drops_org_id_and_prose() -> None:
@@ -321,17 +361,70 @@ async def test_an_org_scoped_change_may_read_the_organization() -> None:
     assert evidence.scope.site_ids == ()
 
 
-async def test_an_org_wide_result_never_adds_a_site_to_a_site_scoped_investigation() -> None:
-    rows = {"results": [{"site_id": OTHER_SITE, "mac": MAC, "name": "ap-42"}]}
+async def test_an_org_wide_result_keeps_its_in_scope_rows_and_counts_the_rest() -> None:
+    rows = {
+        "results": [
+            {"site_id": SITE, "mac": MAC, "name": "ap-1"},
+            {"site_id": OTHER_SITE, "mac": "5c5b35000002", "name": "ap-42"},
+            {"site_id": SITE, "mac": "5c5b35000003", "name": "ap-2"},
+        ]
+    }
     guard = reader(mcp=FakeMcp(results=rows))
 
     evidence = await guard.call("get_mist_config", {"resource_type": "devices"})
 
-    assert evidence.collection == "error"
-    assert "site" in evidence.detail
+    assert evidence.citable is True
+    assert evidence.collection == "partial"
+    assert [row["mac"] for row in evidence.payload["results"]] == [MAC, "5c5b35000003"]
+    assert evidence.payload["digest"]["rows"] == {"results": 3}
+    assert "1 rows outside" in evidence.detail
+    assert guard.budget.mcp_calls == 1
     assert guard.authority.site_ids == frozenset({SITE})
     with pytest.raises(ReadRejectedError):
         await guard.call("search_mist_data", search(site_id=OTHER_SITE))
+
+
+async def test_a_result_of_nothing_but_foreign_rows_is_empty_and_not_citable() -> None:
+    rows = {
+        "total": 2,
+        "results": [{"site_id": OTHER_SITE, "mac": MAC}, {"site_id": OTHER_SITE, "mac": "5c5b35000002"}],
+        # Deeper than the redaction bounds, and holding no row: it cannot rescue an all-foreign result.
+        "context": _nested(payloads.MAX_DEPTH + 2),
+    }
+    guard = reader(mcp=FakeMcp(results=rows))
+
+    evidence = await guard.call("get_mist_config", {"resource_type": "devices"})
+
+    assert evidence.citable is False
+    assert evidence.payload == {}
+    assert "All 2 rows" in evidence.detail
+    assert guard.budget.mcp_calls == 1
+
+
+async def test_rows_that_survive_deeper_in_the_result_keep_the_item_citable() -> None:
+    rows = {
+        "results": [{"site_id": OTHER_SITE, "mac": MAC}],
+        "grouped": {"pages": [{"site_id": SITE, "mac": "5c5b35000004"}]},
+    }
+
+    evidence = await reader(mcp=FakeMcp(results=rows)).call("get_mist_config", {"resource_type": "devices"})
+
+    assert evidence.citable is True
+    assert evidence.collection == "partial"
+    assert "1 rows outside" in evidence.detail
+
+
+async def test_a_foreign_row_past_the_redaction_cap_is_still_weighed() -> None:
+    rows = {"results": [{"site_id": SITE, "index": index} for index in range(payloads.MAX_ITEMS + 10)]}
+    rows["results"][payloads.MAX_ITEMS + 5]["site_id"] = OTHER_SITE
+    guard = reader(mcp=FakeMcp(results=rows))
+
+    evidence = await guard.call("get_mist_config", {"resource_type": "devices"})
+
+    assert evidence.collection == "partial"
+    assert "1 rows outside" in evidence.detail
+    assert evidence.payload["digest"]["rows"] == {"results": payloads.MAX_ITEMS + 10}
+    assert all(row["site_id"] == SITE for row in evidence.payload["results"])
 
 
 async def test_an_org_scoped_investigation_reads_every_site_of_its_organization() -> None:
@@ -347,14 +440,38 @@ async def test_an_org_scoped_investigation_reads_every_site_of_its_organization(
     assert guard.authority.site_ids == frozenset({SITE})
 
 
-async def test_a_foreign_organization_in_a_result_rejects_the_whole_result() -> None:
-    rows = {"results": [{"org_id": OTHER_ORG, "mac": MAC}]}
+async def test_nothing_below_the_redaction_depth_reaches_the_evidence_or_the_checks() -> None:
+    deep: dict = {"site_id": OTHER_SITE, "next_cursor": "c1"}
+    for _ in range(payloads.MAX_DEPTH + 3):
+        deep = {"level": deep}
+    guard = reader(mcp=FakeMcp(results={"results": [deep]}))
+
+    evidence = await guard.call("search_mist_data", search())
+
+    stored = json.dumps(evidence.model_dump(mode="json"))
+    assert "[depth omitted]" in stored
+    assert OTHER_SITE not in stored
+    assert evidence.collection == "complete"
+
+
+async def test_a_foreign_organization_outside_the_rows_rejects_the_whole_result() -> None:
+    rows = {"org_id": OTHER_ORG, "results": [{"mac": MAC}]}
 
     evidence = await reader(mcp=FakeMcp(results=rows)).call("search_mist_data", search())
 
     assert evidence.collection == "error"
     assert evidence.citable is False
     assert "organization" in evidence.detail
+
+
+async def test_a_row_of_another_organization_costs_that_row_only() -> None:
+    rows = {"results": [{"org_id": OTHER_ORG, "mac": MAC}, {"org_id": ORG, "mac": "5c5b35000002"}]}
+
+    evidence = await reader(mcp=FakeMcp(results=rows)).call("search_mist_data", search())
+
+    assert evidence.citable is True
+    assert [row["mac"] for row in evidence.payload["results"]] == ["5c5b35000002"]
+    assert "1 rows outside" in evidence.detail
 
 
 async def test_the_reader_tells_its_consumers_what_it_is_bound_to() -> None:
@@ -689,6 +806,48 @@ async def test_a_rule_read_stays_inside_the_organization_and_its_sites(overrides
 
     assert rejection.value.category == "out_of_scope"
     assert rules.reads == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"path": "/api/v1/self", "site_id": None},
+        {"path": "/api/v1/self/apitokens", "site_id": None},
+        {"path": "/api/v1/const/device_events", "site_id": None, "kind": "reference", "window": None},
+        {"path": "/api/v1/const/device_events", "site_id": None, "org_neutral": True, "window": None},
+        {"path": f"/api/v1/sites/{SITE}/stats", "site_id": None, "org_neutral": True, "kind": "reference"},
+    ],
+)
+async def test_a_rule_read_names_a_scope_or_is_a_declared_constant_read(overrides: dict) -> None:
+    rules = FakeRuleTransport()
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await reader(rules=rules).read(rule_read(**overrides))
+
+    assert rejection.value.category == "out_of_scope"
+    assert rules.reads == []
+
+
+async def test_a_declared_constant_read_is_reference_evidence_with_no_scope() -> None:
+    rules = FakeRuleTransport(result={"results": ["AP_CONFIGURED"]})
+    guard = reader(rules=rules)
+
+    evidence = await guard.read(
+        rule_read(
+            path="/api/v1/const/device_events",
+            params={},
+            site_id=None,
+            kind="reference",
+            window=None,
+            org_neutral=True,
+            title="Device event types",
+        )
+    )
+
+    assert evidence.kind == "reference"
+    assert evidence.scope.site_ids == ()
+    assert evidence.collection == "complete"
+    assert guard.budget.rule_reads == 1
 
 
 async def test_each_plugin_spends_its_own_allowance_inside_the_attempt_total() -> None:

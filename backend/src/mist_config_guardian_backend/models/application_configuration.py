@@ -71,7 +71,7 @@ class AiRequestAudit(TimestampedModel, Document):
     that a request happened, what it covered, and whether it succeeded.
     """
 
-    purpose: Literal["impact_assessment", "diff_summary", "diff_followup", "connection_test"]
+    purpose: Literal["impact_assessment", "diff_summary", "diff_followup", "connection_test", "capability_probe"]
     organization_id: PydanticObjectId | None = None
     user_id: PydanticObjectId | None = None
     subject_id: str | None = None

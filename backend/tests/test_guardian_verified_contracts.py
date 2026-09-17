@@ -283,7 +283,12 @@ def test_the_allowlist_is_frozen_from_the_recorded_catalogue():
         assert schema_sha256(schema) == entry["input_schema_sha256"]
         assert "$ref" not in str(schema)
         assert entry["discriminator"] in schema["required"]
-        values = schema["properties"][entry["discriminator"]]["enum"]
+        properties = schema["properties"]
+        # The scope facts the Reader's guards read are frozen from this schema, never from a live one (R28).
+        assert entry["requires_org"] == ("org_id" in properties)
+        assert entry["site_scopable"] == ("site_id" in properties)
+        assert entry["time_ranged"] == ({"start_time", "end_time"} <= set(properties))
+        values = properties[entry["discriminator"]]["enum"]
         assert not set(entry["kinds"]) & set(entry["excluded"])
         assert set(entry["kinds"]) | set(entry["excluded"]) == set(values)
         assert set(entry["kinds"].values()) <= EVIDENCE_KINDS

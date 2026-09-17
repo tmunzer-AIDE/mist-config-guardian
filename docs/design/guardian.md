@@ -86,13 +86,18 @@ DNT-NTR change (`org:networktemplates` `dns_servers`) is dual use for switches.
 `mcp_allowlist.json` is frozen from `backend/tests/fixtures/mist_mcp_catalog.json` (recorded `tools/list`, no live
 discovery). Each allowlisted tool's input schema is hashed as sorted-key, compact UTF-8 JSON.
 
-| Tool | Discriminator | Kind | Excluded values |
-|---|---|---|---|
-| `search_mist_data` | `search_type` | `service_health` (events, alarms, client/device/session searches) | `sites`, `inventory`, `mxedges`, `usermacs`, `guest_authorizations`, `rogue_events` |
-| `get_mist_stats` | `stats_type` | `service_health` (all 15) | none |
-| `get_mist_insights` | `insight_type` | `service_health` (all 4) | none |
-| `get_mist_config` | `resource_type` | `configuration` (27) | `psks`, `webhooks` |
-| `get_mist_constants` | `constant_type` | `reference` (all 27) | none |
+| Tool | Discriminator | Kind | Excluded values | org / site / time |
+|---|---|---|---|---|
+| `search_mist_data` | `search_type` | `service_health` (events, alarms, client/device/session searches) | `sites`, `inventory`, `mxedges`, `usermacs`, `guest_authorizations`, `rogue_events` | yes / yes / yes |
+| `get_mist_stats` | `stats_type` | `service_health` (all 15) | none | yes / yes / yes |
+| `get_mist_insights` | `insight_type` | `service_health` (all 4) | none | yes / yes / yes |
+| `get_mist_config` | `resource_type` | `configuration` (27) | `psks`, `webhooks` | yes / yes / no |
+| `get_mist_constants` | `constant_type` | `reference` (all 27) | none | no / no / no |
+
+The last column freezes `requires_org`, `site_scopable` and `time_ranged` from the recorded input schema
+(controller ruling R28). The Reader injects `org_id`, applies the site rule and requires one fixed window from
+these frozen facts, never from what a server advertises, and it rejects a discovered tool whose schema
+contradicts them.
 
 `get_mist_self` and `find_mist_entity` are not allowlisted. The secret-bearing configuration objects `psks` and
 `webhooks` are excluded for minimal exposure, since they carry no investigation value. A tool, or a discriminator

@@ -80,6 +80,8 @@ _REJECTED_ARGUMENTS: Mapping[str, str] = {
 _RULE_TIME_PARAMS = frozenset({"start", "end", "start_time", "end_time", "duration"})
 _TIME_ARGUMENTS = ("start_time", "end_time")
 _PATH_SCOPE = re.compile(r"/(orgs|sites)/([^/]+)")
+# The only route a rule read may take without naming an organization or a site: Mist's platform constants.
+_ORG_NEUTRAL_PREFIX = "/api/v1/const/"
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 _INTEGER_TYPES = frozenset({"integer", "number"})
 
@@ -156,7 +158,13 @@ class SiteAuthority:
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
-    """One discovered, allowlisted, read-only tool."""
+    """One discovered, allowlisted, read-only tool, with the scope facts frozen in the allowlist.
+
+    ``requires_org``, ``site_scopable`` and ``time_ranged`` come from :mod:`.mcp_allowlist`, never from the
+    advertised schema, and a schema that contradicts them is rejected at discovery: a server could otherwise
+    disable organization injection, the site rule or the window rule by dropping one argument from what it
+    advertises.
+    """
 
     name: str
     discriminator: str
@@ -164,16 +172,9 @@ class ToolSpec:
     prompt_schema: dict[str, JsonValue]
     validator: Validator
     properties: Mapping[str, Mapping[str, Any]]
-
-    @property
-    def historical(self) -> bool:
-        """Whether the tool takes a time range, and therefore must be asked for exactly one fixed window."""
-        return all(name in self.properties for name in _TIME_ARGUMENTS)
-
-    @property
-    def accepts_site(self) -> bool:
-        """Whether the tool can be scoped to one site."""
-        return "site_id" in self.properties
+    requires_org: bool
+    site_scopable: bool
+    time_ranged: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +244,9 @@ class RuleRead(Contract):
     site_id: Identifier | None = None
     device_macs: tuple[DeviceMac, ...] = ()
     window: WindowName | None = None
+    # Platform constants belong to no organization. Every other read names one of Guardian's own scopes, so a
+    # route that carries no organization and no site (``/self``, ``/self/apitokens``) cannot be read at all.
+    org_neutral: bool = False
 
     @model_validator(mode="after")
     def path_is_one_plain_route(self) -> "RuleRead":
@@ -426,7 +430,7 @@ class Reader:
         self, spec: ToolSpec, arguments: Mapping[str, JsonValue], kind: EvidenceKind
     ) -> tuple[dict[str, JsonValue], EvidenceWindow | None, WindowName | None]:
         prepared = {name: value for name, value in arguments.items() if self._argument_allowed(spec, name)}
-        if "org_id" in spec.properties:
+        if spec.requires_org:
             supplied = prepared.get("org_id")
             if supplied is not None and str(supplied) != self._org_id:
                 msg = "Guardian reads one organization; another was requested."
@@ -459,14 +463,14 @@ class Reader:
             msg = "That site is outside this investigation's site authority."
             raise ReadRejectedError(msg, category="out_of_scope")
         service_health = kind == "service_health"
-        if site is None and spec.accepts_site and service_health and not self._authority.org_wide:
+        if site is None and spec.site_scopable and service_health and not self._authority.org_wide:
             msg = "A site-scoped investigation reads service health one authorized site at a time."
             raise ReadRejectedError(msg, category="out_of_scope")
 
     def _check_window(
         self, spec: ToolSpec, prepared: dict[str, JsonValue]
     ) -> tuple[EvidenceWindow | None, WindowName | None]:
-        if not spec.historical:
+        if not spec.time_ranged:
             return None, None
         matched = self._windows.match(prepared.get("start_time"), prepared.get("end_time"))
         if matched is None:
@@ -499,6 +503,13 @@ class Reader:
             *(("sites", value) for name, value in request.params.items() if name == "site_id"),
             *(("sites", request.site_id) for _ in (1,) if request.site_id),
         ]
+        if request.org_neutral:
+            if not request.path.startswith(_ORG_NEUTRAL_PREFIX) or request.kind != "reference":
+                msg = f"Only a reference read under {_ORG_NEUTRAL_PREFIX} may be organization neutral."
+                raise ReadRejectedError(msg, category="out_of_scope")
+        elif not identities:
+            msg = "A rule read names one of this investigation's organizations or sites in its path."
+            raise ReadRejectedError(msg, category="out_of_scope")
         for collection, identity in identities:
             if collection == "orgs" and identity != self._org_id:
                 msg = "Guardian reads one organization; another was requested."
@@ -508,17 +519,37 @@ class Reader:
                 raise ReadRejectedError(msg, category="out_of_scope")
 
     def _recorded(self, envelope: _Envelope, raw: Any, *, budget: int, cache_key: str | None = None) -> Evidence:
-        """Redact, check the boundaries, and keep the largest bounded form of the result that fits its budget."""
-        redacted = payloads.redact(raw, secrets=self._secrets)
-        if (foreign := self._foreign(redacted)) is not None:
+        """Keep what this investigation may see, redact it, and bound it into the largest form that fits.
+
+        Authority and completeness are decided on the validated result, before redaction, so a row beyond the
+        redaction bounds is still seen. One row naming another site costs that row, not the whole read: it is left
+        out and counted, and the item stays citable for the rows that remain.
+        """
+        kept, omitted = self._within_authority(raw)
+        if (foreign := self._foreign(kept)) is not None:
+            # Not a row: the result itself belongs to another organization or site, so none of it is usable.
             return self._failed(envelope, foreign)
-        collection = "partial" if payloads.has_more(redacted) else "complete"
+        if omitted and not _holds_rows(kept):
+            msg = f"All {omitted} rows named an organization or a site outside this investigation's authority."
+            return self._failed(envelope, msg)
+        note = (
+            f"{omitted} rows outside this investigation's organization or site authority were left out."
+            if omitted
+            else ""
+        )
+        redacted = payloads.redact(kept, secrets=self._secrets)
+        collection = "partial" if omitted or payloads.has_more(raw) else "complete"
         chosen: Evidence | None = None
         for candidate, representation, detail in payloads.shrink(
-            payloads.payload_of(redacted), rows=payloads.row_counts(raw), allow_full=not payloads.omits(raw)
+            payloads.payload_of(redacted),
+            rows=payloads.row_counts(raw),
+            allow_full=not omitted and not payloads.omits(raw),
         ):
             chosen = envelope.evidence(
-                collection=collection, representation=representation, payload=candidate, detail=detail
+                collection=collection,
+                representation=representation,
+                payload=candidate,
+                detail=" ".join(part for part in (note, detail) if part)[:MAX_DETAIL_CHARS],
             )
             if json_size(chosen) <= budget:
                 break
@@ -542,19 +573,61 @@ class Reader:
             )
         )
 
-    def _foreign(self, value: JsonValue) -> str | None:
-        """The first reason a result leaves this investigation's organization or its authorized sites."""
-        if isinstance(value, dict):
+    def _within_authority(self, raw: Any, depth: int = 0) -> tuple[Any, int]:
+        """The result without the rows outside this organization or its sites, and how many were left out.
+
+        Rows are read before redaction, so a row past the redaction bounds is weighed like any other instead of
+        disappearing into the kept ones. Below the redaction depth nothing survives into the stored payload, so
+        the walk stops there.
+        """
+        if depth > payloads.MAX_DEPTH:
+            return raw, 0
+        if isinstance(raw, list):
+            kept: list[Any] = []
+            omitted = 0
+            for item in raw:
+                if isinstance(item, Mapping) and self._foreign(item) is not None:
+                    omitted += 1
+                    continue
+                filtered, dropped = self._within_authority(item, depth + 1)
+                kept.append(filtered)
+                omitted += dropped
+            return kept, omitted
+        if isinstance(raw, Mapping):
+            result: dict[str, Any] = {}
+            omitted = 0
+            for key, value in raw.items():
+                result[str(key)], dropped = self._within_authority(value, depth + 1)
+                omitted += dropped
+            return result, omitted
+        return raw, 0
+
+    def _foreign(self, value: Any, depth: int = 0) -> str | None:
+        """The first reason a value leaves this investigation's organization or its authorized sites."""
+        if depth > payloads.MAX_DEPTH:
+            return None
+        if isinstance(value, Mapping):
             organization = value.get("org_id")
             if isinstance(organization, str) and organization and organization != self._org_id:
                 return "The result carried a foreign organization identity."
             site = value.get("site_id")
             if isinstance(site, str) and site and not self._authority.org_wide and not self._authority.allows(site):
                 return "The result named a site outside this investigation's site authority."
-            return next((found for found in map(self._foreign, value.values()) if found), None)
+            return next((found for found in (self._foreign(item, depth + 1) for item in value.values()) if found), None)
         if isinstance(value, list):
-            return next((found for found in map(self._foreign, value) if found), None)
+            return next((found for found in (self._foreign(item, depth + 1) for item in value) if found), None)
         return None
+
+
+def _holds_rows(value: Any, depth: int = 0) -> bool:
+    """Whether any list in the result still holds a row, which is what authority filtering takes away."""
+    if depth > payloads.MAX_DEPTH:
+        return False
+    if isinstance(value, list):
+        return any(isinstance(item, Mapping) or _holds_rows(item, depth + 1) for item in value)
+    if isinstance(value, Mapping):
+        return any(_holds_rows(item, depth + 1) for item in value.values())
+    return False
 
 
 def _dropping(catalogue: ToolCatalogue, dropped: Mapping[str, str]) -> ToolCatalogue:
@@ -577,7 +650,7 @@ def _catalogue(result: Mapping[str, Any]) -> ToolCatalogue:
         entry = mcp_allowlist.ALLOWLIST.get(name) if isinstance(name, str) else None
         if entry is None:
             continue
-        spec, reason = _tool_spec(entry.name, entry.discriminator, row)
+        spec, reason = _tool_spec(entry, row)
         if spec is None:
             rejected[entry.name] = reason
         else:
@@ -585,7 +658,9 @@ def _catalogue(result: Mapping[str, Any]) -> ToolCatalogue:
     return ToolCatalogue(tools=tools, rejected=rejected)
 
 
-def _tool_spec(name: str, discriminator: str, row: Mapping[str, Any]) -> tuple[ToolSpec | None, str]:
+def _tool_spec(  # noqa: PLR0911 - one return per reason a discovered tool cannot be used
+    entry: mcp_allowlist.AllowedTool, row: Mapping[str, Any]
+) -> tuple[ToolSpec | None, str]:
     annotations = row.get("annotations")
     if not isinstance(annotations, Mapping) or annotations.get("readOnlyHint") is not True:
         return None, "The catalogue does not mark this tool read-only."
@@ -600,20 +675,40 @@ def _tool_spec(name: str, discriminator: str, row: Mapping[str, Any]) -> tuple[T
         return None, "The input schema is not a valid JSON Schema."
     properties = schema.get("properties")
     properties = properties if isinstance(properties, Mapping) else {}
-    if discriminator not in properties:
+    if entry.discriminator not in properties:
         return None, "The input schema has no discriminating argument."
+    if (missing := _contradicted(entry, properties)) is not None:
+        return None, f"The advertised schema contradicts the frozen allowlist: it has no {missing}."
     compact = payloads.compact_schema(schema, drop=("org_id",))
     return (
         ToolSpec(
-            name=name,
-            discriminator=discriminator,
+            name=entry.name,
+            discriminator=entry.discriminator,
             input_schema=schema,
             prompt_schema=compact if isinstance(compact, dict) else {},
             validator=Draft202012Validator(schema),
             properties={str(key): value if isinstance(value, Mapping) else {} for key, value in properties.items()},
+            requires_org=entry.requires_org,
+            site_scopable=entry.site_scopable,
+            time_ranged=entry.time_ranged,
         ),
         "",
     )
+
+
+def _contradicted(entry: mcp_allowlist.AllowedTool, properties: Mapping[str, Any]) -> str | None:
+    """The scope argument a frozen fact promises and the advertised schema leaves out, if any.
+
+    Guardian's guards read the frozen facts, so a schema that cannot carry them is refused rather than silently
+    read without an organization, a site or a window.
+    """
+    if entry.requires_org and "org_id" not in properties:
+        return "org_id, which Guardian injects"
+    if entry.site_scopable and "site_id" not in properties:
+        return "site_id, which the site authority needs"
+    if entry.time_ranged and not set(_TIME_ARGUMENTS) <= set(properties):
+        return "start_time and end_time, which every historical read must carry"
+    return None
 
 
 def _tool_result(result: Mapping[str, Any]) -> tuple[Any, str | None]:

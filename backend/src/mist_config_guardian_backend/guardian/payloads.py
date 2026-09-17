@@ -82,17 +82,25 @@ def payload_of(value: JsonValue) -> dict[str, JsonValue]:
     return value if isinstance(value, dict) else {"result": value}
 
 
-def has_more(value: JsonValue) -> bool:
-    """Whether the result itself says it is one page of a longer answer, which makes the collection partial."""
-    if isinstance(value, dict):
+def has_more(value: Any, depth: int = 0) -> bool:
+    """Whether the result itself says it is one page of a longer answer, which makes the collection partial.
+
+    This reads the validated result before redaction, so a page marker below the redaction bounds still counts. It
+    stops at :data:`MAX_DEPTH`, where redaction replaces everything with a marker anyway.
+    """
+    if depth > MAX_DEPTH:
+        return False
+    if isinstance(value, Mapping):
         count = value.get("count")
         for key in ("results", "data"):
             if isinstance(value.get(key), list):
                 count = len(value[key])
         if type(count) is int and type(value.get("total")) is int and value["total"] > count:
             return True
-        return bool(value.get("has_more") or value.get("next_cursor")) or any(has_more(item) for item in value.values())
-    return isinstance(value, list) and any(has_more(item) for item in value)
+        return bool(value.get("has_more") or value.get("next_cursor")) or any(
+            has_more(item, depth + 1) for item in value.values()
+        )
+    return isinstance(value, list) and any(has_more(item, depth + 1) for item in value)
 
 
 def row_counts(value: Any) -> dict[str, int]:

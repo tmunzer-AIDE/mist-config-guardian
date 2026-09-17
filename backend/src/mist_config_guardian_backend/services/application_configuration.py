@@ -24,6 +24,7 @@ from mist_config_guardian_backend.guardian.agent_schema import (
 )
 from mist_config_guardian_backend.integrations.ai_provider import (
     JSON_OBJECT,
+    AiCompletion,
     AiMessage,
     AiProvider,
     AiProviderError,
@@ -175,7 +176,7 @@ class AiRuntimeConfiguration:
     structured_output: StructuredOutputMode | None = None
 
 
-AiPurpose = Literal["impact_assessment", "diff_summary", "diff_followup", "connection_test"]
+AiPurpose = Literal["impact_assessment", "diff_summary", "diff_followup", "connection_test", "capability_probe"]
 
 
 @dataclass(frozen=True)
@@ -339,30 +340,26 @@ class ApplicationConfigurationService:
     async def test_ai_connection(
         self, recorder: AiAuditSink | None = None, *, draft: AiProviderDraft | None = None
     ) -> AiConnectionTestResponse:
-        """Probe a draft, or check the stored provider, its structured output, and persist both outcomes."""
+        """Probe a draft, or check the stored provider, its structured output, and persist both outcomes.
+
+        Every outbound request is audited on its own: the connection check, and each structured-output probe.
+        """
         configuration = await self._get_or_create()
         runtime = self._draft_runtime(configuration, draft) if draft else self._runtime(configuration)
         provider = self._build_provider(runtime)
-        started = time.perf_counter()
+        audits: list[AiRequestRecord] = []
         capability: StructuredOutputCapability | None = None
         probed = False
         try:
-            if runtime.model:
-                ok, detail = await provider.test_connection()
-                if ok and draft is None:
-                    # A draft is not saved, so a record for it could never be matched to a saved provider.
-                    capability = await self._probe_structured_output(provider, runtime)
-                    probed = True
-            else:
-                await provider.list_models()
-                ok, detail = True, "Connected. Select a model, then test again to verify completions."
-        except AiProviderError as exc:
-            ok, detail = False, str(exc)
+            ok, detail = await self._check_provider(provider, runtime, audits)
+            if ok and runtime.model and draft is None:
+                # A draft is not saved, so a record for it could never be matched to a saved provider.
+                capability = await self._probe_structured_output(provider, runtime, audits)
+                probed = True
         finally:
             await provider.aclose()
         if probed:
             detail = f"{detail} {_capability_detail(capability)}"
-        duration_ms = int((time.perf_counter() - started) * 1000)
         checked_at = utc_now()
         if draft is None:
             configuration.impact_ai_last_test_at = checked_at
@@ -374,38 +371,60 @@ class ApplicationConfigurationService:
             configuration.touch()
             await configuration.save()
         if recorder is not None:
-            await recorder.record(
-                AiRequestRecord(
-                    purpose="connection_test",
-                    base_url=runtime.base_url,
-                    model=runtime.model,
-                    duration_ms=duration_ms,
-                    succeeded=ok,
-                    error=None if ok else detail,
-                )
-            )
+            for audit in audits:
+                await recorder.record(audit)
         return AiConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
 
+    async def _check_provider(
+        self, provider: AiProvider, runtime: AiRuntimeConfiguration, audits: list[AiRequestRecord]
+    ) -> tuple[bool, str]:
+        """One outbound request: the completion that proves the model, or the model list when none is chosen."""
+        started = time.perf_counter()
+        try:
+            if runtime.model:
+                ok, detail = await provider.test_connection()
+            else:
+                await provider.list_models()
+                ok, detail = True, "Connected. Select a model, then test again to verify completions."
+        except AiProviderError as exc:
+            ok, detail = False, str(exc)
+        audits.append(self._audit("connection_test", runtime, started, ok=ok, error=None if ok else detail))
+        return ok, detail
+
     async def _probe_structured_output(
-        self, provider: AiProvider, runtime: AiRuntimeConfiguration
+        self, provider: AiProvider, runtime: AiRuntimeConfiguration, audits: list[AiRequestRecord]
     ) -> StructuredOutputCapability | None:
         """Ask for Guardian's own action schema and validate what comes back, not that the request was accepted.
 
         The JSON-schema probe is tried first; ``json_object`` is recorded only when a probe prompted with the same
-        schema returns content that validates against it. When neither does, nothing is recorded.
+        schema returns content that validates against it. When neither does, nothing is recorded. Each probe is
+        one outbound request and gets its own audit row, whose outcome is whether it returned a valid action.
         """
         messages = [
             AiMessage(role="system", content=PROBE_INSTRUCTION),
             AiMessage(role="user", content=probe_request()),
         ]
         for mode, response_format in _PROBE_FORMATS:
+            started = time.perf_counter()
             try:
                 completion = await provider.complete(
                     messages, max_tokens=_PROBE_MAX_TOKENS, response_format=response_format
                 )
-            except AiProviderError:
+            except AiProviderError as exc:
+                audits.append(self._audit("capability_probe", runtime, started, ok=False, error=str(exc)))
                 continue
-            if validates_as_action(completion.content):
+            honored = validates_as_action(completion.content)
+            audits.append(
+                self._audit(
+                    "capability_probe",
+                    runtime,
+                    started,
+                    ok=honored,
+                    error=None if honored else f"The provider did not return a valid {mode} action.",
+                    completion=completion,
+                )
+            )
+            if honored:
                 return StructuredOutputCapability(
                     mode=mode,
                     fingerprint=capability_fingerprint(base_url=runtime.base_url, model=runtime.model),
@@ -413,6 +432,28 @@ class ApplicationConfigurationService:
                     tested_at=utc_now(),
                 )
         return None
+
+    @staticmethod
+    def _audit(  # noqa: PLR0913 - one audited fact about the request per argument
+        purpose: AiPurpose,
+        runtime: AiRuntimeConfiguration,
+        started: float,
+        *,
+        ok: bool,
+        error: str | None = None,
+        completion: AiCompletion | None = None,
+    ) -> AiRequestRecord:
+        """One row for one outbound provider request, with its own duration and outcome."""
+        return AiRequestRecord(
+            purpose=purpose,
+            base_url=runtime.base_url,
+            model=runtime.model,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            succeeded=ok,
+            error=error,
+            request_tokens=completion.request_tokens if completion else None,
+            response_tokens=completion.response_tokens if completion else None,
+        )
 
     async def list_ai_models(self, *, draft: AiProviderDraft | None = None) -> list[AiModelResponse]:
         """Discover models using the draft when supplied, otherwise saved settings."""
