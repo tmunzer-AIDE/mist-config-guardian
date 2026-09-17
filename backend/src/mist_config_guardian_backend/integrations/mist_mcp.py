@@ -1,5 +1,9 @@
 """Bounded Streamable HTTP client for the existing Mist MCP, not a Mist API adapter."""
 
+# Each ``timeout`` here is httpx's own request bound, which an asyncio timeout would not give httpx a chance to
+# apply, and which a caller with a phase deadline passes in per call.
+# ruff: noqa: ASYNC109
+
 import json
 from contextlib import AbstractAsyncContextManager
 from typing import Self
@@ -19,7 +23,7 @@ class MistMcpError(RuntimeError):
 
 
 class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
-    def __init__(self, *, url: str, token: str, cloud: str) -> None:
+    def __init__(self, *, url: str, token: str, cloud: str, max_wire_bytes: int = MAX_WIRE_BYTES) -> None:
         parts = urlsplit(url)
         if (
             parts.scheme not in {"https", "http"}
@@ -42,6 +46,9 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
             timeout=20,
             follow_redirects=False,
         )
+        # A caller with its own deadline bounds each request and how much wire it will read; the defaults keep
+        # every existing caller on exactly the bounds it had.
+        self._max_wire_bytes = max_wire_bytes
         self._next_id = 0
 
     async def __aenter__(self) -> Self:
@@ -64,14 +71,17 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
     async def __aexit__(self, *_args: object) -> None:
         await self._client.aclose()
 
-    async def rpc(self, method: str, params: dict, *, notification: bool = False) -> dict:  # noqa: C901, PLR0912 - JSON/SSE protocol parsing
+    async def rpc(  # noqa: C901, PLR0912 - JSON/SSE protocol parsing
+        self, method: str, params: dict, *, notification: bool = False, timeout: float | None = None
+    ) -> dict:
         self._next_id += 1
         identity = self._next_id
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
         if not notification:
             payload["id"] = identity
         try:
-            async with self._client.stream("POST", self.url, json=payload) as response:
+            deadline = httpx.USE_CLIENT_DEFAULT if timeout is None else httpx.Timeout(timeout)
+            async with self._client.stream("POST", self.url, json=payload, timeout=deadline) as response:
                 response.raise_for_status()
                 if session := response.headers.get("mcp-session-id"):
                     self._client.headers["Mcp-Session-Id"] = session
@@ -82,7 +92,7 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
                     buffer = ""
                     async for chunk in response.aiter_bytes():
                         body.extend(chunk)
-                        if len(body) > MAX_WIRE_BYTES:
+                        if len(body) > self._max_wire_bytes:
                             msg = "response_limit"
                             raise MistMcpError(msg)
                         # Decode only complete UTF-8 buffers; event payloads are bounded before parsing.
@@ -100,7 +110,7 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
                     raise MistMcpError(msg)
                 async for part in response.aiter_bytes():
                     body.extend(part)
-                    if len(body) > MAX_WIRE_BYTES:
+                    if len(body) > self._max_wire_bytes:
                         msg = "response_limit"
                         raise MistMcpError(msg)
                 item = json.loads(body)
@@ -128,8 +138,8 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
             raise MistMcpError(msg)
         return result
 
-    async def list_tools(self) -> dict:
-        return await self.rpc("tools/list", {})
+    async def list_tools(self, *, timeout: float | None = None) -> dict:
+        return await self.rpc("tools/list", {}, timeout=timeout)
 
-    async def call_tool(self, name: str, arguments: dict) -> dict:
-        return await self.rpc("tools/call", {"name": name, "arguments": arguments})
+    async def call_tool(self, name: str, arguments: dict, *, timeout: float | None = None) -> dict:
+        return await self.rpc("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)

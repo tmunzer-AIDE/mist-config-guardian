@@ -426,8 +426,21 @@ def test_guardian_code_never_touches_the_legacy_engine():
 
 
 # The deterministic core: it may use the pure snapshot helpers (registry, canonical form, diff walker), never the
-# service, settings, security, persistence or transport layers. Later pure modules join this list.
-PURE_GUARDIAN_MODULES = ("change", "contracts", "deployment", "evidence", "ledger", "monitoring", "repository")
+# service, settings, security, persistence or transport layers. Later pure modules join this list. The Reader is an
+# I/O boundary, not an I/O module: both of its transports are injected protocols, so it stays on this list.
+PURE_GUARDIAN_MODULES = (
+    "agent_schema",
+    "change",
+    "contracts",
+    "deployment",
+    "evidence",
+    "ledger",
+    "mcp_allowlist",
+    "monitoring",
+    "payloads",
+    "reader",
+    "repository",
+)
 IMPURE_LAYERS = (
     "beanie",
     "motor",
@@ -467,12 +480,15 @@ def test_the_pure_guardian_core_loads_no_database_driver_settings_or_service_tra
 
 
 def test_guardian_stays_dormant_until_a_gated_path_is_wired():
-    # Only persistence registration and retention reach Guardian code. Later tasks extend this set as they add
-    # guardian_enabled-gated paths.
+    # Only persistence registration, retention and the setup-time capability probe reach Guardian code. The probe
+    # reads Guardian's versioned action schema when an administrator tests the AI provider: it stores what the
+    # provider proved and starts no investigation, so it is deliberately not behind guardian_enabled. Later tasks
+    # extend this set as they add guardian_enabled-gated paths.
     allowed = {
         *(path.relative_to(BACKEND).as_posix() for path in guardian_sources()),
         "models/__init__.py",
         "services/investigation_retention.py",
+        "services/application_configuration.py",
     }
     importers = {
         path.relative_to(BACKEND).as_posix()

@@ -705,6 +705,16 @@
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "structured_output": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StructuredOutputResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9968,6 +9978,35 @@
           }
         },
         "title": "SnapshotTriggerRequest",
+        "type": "object"
+      },
+      "StructuredOutputResponse": {
+        "description": "What the last setup-time probe proved, and whether it still describes the saved provider.\n\nThe fingerprint itself stays inside: an administrator needs the mode, whether it still applies and when it was\ntested, not the value it is compared against.",
+        "properties": {
+          "matches_fingerprint": {
+            "title": "Matches Fingerprint",
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "json_schema",
+              "json_object"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "tested_at": {
+            "format": "date-time",
+            "title": "Tested At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "matches_fingerprint",
+          "tested_at"
+        ],
+        "title": "StructuredOutputResponse",
         "type": "object"
       },
       "TimelineMarkerListResponse": {

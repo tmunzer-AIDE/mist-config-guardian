@@ -62,7 +62,12 @@ from mist_config_guardian_backend.impact.mcp_scope import (
 )
 from mist_config_guardian_backend.impact.mcp_views import selected_rows
 from mist_config_guardian_backend.impact.skills import DomainSkill
-from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
+from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
+    AiMessage,
+    AiProviderError,
+    OpenAiCompatibleProvider,
+)
 from mist_config_guardian_backend.integrations.mist import REGION_HOSTS
 from mist_config_guardian_backend.integrations.mist_mcp import MistMcpClient, MistMcpError
 from mist_config_guardian_backend.models.base import utc_now
@@ -442,7 +447,7 @@ class McpImpactAgent(ModelRequestJournal):
                                 completion = await provider.complete(
                                     [AiMessage(role="system", content=system), AiMessage(role="user", content=body)],
                                     max_tokens=record.output_token_limit,
-                                    json_object=True,
+                                    response_format=JSON_OBJECT,
                                 )
                         except (AiProviderError, TimeoutError):
                             await self._finish(root, record, "provider_error")

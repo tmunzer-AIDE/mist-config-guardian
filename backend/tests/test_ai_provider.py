@@ -1,12 +1,16 @@
 """Generalised OpenAI-compatible provider adapter tests."""
 
+import json
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
 from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
     AiMessage,
     AiProviderError,
+    JsonSchemaFormat,
     OpenAiCompatibleProvider,
 )
 
@@ -53,19 +57,44 @@ async def test_complete_returns_content_and_usage(httpx_mock: HTTPXMock) -> None
     assert completion.response_tokens == 40
 
 
-async def test_complete_requests_json_object_when_asked(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(
-        method="POST",
-        url=COMPLETIONS_URL,
-        json={"choices": [{"message": {"content": "{}"}}]},
-    )
+async def test_text_completions_ask_for_no_response_format(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "hi"}}]})
 
     async with _provider() as provider:
-        await provider.complete([AiMessage(role="user", content="e")], json_object=True)
+        await provider.complete([AiMessage(role="user", content="e")])
 
     request = httpx_mock.get_request()
     assert request is not None
-    assert "json_object" in request.read().decode()
+    assert "response_format" not in json.loads(request.read())
+
+
+async def test_complete_requests_a_json_object_when_asked(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "{}"}}]})
+
+    async with _provider() as provider:
+        await provider.complete([AiMessage(role="user", content="e")], response_format=JSON_OBJECT)
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert json.loads(request.read())["response_format"] == {"type": "json_object"}
+
+
+async def test_complete_sends_a_named_json_schema(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "{}"}}]})
+    schema = {"type": "object", "properties": {"action": {"const": "report"}}, "required": ["action"]}
+
+    async with _provider() as provider:
+        await provider.complete(
+            [AiMessage(role="user", content="e")],
+            response_format=JsonSchemaFormat(name="guardian_action", schema=schema),
+        )
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert json.loads(request.read())["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "guardian_action", "schema": schema, "strict": True},
+    }
 
 
 async def test_complete_maps_malformed_responses_to_provider_error(httpx_mock: HTTPXMock) -> None:

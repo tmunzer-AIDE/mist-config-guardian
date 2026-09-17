@@ -4,10 +4,28 @@ from datetime import datetime
 from typing import ClassVar, Literal
 
 from beanie import Document, PydanticObjectId
-from pydantic import Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from pymongo import IndexModel
 
 from mist_config_guardian_backend.models.base import TimestampedModel
+
+StructuredOutputMode = Literal["json_schema", "json_object"]
+
+
+class StructuredOutputCapability(BaseModel):
+    """What the setup-time probe proved this provider can produce, and what that proof is bound to.
+
+    The fingerprint covers the provider base URL, the model and Guardian's action-schema version, and no
+    credential: a change to any of the three invalidates the record, and the Guardian agent is skipped without a
+    valid one. There is no runtime fallback.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: StructuredOutputMode
+    fingerprint: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    schema_version: str = Field(min_length=1, max_length=32)
+    tested_at: AwareDatetime
 
 
 class ApplicationConfiguration(TimestampedModel, Document):
@@ -24,6 +42,7 @@ class ApplicationConfiguration(TimestampedModel, Document):
     impact_ai_last_test_at: datetime | None = None
     impact_ai_last_test_ok: bool | None = None
     impact_ai_last_test_detail: str | None = None
+    impact_ai_structured_output: StructuredOutputCapability | None = None
 
     smtp_enabled: bool = False
     smtp_host: str = ""

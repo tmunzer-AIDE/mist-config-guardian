@@ -22,7 +22,12 @@ from mist_config_guardian_backend.impact.agent import (
 )
 from mist_config_guardian_backend.impact.limits import MAX_AUDIT_CALLS
 from mist_config_guardian_backend.impact.mcp_contracts import MAX_MCP_EVIDENCE_BYTES
-from mist_config_guardian_backend.integrations.ai_provider import AiCompletion, AiProviderError
+from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
+    TEXT,
+    AiCompletion,
+    AiProviderError,
+)
 from mist_config_guardian_backend.services import impact_agent, mcp_dispatch, mcp_impact_agent
 from mist_config_guardian_backend.services import impact_investigations as worker
 from test_impact_change_context import MAC, device_inputs, use_data
@@ -122,8 +127,8 @@ class Replay:
         self.sessions = 0
         self.tool_calls: list[tuple[str, dict]] = []
 
-    def complete(self, messages, *, max_tokens, json_object):
-        assert json_object
+    def complete(self, messages, *, max_tokens, response_format):
+        assert response_format is JSON_OBJECT
         assert max_tokens == CONFIGURED_RESPONSE_TOKENS
         system, body = messages[0].content, messages[1].content
         assert SERVICE_TOKEN not in system + body
@@ -164,8 +169,8 @@ class Replay:
                 assert kwargs["api_key"] == PROVIDER_KEY
                 replay.sessions += 1
 
-            async def complete(self, messages, *, max_tokens=None, json_object=False):
-                return replay.complete(messages, max_tokens=max_tokens, json_object=json_object)
+            async def complete(self, messages, *, max_tokens=None, response_format=TEXT):
+                return replay.complete(messages, max_tokens=max_tokens, response_format=response_format)
 
         class Client(Session):
             def __init__(self, *, url, token, cloud):

@@ -13,17 +13,34 @@ from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.config import Settings, get_settings
+from mist_config_guardian_backend.guardian.agent_schema import (
+    ACTION_SCHEMA,
+    ACTION_SCHEMA_NAME,
+    ACTION_SCHEMA_VERSION,
+    PROBE_INSTRUCTION,
+    capability_fingerprint,
+    probe_request,
+    validates_as_action,
+)
 from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
+    AiMessage,
     AiProvider,
     AiProviderError,
+    JsonSchemaFormat,
     OpenAiCompatibleProvider,
+    ResponseFormat,
 )
 from mist_config_guardian_backend.integrations.smtp import (
     SmtpCredentials,
     SmtpNegotiationError,
     connect_and_authenticate,
 )
-from mist_config_guardian_backend.models.application_configuration import ApplicationConfiguration
+from mist_config_guardian_backend.models.application_configuration import (
+    ApplicationConfiguration,
+    StructuredOutputCapability,
+    StructuredOutputMode,
+)
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.schemas.application_configuration import (
     AiConnectionTestResponse,
@@ -36,6 +53,7 @@ from mist_config_guardian_backend.schemas.application_configuration import (
     SmtpConnectionTestResponse,
     SmtpSettingsResponse,
     SmtpSettingsUpdate,
+    StructuredOutputResponse,
 )
 from mist_config_guardian_backend.security.credentials import (
     CredentialDecryptionError,
@@ -45,6 +63,12 @@ from mist_config_guardian_backend.security.credentials import (
 _IMPACT_AI_KEY_CONTEXT = "impact-ai-api-key"
 _AI_PROVIDER_KEY_CONTEXT = "ai-provider-key"
 _SMTP_PASSWORD_CONTEXT = "smtp-password"  # noqa: S105 - an encryption context label, not a secret
+# The capability probe asks for one small action; a provider that needs more than this is not usable anyway.
+_PROBE_MAX_TOKENS = 400
+_PROBE_FORMATS: tuple[tuple[StructuredOutputMode, ResponseFormat], ...] = (
+    ("json_schema", JsonSchemaFormat(name=ACTION_SCHEMA_NAME, schema=ACTION_SCHEMA)),
+    ("json_object", JSON_OBJECT),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +118,36 @@ def _probe_smtp(credentials: SmtpCredentials) -> tuple[bool, str]:
     return True, "Connected and authenticated over TLS."
 
 
+def structured_output_mode(configuration: ApplicationConfiguration) -> StructuredOutputMode | None:
+    """The proved structured-output mode, but only while the record still fits this provider, model and schema."""
+    record = configuration.impact_ai_structured_output
+    if record is None or record.schema_version != ACTION_SCHEMA_VERSION:
+        return None
+    current = capability_fingerprint(
+        base_url=configuration.impact_ai_base_url,
+        model=configuration.impact_ai_model,
+        schema_version=record.schema_version,
+    )
+    return record.mode if record.fingerprint == current else None
+
+
+def _structured_output_response(configuration: ApplicationConfiguration) -> StructuredOutputResponse | None:
+    record = configuration.impact_ai_structured_output
+    if record is None:
+        return None
+    return StructuredOutputResponse(
+        mode=record.mode,
+        matches_fingerprint=structured_output_mode(configuration) is not None,
+        tested_at=record.tested_at,
+    )
+
+
+def _capability_detail(capability: StructuredOutputCapability | None) -> str:
+    if capability is None:
+        return "Structured output is unavailable; the Guardian agent will be skipped."
+    return f"Structured output: {capability.mode}."
+
+
 class ApplicationConfigurationError(ValueError):
     """Raised when persisted application configuration is unusable."""
 
@@ -116,6 +170,9 @@ class AiRuntimeConfiguration:
     api_key: str
     max_response_tokens: int
     automatic_summaries: bool
+    # The structured-output mode the setup-time probe proved for exactly this provider, model and action schema.
+    # ``None`` means no valid record, and the Guardian agent is skipped rather than guessing at runtime.
+    structured_output: StructuredOutputMode | None = None
 
 
 AiPurpose = Literal["impact_assessment", "diff_summary", "diff_followup", "connection_test"]
@@ -282,14 +339,20 @@ class ApplicationConfigurationService:
     async def test_ai_connection(
         self, recorder: AiAuditSink | None = None, *, draft: AiProviderDraft | None = None
     ) -> AiConnectionTestResponse:
-        """Probe a draft, or check the stored provider and persist its outcome."""
+        """Probe a draft, or check the stored provider, its structured output, and persist both outcomes."""
         configuration = await self._get_or_create()
         runtime = self._draft_runtime(configuration, draft) if draft else self._runtime(configuration)
         provider = self._build_provider(runtime)
         started = time.perf_counter()
+        capability: StructuredOutputCapability | None = None
+        probed = False
         try:
             if runtime.model:
                 ok, detail = await provider.test_connection()
+                if ok and draft is None:
+                    # A draft is not saved, so a record for it could never be matched to a saved provider.
+                    capability = await self._probe_structured_output(provider, runtime)
+                    probed = True
             else:
                 await provider.list_models()
                 ok, detail = True, "Connected. Select a model, then test again to verify completions."
@@ -297,12 +360,17 @@ class ApplicationConfigurationService:
             ok, detail = False, str(exc)
         finally:
             await provider.aclose()
+        if probed:
+            detail = f"{detail} {_capability_detail(capability)}"
         duration_ms = int((time.perf_counter() - started) * 1000)
         checked_at = utc_now()
         if draft is None:
             configuration.impact_ai_last_test_at = checked_at
             configuration.impact_ai_last_test_ok = ok
             configuration.impact_ai_last_test_detail = detail
+            if probed:
+                # This probe is the authoritative record: when neither format validates, nothing is kept.
+                configuration.impact_ai_structured_output = capability
             configuration.touch()
             await configuration.save()
         if recorder is not None:
@@ -317,6 +385,34 @@ class ApplicationConfigurationService:
                 )
             )
         return AiConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
+
+    async def _probe_structured_output(
+        self, provider: AiProvider, runtime: AiRuntimeConfiguration
+    ) -> StructuredOutputCapability | None:
+        """Ask for Guardian's own action schema and validate what comes back, not that the request was accepted.
+
+        The JSON-schema probe is tried first; ``json_object`` is recorded only when a probe prompted with the same
+        schema returns content that validates against it. When neither does, nothing is recorded.
+        """
+        messages = [
+            AiMessage(role="system", content=PROBE_INSTRUCTION),
+            AiMessage(role="user", content=probe_request()),
+        ]
+        for mode, response_format in _PROBE_FORMATS:
+            try:
+                completion = await provider.complete(
+                    messages, max_tokens=_PROBE_MAX_TOKENS, response_format=response_format
+                )
+            except AiProviderError:
+                continue
+            if validates_as_action(completion.content):
+                return StructuredOutputCapability(
+                    mode=mode,
+                    fingerprint=capability_fingerprint(base_url=runtime.base_url, model=runtime.model),
+                    schema_version=ACTION_SCHEMA_VERSION,
+                    tested_at=utc_now(),
+                )
+        return None
 
     async def list_ai_models(self, *, draft: AiProviderDraft | None = None) -> list[AiModelResponse]:
         """Discover models using the draft when supplied, otherwise saved settings."""
@@ -562,6 +658,7 @@ class ApplicationConfigurationService:
             api_key=self._decrypt_api_key(configuration),
             max_response_tokens=configuration.impact_ai_max_response_tokens or self._settings.ai_max_response_tokens,
             automatic_summaries=configuration.impact_ai_automatic_summaries,
+            structured_output=structured_output_mode(configuration),
         )
 
     def _decrypt_api_key(self, configuration: ApplicationConfiguration) -> str:
@@ -601,6 +698,7 @@ class ApplicationConfigurationService:
             last_test_at=configuration.impact_ai_last_test_at,
             last_test_ok=configuration.impact_ai_last_test_ok,
             last_test_detail=configuration.impact_ai_last_test_detail,
+            structured_output=_structured_output_response(configuration),
         )
 
     @staticmethod

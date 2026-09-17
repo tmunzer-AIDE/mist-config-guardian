@@ -39,7 +39,12 @@ from mist_config_guardian_backend.impact.contracts import InvestigationEvidence,
 from mist_config_guardian_backend.impact.deployment import DeploymentEvidence
 from mist_config_guardian_backend.impact.mcp_contracts import McpAction
 from mist_config_guardian_backend.impact.skills import DomainSkill, SkillReference, selected_skills
-from mist_config_guardian_backend.integrations.ai_provider import AiMessage, AiProviderError, OpenAiCompatibleProvider
+from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
+    AiMessage,
+    AiProviderError,
+    OpenAiCompatibleProvider,
+)
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.investigation import (
     ImpactInvestigation,
@@ -455,7 +460,7 @@ class ImpactAgent(ModelRequestJournal):
                         completion = await provider.complete(
                             [AiMessage(role="system", content=system), AiMessage(role="user", content=data)],
                             max_tokens=record.output_token_limit,
-                            json_object=True,
+                            response_format=JSON_OBJECT,
                         )
                 except (AiProviderError, TimeoutError):
                     await self._finish(root, record, "provider_error")

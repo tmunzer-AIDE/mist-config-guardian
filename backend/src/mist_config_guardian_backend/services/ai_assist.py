@@ -16,10 +16,13 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
+    TEXT,
     AiCompletion,
     AiMessage,
     AiProvider,
     AiProviderError,
+    ResponseFormat,
 )
 from mist_config_guardian_backend.models.application_configuration import AiRequestAudit
 from mist_config_guardian_backend.models.base import utc_now
@@ -311,7 +314,7 @@ class AiAssistService:
             if cached is not None:
                 return cached.model_copy(update={"cached": True})
         messages = build_summary_messages(diff)
-        completion = await self._call(runtime, messages, subject, purpose="diff_summary", json_object=True)
+        completion = await self._call(runtime, messages, subject, purpose="diff_summary", response_format=JSON_OBJECT)
         summary, cards = parse_summary(completion.content)
         response = AiDiffSummaryResponse(
             summary=summary,
@@ -332,7 +335,7 @@ class AiAssistService:
         """Answer one question against a fixed comparison."""
         runtime = await self._runtime()
         messages = build_followup_messages(diff, question)
-        completion = await self._call(runtime, messages, subject, purpose="diff_followup", json_object=False)
+        completion = await self._call(runtime, messages, subject, purpose="diff_followup", response_format=TEXT)
         return AiDiffFollowupResponse(
             question=question,
             answer=completion.content.strip(),
@@ -358,7 +361,7 @@ class AiAssistService:
         subject: DiffSubject,
         *,
         purpose: AiPurpose,
-        json_object: bool,
+        response_format: ResponseFormat,
     ) -> AiCompletion:
         provider = self._build_provider(runtime)
         started = time.perf_counter()
@@ -366,7 +369,7 @@ class AiAssistService:
             completion = await provider.complete(
                 messages,
                 max_tokens=runtime.max_response_tokens,
-                json_object=json_object,
+                response_format=response_format,
             )
         except AiProviderError as exc:
             await self._audit(
