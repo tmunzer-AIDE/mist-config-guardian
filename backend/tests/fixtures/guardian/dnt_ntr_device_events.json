@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "label": "DNT-NTR device-event receipts, reconstructed from API projections",
+  "provenance": {
+    "reconstructed_from": "The legacy investigation's deployment.observations projection copied from the production application on 2026-09-17. No raw webhook body exists for these receipts.",
+    "pseudonymized": ["organization_id", "site_id", "audit_id", "receipt_id", "device_mac"],
+    "preserved": ["received_at", "occurred_at", "event types", "device types"],
+    "derived": {
+      "receipt_id": "Renumbered in the original receipt-id order.",
+      "audit_id": "Inferred from the legacy correlation: 'outside_window' required a matching audit_id and 'session_candidate' meant none. It is not read from a raw payload.",
+      "occurred_at": "The projection rendered every device-event occurrence time with no fractional second."
+    },
+    "observation_window": "No SW_CONFIGURED, *_CONFIG_FAILED or *_CONFIG_REVERTED receipt was observed for any device within the monitoring hour (monitoring completed 2026-09-16T05:42:27.039000Z)."
+  },
+  "organization_id": "10000000-0000-4000-8000-000000000001",
+  "site_id": "20000000-0000-4000-8000-000000000001",
+  "audit_id": "30000000-0000-4000-8000-000000000001",
+  "receipts": [
+    {"receipt_id": "00000000000000000000e001", "received_at": "2026-09-16T04:41:39.757000Z", "event_type": "SW_CONFIG_CHANGED_BY_USER", "device_type": "switch", "device_mac": "020000000012", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e002", "received_at": "2026-09-16T04:41:39.760000Z", "event_type": "AP_CONFIG_CHANGED_BY_USER", "device_type": "ap", "device_mac": "020000000021", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e003", "received_at": "2026-09-16T04:41:39.761000Z", "event_type": "SW_CONFIG_CHANGED_BY_USER", "device_type": "switch", "device_mac": "020000000011", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e004", "received_at": "2026-09-16T04:41:39.762000Z", "event_type": "SW_CONFIG_CHANGED_BY_USER", "device_type": "switch", "device_mac": "020000000013", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e005", "received_at": "2026-09-16T04:41:39.764000Z", "event_type": "GW_CONFIG_CHANGED_BY_USER", "device_type": "gateway", "device_mac": "020000000031", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e006", "received_at": "2026-09-16T04:41:39.765000Z", "event_type": "AP_CONFIG_CHANGED_BY_USER", "device_type": "ap", "device_mac": "020000000022", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e007", "received_at": "2026-09-16T04:41:39.766000Z", "event_type": "AP_CONFIG_CHANGED_BY_USER", "device_type": "ap", "device_mac": "020000000023", "occurred_at": "2026-09-16T04:41:35Z", "audit_id": "30000000-0000-4000-8000-000000000001"},
+    {"receipt_id": "00000000000000000000e008", "received_at": "2026-09-16T04:41:49.278000Z", "event_type": "AP_CONFIGURED", "device_type": "ap", "device_mac": "020000000023", "occurred_at": "2026-09-16T04:41:37Z", "audit_id": null},
+    {"receipt_id": "00000000000000000000e009", "received_at": "2026-09-16T04:41:49.282000Z", "event_type": "AP_CONFIGURED", "device_type": "ap", "device_mac": "020000000021", "occurred_at": "2026-09-16T04:41:37Z", "audit_id": null},
+    {"receipt_id": "00000000000000000000e00a", "received_at": "2026-09-16T04:41:49.290000Z", "event_type": "AP_CONFIGURED", "device_type": "ap", "device_mac": "020000000022", "occurred_at": "2026-09-16T04:41:37Z", "audit_id": null},
+    {"receipt_id": "00000000000000000000e00b", "received_at": "2026-09-16T04:42:09.351000Z", "event_type": "GW_CONFIGURED", "device_type": "gateway", "device_mac": "020000000031", "occurred_at": "2026-09-16T04:42:03Z", "audit_id": null}
+  ]
+}

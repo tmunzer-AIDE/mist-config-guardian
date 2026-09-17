@@ -1,0 +1,247 @@
+# Guardian external-contract verification record (plan Task 1).
+#
+# Each decision records the question, its sources, when it was observed, the result and the SHA-256 of every
+# fixture it was decided from. Paths are relative to the repository root. The loader and validators live in
+# backend/tests/guardian_verification.py; backend/tests/test_guardian_verified_contracts.py fails when a decision is
+# missing, a result is outside its allowed set, or a fixture hash drifts.
+#
+# Decision ids are stable; later tasks look them up by id:
+#   device_event_ordering        -> Task 4 deployment pairing
+#   sw_configured_emission       -> Task 4 deployment pairing, Task 12 replay
+#   dns_attribute_semantics      -> Task 6 dns plug-in
+#   mcp_evidence_kind_allowlist  -> Task 5 Reader allowlist
+#   structured_output_capability -> Task 5 capability probe
+version: 1
+spec: docs/superpowers/specs/2026-09-16-guardian-simplification-design.md
+decisions:
+  - id: device_event_ordering
+    question: >-
+      Do Mist device events carry a trustworthy sequence field for same-second ordering, and at what precision are
+      provider occurrence times usable?
+    result: same_second_ambiguous
+    details:
+      device_event_timestamp_precision: second
+      audit_timestamp_precision: millisecond
+      sequence_field: null
+      receipt_order_trusted: false
+      comparison: >-
+        Compare device-event occurrence times with the change anchor truncated to whole seconds. Triggers from
+        different audits for one device in the same second, and conflicting outcomes in the same second, are
+        ambiguous. Receipt time is a fallback that never satisfies a precondition.
+    source:
+      - kind: provider_contract
+        ref: >-
+          Mist OpenAPI 2609.1.0, github.com/mistsys/mist_openapi@609ea461439fd4268c8336164335d135bd484141,
+          #/components/schemas/device_event, #/components/schemas/log_event and #/components/schemas/timestamp
+        sha256: a4ceca342e1862255e5e232dec076ee0781bd94ff2d888714b7e9712493ab721
+      - kind: recorded_receipts
+        ref: >-
+          DNT-NTR audit of 2026-09-16: 11 device-event receipts and the audit time, reconstructed from production API
+          projections
+      - kind: repository_code
+        ref: >-
+          backend/src/mist_config_guardian_backend/impact/deployment.py (_timestamp),
+          backend/src/mist_config_guardian_backend/services/webhook_processing.py (_event_time),
+          backend/src/mist_config_guardian_backend/models/webhook.py (WebhookReceipt)
+    observed_at: "2026-09-17T13:52:26+00:00"
+    fixtures:
+      - path: backend/tests/fixtures/guardian/mist_event_timestamp_contract.json
+        sha256: 76c8271c8bc6608d8c0675561d719a7d6ead32905f992331d715fa47069f9d50
+      - path: backend/tests/fixtures/guardian/dnt_ntr_device_events.json
+        sha256: f87f163a3190d2a8c3f6e9a5d41c1822002d0ac2c27275cec10c3571996829ee
+      - path: backend/tests/fixtures/guardian/dnt_ntr_change.json
+        sha256: 976bdbe0010d8f830309d244c1c4e70407860eeb4524db4e5541b9040ffcbbae
+    notes: >-
+      The provider contract defines the device-event timestamp as epoch seconds (number, double), forbids additional
+      properties and lists no sequence, counter or ordering property; `count` is an event count. All 11 recorded
+      device-event occurrence times are whole seconds, while the audit time carries milliseconds (04:41:35.242):
+      that difference is the 242 ms regression. WebhookReceipt stores no provider ordering field; its creation time
+      and ObjectId reflect delivery order only (the seven trigger receipts share one occurrence second and arrived
+      within 9 ms of each other). The repository parsers accept fractional seconds and millisecond epochs, which is
+      input tolerance, not a precision guarantee. Same-second conflicts therefore remain ambiguous.
+
+  - id: sw_configured_emission
+    question: Does Mist emit SW_CONFIGURED when a switch's rendered configuration is unchanged?
+    result: unknown
+    details:
+      controlled_test: not_run
+      consequence: >-
+        A targeted switch without a confirming outcome keeps an unsatisfied deployment precondition; Guardian never
+        assumes a switch configuration was applied.
+    source:
+      - kind: recorded_receipts
+        ref: >-
+          DNT-NTR audit of 2026-09-16: SW_CONFIG_CHANGED_BY_USER for three switches, no SW_* outcome within the
+          monitoring hour; AP_CONFIGURED and GW_CONFIGURED for the other four devices
+      - kind: recorded_monitoring
+        ref: DNT-NTR monitoring projection (switch config_state pending, AP and gateway config_state applied)
+      - kind: repository_code
+        ref: >-
+          backend/src/mist_config_guardian_backend/services/monitoring.py (_CONFIGURED_EVENTS) and
+          backend/src/mist_config_guardian_backend/impact/deployment.py (_EVENTS) recognize SW_CONFIGURED;
+          only synthetic test payloads contain it
+    observed_at: "2026-09-17T13:52:26+00:00"
+    fixtures:
+      - path: backend/tests/fixtures/guardian/dnt_ntr_device_events.json
+        sha256: f87f163a3190d2a8c3f6e9a5d41c1822002d0ac2c27275cec10c3571996829ee
+      - path: backend/tests/fixtures/guardian/dnt_ntr_monitoring.json
+        sha256: 24eaccc52fad9c29b61f33f37b709d903cb0558dfc0af40a1bc5b2d996dc9e64
+    notes: >-
+      No controlled test was run: this task makes no Mist configuration write, and the read-only Mist MCP tools
+      were disabled in the verification environment, so no event search was possible either. In DNT-NTR every
+      switch received SW_CONFIG_CHANGED_BY_USER at 04:41:35 and none reported SW_CONFIGURED, SW_CONFIG_FAILED or
+      SW_CONFIG_REVERTED within the hour, while the three APs (04:41:37) and the gateway (04:42:03) reported
+      *_CONFIGURED. Whether those switches' rendered configuration changed is not known, because DNS set in a
+      switch's ip_config or oob_ip_config overrides the template's dns_servers. The observation fits
+      "not emitted for an unchanged configuration", "not emitted or not delivered at all" and "changed but never
+      confirmed", so it cannot decide the question.
+
+  - id: dns_attribute_semantics
+    question: >-
+      For each Mist object type and attribute that can carry DNS settings, does the setting drive the device's own
+      management resolution or the resolution of the clients it serves?
+    result: recorded
+    details:
+      mappings: 65
+      management_resolution: 3
+      client_resolution: 10
+      unverified: 52
+      dnt_ntr_attribute:
+        object_type: org:networktemplates
+        attribute: dns_servers
+        semantics: unverified
+    source:
+      - kind: provider_schema
+        ref: >-
+          Mist OpenAPI 2609.1.0, github.com/mistsys/mist_openapi@609ea461439fd4268c8336164335d135bd484141, GET
+          response schema of every registry object type
+        sha256: a4ceca342e1862255e5e232dec076ee0781bd94ff2d888714b7e9712493ab721
+      - kind: repository_code
+        ref: >-
+          backend/src/mist_config_guardian_backend/snapshots/registry.py (object types) and
+          backend/src/mist_config_guardian_backend/services/change_groups.py (title rendering that identifies the
+          DNT-NTR object as org networktemplates)
+      - kind: recorded_catalogue
+        ref: backend/tests/fixtures/mist_mcp_catalog.json (networktemplates described as switch templates)
+    observed_at: "2026-09-17T13:52:26+00:00"
+    fixtures:
+      - path: backend/tests/fixtures/guardian/dns_attribute_semantics.json
+        sha256: fc8ff79972bf259f6f71f3bfd17e90c727ca5ae54eccf80564ad0f72328acbd8
+      - path: backend/tests/fixtures/guardian/dnt_ntr_change.json
+        sha256: 976bdbe0010d8f830309d244c1c4e70407860eeb4524db4e5541b9040ffcbbae
+    notes: >-
+      Semantics come from schema text only: the Mist MCP schema tool was disabled in the verification environment,
+      and the repository holds no redacted configuration payload that carries DNS. Client resolution is recorded
+      where the schema says the setting is advertised to or enforced on clients (DHCP server scopes, WLAN DNS
+      restrictions); management resolution where it names the device's own management traffic (AP ip_config,
+      Mist Edge out-of-band interface). The global dns_servers and dns_suffix, dnsOverride and Junos ip_config DNS
+      of switches and gateways stay unverified: the schema ties them to the device's management resolver, and the
+      DHCP server on the same device falls back to that resolver ("if not defined, system one will be used"), so
+      one class is not established and a management-only claim could hide a client effect. The DNT-NTR change
+      (org network template dns_servers) is therefore unhandled and uncovered.
+
+  - id: mcp_evidence_kind_allowlist
+    question: Which (tool, discriminator) combinations of the MCP catalogue are allowlisted, and with which evidence kind?
+    result: frozen
+    details:
+      allowlisted_tools: 5
+      allowlisted_combinations: 87
+      excluded_combinations: 6
+      excluded_tools: [find_mist_entity, get_mist_self]
+    source:
+      - kind: recorded_catalogue
+        ref: backend/tests/fixtures/mist_mcp_catalog.json (recorded tools/list; no live discovery)
+        sha256: 8531cc4c9f7d1e846fdfd7cc4fdf5feb4ef6420229d92b0b1ca5ff7cf7077294
+      - kind: spec
+        ref: docs/superpowers/specs/2026-09-16-guardian-simplification-design.md, "Evidence" kind rules
+    observed_at: "2026-09-17T13:52:26+00:00"
+    fixtures:
+      - path: backend/tests/fixtures/guardian/mcp_allowlist.json
+        sha256: 3cb870d83bc200e83c3c14ed65a405ad638a477e7b3b608d96e4769a7b94d26c
+      - path: backend/tests/fixtures/mist_mcp_catalog.json
+        sha256: 8531cc4c9f7d1e846fdfd7cc4fdf5feb4ef6420229d92b0b1ca5ff7cf7077294
+    notes: >-
+      Events, alarms, operational client/device/session searches, statistics, insights and SLE are service_health;
+      configuration reads are configuration; constants are reference. Discovery, inventory, identity and rogue
+      detection searches are not clearly classifiable and stay unavailable, as do get_mist_self and
+      find_mist_entity. Each allowlisted tool's input schema hash is frozen with the normalization named in the
+      fixture. Secret-bearing configuration types (psks, webhooks) are allowlisted as configuration under the kind
+      rule, so the Reader's redaction must hold for them.
+
+  - id: structured_output_capability
+    question: Does the configured provider honor response_format json_schema for the Guardian action schema?
+    result: inconclusive
+    reason: >-
+      No provider was probed: this task does not read or use AI provider credentials. The setup-time probe in
+      Task 5 produces the authoritative capability record, and the agent is skipped without it.
+    details:
+      provider_fingerprint: null
+      validation_result: null
+      action_schema_version: null
+    source:
+      - kind: spec
+        ref: >-
+          docs/superpowers/specs/2026-09-16-guardian-simplification-design.md, "Agent / Structured-output capability"
+          and "Verification items for planning" item 5
+      - kind: plan_ruling
+        ref: Task 1 controller ruling (no provider credentials are read or used during verification)
+    observed_at: "2026-09-17T13:52:26+00:00"
+    fixtures: []
+    notes: >-
+      The Guardian action schema is defined in Task 7, so no exact versioned schema existed to probe. No
+      fingerprint, request or provider output was recorded. This result is not a capability record and must never
+      enable the agent.
+
+dnt_ntr_expected_outcomes:
+  status: conditional
+  depends_on: [device_event_ordering, dns_attribute_semantics, sw_configured_emission]
+  fixtures:
+    - path: backend/tests/fixtures/guardian/dnt_ntr_change.json
+      sha256: 976bdbe0010d8f830309d244c1c4e70407860eeb4524db4e5541b9040ffcbbae
+    - path: backend/tests/fixtures/guardian/dnt_ntr_monitoring.json
+      sha256: 24eaccc52fad9c29b61f33f37b709d903cb0558dfc0af40a1bc5b2d996dc9e64
+    - path: backend/tests/fixtures/guardian/dnt_ntr_device_events.json
+      sha256: f87f163a3190d2a8c3f6e9a5d41c1822002d0ac2c27275cec10c3571996829ee
+  conditions:
+    - decision: dns_attribute_semantics
+      state: org:networktemplates dns_servers is unverified
+      effect: >-
+        No plug-in claims the change, so no mapping-specific obligation, metric selection or switch expectation is
+        fixed yet.
+    - decision: sw_configured_emission
+      state: unknown
+      effect: >-
+        The "with SW_CONFIGURED outcomes added" replay variant cannot be tied to observed provider behavior.
+  invariants:
+    - id: no_false_deployment_unknown_at_second_precision
+      statement: >-
+        Compared at one-second provider precision, every audit-linked trigger occurs at or after the change anchor
+        (04:41:35.242 truncates to 04:41:35), one trigger per device, all from this audit; every recorded
+        *_CONFIGURED outcome follows its device's trigger within 30 minutes. No device may become deployment
+        unknown because of the sub-second anchor.
+      devices: ["020000000011", "020000000012", "020000000013", "020000000021", "020000000022", "020000000023", "020000000031"]
+    - id: unconfirmed_switch_precondition_unsatisfied
+      statement: >-
+        Any targeted switch without a confirming outcome has an unsatisfied deployment precondition, whichever
+        mapping later targets it.
+      devices: ["020000000011", "020000000012", "020000000013"]
+  provisional:
+    note: >-
+      What the recorded decisions and the spec's ledger, coverage and composition rules imply today. It is not
+      asserted; Task 12 fixes the asserted result after Tasks 3 to 7 exist and the conditions are revisited.
+    as_recorded:
+      peak_impact: info
+      current_impact: info
+      coverage: partial
+      confidence: low
+      recovery: none
+      reason: >-
+        Atom A1 (dns_servers on the network template; modified_time forms no atom) is uncovered on all seven
+        expected devices. No exclusive monitoring, deployment or rule input reaches warning, so there is no floor.
+    with_sw_configured_added:
+      peak_impact: info
+      current_impact: info
+      coverage: partial
+      confidence: low
+      recovery: none
+      reason: Confirming the switches does not cover A1, so the rows stay uncovered.
