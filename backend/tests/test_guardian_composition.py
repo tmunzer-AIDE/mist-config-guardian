@@ -8,6 +8,7 @@ recovery, sources, impacted devices and gaps.
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from mist_config_guardian_backend.guardian.composition import (
     MAX_VERDICT_GAPS,
@@ -17,10 +18,13 @@ from mist_config_guardian_backend.guardian.composition import (
 )
 from mist_config_guardian_backend.guardian.contracts import (
     AgentConclusion,
+    CompactImpactedDevice,
     Conclusion,
     DeviceImpact,
     Evidence,
     Finding,
+    Verdict,
+    band_rank,
 )
 from mist_config_guardian_backend.guardian.evidence import IMPACTED_DEVICES_BUDGET, json_size
 
@@ -410,3 +414,45 @@ def test_gaps_are_capped_and_the_rest_are_counted() -> None:
     assert len(verdict.gaps) == MAX_VERDICT_GAPS + 1
     assert verdict.gaps[-1].source == "core"
     assert "24 further gap" in verdict.gaps[-1].text
+
+
+# --- ruling R36: composition is a total function ----------------------------------------------------------------
+
+
+def test_a_device_row_cannot_be_worse_now_than_it_ever_was() -> None:
+    with pytest.raises(ValidationError, match="cannot exceed peak"):
+        DeviceSeverity(mac=MAC, site_id=SITE, peak="warning", current="critical")
+
+
+def test_a_verdict_cannot_list_a_device_above_its_own_peak() -> None:
+    with pytest.raises(ValidationError, match="exceed the verdict's peak"):
+        Verdict(
+            peak="info",
+            current="info",
+            recovery="none",
+            confidence="low",
+            coverage="partial",
+            summary="",
+            impacted_devices=(CompactImpactedDevice(mac=MAC, site_id=SITE, peak="critical", current="critical"),),
+        )
+
+
+@pytest.mark.parametrize("coverage", ["complete", "partial", "insufficient", "not_applicable"])
+@pytest.mark.parametrize(("peak", "current"), [("warning", "none"), ("critical", "critical"), ("info", "info")])
+def test_a_measured_device_never_outruns_the_verdict_that_lists_it(coverage, peak, current) -> None:
+    """A device row is the monitoring replay's own measurement, so it is part of the floor it was measured for."""
+    verdict = compose(coverage=coverage, devices=(device(peak=peak, current=current),))
+
+    assert all(band_rank(row.peak) <= band_rank(verdict.peak) for row in verdict.impacted_devices)
+    assert all(band_rank(row.current) <= band_rank(verdict.current) for row in verdict.impacted_devices)
+
+
+def test_a_device_row_raises_the_floor_its_conclusion_understated() -> None:
+    verdict = compose(
+        coverage="partial",
+        monitoring=Conclusion(peak="warning", current="none"),
+        devices=(device(peak="critical", current="critical"),),
+    )
+
+    assert (verdict.peak, verdict.current) == ("critical", "critical")
+    assert verdict.sources == ("monitoring",)

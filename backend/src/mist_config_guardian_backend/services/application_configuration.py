@@ -16,6 +16,7 @@ from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.guardian.agent_schema import (
     ACTION_SCHEMA,
     ACTION_SCHEMA_NAME,
+    ACTION_SCHEMA_STRICT,
     ACTION_SCHEMA_VERSION,
     PROBE_INSTRUCTION,
     capability_fingerprint,
@@ -67,7 +68,7 @@ _SMTP_PASSWORD_CONTEXT = "smtp-password"  # noqa: S105 - an encryption context l
 # The capability probe asks for one small action; a provider that needs more than this is not usable anyway.
 _PROBE_MAX_TOKENS = 400
 _PROBE_FORMATS: tuple[tuple[StructuredOutputMode, ResponseFormat], ...] = (
-    ("json_schema", JsonSchemaFormat(name=ACTION_SCHEMA_NAME, schema=ACTION_SCHEMA)),
+    ("json_schema", JsonSchemaFormat(name=ACTION_SCHEMA_NAME, schema=ACTION_SCHEMA, strict=ACTION_SCHEMA_STRICT)),
     ("json_object", JSON_OBJECT),
 )
 

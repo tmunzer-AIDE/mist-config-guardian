@@ -37,6 +37,7 @@ from mist_config_guardian_backend.guardian.agent_schema import ACTION_SCHEMA_VER
 from mist_config_guardian_backend.guardian.change import AtomView
 from mist_config_guardian_backend.guardian.contracts import (
     MAX_DETAIL_CHARS,
+    MAX_IDENTIFIER_CHARS,
     MAX_MCP_CALLS,
     MAX_MODEL_TURNS,
     MAX_SUMMARY_CHARS,
@@ -56,12 +57,14 @@ from mist_config_guardian_backend.guardian.contracts import (
     bound_reason,
 )
 from mist_config_guardian_backend.guardian.evidence import (
+    CONCLUSIONS_BUDGET,
     FEEDBACK_BUDGET,
     MODEL_OUTPUT_BUDGET,
     PROMPT_CAP,
     TOOL_CATALOGUE_BUDGET,
     Bounded,
     EvidenceRegistry,
+    bounded,
     json_size,
     mentions_device,
     normalized_mac,
@@ -96,6 +99,7 @@ DROPPED_GAP = "MCP tools were not offered to the agent because the catalogue did
 WITHHELD_LINE = "{identity}: withheld (not citable)"
 REJECTED = "Action rejected ({category}): {detail}"
 RECORDED = "The call was recorded as {identity} ({collection}). {detail}"
+TRIMMED_GAP = "{findings} finding(s) and {gaps} gap(s) were not stored: the report exceeded its own byte budget"
 
 SYSTEM_PROMPT = """You are Guardian's investigator. You judge whether one configuration audit harmed the network.
 
@@ -125,6 +129,10 @@ Facts about how your report is used, not instructions to agree:
 - Every warning or critical finding cites at least one item, and every impacted device is named by the evidence it
   cites, in its scope or its rows.
 - You may cite only evidence shown in this turn. An item marked withheld is not citable.
+
+Every operational read covers the before window or the after window, never the present. There is
+no snapshot tool for current state, so current_impact rests on what the after window ends on and on the
+deterministic conclusion below.
 
 You have at most ten turns and seven tool calls. While three or fewer turns remain, only a report is accepted. A
 rejected report can be repaired on the next turn; the rejection tells you why.
@@ -511,7 +519,7 @@ def _report(
                 "device_not_in_evidence", f"Impacted device {index} is not named by the evidence it cites."
             )
         impacted.append(DeviceImpact(mac=mac, severity=item["impact"], evidence_ids=group))
-    return _Outcome("report", conclusion=_conclusion(claim, impacted, secrets))
+    return _Outcome("report", conclusion=_conclusion(claim, impacted, registry, secrets))
 
 
 def _ordered(claim: _Claim, **_: Any) -> _Outcome | None:
@@ -564,23 +572,85 @@ def _supported(claim: _Claim, *, registry: EvidenceRegistry, **_: Any) -> _Outco
     )
 
 
-def _conclusion(claim: _Claim, impacted: Sequence[DeviceImpact], secrets: Sequence[str]) -> AgentConclusion:
-    """The accepted report, with every piece of provider text redacted and bounded before it is stored."""
+class _Trimmable(Contract):
+    """One finding or one gap of a report, with the order the conclusions budget drops them in."""
+
+    rank: tuple[int, int, int]
+    finding: Finding | None = None
+    gap: Text | None = None
+
+
+def _conclusion(
+    claim: _Claim, impacted: Sequence[DeviceImpact], registry: EvidenceRegistry, secrets: Sequence[str]
+) -> AgentConclusion:
+    """The accepted report, redacted, bounded, and kept within the conclusions budget.
+
+    Its bands, its summary, its impacted devices and the citations they rest on are never dropped: what gives way
+    is the tail of the findings, worst severity first, and then the gaps, each counted in a gap of its own. A
+    report the schema allows is roughly three times this budget, so the trimming is the mechanism, not the
+    serialized-size assertion that backs the whole run document.
+    """
     findings = [
         Finding(text=text, severity=item["impact"], evidence_ids=claim.citations[f"finding {index}"])
         for index, item in enumerate(claim.findings, start=1)
         if (text := _line(str(item["text"]), MAX_TEXT_CHARS, secrets))
     ]
+    gaps = [text for gap in claim.gaps if (text := _line(gap, MAX_TEXT_CHARS, secrets))]
+    # What gives way, in order: the findings below warning, then the gaps, and only then the severity claims
+    # themselves, worst kept longest.
+    trimmable = [
+        *(
+            _Trimmable(
+                rank=(0 if band_rank(finding.severity) >= _WARNING else 2, -band_rank(finding.severity), index),
+                finding=finding,
+            )
+            for index, finding in enumerate(findings)
+        ),
+        *(_Trimmable(rank=(1, 0, index), gap=gap) for index, gap in enumerate(gaps)),
+    ]
+    support = tuple(
+        identity
+        for identity in sorted(claim.cited, key=lambda value: int(value[1:]))
+        if _item(registry, identity).kind == "service_health"
+    )
+    return bounded(
+        trimmable,
+        budget=CONCLUSIONS_BUDGET,
+        priority=lambda item: item.rank,
+        category=lambda item: "finding" if item.finding is not None else "gap",
+        build=lambda kept, omitted: _reported(claim, impacted, support, kept, omitted, secrets=secrets),
+    )
+
+
+def _reported(  # noqa: PLR0913 - the parts a trimmed report is rebuilt from
+    claim: _Claim,
+    impacted: Sequence[DeviceImpact],
+    support: Sequence[EvidenceId],
+    kept: Sequence[_Trimmable],
+    omitted: Mapping[str, int],
+    *,
+    secrets: Sequence[str],
+) -> AgentConclusion:
+    """One candidate conclusion: what is kept, what was counted, and the citations the bands still rest on."""
+    findings = tuple(item.finding for item in kept if item.finding is not None)
+    gaps = tuple(item.gap for item in kept if item.gap is not None)
+    cited = {identity for source in (impacted, findings) for item in source for identity in item.evidence_ids} | set(
+        claim.citations["report"]
+    )
+    # A dropped finding must not take the last service-health citation with it: the bands rest on it.
+    kept_support = () if not support or cited & set(support) else (support[0],)
+    if omitted:
+        gaps = (*gaps, _line(TRIMMED_GAP.format(findings=omitted.get("finding", 0), gaps=omitted.get("gap", 0))))
     return AgentConclusion(
         concluded=True,
         peak=claim.peak,
         current=claim.current,
         confidence=claim.confidence,
         summary=_line(claim.summary, MAX_SUMMARY_CHARS, secrets),
-        evidence_ids=claim.citations["report"],
-        findings=tuple(findings),
+        evidence_ids=(*claim.citations["report"], *kept_support),
+        findings=findings,
         impacted_devices=tuple(impacted),
-        gaps=tuple(text for gap in claim.gaps if (text := _line(gap, MAX_TEXT_CHARS, secrets))),
+        gaps=gaps,
     )
 
 
@@ -673,7 +743,7 @@ def _render(  # noqa: PLR0913 - one prompt section per argument
     lines += ["## change", to_json(inputs.change).decode()]
     lines += ["## deterministic conclusion", to_json(inputs.deterministic).decode()]
     if inputs.hints:
-        lines += ["## plug-in hints", _within(to_json(dict(inputs.hints)).decode(), HINTS_BUDGET)]
+        lines += ["## plug-in hints", _hints(inputs.hints)]
     lines.append("## evidence")
     shown = {item.id: item for item in evidence}
     for identity in sorted({*shown, *withheld}, key=lambda value: int(value[1:])):
@@ -683,6 +753,21 @@ def _render(  # noqa: PLR0913 - one prompt section per argument
     if feedback:
         lines += ["## feedback", feedback]
     return "\n".join(lines)
+
+
+def _hints(hints: Mapping[str, str]) -> str:
+    """The plug-in hints within their budget, each bounded, so the section stays one valid JSON object.
+
+    A hint is plug-in text, not provider text, but it reaches the prompt, so it is bounded like anything else and
+    a hint that would take the section past its budget is left out rather than cut in half.
+    """
+    kept: dict[str, str] = {}
+    for plugin in sorted(hints):
+        candidate = {**kept, str(plugin)[:MAX_IDENTIFIER_CHARS]: _line(hints[plugin])}
+        if json_size(candidate) > HINTS_BUDGET:
+            break
+        kept = candidate
+    return to_json(kept).decode()
 
 
 def _ids(value: Any) -> tuple[str, ...]:

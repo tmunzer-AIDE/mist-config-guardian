@@ -53,6 +53,10 @@ class JsonSchemaFormat:
 
     Some servers accept the parameter and ignore it, so a caller that depends on the shape validates the returned
     content against the same schema rather than trusting the request was honored.
+
+    ``strict`` promises the schema is inside the provider's strict subset, and only a strict request carries the
+    flag. A schema the subset excludes, such as one with a root ``oneOf``, asks for no strictness rather than
+    asking for something the provider must refuse or downgrade.
     """
 
     name: str
@@ -71,11 +75,12 @@ def _response_format(response_format: ResponseFormat) -> dict[str, Any] | None:
     if isinstance(response_format, JsonObjectFormat):
         return {"type": "json_object"}
     if isinstance(response_format, JsonSchemaFormat):
-        schema = {
-            "name": response_format.name,
-            "schema": dict(response_format.schema),
-            "strict": response_format.strict,
-        }
+        # ``strict`` is sent only when it is asked for. A schema outside OpenAI-style strict mode, such as one with
+        # a root ``oneOf``, is refused or silently downgraded when the flag is set, so a caller that cannot promise
+        # strictness sends no flag at all and validates the returned content instead.
+        schema: dict[str, Any] = {"name": response_format.name, "schema": dict(response_format.schema)}
+        if response_format.strict:
+            schema["strict"] = True
         return {"type": "json_schema", "json_schema": schema}
     return None
 

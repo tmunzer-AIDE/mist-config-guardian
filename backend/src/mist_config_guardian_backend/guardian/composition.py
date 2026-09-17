@@ -8,7 +8,9 @@ alone, and the agent contributes only when its report cites service-health evide
 a database or a clock, so every rule is table-testable.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+
+from pydantic import model_validator
 
 from mist_config_guardian_backend.guardian.contracts import (
     MAX_TEXT_CHARS,
@@ -60,6 +62,13 @@ class DeviceSeverity(Contract):
     peak: Band = "none"
     current: Band = "none"
 
+    @model_validator(mode="after")
+    def current_within_peak(self) -> "DeviceSeverity":
+        if band_rank(self.current) > band_rank(self.peak):
+            msg = f"A device's current ({self.current}) cannot exceed peak ({self.peak})"
+            raise ValueError(msg)
+        return self
+
 
 def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argument
     *,
@@ -79,7 +88,8 @@ def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argume
     """
     plugins = dict(sorted((rules or {}).items()))
     base: Band = "none" if coverage == "complete" else "info"
-    floor = _Floor(monitoring, deployment, plugins)
+    rows = tuple(devices)
+    floor = _Floor(monitoring, deployment, plugins, rows)
     contribution = _Contribution.of(agent, evidence)
 
     peak = _worst(base, floor.peak, contribution.peak)
@@ -87,7 +97,7 @@ def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argume
     # Rule 5: only a contributing report that concurs with the published peak raises confidence above low.
     confidence: Confidence = "medium" if contribution.contributes and contribution.peak == peak else "low"
 
-    listed, unidentified = _impacted(devices, monitoring, deployment, plugins, contribution)
+    listed, unidentified = _impacted(rows, monitoring, deployment, plugins, contribution)
     gaps = _gaps(monitoring, deployment, plugins, agent, contribution, peak=peak, unidentified=unidentified)
     return Verdict(
         peak=peak,
@@ -104,18 +114,36 @@ def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argume
 
 
 class _Floor:
-    """Rule 2: the maximum over the deterministic sources, counting warning and critical alone."""
+    """Rule 2: the maximum over the deterministic sources, counting warning and critical alone.
+
+    The per-device rows belong to this floor too: they are the exclusive monitoring replay, which rule 2 names,
+    measured device by device rather than folded into one band. Folding them back in changes nothing for a
+    consistent replay, whose conclusion already carries the maximum over its own devices, and it keeps composition
+    total: a verdict can never list a device it did not account for (controller ruling R36).
+    """
 
     def __init__(
-        self, monitoring: Conclusion | None, deployment: Conclusion | None, rules: Mapping[str, Conclusion]
+        self,
+        monitoring: Conclusion | None,
+        deployment: Conclusion | None,
+        rules: Mapping[str, Conclusion],
+        devices: Sequence[DeviceSeverity] = (),
     ) -> None:
+        measured = (_worst(*(row.peak for row in devices)), _worst(*(row.current for row in devices)))
+        if monitoring is not None and devices:
+            monitoring = monitoring.model_copy(
+                update={
+                    "peak": _worst(monitoring.peak, measured[0]),
+                    "current": _worst(monitoring.current, measured[1]),
+                }
+            )
         self.inputs: dict[VerdictSource, Conclusion] = {
             **({"monitoring": monitoring} if monitoring is not None else {}),
             **({"deployment": deployment} if deployment is not None else {}),
             **{f"rule:{plugin}": conclusion for plugin, conclusion in rules.items()},
         }
-        self.peak = _worst(*(_above_info(item.peak) for item in self.inputs.values()))
-        self.current = _worst(*(_above_info(item.current) for item in self.inputs.values()))
+        self.peak = _worst(*(_above_info(item.peak) for item in self.inputs.values()), _above_info(measured[0]))
+        self.current = _worst(*(_above_info(item.current) for item in self.inputs.values()), _above_info(measured[1]))
 
     def setting(self, band: Band) -> list[VerdictSource]:
         """The floor inputs whose own contribution is exactly ``band``."""

@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 from mist_config_guardian_backend.guardian.agent import (
+    DROPPED_TOOL,
+    HINTS_BUDGET,
     MAX_MODEL_TURNS,
     NO_CAPABILITY,
     NO_MCP_ENDPOINT,
@@ -30,10 +32,20 @@ from mist_config_guardian_backend.guardian.agent import (
     run_agent,
     tools_view,
 )
+from mist_config_guardian_backend.guardian.agent_schema import MAX_REPORT_ITEMS
 from mist_config_guardian_backend.guardian.change import AtomView
-from mist_config_guardian_backend.guardian.contracts import MAX_MCP_CALLS, Evidence, Target
+from mist_config_guardian_backend.guardian.composition import cited, compose
+from mist_config_guardian_backend.guardian.contracts import (
+    BANDS,
+    MAX_MCP_CALLS,
+    MAX_SUMMARY_CHARS,
+    MAX_TEXT_CHARS,
+    Evidence,
+    Target,
+)
 from mist_config_guardian_backend.guardian.evidence import (
     CHANGE_VIEW_BUDGET,
+    CONCLUSIONS_BUDGET,
     DETERMINISTIC_VIEW_BUDGET,
     MODEL_OUTPUT_BUDGET,
     PROMPT_CAP,
@@ -57,6 +69,7 @@ AS_OF = CHANGED_AT + timedelta(minutes=60)
 WINDOWS = evidence_windows(CHANGED_AT, AS_OF)
 BEFORE = (int(WINDOWS.before.start.timestamp()), int(WINDOWS.before.end.timestamp()))
 CATALOGUE = json.loads((Path(__file__).parent / "fixtures" / "mist_mcp_catalog.json").read_text())
+CATALOGUE_TOOL_NAMES = sorted(str(tool["name"]) for tool in CATALOGUE if isinstance(tool, dict))
 
 
 class FakeMcp:
@@ -494,6 +507,85 @@ async def test_ten_stored_turns_serialize_within_the_steps_budget() -> None:
     assert json_size(steps) <= STEPS_BUDGET
 
 
+# --- the stored conclusion stays within the conclusions budget ----------------------------------------------------
+
+
+MANY_MACS = tuple(f"5c5b35{index:06d}" for index in range(MAX_REPORT_ITEMS))
+
+
+def maximal_report() -> str:
+    """The largest report the action schema allows: 20 findings, 20 devices, 20 gaps and a full summary."""
+    return json.dumps(
+        {
+            "action": "report",
+            "peak_impact": "critical",
+            "current_impact": "critical",
+            "confidence": "medium",
+            "summary": "s" * MAX_SUMMARY_CHARS,
+            "evidence": ["E1"],
+            "findings": [
+                {
+                    "text": f"finding {index}: " + "f" * (MAX_TEXT_CHARS - 20),
+                    "impact": BANDS[index % len(BANDS)],
+                    "evidence": ["E1"],
+                }
+                for index in range(MAX_REPORT_ITEMS)
+            ],
+            "impacted_devices": [{"mac": mac, "impact": "critical", "evidence": ["E1"]} for mac in MANY_MACS],
+            "gaps": [f"gap {index}: " + "g" * (MAX_TEXT_CHARS - 20) for index in range(MAX_REPORT_ITEMS)],
+        }
+    )
+
+
+def wide_registry() -> EvidenceRegistry:
+    return registry_with(evidence(scope={"site_ids": (SITE,), "device_macs": MANY_MACS}))
+
+
+async def test_a_maximal_report_is_stored_within_the_conclusions_budget() -> None:
+    result = await run(maximal_report(), registry=wide_registry())
+
+    conclusion = result.conclusion
+    assert conclusion.concluded is True
+    assert json_size(conclusion) <= CONCLUSIONS_BUDGET
+    assert conclusion.summary == "s" * MAX_SUMMARY_CHARS
+    assert (conclusion.peak, conclusion.current, conclusion.confidence) == ("critical", "critical", "medium")
+    assert len(conclusion.impacted_devices) == MAX_REPORT_ITEMS
+    assert len(conclusion.findings) < MAX_REPORT_ITEMS
+
+
+async def test_a_trimmed_report_keeps_its_worst_findings_and_states_what_was_dropped() -> None:
+    result = await run(maximal_report(), registry=wide_registry())
+
+    conclusion = result.conclusion
+    kept = [finding.severity for finding in conclusion.findings]
+    assert kept == sorted(kept, key=lambda band: -BANDS.index(band))
+    assert "critical" in kept
+    assert any("not stored" in gap for gap in conclusion.gaps)
+    dropped = next(gap for gap in conclusion.gaps if "not stored" in gap)
+    assert f"{MAX_REPORT_ITEMS - len(conclusion.findings)} finding" in dropped
+    assert f"{MAX_REPORT_ITEMS - len([g for g in conclusion.gaps if g != dropped])} gap" in dropped
+
+
+async def test_a_trimmed_report_keeps_the_citations_its_bands_rest_on() -> None:
+    registry = wide_registry()
+    health = {item.id for item in registry.evidence if item.kind == "service_health"}
+
+    result = await run(maximal_report(), registry=registry)
+
+    verdict = compose(coverage="partial", agent=result.conclusion, evidence=registry.evidence)
+    assert cited(result.conclusion) & health
+    assert (verdict.peak, verdict.current, verdict.confidence) == ("critical", "critical", "medium")
+    # The counts reach the report through the verdict's gaps, under the agent's own name.
+    assert any(gap.source == "agent" and "not stored" in gap.text for gap in verdict.gaps)
+
+
+async def test_a_report_within_the_budget_is_stored_whole() -> None:
+    result = await run(report(findings=[{"text": "Clients dropped", "impact": "warning", "evidence": ["E1"]}]))
+
+    assert [finding.text for finding in result.conclusion.findings] == ["Clients dropped"]
+    assert result.conclusion.gaps == ()
+
+
 # --- failures ---------------------------------------------------------------------------------------------------
 
 
@@ -576,12 +668,21 @@ def big_evidence(identity: str, source: str, size: int, **overrides) -> Evidence
 
 
 def worst_case_inputs() -> AgentInputs:
+    """The change view, the deterministic conclusion and the plug-in hints, each filled to its own budget."""
     atoms, obligations = 1, 1
     while json_size(inputs(atoms=atoms + 1).change) <= CHANGE_VIEW_BUDGET:
         atoms += 1
     while json_size(inputs(obligations=obligations + 1).deterministic) <= DETERMINISTIC_VIEW_BUDGET:
         obligations += 1
-    return inputs(atoms=atoms, obligations=obligations)
+    filled = inputs(atoms=atoms, obligations=obligations)
+    hints: dict[str, str] = {}
+    while (
+        len(json.dumps({**hints, f"plug-in-{len(hints)}": "h" * 200}, separators=(",", ":")).encode()) <= HINTS_BUDGET
+    ):
+        hints[f"plug-in-{len(hints)}"] = "h" * 200
+    # One hint past the budget, which the builder leaves out whole rather than cutting the section in half.
+    hints[f"plug-in-{len(hints)}"] = "h" * 200
+    return AgentInputs(change=filled.change, deterministic=filled.deterministic, hints=hints)
 
 
 async def catalogue():
@@ -598,7 +699,9 @@ async def worst_case_tools() -> "object":
     filler = TOOL_CATALOGUE_BUDGET - json_size(shown) - 1
     if filler > 0:
         shown[-1] = {**shown[-1], "arguments": {"description": "z" * filler}}
-    return ToolsView(shown=tuple(shown), dropped=view.dropped, unavailable=view.unavailable)
+    # Every allowlisted tool that a catalogue could refuse, so the "tools not available" section is at its widest.
+    unavailable = dict.fromkeys(CATALOGUE_TOOL_NAMES, DROPPED_TOOL)
+    return ToolsView(shown=tuple(shown), dropped=view.dropped, unavailable=unavailable)
 
 
 def prompt_of(items, *, feedback="", turns_left=10, agent_inputs=None, tools=None):
@@ -744,3 +847,11 @@ def test_the_system_prompt_states_the_protocol_within_its_budget() -> None:
     assert len(SYSTEM_PROMPT.encode()) <= SYSTEM_PROMPT_BUDGET
     assert "report" in SYSTEM_PROMPT
     assert "service_health" in SYSTEM_PROMPT
+
+
+async def test_the_prompt_says_that_no_read_shows_the_present() -> None:
+    """Every allowlisted service-health tool is time-ranged, so the agent is told there is no snapshot read."""
+    prompt = prompt_of([evidence()], tools=tools_view(await catalogue()))
+
+    assert "no snapshot tool for current state" in prompt.system
+    assert prompt.fixed_size <= PROMPT_FIXED_BUDGET

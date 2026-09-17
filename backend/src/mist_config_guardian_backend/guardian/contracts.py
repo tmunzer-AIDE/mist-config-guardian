@@ -431,4 +431,7 @@ class Verdict(Contract):
     @model_validator(mode="after")
     def consistent_bands(self) -> "Verdict":
         validate_published_verdict(self.peak, self.current, self.recovery, self.coverage)
+        if any(band_rank(device.peak) > band_rank(self.peak) for device in self.impacted_devices):
+            msg = "No impacted device can exceed the verdict's peak"
+            raise ValueError(msg)
         return self

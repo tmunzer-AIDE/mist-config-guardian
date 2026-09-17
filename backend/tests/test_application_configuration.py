@@ -8,7 +8,11 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from mist_config_guardian_backend.config import Settings
-from mist_config_guardian_backend.guardian.agent_schema import ACTION_SCHEMA_VERSION, capability_fingerprint
+from mist_config_guardian_backend.guardian.agent_schema import (
+    ACTION_SCHEMA,
+    ACTION_SCHEMA_VERSION,
+    capability_fingerprint,
+)
 from mist_config_guardian_backend.integrations.ai_provider import (
     JSON_OBJECT,
     TEXT,
@@ -119,6 +123,7 @@ class _FakeProvider:
         self.replies = replies
         self.connected = connected
         self.requests: list[tuple[str, tuple[AiMessage, ...]]] = []
+        self.formats: list[object] = []
         self.closed = False
 
     async def complete(self, messages, *, max_tokens=None, response_format=TEXT) -> AiCompletion:  # noqa: ARG002 - the fake mirrors the provider protocol
@@ -130,6 +135,7 @@ class _FakeProvider:
             else "text"
         )
         self.requests.append((kind, tuple(messages)))
+        self.formats.append(response_format)
         reply = self.replies.get(kind)
         if isinstance(reply, Exception):
             raise reply
@@ -222,6 +228,21 @@ async def test_a_probe_that_validates_records_json_schema(monkeypatch: pytest.Mo
     assert [kind for kind, _ in provider.requests] == ["json_schema"]
     assert "json_schema" in response.detail
     assert provider.closed is True
+
+
+async def test_the_schema_probe_asks_for_guardians_own_action_schema_without_strictness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controller ruling R35: the root ``oneOf`` is outside strict mode, and content validation is the gate."""
+    provider = _FakeProvider(replies={"json_schema": REPORT})
+
+    await _service(provider, _provider_configuration(), monkeypatch).test_ai_connection()
+
+    requested = provider.formats[0]
+    assert isinstance(requested, JsonSchemaFormat)
+    assert requested.schema == ACTION_SCHEMA
+    # What that means on the wire is asserted in tests/test_ai_provider.py, over the real request body.
+    assert requested.strict is False
 
 
 async def test_a_server_that_ignores_the_schema_falls_back_to_a_json_object_probe(

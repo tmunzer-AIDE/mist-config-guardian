@@ -496,6 +496,10 @@ def test_a_worst_case_run_stays_within_the_run_document_bound() -> None:
     worst = worst_case_run()
     conclusions = json_size((worst.monitoring, worst.deployment, worst.rules, worst.agent))
 
+    # The agent bounds its own conclusion when it accepts a report; the deterministic ones are not bounded yet,
+    # and this construction holds them well above their share on purpose.
+    assert json_size(worst.agent) <= CONCLUSIONS_BUDGET
+
     assert json_size(worst.evidence) >= EVIDENCE_BUDGET
     assert json_size(worst.ledger) + json_size(worst.obligations) >= LEDGER_VIEW_BUDGET
     assert worst.verdict is not None

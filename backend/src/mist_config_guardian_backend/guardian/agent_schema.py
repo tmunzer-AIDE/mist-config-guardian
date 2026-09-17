@@ -11,6 +11,7 @@ produce the old shape, not the new one.
 
 import json
 import re
+from collections.abc import Mapping
 from hashlib import sha256
 from typing import Any, Final
 
@@ -87,6 +88,19 @@ ACTION_SCHEMA: Final[dict[str, Any]] = {
     "title": "GuardianAction",
     "oneOf": [_CALL, _REPORT],
 }
+
+
+def strict_subset(schema: Mapping[str, Any]) -> bool:
+    """Whether a schema is inside the provider's strict subset, which a root combinator puts it outside of.
+
+    Guardian's action is one call or one report, so its root is a ``oneOf``. Asking a provider for strict mode on
+    such a schema is refused or silently downgraded, and a capable provider is then recorded as ``json_object``
+    (controller ruling R35). The gate for the capability record is the returned content, never the flag.
+    """
+    return not any(key in schema for key in ("oneOf", "anyOf", "allOf", "not"))
+
+
+ACTION_SCHEMA_STRICT: Final = strict_subset(ACTION_SCHEMA)
 
 # What the probe asks for. It is a report an investigation would reject on its merits, which is the point: the
 # probe tests the shape a provider can produce, never the judgement it would make.
