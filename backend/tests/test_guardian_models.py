@@ -427,7 +427,7 @@ def test_guardian_code_never_touches_the_legacy_engine():
 
 # The deterministic core: it may use the pure snapshot helpers (registry, canonical form, diff walker), never the
 # service, settings, security, persistence or transport layers. Later pure modules join this list.
-PURE_GUARDIAN_MODULES = ("change", "contracts", "evidence", "ledger", "repository")
+PURE_GUARDIAN_MODULES = ("change", "contracts", "deployment", "evidence", "ledger", "monitoring", "repository")
 IMPURE_LAYERS = (
     "beanie",
     "motor",
