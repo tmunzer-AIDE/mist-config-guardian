@@ -17,7 +17,7 @@
       "input_schema_sha256": "b31c334b71aebc3105707d491476bb3c6f14bb24a4d63ace8486b476fbfb730f",
       "read_only_hint": true,
       "discriminator": "resource_type",
-      "rule": "Configuration reads are configuration.",
+      "rule": "Configuration reads are configuration, except secret-bearing objects.",
       "kinds": {
         "sites": "configuration",
         "alarmtemplates": "configuration",
@@ -31,10 +31,8 @@
         "sitegroups": "configuration",
         "sitetemplates": "configuration",
         "vpns": "configuration",
-        "webhooks": "configuration",
         "wlantemplates": "configuration",
         "wlans": "configuration",
-        "psks": "configuration",
         "wxrules": "configuration",
         "wxtags": "configuration",
         "evpn_topologies": "configuration",
@@ -49,7 +47,10 @@
         "devices": "configuration",
         "maps": "configuration"
       },
-      "excluded": {}
+      "excluded": {
+        "psks": "Secret-bearing configuration object; excluded for minimal exposure and no investigation value.",
+        "webhooks": "Secret-bearing configuration object; excluded for minimal exposure and no investigation value."
+      }
     },
     "get_mist_constants": {
       "input_schema_sha256": "b000ae291a01026c1ebad86a414f4195ada4ed754a270c3136f38f0f91258cb7",

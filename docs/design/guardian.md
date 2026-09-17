@@ -22,8 +22,8 @@ reconstructed from production API projections.
 |---|---|---|
 | `device_event_ordering` | `same_second_ambiguous` | Task 4 deployment pairing |
 | `sw_configured_emission` | `unknown` | Task 4 deployment pairing, Task 12 replay |
-| `dns_attribute_semantics` | `recorded` (3 management, 10 client, 52 unverified) | Task 6 `dns` plug-in |
-| `mcp_evidence_kind_allowlist` | `frozen` (87 combinations over 5 tools) | Task 5 Reader |
+| `dns_attribute_semantics` | `recorded` (3 management, 10 client, 18 both, 34 unverified) | Task 6 `dns` plug-in |
+| `mcp_evidence_kind_allowlist` | `frozen` (85 combinations over 5 tools) | Task 5 Reader |
 | `structured_output_capability` | `inconclusive` | Task 5 capability probe |
 
 ### Device-event ordering
@@ -62,22 +62,24 @@ for one object key and `[]` for one list index. Every entry cites the schema poi
 | `management_resolution` | `org:mxedges` `oob_ip_config.dns` | "Name server addresses for out-of-band management" |
 | `client_resolution` | `dhcpd_config.*.dns_servers` and `dns_suffix` of switch profiles, gateway profiles, gateway templates, site gateway settings and switch/gateway devices | "DNS servers advertised to DHCP clients" |
 | `client_resolution` | `org:wlans`, `site:wlans` `no_static_dns`, `dns_server_rewrite` | Restricts or rewrites the DNS that wireless clients use |
+| `management_and_client_resolution` | Switch and gateway resolver settings: global `dns_servers`/`dns_suffix` of network templates, switch and gateway profiles, gateway templates, site `switch`/`gateway` settings and devices, plus `dnsOverride` and Junos `ip_config` DNS | "dns settings in `ip_config` and `oob_ip_config` will overwrite this setting" and "if not defined, system one will be used" |
+
+**Dual-use rule.** A setting gets `management_and_client_resolution` when the schema documents both uses: it is the
+device's own management resolver, and the device's DHCP server hands the same resolver to clients of any scope that
+defines no DNS. The `dns` plug-in emits the union of infrastructure-connectivity obligations
+(`empty_policy=incomplete`) and client obligations (`empty_policy=not_exercised`) for it, so a management-only
+check can never hide a client effect. Network templates target switches, as the recorded catalogue describes them.
 
 Everything else is `unverified` and stays uncovered:
 
-- **Switch and gateway resolver settings.** This covers global `dns_servers`/`dns_suffix` (network templates, switch
-  and gateway profiles, gateway templates, site settings, devices), `dnsOverride` and Junos `ip_config` DNS. The
-  schema ties them to the device's own management resolver ("dns settings in `ip_config` and `oob_ip_config` will
-  overwrite this setting"). The DHCP server on the same device falls back to that resolver ("if not defined, system
-  one will be used"). Management resolution is established; a client effect is possible. A management-only
-  mapping could therefore hide a client impact.
+- Site-level `dns_servers`/`dns_suffix`, because the device types that consume them are not established.
 - Gateway data-interface resolvers (`port_config.*.ip_config.dns`), whose traffic is not established.
 - Settings that are not resolver configuration: mDNS forwarding, DNS-failure alert thresholds, Sky ATP DNS
   inspection, SecIntel categories, host-out path policy, and `use_mgmt_vrf` or management `network` selection.
 - Legacy `secpolicies` WLAN copies and Mist tunnel IPsec client DNS, whose consuming devices are not established.
 
-An attribute absent from the table is rejected as unknown. The DNT-NTR change (`org:networktemplates`
-`dns_servers`) is unverified, so the `dns` plug-in does not claim it.
+An attribute absent from the table is rejected as unknown, and so is any class outside the four above. The
+DNT-NTR change (`org:networktemplates` `dns_servers`) is dual use for switches.
 
 ### MCP evidence-kind allowlist
 
@@ -89,12 +91,12 @@ discovery). Each allowlisted tool's input schema is hashed as sorted-key, compac
 | `search_mist_data` | `search_type` | `service_health` (events, alarms, client/device/session searches) | `sites`, `inventory`, `mxedges`, `usermacs`, `guest_authorizations`, `rogue_events` |
 | `get_mist_stats` | `stats_type` | `service_health` (all 15) | none |
 | `get_mist_insights` | `insight_type` | `service_health` (all 4) | none |
-| `get_mist_config` | `resource_type` | `configuration` (all 29) | none |
+| `get_mist_config` | `resource_type` | `configuration` (27) | `psks`, `webhooks` |
 | `get_mist_constants` | `constant_type` | `reference` (all 27) | none |
 
-`get_mist_self` and `find_mist_entity` are not allowlisted. A tool, or a discriminator value, that is missing from
-the fixture is unavailable. The secret-bearing configuration types `psks` and `webhooks` are allowlisted as
-configuration, so the Reader's redaction must hold for them.
+`get_mist_self` and `find_mist_entity` are not allowlisted. The secret-bearing configuration objects `psks` and
+`webhooks` are excluded for minimal exposure, since they carry no investigation value. A tool, or a discriminator
+value, that is missing from the fixture is unavailable.
 
 ### Structured-output capability
 
@@ -109,18 +111,20 @@ reconstructed from API projections, and organization, site, audit, object, sessi
 are pseudonymized. Timestamps, event types, device types and metric values and states are kept as recorded. No
 raw webhook bodies or individual monitoring observations exist for this audit.
 
-The expected outcome is **conditional**, because the DNS mapping for the change is unverified and `SW_CONFIGURED`
-emission is unknown. Only mapping-independent invariants are asserted now:
+The expected outcome is **conditional**, for two reasons. `SW_CONFIGURED` emission is unknown, and the choice of
+infrastructure and client metrics for the dual-use mapping belongs to Task 6. Only mapping-independent invariants
+are asserted now:
 
 - At one-second precision every audit-linked trigger is at or after the anchor, with one trigger per device, and
   every `*_CONFIGURED` outcome follows its trigger within 30 minutes. No device becomes deployment `unknown` because
   of the 242 ms boundary.
-- The three switches have no confirming outcome, so any of them that is targeted has an unsatisfied deployment
-  precondition.
+- The three switches have no confirming outcome, and the dual-use mapping targets them, so each one has an
+  unsatisfied deployment precondition.
 
-Under the recorded decisions, the spec's rules imply `info` peak and current, `partial` coverage, `low` confidence
-and no recovery, both as recorded and with `SW_CONFIGURED` added. The atom `dns_servers` stays uncovered on all
-seven expected devices, and no input reaches `warning`. Task 12 asserts the final result once the engine exists.
+The dual-use mapping handles the DNS atom on the three switches. The three APs and the gateway are not targeted by a
+switch mapping, so the atom stays uncovered on them. Under the recorded decisions, the spec's rules imply `info` peak
+and current, `partial` coverage, `low` confidence and no recovery, both as recorded and with `SW_CONFIGURED` added.
+No input reaches `warning`. Task 12 asserts the final result once the engine exists.
 
 ## Refreshing a verification
 

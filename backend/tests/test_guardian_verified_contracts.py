@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import pytest
 
 from guardian_verification import (
-    DNS_DEVICE_TYPES,
     DNS_SEMANTICS,
     EVIDENCE_KINDS,
     REPO_ROOT,
@@ -17,6 +16,7 @@ from guardian_verification import (
     UnknownDnsAttributeError,
     decision,
     dns_mappings,
+    dns_semantics_errors,
     evidence_kind,
     fixture_errors,
     load_fixture,
@@ -25,7 +25,7 @@ from guardian_verification import (
     sha256_file,
     verification_errors,
 )
-from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS, get_definition
+from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS
 
 TRIGGER = re.compile(r"^(AP|SW|GW)_CONFIG_CHANGED_BY_USER$")
 OUTCOME = re.compile(r"^(AP|SW|GW)_(CONFIGURED|CONFIG_FAILED|CONFIG_REVERTED)$")
@@ -197,25 +197,22 @@ def test_dns_semantics_are_complete_and_cite_the_schema():
     table = load_fixture("dns_attribute_semantics.json")
     schema_source = decision(load_verification(), "dns_attribute_semantics")["source"][0]
     assert table["source"]["sha256"] == schema_source["sha256"]
-    claimed = set()
-    for row in table["mappings"]:
-        scope, _, key = row["object_type"].partition(":")
-        assert get_definition(scope, key) is not None, row["object_type"]
-        assert (row["variant"] is not None) == (row["object_type"] == "site:devices")
-        assert row["semantics"] in DNS_SEMANTICS
-        if row["semantics"] == "unverified":
-            assert row["device_types"] == []
-        else:
-            assert row["device_types"]
-            assert set(row["device_types"]) <= DNS_DEVICE_TYPES
-        assert row["reason"]
-        assert len(row["evidence"]) >= len(row["paths"]) > 0
-        assert all(item["pointer"].startswith("#/components/schemas/") for item in row["evidence"])
-        for path in row["paths"]:
-            assert path[0] == row["attribute"]
-            identity = (row["object_type"], row["variant"], tuple(path))
-            assert identity not in claimed, identity  # One path never carries two semantics.
-            claimed.add(identity)
+    assert set(table["semantics"]) == DNS_SEMANTICS
+    assert dns_semantics_errors(table) == []
+
+
+@pytest.mark.parametrize("semantics", ["unknown", "management", None])
+def test_an_unknown_dns_class_is_rejected(semantics):
+    table = load_fixture("dns_attribute_semantics.json")
+    table["mappings"][0]["semantics"] = semantics
+    assert any("is not one of" in error for error in dns_semantics_errors(table))
+
+
+def test_a_dns_class_without_targets_is_rejected():
+    table = load_fixture("dns_attribute_semantics.json")
+    (row,) = dns_mappings("org:networktemplates", "dns_servers", semantics=table)
+    row["device_types"] = []
+    assert any("device_types must be empty" in error for error in dns_semantics_errors(table))
 
 
 @pytest.mark.parametrize(
@@ -232,8 +229,35 @@ def test_an_unknown_dns_attribute_is_rejected(object_type, attribute, variant):
         dns_mappings(object_type, attribute, variant=variant)
 
 
+@pytest.mark.parametrize(
+    ("object_type", "path", "variant", "device_type"),
+    [
+        ("org:networktemplates", ["dns_servers"], None, "switch"),  # The DNT-NTR change.
+        ("org:networktemplates", ["dns_suffix"], None, "switch"),
+        ("org:switchprofiles", ["ip_config", "dns"], None, "switch"),
+        ("org:gatewaytemplates", ["dnsOverride"], None, "gateway"),
+        ("site:devices", ["dns_servers"], "switch", "switch"),
+        ("site:devices", ["dns_servers"], "gateway", "gateway"),
+        ("site:settings", ["gateway", "dns_servers"], None, "gateway"),
+    ],
+)
+def test_dual_use_resolver_settings_carry_both_classes(object_type, path, variant, device_type):
+    (row,) = [row for row in dns_mappings(object_type, path[0], variant=variant) if path in row["paths"]]
+    assert row["semantics"] == "management_and_client_resolution"
+    assert row["device_types"] == [device_type]
+    assert "if not defined, system one will be used" in row["reason"]
+
+
+def test_every_documented_dual_use_row_carries_both_classes():
+    rows = load_fixture("dns_attribute_semantics.json")["mappings"]
+    fallback = [row for row in rows if "system one will be used" in row["reason"]]
+    assert len(fallback) == 18
+    assert {row["semantics"] for row in fallback} == {"management_and_client_resolution"}
+    assert len({row["reason"] for row in fallback}) == 1
+
+
 def test_recorded_dns_attributes_resolve_to_their_semantics():
-    assert [row["semantics"] for row in dns_mappings("org:networktemplates", "dns_servers")] == ["unverified"]
+    assert [row["semantics"] for row in dns_mappings("site:settings", "dns_servers")] == ["unverified"]
     assert [row["semantics"] for row in dns_mappings("site:devices", "ip_config", variant="ap")] == [
         "management_resolution"
     ]
@@ -252,6 +276,7 @@ def test_the_allowlist_is_frozen_from_the_recorded_catalogue():
     tools = {tool["name"]: tool for tool in json.loads(catalogue_path.read_text(encoding="utf-8"))}
     assert set(allowlist["tools"]) | set(allowlist["excluded_tools"]) == set(tools)
     assert not set(allowlist["tools"]) & set(allowlist["excluded_tools"])
+    assert {"psks", "webhooks"} <= set(allowlist["tools"]["get_mist_config"]["excluded"])
     for name, entry in allowlist["tools"].items():
         schema = tools[name]["inputSchema"]
         assert tools[name]["annotations"]["readOnlyHint"] is True
@@ -287,6 +312,8 @@ def test_allowlisted_calls_resolve_to_their_evidence_kind(tool, arguments, kind)
         ("mist_change_configuration_objects", {"object_type": "org_wlans"}),
         ("search_mist_data", {"search_type": "rogue_events"}),
         ("search_mist_data", {"search_type": "inventory"}),
+        ("get_mist_config", {"resource_type": "psks"}),
+        ("get_mist_config", {"resource_type": "webhooks"}),
         ("search_mist_data", {"search_type": "not_a_search_type"}),
         ("search_mist_data", {}),
         ("get_mist_config", {"resource_type": ["networktemplates"]}),

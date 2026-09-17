@@ -105,11 +105,13 @@ decisions:
       mappings: 65
       management_resolution: 3
       client_resolution: 10
-      unverified: 52
+      management_and_client_resolution: 18
+      unverified: 34
       dnt_ntr_attribute:
         object_type: org:networktemplates
         attribute: dns_servers
-        semantics: unverified
+        semantics: management_and_client_resolution
+        device_types: [switch]
     source:
       - kind: provider_schema
         ref: >-
@@ -126,7 +128,7 @@ decisions:
     observed_at: "2026-09-17T13:52:26+00:00"
     fixtures:
       - path: backend/tests/fixtures/guardian/dns_attribute_semantics.json
-        sha256: fc8ff79972bf259f6f71f3bfd17e90c727ca5ae54eccf80564ad0f72328acbd8
+        sha256: a02137feb486f1e544eace18f084847832324eb7610f2ec91ae5953c4bd6fb94
       - path: backend/tests/fixtures/guardian/dnt_ntr_change.json
         sha256: 976bdbe0010d8f830309d244c1c4e70407860eeb4524db4e5541b9040ffcbbae
     notes: >-
@@ -135,18 +137,21 @@ decisions:
       where the schema says the setting is advertised to or enforced on clients (DHCP server scopes, WLAN DNS
       restrictions); management resolution where it names the device's own management traffic (AP ip_config,
       Mist Edge out-of-band interface). The global dns_servers and dns_suffix, dnsOverride and Junos ip_config DNS
-      of switches and gateways stay unverified: the schema ties them to the device's management resolver, and the
-      DHCP server on the same device falls back to that resolver ("if not defined, system one will be used"), so
-      one class is not established and a management-only claim could hide a client effect. The DNT-NTR change
-      (org network template dns_servers) is therefore unhandled and uncovered.
+      of switches and gateways are management_and_client_resolution (controller ruling R12): the schema ties them
+      to the device's own management resolver, and the DHCP server on the same device hands that resolver to
+      clients of any scope without DNS ("if not defined, system one will be used"). The dns plug-in emits the union
+      of infrastructure obligations (empty_policy incomplete) and client obligations (empty_policy not_exercised)
+      for them. Site-level dns_servers and dns_suffix stay unverified because the device types consuming them are
+      not established. The DNT-NTR change (org network template dns_servers) is dual use for switches, which the
+      recorded catalogue describes as the network templates' devices.
 
   - id: mcp_evidence_kind_allowlist
     question: Which (tool, discriminator) combinations of the MCP catalogue are allowlisted, and with which evidence kind?
     result: frozen
     details:
       allowlisted_tools: 5
-      allowlisted_combinations: 87
-      excluded_combinations: 6
+      allowlisted_combinations: 85
+      excluded_combinations: 8
       excluded_tools: [find_mist_entity, get_mist_self]
     source:
       - kind: recorded_catalogue
@@ -157,16 +162,16 @@ decisions:
     observed_at: "2026-09-17T13:52:26+00:00"
     fixtures:
       - path: backend/tests/fixtures/guardian/mcp_allowlist.json
-        sha256: 3cb870d83bc200e83c3c14ed65a405ad638a477e7b3b608d96e4769a7b94d26c
+        sha256: cecabdd661f50c180aaf52764eed78e2e56dedf9fb852be7f073bee8bf16f76f
       - path: backend/tests/fixtures/mist_mcp_catalog.json
         sha256: 8531cc4c9f7d1e846fdfd7cc4fdf5feb4ef6420229d92b0b1ca5ff7cf7077294
     notes: >-
       Events, alarms, operational client/device/session searches, statistics, insights and SLE are service_health;
       configuration reads are configuration; constants are reference. Discovery, inventory, identity and rogue
       detection searches are not clearly classifiable and stay unavailable, as do get_mist_self and
-      find_mist_entity. Each allowlisted tool's input schema hash is frozen with the normalization named in the
-      fixture. Secret-bearing configuration types (psks, webhooks) are allowlisted as configuration under the kind
-      rule, so the Reader's redaction must hold for them.
+      find_mist_entity. The secret-bearing configuration objects psks and webhooks are excluded for minimal
+      exposure; they carry no investigation value (controller ruling R13). Each allowlisted tool's input schema
+      hash is frozen with the normalization named in the fixture.
 
   - id: structured_output_capability
     question: Does the configured provider honor response_format json_schema for the Guardian action schema?
@@ -204,10 +209,11 @@ dnt_ntr_expected_outcomes:
       sha256: f87f163a3190d2a8c3f6e9a5d41c1822002d0ac2c27275cec10c3571996829ee
   conditions:
     - decision: dns_attribute_semantics
-      state: org:networktemplates dns_servers is unverified
+      state: org:networktemplates dns_servers is management_and_client_resolution for switches
       effect: >-
-        No plug-in claims the change, so no mapping-specific obligation, metric selection or switch expectation is
-        fixed yet.
+        The dual-use mapping handles the DNS atom on the three switches. Which infrastructure and client metrics
+        become obligations belongs to Task 6, so the exact unsatisfied obligations are not fixed yet. The AP and
+        gateway rows are not targeted by a switch mapping and stay uncovered.
     - decision: sw_configured_emission
       state: unknown
       effect: >-
@@ -222,8 +228,8 @@ dnt_ntr_expected_outcomes:
       devices: ["020000000011", "020000000012", "020000000013", "020000000021", "020000000022", "020000000023", "020000000031"]
     - id: unconfirmed_switch_precondition_unsatisfied
       statement: >-
-        Any targeted switch without a confirming outcome has an unsatisfied deployment precondition, whichever
-        mapping later targets it.
+        Any targeted switch without a confirming outcome has an unsatisfied deployment precondition. The dual-use
+        mapping targets all three switches, and none has a confirming outcome.
       devices: ["020000000011", "020000000012", "020000000013"]
   provisional:
     note: >-
@@ -236,12 +242,16 @@ dnt_ntr_expected_outcomes:
       confidence: low
       recovery: none
       reason: >-
-        Atom A1 (dns_servers on the network template; modified_time forms no atom) is uncovered on all seven
-        expected devices. No exclusive monitoring, deployment or rule input reaches warning, so there is no floor.
+        Atom A1 (dns_servers on the network template; modified_time forms no atom) is handled by the dual-use mapping
+        on the three switches, whose deployment preconditions stay unsatisfied without SW_CONFIGURED, and is
+        uncovered on the three APs and the gateway. No exclusive monitoring, deployment or rule input reaches
+        warning, so there is no floor.
     with_sw_configured_added:
       peak_impact: info
       current_impact: info
       coverage: partial
       confidence: low
       recovery: none
-      reason: Confirming the switches does not cover A1, so the rows stay uncovered.
+      reason: >-
+        Confirming the switches satisfies their deployment preconditions, but A1 stays uncovered on the three APs
+        and the gateway.

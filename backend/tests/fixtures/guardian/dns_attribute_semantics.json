@@ -13,6 +13,7 @@
   "semantics": {
     "management_resolution": "The device resolves names for its own management traffic with this setting.",
     "client_resolution": "Clients served by the device receive or are forced onto these DNS settings.",
+    "management_and_client_resolution": "Both: the device's own management resolver, which its DHCP server also hands to clients by default.",
     "unverified": "No single class is established by the cited schema text; the row stays uncovered."
   },
   "mappings": [
@@ -69,8 +70,8 @@
       "object_type": "org:gatewaytemplates",
       "variant": null,
       "attribute": "dnsOverride",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dnsOverride"]
       ],
@@ -86,14 +87,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:gatewaytemplates",
       "variant": null,
       "attribute": "dns_servers",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dns_servers"]
       ],
@@ -110,14 +111,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:gatewaytemplates",
       "variant": null,
       "attribute": "dns_suffix",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dns_suffix"]
       ],
@@ -134,7 +135,7 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:gatewaytemplates",
@@ -263,8 +264,8 @@
       "object_type": "org:hubprofiles",
       "variant": null,
       "attribute": "dnsOverride",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dnsOverride"]
       ],
@@ -280,14 +281,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:hubprofiles",
       "variant": null,
       "attribute": "dns_servers",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dns_servers"]
       ],
@@ -304,14 +305,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:hubprofiles",
       "variant": null,
       "attribute": "dns_suffix",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dns_suffix"]
       ],
@@ -328,7 +329,7 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:hubprofiles",
@@ -494,8 +495,8 @@
       "object_type": "org:networktemplates",
       "variant": null,
       "attribute": "dns_servers",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["dns_servers"]
       ],
@@ -512,14 +513,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:networktemplates",
       "variant": null,
       "attribute": "dns_suffix",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["dns_suffix"]
       ],
@@ -536,7 +537,7 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:networktemplates",
@@ -683,8 +684,8 @@
       "object_type": "org:switchprofiles",
       "variant": null,
       "attribute": "dns_servers",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["dns_servers"]
       ],
@@ -701,14 +702,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:switchprofiles",
       "variant": null,
       "attribute": "dns_suffix",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["dns_suffix"]
       ],
@@ -725,14 +726,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:switchprofiles",
       "variant": null,
       "attribute": "ip_config",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["ip_config", "dns"],
         ["ip_config", "dns_suffix"]
@@ -755,7 +756,7 @@
           "referenced_description": "Unique string values returned or accepted by this schema"
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "org:switchprofiles",
@@ -901,8 +902,8 @@
       "object_type": "site:devices",
       "variant": "gateway",
       "attribute": "dns_servers",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dns_servers"]
       ],
@@ -919,14 +920,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:devices",
       "variant": "gateway",
       "attribute": "dns_suffix",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["dns_suffix"]
       ],
@@ -943,7 +944,7 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:devices",
@@ -1047,8 +1048,8 @@
       "object_type": "site:devices",
       "variant": "switch",
       "attribute": "dns_servers",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["dns_servers"]
       ],
@@ -1065,14 +1066,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:devices",
       "variant": "switch",
       "attribute": "dns_suffix",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["dns_suffix"]
       ],
@@ -1089,14 +1090,14 @@
           "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:devices",
       "variant": "switch",
       "attribute": "ip_config",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["ip_config", "dns"],
         ["ip_config", "dns_suffix"]
@@ -1119,7 +1120,7 @@
           "referenced_description": "Unique string values returned or accepted by this schema"
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:devices",
@@ -1174,7 +1175,7 @@
           "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
         }
       ],
-      "reason": "Not classified from the schema."
+      "reason": "Shared resolver schema, but the device types that consume the site-level value are not established."
     },
     {
       "object_type": "site:settings",
@@ -1193,7 +1194,7 @@
           "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
         }
       ],
-      "reason": "Not classified from the schema."
+      "reason": "Shared resolver schema, but the device types that consume the site-level value are not established."
     },
     {
       "object_type": "site:settings",
@@ -1224,8 +1225,8 @@
       "object_type": "site:settings",
       "variant": null,
       "attribute": "gateway",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
       "paths": [
         ["gateway", "dnsOverride"],
         ["gateway", "dns_servers"],
@@ -1253,7 +1254,7 @@
           "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:settings",
@@ -1350,8 +1351,8 @@
       "object_type": "site:settings",
       "variant": null,
       "attribute": "switch",
-      "semantics": "unverified",
-      "device_types": [],
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
       "paths": [
         ["switch", "dns_servers"],
         ["switch", "dns_suffix"]
@@ -1374,7 +1375,7 @@
           "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
         }
       ],
-      "reason": "The device's own resolver. The shared schema ties it to the management interfaces (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and the DHCP server on the same device falls back to it (\"if not defined, system one will be used\"). Management resolution is established; client resolution is possible for DHCP scopes without explicit DNS. One class is not established."
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
     },
     {
       "object_type": "site:settings",
