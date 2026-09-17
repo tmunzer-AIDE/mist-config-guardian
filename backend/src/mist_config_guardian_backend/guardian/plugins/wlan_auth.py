@@ -15,7 +15,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     ChangeAtom,
     Conclusion,
     DeviceImpact,
-    Evidence,
     ExpectedDevice,
     Finding,
     Identifier,
@@ -26,7 +25,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     Target,
 )
 from mist_config_guardian_backend.guardian.plugins import base
-from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, WindowName
+from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, RuleReading, WindowName
 
 ID = "wlan-auth"
 VERSION = "1"
@@ -155,20 +154,20 @@ class WlanAuthPlugin:
             label=base.identifier(changed.name),
         )
 
-    async def collect(self, plan: RulePlan, reader: Reader) -> list[Evidence]:
+    async def collect(self, plan: RulePlan, reader: Reader) -> list[RuleReading]:
         target = _plan(plan)
         if target.wlan_id is None or not target.obligations:
             return []
-        return [await reader.read(_read(target, window)) for window in ("before", "after")]
+        return [await base.read(reader, _read(target, window)) for window in ("before", "after")]
 
-    def evaluate(self, plan: RulePlan, evidence: Sequence[Evidence]) -> RuleConclusion:
+    def evaluate(self, plan: RulePlan, readings: Sequence[RuleReading]) -> RuleConclusion:
         target = _plan(plan)
         ids = base.obligation_ids(target)
-        reading = _attempts(target, evidence)
+        reading = _attempts(target, readings)
         if not ids or reading.reason:
             unsatisfied = ObligationStatus(status="unsatisfied", reason=base.text(reading.reason))
             return Conclusion(statuses=dict.fromkeys(ids, unsatisfied), gaps=target.gaps)
-        cited = tuple(item.id for item in evidence)
+        cited = tuple(item.id for item in readings if item.evidence.citable)
         if not reading.attempted:
             return Conclusion(
                 statuses=dict.fromkeys(ids, ObligationStatus(status="not_exercised", evidence_ids=cited)),
@@ -213,18 +212,18 @@ def _finding_text(plan: WlanAuthPlan, reading: Attempts) -> str:
     )
 
 
-def _attempts(plan: WlanAuthPlan, evidence: Sequence[Evidence]) -> Attempts:
+def _attempts(plan: WlanAuthPlan, readings: Sequence[RuleReading]) -> Attempts:
     """Pair the before and after reads and compare each client with itself."""
-    ordered = [item for item in evidence if item.window is not None]
+    ordered = [item for item in readings if item.evidence.window is not None]
     ordered.sort(key=base.window_start)
     if len(ordered) != base.PAIRED_READS:
         return Attempts(reason=base.NOT_READ_REASON)
-    readings = [base.read_rows(item) for item in ordered]
-    if not all(reading.complete for reading in readings):
-        return Attempts(reason=next(reading.reason for reading in readings if reading.reason))
+    results = [base.read_rows(item) for item in ordered]
+    if not all(result.complete for result in results):
+        return Attempts(reason=next(result.reason for result in results if result.reason))
     clients: dict[str, _Client] = {}
-    for reading, window in zip(readings, ("before", "after"), strict=True):
-        for row in reading.rows:
+    for result, window in zip(results, ("before", "after"), strict=True):
+        for row in result.rows:
             failure = _record(plan, row, window, clients)
             if failure:
                 return Attempts(reason=failure)
@@ -246,7 +245,7 @@ def _record(plan: WlanAuthPlan, row: Mapping[str, object], window: str, clients:
     kind = base.string(row.get("type"))
     if kind not in SUCCESSES | FAILURES:
         return ""
-    client = base.mac(base.string(row.get("mac")))
+    client = base.mac(row.get("mac"))
     at = base.number(row.get("timestamp"))
     if client is None or at is None:
         return IDENTITY_REASON

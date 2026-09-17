@@ -20,7 +20,11 @@ from mist_config_guardian_backend.guardian.contracts import (
     ObligationStatus,
     RulePlan,
 )
-from mist_config_guardian_backend.guardian.evidence import EvidenceRegistry
+from mist_config_guardian_backend.guardian.evidence import (
+    RULE_EVIDENCE_ITEM_BUDGET,
+    EvidenceRegistry,
+    json_size,
+)
 from mist_config_guardian_backend.guardian.ledger import build_ledger
 from mist_config_guardian_backend.guardian.plugins import PLUGINS, base
 from mist_config_guardian_backend.guardian.plugins.wlan_auth import WlanAuthPlan, WlanAuthPlugin
@@ -262,7 +266,7 @@ async def test_a_previously_connected_client_that_disconnects_is_a_possible_disr
     assert (conclusion.peak, conclusion.current) == ("warning", "warning")
     assert {status.status for status in conclusion.statuses.values()} == {"satisfied"}
     assert [device.mac for device in conclusion.impacted_devices] == [AP]
-    assert "1 of 1 client(s)" in conclusion.findings[0].text
+    assert "1 client(s)" in conclusion.findings[0].text
     assert "causation are not established" in conclusion.findings[0].text
     assert CLIENT not in conclusion.model_dump_json()
 
@@ -286,16 +290,94 @@ async def test_an_unused_wlan_deletion_is_a_complete_observation_of_no_disruptio
     [
         (TransportError("Mist returned HTTP 503"), "read failed"),
         ({"results": [], "total": 3}, base.PARTIAL_REASON),
-        ({"results": [{"mac": "x" * 2000, "note": "y" * 2000}], "total": 1}, base.DIGEST_REASON),
     ],
 )
-async def test_a_failed_partial_or_digested_collection_is_never_zero_usage(result, reason):
+async def test_a_failed_or_partial_collection_is_never_zero_usage(result, reason):
     transport = FakeRuleTransport(result)
     _plan, conclusion, _ = await run(WlanRemovalPlugin(), wlan_change(), transport=transport)
 
     assert {status.status for status in conclusion.statuses.values()} == {"unsatisfied"}
     assert all(reason.lower() in (status.reason or "").lower() for status in conclusion.statuses.values())
     assert (conclusion.peak, conclusion.current) == ("none", "none")
+
+
+@pytest.mark.parametrize("clients", [1, 8, 100])
+async def test_a_result_too_large_to_store_is_still_judged_in_full(clients):
+    """The stored item is bounded; the judgement is not. A busy WLAN's disruption must not disappear into a digest."""
+    macs = [f"0011223344{index:02x}" for index in range(clients)]
+    before = sessions(*(session(client=mac, connect=CHANGED_AT.timestamp() - 300, disconnect=None) for mac in macs))
+    after = sessions(
+        *(
+            session(client=mac, connect=CHANGED_AT.timestamp() - 300, disconnect=CHANGED_AT.timestamp() + 60)
+            for mac in macs
+        )
+    )
+    registry = EvidenceRegistry()
+    transport = FakeRuleTransport(lambda _path, params: before if params["start"] == BEFORE_START else after)
+    _plan, conclusion, _ = await run(WlanRemovalPlugin(), wlan_change(), charged=reader(transport, registry=registry))
+
+    assert (conclusion.peak, conclusion.current) == ("warning", "warning")
+    assert f"{clients} client(s)" in conclusion.findings[0].text
+    stored = registry.evidence
+    assert all(json_size(item) <= RULE_EVIDENCE_ITEM_BUDGET for item in stored)
+    # The digest counts come from the full validated result, whatever the stored copy could keep.
+    for item in stored:
+        rows = item.payload.get("digest", {}).get("rows", {}) if item.representation == "digest" else None
+        assert rows is None or rows["results"] == clients
+    # No row of the result reaches the conclusion: only counts, judgements and the identities privacy allows.
+    assert all(mac not in conclusion.model_dump_json() for mac in macs)
+
+
+async def test_no_raw_row_text_reaches_a_conclusion_a_finding_or_a_gap():
+    prose = "secret-provider-message"
+    row = session(connect=CHANGED_AT.timestamp() - 300, disconnect=CHANGED_AT.timestamp() + 60) | {
+        "text": prose,
+        "ssid": "secret-injected-name",
+        "hostname": "laptop-of-someone",
+    }
+    transport = FakeRuleTransport(sessions(row))
+    _plan, conclusion, _ = await run(WlanRemovalPlugin(), wlan_change(), transport=transport)
+
+    assert conclusion.peak == "warning"
+    reported = conclusion.model_dump_json()
+    assert all(text not in reported for text in (prose, "secret-injected-name", "laptop-of-someone", CLIENT))
+
+
+async def test_a_departing_client_the_before_window_did_not_report_is_still_counted():
+    """The ported rule counted any session that began before the change and ended after it."""
+    long_lived = session(
+        client=OTHER_CLIENT,
+        connect=(CHANGED_AT - timedelta(hours=6)).timestamp(),
+        disconnect=(CHANGED_AT + timedelta(minutes=1)).timestamp(),
+    )
+    transport = FakeRuleTransport(
+        lambda _path, params: sessions() if params["start"] == BEFORE_START else sessions(long_lived)
+    )
+    _plan, conclusion, _ = await run(WlanRemovalPlugin(), wlan_change(), transport=transport)
+
+    assert (conclusion.peak, conclusion.current) == ("warning", "warning")
+    assert "1 client(s)" in conclusion.findings[0].text
+    assert "recorded 0 connected client(s)" in conclusion.findings[0].text
+
+
+@pytest.mark.parametrize("reported", ["00:11:22:33:44:55", "00-11-22-33-44-55", "001122334455", "001122334455".upper()])
+async def test_a_client_is_the_same_client_however_the_provider_formats_its_mac(reported):
+    departure = session(
+        client=reported,
+        connect=(CHANGED_AT - timedelta(minutes=5)).timestamp(),
+        disconnect=(CHANGED_AT + timedelta(minutes=1)).timestamp(),
+        access_point="AA:BB:CC:DD:EE:FF",
+    )
+    before = session(client="001122334455", connect=CHANGED_AT.timestamp() - 300, disconnect=None)
+    transport = FakeRuleTransport(
+        lambda _path, params: sessions(before) if params["start"] == BEFORE_START else sessions(departure)
+    )
+    _plan, conclusion, _ = await run(WlanRemovalPlugin(), wlan_change(), transport=transport)
+
+    assert conclusion.peak == "warning"
+    assert "1 client(s)" in conclusion.findings[0].text
+    assert "recorded 1 connected client(s)" in conclusion.findings[0].text
+    assert [device.mac for device in conclusion.impacted_devices] == ["aabbccddeeff"]
 
 
 async def test_session_evidence_naming_another_wlan_cannot_answer_this_one():
@@ -654,3 +736,47 @@ async def test_authentication_evidence_that_cannot_be_relied_on_is_not_a_quiet_w
 
     assert {status.status for status in conclusion.statuses.values()} == {"unsatisfied"}
     assert (conclusion.peak, conclusion.current) == ("none", "none")
+
+
+async def test_an_authentication_history_too_large_to_store_is_still_judged_in_full():
+    macs = [f"0011223355{index:02x}" for index in range(40)]
+    before = {
+        "results": [
+            auth_event(kind="CLIENT_AUTHENTICATED", at=CHANGED_AT - timedelta(minutes=1), client=mac) for mac in macs
+        ],
+        "total": len(macs),
+    }
+    after = {
+        "results": [
+            auth_event(kind="MARVIS_EVENT_CLIENT_AUTH_FAILURE", at=CHANGED_AT + timedelta(seconds=1), client=mac)
+            for mac in macs
+        ],
+        "total": len(macs),
+    }
+    registry = EvidenceRegistry()
+    transport = FakeRuleTransport(lambda _path, params: before if params["start"] == BEFORE_START else after)
+    _plan, conclusion, _ = await run(WlanAuthPlugin(), auth_change(), charged=reader(transport, registry=registry))
+
+    assert (conclusion.peak, conclusion.current) == ("warning", "warning")
+    assert f"{len(macs)} client(s)" in conclusion.findings[0].text
+    stored = registry.evidence
+    assert [item.representation for item in stored] == ["digest", "digest"]
+    assert all(item.payload["digest"]["rows"]["results"] == len(macs) for item in stored)
+    assert all(json_size(item) <= RULE_EVIDENCE_ITEM_BUDGET for item in stored)
+    assert all(mac not in conclusion.model_dump_json() for mac in macs)
+
+
+@pytest.mark.parametrize("reported", ["00:11:22:33:44:55", "001122334455".upper()])
+async def test_authentication_pairs_a_client_however_the_provider_formats_its_mac(reported):
+    before = {"results": [auth_event(kind="CLIENT_AUTHENTICATED", at=CHANGED_AT - timedelta(minutes=1))], "total": 1}
+    after = {
+        "results": [
+            auth_event(kind="MARVIS_EVENT_CLIENT_AUTH_FAILURE", at=CHANGED_AT + timedelta(seconds=1), client=reported)
+        ],
+        "total": 1,
+    }
+    transport = FakeRuleTransport(lambda _path, params: before if params["start"] == BEFORE_START else after)
+    _plan, conclusion, _ = await run(WlanAuthPlugin(), auth_change(), transport=transport)
+
+    assert (conclusion.peak, conclusion.current) == ("warning", "warning")
+    assert "1 client(s)" in conclusion.findings[0].text

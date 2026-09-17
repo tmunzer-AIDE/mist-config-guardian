@@ -45,29 +45,38 @@ def secret_name(name: str) -> bool:
     return _SECRET.search(name) is not None
 
 
-def redact(value: Any, *, secrets: Sequence[str] = (), depth: int = 0) -> JsonValue:  # noqa: PLR0911 - bounded recursive JSON redaction
-    """Redact secrets and cut depth, width and string length, so no unbounded value reaches storage or a prompt."""
+def redact(value: Any, *, secrets: Sequence[str] = (), bounded: bool = True, depth: int = 0) -> JsonValue:  # noqa: PLR0911 - bounded recursive JSON redaction
+    """Redact secrets, and cut width and string length while ``bounded``, so nothing unbounded reaches storage.
+
+    The copy that is stored or put in a prompt is bounded. The copy a rule plug-in judges from is not: it is the
+    whole validated result with the same secrets removed, held in memory for the attempt and never persisted, so a
+    result too large to store is still an answer rather than a hole. The depth guard applies either way, because it
+    bounds the recursion itself.
+    """
     if depth > MAX_DEPTH:
         return "[depth omitted]"
+    fields, items, chars, keys = (MAX_FIELDS, MAX_ITEMS, MAX_STRING, MAX_KEY) if bounded else (None, None, None, None)
     if isinstance(value, Mapping):
         if "$encrypted" in value:
             return REDACTED
         return {
-            str(key)[:MAX_KEY]: REDACTED if secret_name(str(key)) else redact(item, secrets=secrets, depth=depth + 1)
-            for key, item in list(value.items())[:MAX_FIELDS]
+            str(key)[:keys]: REDACTED
+            if secret_name(str(key))
+            else redact(item, secrets=secrets, bounded=bounded, depth=depth + 1)
+            for key, item in list(value.items())[:fields]
         }
     if isinstance(value, list):
-        return [redact(item, secrets=secrets, depth=depth + 1) for item in value[:MAX_ITEMS]]
+        return [redact(item, secrets=secrets, bounded=bounded, depth=depth + 1) for item in value[:items]]
     if isinstance(value, str):
         for secret in secrets:
             if secret:
                 value = value.replace(secret, REDACTED)
-        return _BEARER.sub(f"Bearer {REDACTED}", value)[:MAX_STRING]
+        return _BEARER.sub(f"Bearer {REDACTED}", value)[:chars]
     if type(value) is float and not isfinite(value):
         return None
     if value is None or type(value) in {bool, int, float}:
         return value
-    return str(value)[:MAX_KEY]
+    return str(value)[:keys]
 
 
 def redact_text(text: str, *, secrets: Sequence[str] = (), max_chars: int) -> str:
@@ -99,14 +108,20 @@ def payload_of(value: JsonValue) -> dict[str, JsonValue]:
     return value if isinstance(value, dict) else {"result": value}
 
 
-def has_more(value: Any, depth: int = 0) -> bool:
+def has_more(value: Any, *, limit: int | None = None, depth: int = 0) -> bool:
     """Whether the result itself says it is one page of a longer answer, which makes the collection partial.
 
     This reads the validated result before redaction, so a page marker below the redaction bounds still counts. It
     stops at :data:`MAX_DEPTH`, where redaction replaces everything with a marker anyway.
+
+    ``limit`` is the row limit the read asked for. A bare array that came back exactly that long carries no envelope
+    to say so, and is one page of a longer answer as surely as a ``total`` above its ``results``: absence of a row
+    in it establishes nothing.
     """
     if depth > MAX_DEPTH:
         return False
+    if limit is not None and isinstance(value, list) and len(value) >= limit:
+        return True
     if isinstance(value, Mapping):
         count = value.get("count")
         for key in ("results", "data"):
@@ -115,9 +130,9 @@ def has_more(value: Any, depth: int = 0) -> bool:
         if type(count) is int and type(value.get("total")) is int and value["total"] > count:
             return True
         return bool(value.get("has_more") or value.get("next_cursor")) or any(
-            has_more(item, depth + 1) for item in value.values()
+            has_more(item, depth=depth + 1) for item in value.values()
         )
-    return isinstance(value, list) and any(has_more(item, depth + 1) for item in value)
+    return isinstance(value, list) and any(has_more(item, depth=depth + 1) for item in value)
 
 
 def row_counts(value: Any) -> dict[str, int]:

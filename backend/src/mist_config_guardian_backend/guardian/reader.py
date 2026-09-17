@@ -260,6 +260,25 @@ class RuleRead(Contract):
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class RuleReading:
+    """One rule read as its plug-in uses it: what will be stored, and what the plug-in judges from.
+
+    ``evidence`` is the citable, bounded artifact a run persists and a report cites. ``result`` is the whole
+    validated result behind it — authority filtered, secret redacted and stripped of the fields the read declared
+    it may not keep — held in memory for the attempt and never persisted. The two describe the same read: same
+    E-id, source, kind, window and scope. A plug-in judges from ``result`` and reports counts, judgements and
+    identities; no row of it may be copied into a conclusion, a finding or a gap.
+    """
+
+    evidence: Evidence
+    result: dict[str, JsonValue]
+
+    @property
+    def id(self) -> str:
+        return self.evidence.id
+
+
 class Reader:
     """One attempt's bounded, tenant-safe access to Mist, through injected transports."""
 
@@ -294,6 +313,7 @@ class Reader:
         self._plugin_reads: Counter[str] = Counter()
         self._dropped: dict[str, str] = {}
         self._cache: dict[str, Evidence] = {}
+        self._results: dict[str, dict[str, JsonValue]] = {}
 
     @property
     def org_id(self) -> str:
@@ -385,7 +405,15 @@ class Reader:
         raw, failure = _tool_result(result)
         if failure is not None:
             return self._failed(envelope, failure)
-        return self._recorded(envelope, raw, budget=MCP_EVIDENCE_ITEM_BUDGET, cache_key=key)
+        return self._recorded(envelope, raw, budget=MCP_EVIDENCE_ITEM_BUDGET, cache_key=key, limit=_row_limit(prepared))
+
+    def full_result(self, evidence: Evidence) -> dict[str, JsonValue]:
+        """The whole validated result behind one rule read, for evaluation only; empty for anything else.
+
+        Storage stays at the evidence item budget, so a large result is stored as a digest while the plug-in that
+        asked for it still judges from every row it returned.
+        """
+        return self._results.get(evidence.id, {})
 
     # -- rule reads --------------------------------------------------------
     async def read(self, request: RuleRead) -> Evidence:
@@ -420,7 +448,11 @@ class Reader:
         except TransportError as exc:
             return self._failed(envelope, _detail(exc))
         return self._recorded(
-            envelope, payloads.without_fields(raw, request.omit_fields), budget=RULE_EVIDENCE_ITEM_BUDGET
+            envelope,
+            payloads.without_fields(raw, request.omit_fields),
+            budget=RULE_EVIDENCE_ITEM_BUDGET,
+            limit=_row_limit(params),
+            keep=True,
         )
 
     # -- internals ---------------------------------------------------------
@@ -532,7 +564,16 @@ class Reader:
                 msg = "That site is outside this investigation's site authority."
                 raise ReadRejectedError(msg, category="out_of_scope")
 
-    def _recorded(self, envelope: _Envelope, raw: Any, *, budget: int, cache_key: str | None = None) -> Evidence:
+    def _recorded(  # noqa: PLR0913 - one bound, or one decision about this result, per argument
+        self,
+        envelope: _Envelope,
+        raw: Any,
+        *,
+        budget: int,
+        cache_key: str | None = None,
+        limit: int | None = None,
+        keep: bool = False,
+    ) -> Evidence:
         """Keep what this investigation may see, redact it, and bound it into the largest form that fits.
 
         Authority and completeness are decided on the validated result, before redaction, so a row beyond the
@@ -552,7 +593,7 @@ class Reader:
             else ""
         )
         redacted = payloads.redact(kept, secrets=self._secrets)
-        collection = "partial" if omitted or payloads.has_more(raw) else "complete"
+        collection = "partial" if omitted or payloads.has_more(raw, limit=limit) else "complete"
         chosen: Evidence | None = None
         for candidate, representation, detail in payloads.shrink(
             payloads.payload_of(redacted),
@@ -573,6 +614,11 @@ class Reader:
         recorded = self._registry.record(chosen)
         if cache_key is not None:
             self._cache[cache_key] = recorded
+        if keep:
+            # What the plug-in judges from: the same result, with the same secrets gone, without the storage bounds.
+            self._results[recorded.id] = payloads.payload_of(
+                payloads.redact(kept, secrets=self._secrets, bounded=False)
+            )
         return recorded
 
     def _failed(self, envelope: _Envelope, detail: str) -> Evidence:
@@ -756,6 +802,17 @@ def _error_signal(value: Any) -> bool:
     return isinstance(value, Mapping) and bool(
         value.get("error") or value.get("success") is False or value.get("status") == "error"
     )
+
+
+def _row_limit(arguments: Mapping[str, Any]) -> int | None:
+    """The row limit a read asked for, when it named one: a result exactly that long may be one page of more."""
+    limit = arguments.get("limit")
+    if limit is None or isinstance(limit, bool):
+        return None
+    try:
+        return int(limit)
+    except (TypeError, ValueError):
+        return None
 
 
 def _detail(error: BaseException) -> str:

@@ -31,7 +31,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     Text,
     bound_reason,
 )
-from mist_config_guardian_backend.guardian.reader import Reader
+from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, RuleReading
 
 MAX_PLUGIN_GAPS = 8
 PLAN_FAILED = "planning failed"
@@ -40,7 +40,6 @@ EVALUATION_FAILED = "evaluation failed"
 MAC_DIGITS = 12
 PAIRED_READS = 2
 NOT_READ_REASON = "The read this observation needs was not made"
-DIGEST_REASON = "The result exceeded the evidence bounds and was kept as a digest"
 PARTIAL_REASON = "The result was incomplete, so absence of a row establishes nothing"
 
 
@@ -60,12 +59,16 @@ class RulePlugin(Protocol):
         """The obligations and exclusions this plug-in takes on, or ``None`` when it does not apply."""
         ...
 
-    async def collect(self, plan: RulePlan, reader: Reader) -> list[Evidence]:
+    async def collect(self, plan: RulePlan, reader: Reader) -> list[RuleReading]:
         """Everything the plan needs read, in a fixed order, through the Reader alone."""
         ...
 
-    def evaluate(self, plan: RulePlan, evidence: Sequence[Evidence]) -> RuleConclusion:
-        """A status for every rule obligation of the plan, with the severity and findings the evidence shows."""
+    def evaluate(self, plan: RulePlan, readings: Sequence[RuleReading]) -> RuleConclusion:
+        """A status for every rule obligation of the plan, with the severity and findings the reads show.
+
+        A reading's full result is what the judgement is made from; only counts, judgements and identities that
+        already pass the privacy rules leave this method, and the evidence it cites is the bounded stored one.
+        """
         ...
 
 
@@ -93,7 +96,8 @@ class RuleRun:
 
     ``conclusions`` is keyed by plug-in id and holds an entry for every plug-in that planned or failed. Statuses are
     keyed by the plug-in's own obligation ids, which only a plug-in present in ``plans`` can have mapped onto ledger
-    ids.
+    ids. ``evidence`` holds the bounded, citable items alone: the full results the plug-ins judged from stay inside
+    the attempt's Reader and are never handed on to be stored.
     """
 
     plans: dict[str, RulePlan] = field(default_factory=dict)
@@ -126,9 +130,9 @@ async def run_rules(
             _record_gaps(run, plugin, gaps)
             continue
         run.plans[plugin.id] = plan
-        evidence = await _collected(plugin, plan, reader, gaps)
-        run.evidence[plugin.id] = evidence
-        run.conclusions[plugin.id] = _evaluated(plugin, plan, evidence, gaps)
+        readings = await _collected(plugin, plan, reader, gaps)
+        run.evidence[plugin.id] = tuple(reading.evidence for reading in readings)
+        run.conclusions[plugin.id] = _evaluated(plugin, plan, readings, gaps)
     return run
 
 
@@ -150,14 +154,14 @@ def validate_plan(plugin: RulePlugin, plan: RulePlan, change: ChangeSet) -> None
 
 
 def validate_conclusion(
-    plugin: RulePlugin, plan: RulePlan, conclusion: RuleConclusion, evidence: Sequence[Evidence]
+    plugin: RulePlugin, plan: RulePlan, conclusion: RuleConclusion, readings: Sequence[RuleReading]
 ) -> None:
     """A plug-in reports on its own rule obligations and cites only citable evidence it collected."""
     own = {obligation.id for obligation in plan.obligations if obligation.kind == "rule"}
     if not set(conclusion.statuses) <= own:
         msg = f"{plugin.id} reported a status for an obligation it does not own"
         raise PluginError(msg)
-    citable = {item.id for item in evidence if item.citable}
+    citable = {reading.id for reading in readings if reading.evidence.citable}
     cited = {
         identity
         for source in (*conclusion.statuses.values(), *conclusion.findings, *conclusion.impacted_devices)
@@ -200,30 +204,36 @@ def cohort(devices: Sequence[ExpectedDevice], *, device_type: str, site_id: str 
     )
 
 
-def read_rows(evidence: Evidence | None, *, key: str = "results") -> ReadResult:
+def read_rows(reading: RuleReading | None, *, key: str = "results") -> ReadResult:
     """The rows of a read that can be relied on, or why it cannot be.
 
-    A digest holds only the first few rows of a longer result, and a partial collection left rows out, so neither
-    can establish that something was not observed. Both are reasons, exactly as the ported clients treated anything
-    but a complete response.
+    The rows are the read's full validated result, not the bounded copy that will be stored: a result too large to
+    store is still an answer. A partial collection is not, because rows are missing from the result itself — the
+    provider said it was one page of more, or a row named a site this investigation may not read — and the ported
+    clients treated anything but a complete response the same way.
     """
-    if evidence is None:
+    if reading is None:
         return ReadResult(reason=NOT_READ_REASON)
-    if evidence.collection == "error":
-        return ReadResult(reason=bound_reason(f"The read failed: {evidence.detail}"))
-    if evidence.representation == "digest":
-        return ReadResult(reason=DIGEST_REASON)
-    if evidence.collection == "partial":
+    if reading.evidence.collection == "error":
+        return ReadResult(reason=bound_reason(f"The read failed: {reading.evidence.detail}"))
+    if reading.evidence.collection == "partial":
         return ReadResult(reason=PARTIAL_REASON)
-    rows = evidence.payload.get(key)
+    rows = reading.result.get(key)
     if not isinstance(rows, list):
         return ReadResult(reason=f"The result held no {key}")
     return ReadResult(rows=tuple(row for row in rows if isinstance(row, Mapping)))
 
 
-def window_start(evidence: Evidence) -> datetime:
+async def read(reader: Reader, request: RuleRead) -> RuleReading:
+    """One read, as a plug-in makes it: the bounded evidence to cite and the whole result to judge from."""
+    evidence = await reader.read(request)
+    return RuleReading(evidence=evidence, result=reader.full_result(evidence))
+
+
+def window_start(reading: RuleReading) -> datetime:
     """When a read's window opens, for ordering a pair of reads; a read without one sorts first."""
-    return evidence.window.start if evidence.window else datetime.min.replace(tzinfo=UTC)
+    window = reading.evidence.window
+    return window.start if window else datetime.min.replace(tzinfo=UTC)
 
 
 def changed_at(window: EvidenceWindow) -> datetime:
@@ -288,7 +298,7 @@ def _planned(
     return plan
 
 
-async def _collected(plugin: RulePlugin, plan: RulePlan, reader: Reader, gaps: list[str]) -> tuple[Evidence, ...]:
+async def _collected(plugin: RulePlugin, plan: RulePlan, reader: Reader, gaps: list[str]) -> tuple[RuleReading, ...]:
     try:
         return tuple(await plugin.collect(plan, reader))
     except Exception as exc:  # noqa: BLE001 - a refused or failed read leaves this plug-in's obligations unanswered
@@ -296,10 +306,12 @@ async def _collected(plugin: RulePlugin, plan: RulePlan, reader: Reader, gaps: l
         return ()
 
 
-def _evaluated(plugin: RulePlugin, plan: RulePlan, evidence: tuple[Evidence, ...], gaps: list[str]) -> RuleConclusion:
+def _evaluated(
+    plugin: RulePlugin, plan: RulePlan, readings: tuple[RuleReading, ...], gaps: list[str]
+) -> RuleConclusion:
     try:
-        conclusion = plugin.evaluate(plan, evidence)
-        validate_conclusion(plugin, plan, conclusion, evidence)
+        conclusion = plugin.evaluate(plan, readings)
+        validate_conclusion(plugin, plan, conclusion, readings)
     except Exception as exc:  # noqa: BLE001 - an unevaluated plug-in reports nothing rather than failing the attempt
         gaps.append(f"{plugin.id} {EVALUATION_FAILED}: {bound_reason(str(exc))}")
         return Conclusion(gaps=gaps_within(gaps))

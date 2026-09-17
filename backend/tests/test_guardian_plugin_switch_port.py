@@ -11,10 +11,16 @@ import pytest
 
 from mist_config_guardian_backend.guardian.change import ObjectChange, build_change_set
 from mist_config_guardian_backend.guardian.contracts import ExpectedDevice
-from mist_config_guardian_backend.guardian.evidence import EvidenceRegistry
+from mist_config_guardian_backend.guardian.evidence import (
+    RULE_EVIDENCE_ITEM_BUDGET,
+    EvidenceRegistry,
+    json_size,
+)
 from mist_config_guardian_backend.guardian.ledger import build_ledger
 from mist_config_guardian_backend.guardian.plugins import base
 from mist_config_guardian_backend.guardian.plugins.switch_port import (
+    AP_LIMIT,
+    BOUNDED_LIST_REASON,
     CONTRADICTION_REASON,
     FOREIGN_EVENT_REASON,
     NEIGHBOUR_FIELDS,
@@ -464,6 +470,7 @@ async def test_an_access_point_snapshot_that_cannot_be_relied_on_says_so_beside_
     assert conclusion.peak == "warning"
     assert "read failed" in conclusion.findings[0].text
     assert conclusion.findings[0].evidence_ids == ("E1",)
+    assert {status.status for status in conclusion.statuses.values()} == {"unsatisfied"}
 
 
 async def test_the_port_rule_refuses_another_plug_ins_plan_and_reads_nothing_without_a_port():
@@ -475,3 +482,74 @@ async def test_the_port_rule_refuses_another_plug_ins_plan_and_reads_nothing_wit
     assert transport.reads == []
     with pytest.raises(base.PluginError, match="another plug-in's plan"):
         SwitchPortPlugin().evaluate(base.PluginPlan(), [])
+
+
+def many_access_points(count: int) -> list:
+    """``count`` managed access points at this site, none of which names the changed port."""
+    return [
+        {
+            "mac": f"0200000100{index:02x}",
+            "type": "ap",
+            "org_id": ORG,
+            "site_id": SITE,
+            "status": "connected",
+            "lldp_stats": {"eth0": {"chassis_id": SWITCH, "port_id": OTHER_PORT}},
+        }
+        for index in range(count)
+    ]
+
+
+LOSS = (event("SW_PORT_UP", CHANGED_AT - timedelta(minutes=1)), event("SW_PORT_DOWN", CHANGED_AT))
+
+
+async def test_an_access_point_list_below_its_limit_can_carry_the_negative():
+    _plan, conclusion, _ = await run(transport=transport_for(LOSS, aps=many_access_points(AP_LIMIT - 1)))
+
+    assert "No managed access point reports this port as its uplink" in conclusion.findings[0].text
+    assert {status.status for status in conclusion.statuses.values()} == {"satisfied"}
+
+
+async def test_an_access_point_list_at_its_limit_cannot_carry_the_negative():
+    _plan, conclusion, _ = await run(transport=transport_for(LOSS, aps=many_access_points(AP_LIMIT)))
+
+    assert "No managed access point reports this port as its uplink" not in conclusion.findings[0].text
+    assert "came back at its row limit" in conclusion.findings[0].text
+    # The loss it did observe still stands; what was attached to the port did not, so the observation is not covered.
+    assert conclusion.peak == "warning"
+    assert {(status.status, status.reason) for status in conclusion.statuses.values()} == {
+        ("unsatisfied", BOUNDED_LIST_REASON)
+    }
+
+
+async def test_a_device_event_history_too_large_to_store_is_still_judged_in_full():
+    noise = [
+        event("SW_PORT_UP", CHANGED_AT - timedelta(minutes=2), port=f"ge-0/0/{index}")
+        | {"text": f"port {index} came up after a long descriptive provider sentence"}
+        for index in range(10, 90)
+    ]
+    registry = EvidenceRegistry()
+    transport = transport_for((*LOSS, *noise))
+    _plan, conclusion, _ = await run(transport=transport, registry=registry)
+
+    stored = registry.evidence
+    assert stored[0].representation == "digest"
+    assert stored[0].payload["digest"]["rows"]["results"] == len(noise) + len(LOSS)
+    assert all(json_size(item) <= RULE_EVIDENCE_ITEM_BUDGET for item in stored)
+    assert conclusion.peak == "warning"
+    assert "came up after a long descriptive" not in conclusion.model_dump_json()
+
+
+@pytest.mark.parametrize("reported", ["02:00:00:00:00:01", "02-00-00-00-00-01", "020000000001".upper()])
+async def test_a_port_event_names_this_switch_however_the_provider_formats_its_mac(reported):
+    rows = [row | {"mac": reported} for row in LOSS]
+    _plan, conclusion, _ = await run(transport=transport_for(rows))
+
+    assert conclusion.peak == "warning"
+    assert {status.status for status in conclusion.statuses.values()} == {"satisfied"}
+
+
+async def test_a_port_event_of_a_genuinely_different_switch_still_closes_the_history():
+    rows = [row | {"mac": "0200000000ff"} for row in LOSS]
+    _plan, conclusion, _ = await run(transport=transport_for(rows))
+
+    assert statuses(conclusion) == {("unsatisfied", FOREIGN_EVENT_REASON)}

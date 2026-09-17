@@ -24,7 +24,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     Conclusion,
     ConfigPath,
     DeviceImpact,
-    Evidence,
     ExpectedDevice,
     Finding,
     Identifier,
@@ -36,13 +35,13 @@ from mist_config_guardian_backend.guardian.contracts import (
     band_rank,
 )
 from mist_config_guardian_backend.guardian.plugins import base
-from mist_config_guardian_backend.guardian.reader import Reader, RuleRead
+from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, RuleReading
 
 ID = "switch-port"
 VERSION = "1"
 MAX_READS = 3
 EVENT_LIMIT = "1000"
-AP_LIMIT = "50"
+AP_LIMIT = 50
 AP_FIELDS = "mac,type,org_id,site_id,status,last_seen,lldp_stat,lldp_stats,port_stat"
 POWER_BASELINE = timedelta(minutes=5)
 PORT_PATH_SEGMENTS = 3
@@ -85,6 +84,10 @@ LINK_TEXT = "Previously active port went down after the change; alternate paths 
 POWER_TEXT = "Previously powered port was disabled after the change; AP failure is not established."
 ATTACHED_TEXT = "Past dependency, sole power path and impact remain unproven."
 UNATTACHED_TEXT = "No managed access point reports this port as its uplink."
+BOUNDED_LIST_REASON = (
+    "The organization's access-point list came back at its row limit, so no access point in it naming this port "
+    "does not establish that none does"
+)
 
 
 class SwitchPortPlan(base.PluginPlan):
@@ -141,10 +144,16 @@ class PortSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class Neighbour:
-    """What the organization's own access points say about this port, when they were read."""
+    """What the organization's own access points say about this port, when they were read.
+
+    ``settled`` is false when the question could not be answered at all: the read failed, rows were missing, or the
+    list came back as long as it was allowed to be, in which case no access point in it naming this port does not
+    mean there is none.
+    """
 
     cited: tuple[str, ...] = ()
     text: str = ""
+    settled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,22 +203,25 @@ class SwitchPortPlugin:
             port_id=port_id,
         )
 
-    async def collect(self, plan: RulePlan, reader: Reader) -> list[Evidence]:
+    async def collect(self, plan: RulePlan, reader: Reader) -> list[RuleReading]:
         target = _plan(plan)
         if target.port_id is None or not target.obligations:
             return []
-        evidence = [await reader.read(_events_read(target)), await reader.read(_snapshot_read(target))]
-        history = _history(target, evidence)
+        readings = [
+            await base.read(reader, _events_read(target)),
+            await base.read(reader, _snapshot_read(target)),
+        ]
+        history = _history(target, readings)
         # The managed neighbour only ever qualifies a loss, so it costs a read only when there is one to qualify.
         if any(history.losses(ATTRIBUTES[attribute][0]) for attribute in _attributes(target)):
-            evidence.append(await reader.read(_neighbour_read(target, reader.org_id)))
-        return evidence
+            readings.append(await base.read(reader, _neighbour_read(target, reader.org_id)))
+        return readings
 
-    def evaluate(self, plan: RulePlan, evidence: Sequence[Evidence]) -> RuleConclusion:
+    def evaluate(self, plan: RulePlan, readings: Sequence[RuleReading]) -> RuleConclusion:
         target = _plan(plan)
-        history = _history(target, evidence)
-        snapshot = _snapshot(evidence)
-        neighbour = _neighbour(target, evidence)
+        history = _history(target, readings)
+        snapshot = _snapshot(readings)
+        neighbour = _neighbour(target, readings)
         statuses: dict[str, ObligationStatus] = {}
         findings: list[Finding] = []
         peak: Band = "none"
@@ -264,8 +276,15 @@ def _outcome(attribute: str, history: PortHistory, snapshot: PortSnapshot, neigh
         recovered = bool(later) and later[-1].kind == up
         text = LINK_TEXT
     cited = (*cited, *neighbour.cited)
+    # The loss stands on its own evidence; the observation is only fully covered when what was attached to the
+    # port was established too, so an unanswerable neighbour question leaves the status unsatisfied beside it.
+    status = (
+        ObligationStatus(status="satisfied", evidence_ids=cited)
+        if neighbour.settled
+        else ObligationStatus(status="unsatisfied", reason=base.text(neighbour.text), evidence_ids=cited)
+    )
     return _Outcome(
-        status=ObligationStatus(status="satisfied", evidence_ids=cited),
+        status=status,
         finding=Finding(text=base.text(f"{text} {neighbour.text}".strip()), severity=severity, evidence_ids=cited),
         peak=severity,
         current="none" if recovered else severity,
@@ -304,67 +323,76 @@ def _attributes(plan: SwitchPortPlan) -> tuple[str, ...]:
     return tuple(obligation.paths[0][-1] for obligation in plan.obligations)
 
 
-def _history(plan: SwitchPortPlan, evidence: Sequence[Evidence]) -> PortHistory:
+def _history(plan: SwitchPortPlan, readings: Sequence[RuleReading]) -> PortHistory:
     """The exact-port events of the combined window, rejecting anything that cannot be ordered."""
-    item = evidence[0] if evidence else None
+    item = readings[0] if readings else None
     reading = base.read_rows(item)
     # A read that answered something unusable is still worth citing beside the reason it could not be relied on.
-    cited = (item.id,) if item is not None and item.citable else ()
-    if item is None or item.window is None or not reading.complete:
+    cited = (item.id,) if item is not None and item.evidence.citable else ()
+    window = item.evidence.window if item is not None else None
+    if item is None or window is None or not reading.complete:
         return PortHistory(reason=reading.reason or base.NOT_READ_REASON, cited=cited)
+    device = base.mac(plan.device_mac)
     events: list[PortEvent] = []
     for row in reading.rows:
         kind = base.string(row.get("type"))
         if kind not in EVENT_TYPES or base.string(row.get("port_id")) != plan.port_id:
             continue
         at = base.number(row.get("timestamp"))
-        if base.string(row.get("mac")) != plan.device_mac or at is None:
+        if base.mac(row.get("mac")) != device or at is None:
             return PortHistory(reason=FOREIGN_EVENT_REASON, cited=cited)
         moment = datetime.fromtimestamp(at, tz=UTC)
-        if not item.window.start <= moment <= item.window.end:
+        if not window.start <= moment <= window.end:
             return PortHistory(reason=OUT_OF_WINDOW_REASON, cited=cited)
         events.append(PortEvent(at=moment, kind=str(kind)))
     ordered = tuple(sorted(set(events), key=lambda event: (event.at, event.kind)))
     if any(len({event.kind for event in ordered if event.at == other.at}) > 1 for other in ordered):
         return PortHistory(reason=CONTRADICTION_REASON, cited=cited)
-    return PortHistory(events=ordered, changed_at=base.changed_at(item.window), end=item.window.end, cited=cited)
+    return PortHistory(events=ordered, changed_at=base.changed_at(window), end=window.end, cited=cited)
 
 
-def _snapshot(evidence: Sequence[Evidence]) -> PortSnapshot:
+def _snapshot(readings: Sequence[RuleReading]) -> PortSnapshot:
     """The one unique port row; anything else is not a state this rule may rely on."""
-    item = evidence[1] if len(evidence) > 1 else None
+    item = readings[1] if len(readings) > 1 else None
     reading = base.read_rows(item)
     if item is None or not reading.complete or len(reading.rows) != 1:
         return PortSnapshot()
     row = reading.rows[0]
     observed = base.number(row.get("timestamp"))
     return PortSnapshot(
-        cited=(item.id,) if item.citable else (),
+        cited=(item.id,) if item.evidence.citable else (),
         poe_on=row.get("poe_on") is True,
         power_draw=base.number(row.get("power_draw")),
         observed_at=datetime.fromtimestamp(observed, tz=UTC) if observed and observed > 0 else None,
     )
 
 
-def _neighbour(plan: SwitchPortPlan, evidence: Sequence[Evidence]) -> Neighbour:
-    """The managed access point whose own LLDP names this switch and port, when the access points were read."""
-    item = evidence[2] if len(evidence) > 2 else None  # noqa: PLR2004 - the third read is the access points
+def _neighbour(plan: SwitchPortPlan, readings: Sequence[RuleReading]) -> Neighbour:
+    """The managed access point whose own LLDP names this switch and port, when the access points were read.
+
+    The read returns a bare array, so a list exactly as long as the limit says nothing about what comes after it.
+    Only a list shorter than its own limit can carry the negative that no managed access point names this port.
+    """
+    item = readings[2] if len(readings) > 2 else None  # noqa: PLR2004 - the third read is the access points
     if item is None:
         return Neighbour()
     reading = base.read_rows(item, key="result")
+    cited = (item.id,) if item.evidence.citable else ()
     if not reading.complete:
-        return Neighbour(cited=(item.id,) if item.citable else (), text=base.text(reading.reason))
+        # A list as long as its own limit is one page of a longer one, which is why the Reader called it partial.
+        rows = item.result.get("result")
+        bounded = isinstance(rows, list) and len(rows) >= AP_LIMIT
+        text = BOUNDED_LIST_REASON if bounded else base.text(reading.reason)
+        return Neighbour(cited=cited, text=text, settled=False)
     attached = sorted(
         {mac for row in reading.rows if _attached(row, plan) and (mac := base.mac(row.get("mac"))) is not None}
     )
-    return Neighbour(
-        cited=(item.id,),
-        text=(
-            f"Managed access point {', '.join(attached)} reports this port as its uplink. {ATTACHED_TEXT}"
-            if attached
-            else UNATTACHED_TEXT
-        ),
-    )
+    if attached:
+        return Neighbour(
+            cited=cited,
+            text=f"Managed access point {', '.join(attached)} reports this port as its uplink. {ATTACHED_TEXT}",
+        )
+    return Neighbour(cited=cited, text=UNATTACHED_TEXT)
 
 
 def _attached(row: Mapping[str, object], plan: SwitchPortPlan) -> bool:
@@ -373,7 +401,7 @@ def _attached(row: Mapping[str, object], plan: SwitchPortPlan) -> bool:
     links = list(stats.values()) if isinstance(stats, Mapping) else [row.get("lldp_stat")]
     return any(
         isinstance(link, Mapping)
-        and base.mac(link.get("chassis_id")) == plan.device_mac
+        and base.mac(link.get("chassis_id")) == base.mac(plan.device_mac)
         and base.string(link.get("port_id")) == plan.port_id
         for link in links
     )
@@ -411,7 +439,13 @@ def _neighbour_read(plan: SwitchPortPlan, org_id: str) -> RuleRead:
         title=base.text(f"Managed access points at the site of {plan.device_mac}"),
         kind="service_health",
         path=f"/api/v1/orgs/{org_id}/stats/devices",
-        params={"type": "ap", "status": "all", "site_id": str(plan.site_id), "limit": AP_LIMIT, "fields": AP_FIELDS},
+        params={
+            "type": "ap",
+            "status": "all",
+            "site_id": str(plan.site_id),
+            "limit": str(AP_LIMIT),
+            "fields": AP_FIELDS,
+        },
         site_id=plan.site_id,
     )
 

@@ -22,7 +22,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     Conclusion,
     ConfigPath,
     EmptyPolicy,
-    Evidence,
     ExpectedDevice,
     Obligation,
     RuleConclusion,
@@ -30,7 +29,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     Target,
 )
 from mist_config_guardian_backend.guardian.plugins import base
-from mist_config_guardian_backend.guardian.reader import Reader
+from mist_config_guardian_backend.guardian.reader import Reader, RuleReading
 
 ID = "dns"
 VERSION = "1"
@@ -177,11 +176,11 @@ class DnsPlugin:
             finding_kinds=INFRASTRUCTURE_FINDINGS if MANAGEMENT in classes else (),
         )
 
-    async def collect(self, plan: RulePlan, reader: Reader) -> list[Evidence]:  # noqa: ARG002 - reads nothing
+    async def collect(self, plan: RulePlan, reader: Reader) -> list[RuleReading]:  # noqa: ARG002 - reads nothing
         """This rule reads nothing: monitoring already recorded what answers its obligations."""
         return []
 
-    def evaluate(self, plan: RulePlan, evidence: Sequence[Evidence]) -> RuleConclusion:  # noqa: ARG002 - see collect
+    def evaluate(self, plan: RulePlan, readings: Sequence[RuleReading]) -> RuleConclusion:  # noqa: ARG002 - as above
         """It claims no rule coverage, so it reports no status of its own."""
         return Conclusion()
 

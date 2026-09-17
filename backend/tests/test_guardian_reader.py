@@ -116,6 +116,7 @@ def reader(  # noqa: PLR0913 - one Reader collaborator per argument, all default
     deadlines: dict[str, float] | None = None,
     allowances: dict[str, int] | None = None,
     registry: EvidenceRegistry | None = None,
+    secrets: tuple[str, ...] = (),
 ) -> Reader:
     return Reader(
         org_id=ORG,
@@ -127,6 +128,7 @@ def reader(  # noqa: PLR0913 - one Reader collaborator per argument, all default
         clock=clock or FakeClock(),
         mcp_transport=mcp if mcp is not None else FakeMcp(),
         rule_transport=rules if rules is not None else FakeRuleTransport(),
+        secrets=secrets,
     )
 
 
@@ -1198,3 +1200,57 @@ async def test_the_mcp_client_keeps_its_configured_timeout_when_none_is_given(ht
 
     assert result == {"tools": []}
     assert httpx_mock.get_requests()[-1].extensions["timeout"]["read"] == 20
+
+
+async def test_a_rule_read_hands_its_plugin_the_whole_result_and_stores_a_bounded_one() -> None:
+    """Storage is bounded at the item budget; the judgement is not, so a large result is still an answer."""
+    rows = [{"mac": MAC, "ssid": f"corp-{index}", "note": "x" * 200} for index in range(100)]
+    rules = FakeRuleTransport(result={"results": rows, "total": len(rows)})
+    guard = reader(rules=rules)
+
+    evidence = await guard.read(rule_read())
+    result = guard.full_result(evidence)
+
+    assert evidence.representation == "digest"
+    assert json_size(evidence) <= RULE_EVIDENCE_ITEM_BUDGET
+    assert evidence.payload["digest"]["rows"]["results"] == len(rows)
+    assert result["results"] == rows
+    assert guard.full_result(evidence) is not evidence.payload
+
+
+async def test_the_result_a_plugin_judges_from_is_filtered_redacted_and_stripped_like_the_stored_one() -> None:
+    rows = [
+        {"mac": MAC, "psk": "top-secret", "neighbor_mac": "aabbccddeeff", "token": "t"},
+        {"mac": MAC, "site_id": OTHER_SITE},
+    ]
+    rules = FakeRuleTransport(result={"results": rows, "total": len(rows)})
+    guard = reader(rules=rules, secrets=("top-secret",))
+
+    evidence = await guard.read(rule_read(omit_fields=("neighbor_mac",)))
+    result = guard.full_result(evidence)
+
+    assert result["results"] == [{"mac": MAC, "psk": "[redacted]", "token": "[redacted]"}]
+    assert evidence.collection == "partial"
+    assert "aabbccddeeff" not in str(result)
+
+
+async def test_a_failed_read_leaves_its_plugin_nothing_to_judge_from() -> None:
+    rules = FakeRuleTransport(result=TransportError("Mist returned HTTP 503"))
+
+    guard = reader(rules=rules)
+    evidence = await guard.read(rule_read())
+
+    assert evidence.collection == "error"
+    assert guard.full_result(evidence) == {}
+
+
+@pytest.mark.parametrize(
+    ("limit", "collection"),
+    [("4", "partial"), ("5", "complete"), ("all", "complete")],
+)
+async def test_a_bare_array_as_long_as_its_limit_is_one_page_of_a_longer_answer(limit, collection) -> None:
+    rules = FakeRuleTransport(result=[{"mac": MAC} for _ in range(4)])
+
+    evidence = await reader(rules=rules).read(rule_read(window=None, params={"limit": limit}))
+
+    assert evidence.collection == collection

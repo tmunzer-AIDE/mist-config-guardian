@@ -15,7 +15,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     ChangeAtom,
     Conclusion,
     DeviceImpact,
-    Evidence,
     ExpectedDevice,
     Finding,
     Identifier,
@@ -26,7 +25,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     Target,
 )
 from mist_config_guardian_backend.guardian.plugins import base
-from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, WindowName
+from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, RuleReading, WindowName
 
 ID = "wlan-removal"
 VERSION = "1"
@@ -117,20 +116,20 @@ class WlanRemovalPlugin:
             label=base.identifier(changed.name),
         )
 
-    async def collect(self, plan: RulePlan, reader: Reader) -> list[Evidence]:
+    async def collect(self, plan: RulePlan, reader: Reader) -> list[RuleReading]:
         target = _plan(plan)
         if target.wlan_id is None or not target.obligations:
             return []
-        return [await reader.read(_read(target, window)) for window in ("before", "after")]
+        return [await base.read(reader, _read(target, window)) for window in ("before", "after")]
 
-    def evaluate(self, plan: RulePlan, evidence: Sequence[Evidence]) -> RuleConclusion:
+    def evaluate(self, plan: RulePlan, readings: Sequence[RuleReading]) -> RuleConclusion:
         target = _plan(plan)
         ids = base.obligation_ids(target)
-        reading = _sessions(target, evidence)
+        reading = _sessions(target, readings)
         if not ids or reading.reason:
             unsatisfied = ObligationStatus(status="unsatisfied", reason=base.text(reading.reason))
             return Conclusion(statuses=dict.fromkeys(ids, unsatisfied), gaps=target.gaps)
-        cited = tuple(item.id for item in evidence)
+        cited = tuple(item.id for item in readings if item.evidence.citable)
         severity = "warning" if reading.clients else "none"
         return Conclusion(
             statuses=dict.fromkeys(ids, ObligationStatus(status="satisfied", evidence_ids=cited)),
@@ -147,20 +146,23 @@ class WlanRemovalPlugin:
 
 def _finding_text(plan: WlanRemovalPlan, reading: Sessions) -> str:
     wlan = plan.label or plan.wlan_id
+    seen = f"The before window recorded {reading.baseline} connected client(s)."
     if reading.clients:
         return base.text(
-            f"{len(reading.clients)} of {reading.baseline} client(s) connected to WLAN {wlan} before the change "
-            f"disconnected after it. {DISRUPTION_TEXT}"
+            f"{len(reading.clients)} client(s) connected to WLAN {wlan} before the change disconnected after it. "
+            f"{seen} {DISRUPTION_TEXT}"
         )
-    return base.text(
-        f"None of the {reading.baseline} client(s) connected to WLAN {wlan} before the change disconnected after "
-        f"it. {QUIET_TEXT}"
-    )
+    return base.text(f"No client of WLAN {wlan} disconnected after the change. {seen} {QUIET_TEXT}")
 
 
-def _sessions(plan: WlanRemovalPlan, evidence: Sequence[Evidence]) -> Sessions:
-    """Pair the before and after reads, and count the clients that were connected and then left."""
-    ordered = [item for item in evidence if item.window is not None]
+def _sessions(plan: WlanRemovalPlan, readings: Sequence[RuleReading]) -> Sessions:
+    """Pair the before and after reads, and count the clients that were connected and then left.
+
+    A departure is a session of the after window that began before the change and ended after it, whether or not
+    the before read also returned that client: a long-lived session the before window did not report is exactly the
+    one that matters, and the ported rule counted it.
+    """
+    ordered = [item for item in readings if item.evidence.window is not None]
     ordered.sort(key=base.window_start)
     if len(ordered) != base.PAIRED_READS:
         return Sessions(reason=base.NOT_READ_REASON)
@@ -169,24 +171,15 @@ def _sessions(plan: WlanRemovalPlan, evidence: Sequence[Evidence]) -> Sessions:
         return Sessions(reason=before.reason or after.reason)
     if any(base.string(row.get("wlan_id")) not in (None, plan.wlan_id) for row in (*before.rows, *after.rows)):
         return Sessions(reason=SCOPE_REASON)
-    window = ordered[1].window
-    if window is None:  # pragma: no cover - ordered holds only evidence with a window
+    window = ordered[1].evidence.window
+    if window is None:  # pragma: no cover - ordered holds only readings with a window
         return Sessions(reason=base.NOT_READ_REASON)
-    connected = {mac for row in before.rows if (mac := base.string(row.get("mac")))}
     departures = [row for row in after.rows if _departed(row, window.start, window.end)]
-    clients = frozenset(mac for row in departures if (mac := base.string(row.get("mac"))) in connected)
     return Sessions(
-        baseline=len(connected),
-        clients=clients,
+        baseline=len({mac for row in before.rows if (mac := base.mac(row.get("mac")))}),
+        clients=frozenset(mac for row in departures if (mac := base.mac(row.get("mac")))),
         access_points=tuple(
-            sorted(
-                {
-                    access_point
-                    for row in departures
-                    if base.string(row.get("mac")) in clients
-                    and (access_point := base.mac(base.string(row.get("ap")))) is not None
-                }
-            )
+            sorted({access_point for row in departures if (access_point := base.mac(row.get("ap"))) is not None})
         ),
     )
 
