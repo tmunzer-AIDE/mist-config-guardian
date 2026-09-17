@@ -669,6 +669,79 @@ async def test_a_tool_outside_the_allowlist_is_never_called(tool, arguments) -> 
     assert mcp.calls == []
 
 
+# --- nested argument objects (controller ruling R31) --------------------------
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("search_mist_data", {"search_type": "device_events", "filters": {"org_id": OTHER_ORG}}),
+        ("search_mist_data", {"search_type": "device_events", "filters": {"site_id": OTHER_SITE}}),
+        ("search_mist_data", {"search_type": "device_events", "filters": {"site_id": [SITE, OTHER_SITE]}}),
+        ("search_mist_data", {"search_type": "device_events", "filters": {"nested": {"site_id": OTHER_SITE}}}),
+        ("search_mist_data", {"search_type": "device_events", "filters": {"any": [{"org_id": OTHER_ORG}]}}),
+        ("get_mist_stats", {"stats_type": "site_devices", "site_id": SITE, "filters": {"site_id": OTHER_SITE}}),
+        (
+            "get_mist_insights",
+            {"insight_type": "sle", "site_id": SITE, "params": {"scope": "site", "scope_id": OTHER_SITE}},
+        ),
+        (
+            "get_mist_insights",
+            {"insight_type": "sle", "site_id": SITE, "params": {"scope": "org", "scope_id": OTHER_ORG}},
+        ),
+    ],
+)
+async def test_a_nested_object_never_reaches_another_organization_or_site(tool, arguments) -> None:
+    mcp = FakeMcp()
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await reader(mcp=mcp).call(tool, {**arguments, "start_time": BEFORE[0], "end_time": BEFORE[1]})
+
+    assert rejection.value.category == "out_of_scope"
+    assert mcp.calls == []
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"duration": "1d"},
+        {"start_time": 1},
+        {"end_time": 1},
+        {"nested": {"start": 1}},
+        {"api_key": "x"},
+    ],
+)
+async def test_a_nested_object_carries_no_time_range_and_no_credential(filters) -> None:
+    mcp = FakeMcp()
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await reader(mcp=mcp).call("search_mist_data", search(filters=filters))
+
+    assert rejection.value.category == "argument_invalid"
+    assert mcp.calls == []
+
+
+async def test_arguments_nested_deeper_than_the_redaction_bound_are_refused() -> None:
+    deep: dict = {"org_id": ORG}
+    for _ in range(payloads.MAX_DEPTH + 1):
+        deep = {"nested": deep}
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await reader().call("search_mist_data", search(filters=deep))
+
+    assert rejection.value.category == "argument_invalid"
+
+
+async def test_a_nested_object_inside_this_investigations_scope_is_forwarded() -> None:
+    mcp = FakeMcp()
+    filters = {"org_id": ORG, "site_id": [SITE], "mac": MAC, "any": [{"model": "AP45"}, 5, None]}
+
+    evidence = await reader(mcp=mcp).call("search_mist_data", search(filters=filters))
+
+    assert evidence.collection == "complete"
+    assert mcp.calls[0][1]["filters"] == filters
+
+
 # --- budget, caching and deadlines -------------------------------------------
 
 

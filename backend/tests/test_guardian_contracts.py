@@ -281,6 +281,37 @@ def test_agent_conclusions_either_report_or_explain_why_not():
         AgentConclusion(concluded=True, peak="info", current="critical", confidence="low")
 
 
+def test_an_agent_report_holds_no_device_above_its_own_peak():
+    """Controller ruling R17: the report is held to the same device rule as any other conclusion."""
+    AgentConclusion(
+        concluded=True,
+        peak="warning",
+        current="none",
+        confidence="low",
+        impacted_devices=(DeviceImpact(mac=MAC, severity="warning"),),
+    )
+    with pytest.raises(ValidationError, match="exceed the report's peak"):
+        AgentConclusion(
+            concluded=True,
+            peak="info",
+            current="info",
+            confidence="low",
+            impacted_devices=(DeviceImpact(mac=MAC, severity="warning"),),
+        )
+
+
+def test_an_agent_that_did_not_conclude_reports_nothing_it_could_not_have_judged():
+    """Controller ruling R17: no findings and no devices without an accepted report behind them."""
+    with pytest.raises(ValidationError, match="no findings and no impacted devices"):
+        AgentConclusion(
+            concluded=False, reason="Provider failed", findings=(Finding(text="Clients dropped", severity="warning"),)
+        )
+    with pytest.raises(ValidationError, match="no findings and no impacted devices"):
+        AgentConclusion(
+            concluded=False, reason="Provider failed", impacted_devices=(DeviceImpact(mac=MAC, severity="warning"),)
+        )
+
+
 def test_ledger_rows_resolve_to_one_of_three_outcomes():
     target = Target(device_mac=MAC)
     LedgerRow(atom_id="A1", target=target, resolution="claimed", obligation_ids=("O1",))

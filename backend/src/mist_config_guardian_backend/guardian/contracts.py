@@ -330,11 +330,17 @@ class AgentConclusion(Contract):
             if self.reason is None or any(v is not None for v in (self.peak, self.current, self.confidence)):
                 msg = "An agent that did not conclude has a reason and no assessment"
                 raise ValueError(msg)
+            if self.findings or self.impacted_devices:
+                msg = "An agent that did not conclude reports no findings and no impacted devices"
+                raise ValueError(msg)
             return self
         if self.reason is not None or self.peak is None or self.current is None or self.confidence is None:
             msg = "An accepted agent report has peak, current and confidence and no failure reason"
             raise ValueError(msg)
         _require_ordered(self.peak, self.current)
+        if any(band_rank(device.severity) > band_rank(self.peak) for device in self.impacted_devices):
+            msg = "No impacted device can exceed the report's peak"
+            raise ValueError(msg)
         return self
 
 

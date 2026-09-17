@@ -296,7 +296,8 @@ def test_the_fingerprint_covers_the_provider_model_and_schema_but_no_key_materia
     assert fingerprint == capability_fingerprint(base_url=f"{BASE_URL}/", model="test-model")
     assert fingerprint != capability_fingerprint(base_url="https://other.test/v1", model="test-model")
     assert fingerprint != capability_fingerprint(base_url=BASE_URL, model="other-model")
-    assert fingerprint != capability_fingerprint(base_url=BASE_URL, model="test-model", schema_version="2")
+    other_version = f"{ACTION_SCHEMA_VERSION}-next"
+    assert fingerprint != capability_fingerprint(base_url=BASE_URL, model="test-model", schema_version=other_version)
     assert "test-model" not in fingerprint
 
 

@@ -55,6 +55,8 @@ RUN_ENVELOPE_BUDGET = 8 * KB
 
 # An id no attempt can exceed. Sizing an item under it before its id is reserved gives an upper bound.
 WIDEST_EVIDENCE_ID = "E999999"
+# The payload walk stops where redaction already replaced everything with a marker.
+_MAX_PAYLOAD_DEPTH = 12
 
 _ITEM_BUDGETS = {
     "deployment": DEPLOYMENT_EVIDENCE_BUDGET,
@@ -230,3 +232,39 @@ class EvidenceRegistry:
     def evidence(self) -> tuple[Evidence, ...]:
         """Recorded evidence in E-id order, as a run stores it."""
         return tuple(sorted(self._recorded.values(), key=lambda item: int(item.id[1:])))
+
+
+MAC_DIGITS = 12
+_MAC_SEPARATORS = str.maketrans({":": "", "-": "", ".": ""})
+
+
+def normalized_mac(value: object) -> str | None:
+    """A device identity as Guardian stores it, or ``None`` when the value is not one.
+
+    Providers, plug-ins and the agent all write MACs in whichever separator their source used, so every comparison
+    of a device identity goes through this one normalization.
+    """
+    stripped = value.translate(_MAC_SEPARATORS).lower() if isinstance(value, str) else ""
+    return stripped if len(stripped) == MAC_DIGITS and all(digit in "0123456789abcdef" for digit in stripped) else None
+
+
+def mentions_device(evidence: Evidence, mac: str) -> bool:
+    """Whether one evidence item names a device: in its scope, in its rows, or in its digest identities.
+
+    A conclusion may derive a device from the whole validated result while the stored item is a digest of it, so
+    the check is digest-aware: the item's scope is as good an answer as a row it still shows (controller ruling
+    R34). It is not a claim that the device is impacted, only that this item is about it.
+    """
+    return mac in evidence.scope.device_macs or _names(evidence.payload, mac)
+
+
+def _names(value: object, mac: str, depth: int = 0) -> bool:
+    if depth > _MAX_PAYLOAD_DEPTH:  # pragma: no cover - redaction already bounds a stored payload to this depth
+        return False
+    if isinstance(value, str):
+        return normalized_mac(value) == mac
+    if isinstance(value, Mapping):
+        return any(_names(item, mac, depth + 1) for item in value.values())
+    if isinstance(value, list):
+        return any(_names(item, mac, depth + 1) for item in value)
+    return False

@@ -79,6 +79,8 @@ _REJECTED_ARGUMENTS: Mapping[str, str] = {
     "page": "Paging is not available in an attempt; narrow the query instead.",
 }
 _RULE_TIME_PARAMS = frozenset({"start", "end", "start_time", "end_time", "duration"})
+# The same names, refused inside a free-form nested argument object, where no schema would catch them.
+_NESTED_TIME = _RULE_TIME_PARAMS
 _TIME_ARGUMENTS = ("start_time", "end_time")
 _PATH_SCOPE = re.compile(r"/(orgs|sites)/([^/]+)")
 # The only route a rule read may take without naming an organization or a site: Mist's platform constants.
@@ -476,6 +478,8 @@ class Reader:
             raise ReadRejectedError(msg, category="out_of_scope")
         if spec.requires_org:
             prepared["org_id"] = self._org_id
+        for value in prepared.values():
+            self._check_nested(value)
         self._check_site(spec, prepared, kind)
         window, name = self._check_window(spec, prepared)
         try:
@@ -496,6 +500,48 @@ class Reader:
             msg = f"{name} is not an argument of {spec.name}."
             raise ReadRejectedError(msg, category="argument_invalid")
         return True
+
+    def _check_nested(self, value: Any, depth: int = 0) -> None:
+        """Scope a free-form nested argument object exactly like a top-level argument (controller ruling R31).
+
+        ``filters``, ``params`` and anything else a tool advertises as a bare object validate against no
+        properties, so a nested ``org_id``, ``site_id`` or SLE ``scope_id`` would otherwise carry a cross-tenant or
+        cross-site query straight to the transport. A nested time key is refused outright: the Reader owns the
+        window, and a filter that narrowed it again would describe evidence by a range nothing recorded.
+        """
+        if depth > payloads.MAX_DEPTH:
+            # Below this the walk would stop while the transport would still see the value, so it is refused.
+            msg = f"Arguments nested deeper than {payloads.MAX_DEPTH} levels are not accepted."
+            raise ReadRejectedError(msg, category="argument_invalid")
+        if isinstance(value, list):
+            for item in value:
+                self._check_nested(item, depth + 1)
+            return
+        if not isinstance(value, Mapping):
+            return
+        scope = str(value.get("scope") or "")
+        for key, nested in ((str(name), item) for name, item in value.items()):
+            self._check_nested_key(key, nested, scope=scope)
+            self._check_nested(nested, depth + 1)
+
+    def _check_nested_key(self, key: str, nested: Any, *, scope: str) -> None:
+        """One key of a nested object: no window, no credential, and no identity outside this investigation."""
+        if key in _NESTED_TIME:
+            msg = "A nested filter carries no time range; the Reader sets the window for the whole call."
+            raise ReadRejectedError(msg, category="argument_invalid")
+        if payloads.secret_name(key):
+            msg = "Credential arguments are not accepted."
+            raise ReadRejectedError(msg, category="argument_invalid")
+        if (key == "org_id" or (key == "scope_id" and scope == "org")) and any(
+            identity != self._org_id for identity in _identities(nested)
+        ):
+            msg = "Guardian reads one organization; another was requested."
+            raise ReadRejectedError(msg, category="out_of_scope")
+        if (key == "site_id" or (key == "scope_id" and scope == "site")) and not all(
+            self._authority.allows(identity) for identity in _identities(nested)
+        ):
+            msg = "That site is outside this investigation's site authority."
+            raise ReadRejectedError(msg, category="out_of_scope")
 
     def _check_site(self, spec: ToolSpec, prepared: Mapping[str, JsonValue], kind: EvidenceKind) -> None:
         site = prepared.get("site_id")
@@ -677,6 +723,12 @@ class Reader:
         if isinstance(value, list):
             return next((found for found in (self._foreign(item, depth + 1) for item in value) if found), None)
         return None
+
+
+def _identities(value: Any) -> tuple[str, ...]:
+    """The identities one nested scope key names, whether it holds one or a list of them."""
+    values = value if isinstance(value, list) else [value]
+    return tuple(item for item in values if isinstance(item, str) and item)
 
 
 def _holds_rows(value: Any, depth: int = 0) -> bool:

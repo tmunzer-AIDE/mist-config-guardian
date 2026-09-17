@@ -31,13 +31,13 @@ from mist_config_guardian_backend.guardian.contracts import (
     Text,
     bound_reason,
 )
+from mist_config_guardian_backend.guardian.evidence import mentions_device, normalized_mac
 from mist_config_guardian_backend.guardian.reader import Reader, RuleRead, RuleReading
 
 MAX_PLUGIN_GAPS = 8
 PLAN_FAILED = "planning failed"
 COLLECTION_FAILED = "collection failed"
 EVALUATION_FAILED = "evaluation failed"
-MAC_DIGITS = 12
 PAIRED_READS = 2
 NOT_READ_REASON = "The read this observation needs was not made"
 PARTIAL_REASON = "The result was incomplete, so absence of a row establishes nothing"
@@ -170,6 +170,13 @@ def validate_conclusion(
     if not cited <= citable:
         msg = f"{plugin.id} cited evidence it did not collect, or evidence that failed to collect"
         raise PluginError(msg)
+    items = {reading.id: reading.evidence for reading in readings}
+    for device in conclusion.impacted_devices:
+        # The same rule an agent report is held to, and digest-aware for the same reason: a plug-in derives an
+        # identity from the whole validated result while the stored item may be a digest of it (ruling R34).
+        if not any(mentions_device(items[identity], device.mac) for identity in device.evidence_ids):
+            msg = f"{plugin.id} reported {device.mac}, which the evidence it cites does not name"
+            raise PluginError(msg)
 
 
 # -- shared planning vocabulary ---------------------------------------------------------------------------------
@@ -253,8 +260,7 @@ def string(value: object) -> str | None:
 
 def mac(value: object) -> str | None:
     """A device identity a payload names, normalized, or nothing when it is not one."""
-    normalized = value.replace(":", "").replace("-", "").lower() if isinstance(value, str) else ""
-    return normalized if len(normalized) == MAC_DIGITS and all(c in "0123456789abcdef" for c in normalized) else None
+    return normalized_mac(value)
 
 
 def number(value: object) -> float | None:

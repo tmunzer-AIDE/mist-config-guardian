@@ -16,6 +16,9 @@ from mist_config_guardian_backend.guardian.change import ObjectChange, build_cha
 from mist_config_guardian_backend.guardian.contracts import (
     MAX_RULE_READS,
     Conclusion,
+    DeviceImpact,
+    Evidence,
+    EvidenceScope,
     ExpectedDevice,
     ObligationStatus,
     RulePlan,
@@ -32,6 +35,7 @@ from mist_config_guardian_backend.guardian.plugins.wlan_removal import WlanRemov
 from mist_config_guardian_backend.guardian.reader import (
     Reader,
     ReadRejectedError,
+    RuleReading,
     SiteAuthority,
     TransportError,
     evidence_windows,
@@ -681,6 +685,36 @@ async def test_a_conclusion_may_only_answer_its_own_obligations_and_cite_what_it
         base.validate_conclusion(plugin, plan, Conclusion(statuses={"O99": status}), [])
     with pytest.raises(base.PluginError, match="cited evidence it did not collect"):
         base.validate_conclusion(plugin, plan, Conclusion(statuses={"O1": status}), [])
+
+
+async def test_an_impacted_device_must_be_named_by_the_evidence_it_cites():
+    """The agent report's device rule, applied to a rule conclusion, and digest-aware (controller ruling R34)."""
+    plugin = WlanRemovalPlugin()
+    plan = plugin.plan(wlan_change(), DEVICES)
+    digest = RuleReading(
+        evidence=Evidence(
+            id="E1",
+            source="rule:wlan-removal",
+            kind="service_health",
+            title="Client sessions",
+            captured_at=AS_OF,
+            scope=EvidenceScope(site_ids=(SITE,), device_macs=(AP,)),
+            collection="complete",
+            representation="digest",
+            payload={"digest": {"rows": {"results": 300}}},
+        ),
+        result={},
+    )
+    named = Conclusion(
+        peak="warning", impacted_devices=(DeviceImpact(mac=AP, severity="warning", evidence_ids=("E1",)),)
+    )
+    unnamed = Conclusion(
+        peak="warning", impacted_devices=(DeviceImpact(mac=OTHER_AP, severity="warning", evidence_ids=("E1",)),)
+    )
+
+    base.validate_conclusion(plugin, plan, named, [digest])
+    with pytest.raises(base.PluginError, match="does not name"):
+        base.validate_conclusion(plugin, plan, unnamed, [digest])
 
 
 async def test_a_plug_in_given_another_plug_ins_plan_refuses_to_act_on_it():
