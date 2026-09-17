@@ -60,14 +60,18 @@ async def test_legacy_backfill_pins_org_policy_and_deletion_uses_only_proven_orp
         )
         monkeypatch.setattr(model, "get_pymongo_collection", lambda *_, c=collection: c)
         collections.append((collection, identifier, orphan))
-    assert await service.maintain_investigation_retention() == 13
+    # Four legacy families are backfilled and seven families are swept for orphans. Guardian roots and runs are
+    # written with their TTL already pinned, so nothing scans them for a null that construction rules out.
+    assert await service.maintain_investigation_retention() == 11
     service.Organization.get.assert_awaited_once_with(ORG)
     for index, (collection, identifier, orphan) in enumerate(collections):
-        if index < 6:
+        if index < 4:
             assert collection.update_one.await_args.args == (
                 {"_id": identifier, "organization_id": ORG, "retained_until": None},
                 {"$set": {"retained_until": NOW + timedelta(days=30)}},
             )
+        else:
+            collection.update_one.assert_not_awaited()
         collection.delete_many.assert_awaited_once_with({"_id": {"$in": [orphan]}})
         assert collection.aggregate.await_args.kwargs["maxTimeMS"] == 5000
         pipeline = collection.aggregate.await_args.args[0]

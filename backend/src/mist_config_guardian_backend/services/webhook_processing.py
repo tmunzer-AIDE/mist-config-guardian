@@ -18,6 +18,7 @@ from mist_config_guardian_backend.models.webhook import (
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
 from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
+from mist_config_guardian_backend.services.guardian import GuardianService
 from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
 from mist_config_guardian_backend.services.notifications import NotificationService
@@ -92,13 +93,24 @@ class WebhookProcessingService:
         # how many times either was delivered.
         await self.project(receipt, payload, session=session)
 
-        if receipt.topic == "audits" and receipt.audit_id and get_settings().impact_engine_mode != "legacy":
-            await ImpactInvestigationService(self._vault).ensure(
-                receipt.organization_id,
-                receipt.audit_id,
-                changed_at=self._event_time(payload) or receipt.created_at,
-                anchor_known=self._event_time(payload) is not None,
-            )
+        if receipt.topic == "audits" and receipt.audit_id:
+            settings = get_settings()
+            event_time = self._event_time(payload)
+            if settings.impact_engine_mode != "legacy":
+                await ImpactInvestigationService(self._vault).ensure(
+                    receipt.organization_id,
+                    receipt.audit_id,
+                    changed_at=event_time or receipt.created_at,
+                    anchor_known=event_time is not None,
+                )
+            # The Guardian root is the only new surface this commit gates; every legacy gate stays as it is.
+            if settings.guardian_enabled:
+                await GuardianService(self._vault).ensure(
+                    organization,
+                    receipt.audit_id,
+                    changed_at=event_time or receipt.created_at,
+                    anchor_known=event_time is not None,
+                )
 
         receipt.status = WebhookProcessingStatus.PROCESSED
         receipt.processed_at = utc_now()

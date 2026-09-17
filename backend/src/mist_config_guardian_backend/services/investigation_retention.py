@@ -22,15 +22,17 @@ async def maintain_investigation_retention() -> int:
     changed = 0
     organizations = {}
     now = utc_now()
-    families = [
+    # Legacy families predate the pinned TTL, so they are backfilled. Guardian roots and runs are written with
+    # ``retained_until`` already set, so scanning them hourly for a null that construction rules out would only
+    # cost a collection scan per tick; they are cleaned up as orphans below like every other family.
+    backfilled = [
         (ImpactInvestigation, "created_at"),
         (InvestigationRevision, "generated_at"),
         (ModelRequestArtifact, "created_at"),
         (ImpactAdjudication, "reviewed_at"),
-        (GuardianInvestigation, "created_at"),
-        (GuardianRun, "created_at"),
     ]
-    for model, timestamp in families:
+    families = [*backfilled, (GuardianInvestigation, "created_at"), (GuardianRun, "created_at")]
+    for model, timestamp in backfilled:
         collection = model.get_pymongo_collection()
         rows = (
             await collection.find({"retained_until": None}, {"organization_id": 1, timestamp: 1})

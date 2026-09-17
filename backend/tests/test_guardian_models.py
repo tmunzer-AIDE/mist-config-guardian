@@ -493,15 +493,21 @@ def test_the_pure_guardian_core_loads_no_database_driver_settings_or_service_tra
 
 
 def test_guardian_stays_dormant_until_a_gated_path_is_wired():
-    # Only persistence registration, retention and the setup-time capability probe reach Guardian code. The probe
-    # reads Guardian's versioned action schema when an administrator tests the AI provider: it stores what the
-    # provider proved and starts no investigation, so it is deliberately not behind guardian_enabled. Later tasks
-    # extend this set as they add guardian_enabled-gated paths.
+    # Persistence registration, retention and the setup-time capability probe reach Guardian code without a gate.
+    # The probe reads Guardian's versioned action schema when an administrator tests the AI provider: it stores
+    # what the provider proved and starts no investigation. The orchestrator is imported by the two surfaces that
+    # gate it, and both do nothing at all while guardian_enabled is false. Later tasks extend this set.
     allowed = {
         *(path.relative_to(BACKEND).as_posix() for path in guardian_sources()),
         "models/__init__.py",
+        # Retention pins Guardian TTLs and deletes orphaned Guardian documents; it starts nothing.
         "services/investigation_retention.py",
+        # The setup-time structured-output probe reads Guardian's action schema; it starts nothing.
         "services/application_configuration.py",
+        # The orchestrator itself, and the two surfaces that call it only when guardian_enabled is set.
+        "services/guardian.py",
+        "services/webhook_processing.py",
+        "tasks/monitoring.py",
     }
     importers = {
         path.relative_to(BACKEND).as_posix()
@@ -512,4 +518,6 @@ def test_guardian_stays_dormant_until_a_gated_path_is_wired():
     readers = {
         path.relative_to(BACKEND).as_posix() for path in BACKEND.rglob("*.py") if "guardian_enabled" in path.read_text()
     }
-    assert readers == {"config.py"}
+    # Root creation and worker polling are the only surfaces this commit gates; every legacy gate is untouched.
+    # The orchestrator names the setting in its own docstring, which is what says it never runs on its own.
+    assert readers == {"config.py", "services/guardian.py", "services/webhook_processing.py", "tasks/monitoring.py"}

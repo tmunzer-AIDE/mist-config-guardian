@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,8 +11,14 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
-from mist_config_guardian_backend.models.webhook import WebhookReceipt
+from mist_config_guardian_backend.models.webhook import WebhookProcessingStatus, WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.services import webhook_processing
+from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
+from mist_config_guardian_backend.services.guardian import GuardianService
+from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
+from mist_config_guardian_backend.services.monitoring import MonitoringEventService
+from mist_config_guardian_backend.services.webhook_processing import WebhookProcessingService
 from mist_config_guardian_backend.services.webhooks import (
     WebhookIngestionResult,
     WebhookIngestionService,
@@ -159,3 +166,60 @@ async def test_device_event_is_stored_whatever_its_message_says(monkeypatch: pyt
 
     assert result.receipt_ids == [receipts[0].id]
     assert result.ignored_count == 0
+
+
+async def _process(monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: bool) -> list[tuple[str, object]]:
+    """Process one stored audit receipt and report which investigation surfaces it started."""
+    vault = CredentialVault(Settings(environment="test", database_enabled=False))
+    organization = Organization.model_construct(id=PydanticObjectId(), mist_org_id="org-1")
+    receipt = WebhookReceipt.model_construct(
+        id=PydanticObjectId(),
+        organization_id=organization.id,
+        topic="audits",
+        event_id="audit-1",
+        audit_id="audit-1",
+        payload_hash="hash",
+        encrypted_payload=vault.encrypt_for_context(
+            json.dumps({"id": "audit-1", "timestamp": 1_800_000_000}), context="webhook-payload:org-1"
+        ),
+        signature_version="v2",
+        status=WebhookProcessingStatus.RECEIVED,
+        processing_attempts=0,
+        created_at=datetime(2026, 9, 16, 12, 0, tzinfo=UTC),
+    )
+    started: list[tuple[str, object]] = []
+    monkeypatch.setattr(WebhookReceipt, "get", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(WebhookReceipt, "save", AsyncMock())
+    monkeypatch.setattr(Organization, "get", AsyncMock(return_value=organization))
+    monkeypatch.setattr(webhook_processing, "get_settings", lambda: Settings(guardian_enabled=guardian_enabled))
+    monkeypatch.setattr(WebhookProcessingService, "_add_to_change_group", AsyncMock())
+    monkeypatch.setattr(WebhookProcessingService, "project", AsyncMock())
+    monkeypatch.setattr(AuditVersioningService, "apply", AsyncMock())
+    monkeypatch.setattr(MonitoringEventService, "handle", AsyncMock(return_value=None))
+
+    async def guardian_ensure(_self: object, org: object, audit_id: str, **kwargs: object) -> None:
+        started.append(("guardian", (org, audit_id, kwargs["changed_at"], kwargs["anchor_known"])))
+
+    async def legacy_ensure(_self: object, *args: object, **_kwargs: object) -> None:
+        started.append(("legacy", args))
+
+    monkeypatch.setattr(GuardianService, "ensure", guardian_ensure)
+    monkeypatch.setattr(ImpactInvestigationService, "ensure", legacy_ensure)
+
+    await WebhookProcessingService(vault, projector=AsyncMock()).process(receipt.id)
+    return started
+
+
+async def test_an_audit_starts_no_guardian_investigation_while_the_feature_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await _process(monkeypatch, guardian_enabled=False) == []
+
+
+async def test_an_audit_starts_one_guardian_root_with_its_own_event_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = await _process(monkeypatch, guardian_enabled=True)
+
+    assert [name for name, _ in started] == ["guardian"]
+    _organization, audit_id, changed_at, anchor_known = started[0][1]
+    assert (audit_id, anchor_known) == ("audit-1", True)
+    assert changed_at == datetime.fromtimestamp(1_800_000_000, tz=UTC)
