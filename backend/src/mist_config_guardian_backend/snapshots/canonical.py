@@ -98,7 +98,18 @@ def configuration_hash_matches(
 def changed_top_level_fields(
     before: Mapping[str, object],
     after: Mapping[str, object],
+    *,
+    ignored_fields: Collection[str],
 ) -> list[str]:
-    """Return sorted top-level fields whose canonical values differ."""
-    all_keys = set(before) | set(after)
-    return sorted(key for key in all_keys if canonicalize(before.get(key)) != canonicalize(after.get(key)))
+    """Return sorted top-level fields whose canonical values differ, under the field policy the digest uses.
+
+    ``ignored_fields`` is required so no caller can forget it: an unfiltered comparison lists metadata such as
+    ``modified_time``, which changes on every capture, as a change.
+    """
+    all_keys = (set(before) | set(after)) - set(ignored_fields)
+    return sorted(
+        key
+        for key in all_keys
+        if canonicalize(before.get(key), ignored_fields=ignored_fields)
+        != canonicalize(after.get(key), ignored_fields=ignored_fields)
+    )

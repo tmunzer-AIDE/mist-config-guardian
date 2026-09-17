@@ -165,6 +165,76 @@ async def test_an_unchanged_object_with_an_old_field_policy_is_rehashed(
     assert version.configuration_hash == current
 
 
+async def test_a_captured_update_lists_functional_changed_fields_without_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = get_definition("org", "networktemplates")
+    assert definition is not None
+    stored = {"id": "template-1", "name": "DNT-NTR", "dns_servers": ["10.0.0.1"], "modified_time": 1}
+    current = {**stored, "dns_servers": ["10.0.0.2"], "modified_time": 2}
+    latest = ObjectVersion.model_construct(
+        id=PydanticObjectId(),
+        version=1,
+        configuration=stored,
+        configuration_hash=configuration_hash(stored, ignored_fields=definition.ignored_fields),
+    )
+    inserted: list[dict[str, object]] = []
+
+    class _Versions:
+        def sort(self, *_args: object) -> "_Versions":
+            return self
+
+        async def first_or_none(self) -> ObjectVersion:
+            return latest
+
+    class _SortExpression:
+        def __neg__(self) -> "_SortExpression":
+            return self
+
+    class _Version(SimpleNamespace):
+        organization_id = logical_object_id = object()
+        version = _SortExpression()
+
+        @staticmethod
+        def find(*_args: object) -> _Versions:
+            return _Versions()
+
+        async def insert(self) -> None:
+            inserted.append(vars(self))
+
+    expression = object()
+    logical = SimpleNamespace(id=PydanticObjectId(), touch=lambda: None, save=AsyncMock())
+    monkeypatch.setattr(
+        snapshot_service,
+        "LogicalObject",
+        SimpleNamespace(
+            organization_id=expression,
+            scope=expression,
+            object_type=expression,
+            source_key=expression,
+            find_one=AsyncMock(return_value=logical),
+        ),
+    )
+    monkeypatch.setattr(
+        snapshot_service,
+        "ObjectIncarnation",
+        SimpleNamespace(
+            logical_object_id=expression,
+            mist_object_id=expression,
+            find_one=AsyncMock(return_value=SimpleNamespace(id=PydanticObjectId())),
+        ),
+    )
+    monkeypatch.setattr(snapshot_service, "ObjectVersion", _Version)
+    service = SnapshotService(CredentialVault(Settings(environment="test", credential_encryption_key="test-key")))
+
+    created = await service.capture_configuration(
+        PydanticObjectId(), definition, current, CaptureContext(snapshot_id=None, site_id=None)
+    )
+
+    assert created
+    assert [version["changed_fields"] for version in inserted] == [["dns_servers"]]
+
+
 async def test_a_new_field_policy_does_not_create_a_phantom_version(monkeypatch: pytest.MonkeyPatch) -> None:
     definition = get_definition("site", "maps")
     assert definition is not None

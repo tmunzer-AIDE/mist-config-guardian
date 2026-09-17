@@ -7,7 +7,8 @@ prompt built from the result.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import Final, TypeIs
 
@@ -20,6 +21,7 @@ from mist_config_guardian_backend.schemas.diff import (
     DiffSection,
 )
 from mist_config_guardian_backend.snapshots.canonical import canonicalize
+from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS, GENERATED_DEVICE_IMAGE_FIELDS
 from mist_config_guardian_backend.snapshots.secrets import redact_configuration
 
 ENCRYPTED_MARKER: Final = "$encrypted"
@@ -28,9 +30,8 @@ IDENTITY_KEYS: Final = ("id", "_id", "name", "mac", "port_id")
 COMPACT_MODE_LIMIT: Final = 8
 MAX_ENTRIES: Final = 5000
 MAX_NOTABLE: Final = 10
-COMPARISON_IGNORED_FIELDS: Final = frozenset(
-    {"created_time", "modified_time", "image1_url", "image2_url", "image3_url", "thumbnail_url"}
-)
+# The canonical metadata set snapshot hashing ignores, plus generated image URLs this display-only view also hides.
+COMPARISON_IGNORED_FIELDS: Final = DEFAULT_IGNORED_FIELDS | GENERATED_DEVICE_IMAGE_FIELDS | {"thumbnail_url"}
 
 _VALUE_DISPLAY_LIMIT: Final = 120
 _INLINE_LIST_LIMIT: Final = 8
@@ -221,8 +222,22 @@ def notable_category(path: str, kind: DiffChangeKind) -> str | None:
     return None
 
 
-def _child_path(path: str, key: object) -> str:
-    return f"{path}.{key}" if path else str(key)
+@dataclass(frozen=True, slots=True)
+class _Path:
+    """One location, as the text a diff displays and as the segments Guardian compares.
+
+    The text joins keys with ``.`` and wraps list items in ``[]``, so a key that itself contains either reads like
+    two locations. The segments keep every key and item whole.
+    """
+
+    text: str = ""
+    segments: tuple[str, ...] = ()
+
+    def key(self, key: object) -> "_Path":
+        return _Path(f"{self.text}.{key}" if self.text else str(key), (*self.segments, str(key)))
+
+    def item(self, key: object) -> "_Path":
+        return _Path(f"{self.text}[{key}]", (*self.segments, str(key)))
 
 
 class _DiffBuilder:
@@ -230,6 +245,8 @@ class _DiffBuilder:
 
     def __init__(self, *, max_entries: int = MAX_ENTRIES) -> None:
         self.entries: list[DiffEntry] = []
+        # The segments of each entry, index for index.
+        self.paths: list[tuple[str, ...]] = []
         self.counts = DiffCounts()
         self.truncated = False
         self.secret_fields = 0
@@ -238,7 +255,7 @@ class _DiffBuilder:
     # -- emission ---------------------------------------------------------
     def add(  # noqa: PLR0913 - one call site per entry shape
         self,
-        path: str,
+        path: _Path,
         kind: DiffChangeKind,
         before: object,
         after: object,
@@ -257,16 +274,17 @@ class _DiffBuilder:
             return
         rendered_before = DIFF_SECRET_MASK if secret and before is not ABSENT else render_value(before)
         rendered_after = DIFF_SECRET_MASK if secret and after is not ABSENT else render_value(after)
-        category = None if secret_unknown else notable_category(path, kind)
+        category = None if secret_unknown else notable_category(path.text, kind)
+        self.paths.append(path.segments)
         self.entries.append(
             DiffEntry(
-                field=path,
+                field=path.text,
                 kind=kind,
                 before=rendered_before,
                 after=rendered_after,
                 note=note
                 or _build_note(
-                    path,
+                    path.text,
                     kind,
                     rendered_before,
                     rendered_after,
@@ -274,7 +292,7 @@ class _DiffBuilder:
                     secret=secret,
                     secret_unknown=secret_unknown,
                 ),
-                section=section_key(path),
+                section=section_key(path.text),
                 notable=category is not None,
                 secret=secret,
                 secret_unknown=secret_unknown,
@@ -292,7 +310,7 @@ class _DiffBuilder:
             self.counts.modified += 1
 
     # -- traversal --------------------------------------------------------
-    def walk(self, path: str, before: object, after: object) -> None:
+    def walk(self, path: _Path, before: object, after: object) -> None:
         """Compare two values and emit every changed leaf below them."""
         if is_secret(before) or is_secret(after):
             self._walk_secret(path, before, after)
@@ -312,7 +330,7 @@ class _DiffBuilder:
         if _stable(before) != _stable(after):
             self.add(path, DiffChangeKind.MODIFIED, before, after)
 
-    def walk_one_sided(self, path: str, value: object, kind: DiffChangeKind) -> None:
+    def walk_one_sided(self, path: _Path, value: object, kind: DiffChangeKind) -> None:
         """Emit one entry per leaf of a subtree that exists on a single side."""
         if is_secret(value):
             before = value if kind is DiffChangeKind.REMOVED else ABSENT
@@ -321,17 +339,17 @@ class _DiffBuilder:
             return
         if isinstance(value, Mapping) and value:
             for key, child in value.items():
-                self.walk_one_sided(_child_path(path, key), child, kind)
+                self.walk_one_sided(path.key(key), child, kind)
             return
         if _is_sequence(value) and value:
             for index, child in enumerate(value):
-                self.walk_one_sided(f"{path}[{index}]", child, kind)
+                self.walk_one_sided(path.item(index), child, kind)
             return
         before = value if kind is DiffChangeKind.REMOVED else ABSENT
         after = value if kind is DiffChangeKind.ADDED else ABSENT
         self.add(path, kind, before, after)
 
-    def _walk_secret(self, path: str, before: object, after: object) -> None:
+    def _walk_secret(self, path: _Path, before: object, after: object) -> None:
         if isinstance(after, _Absent):
             self.add(path, DiffChangeKind.REMOVED, before, ABSENT, secret=True)
             return
@@ -353,15 +371,15 @@ class _DiffBuilder:
             return
         self.add(path, DiffChangeKind.MODIFIED, before, after, secret=True)
 
-    def _walk_mapping(self, path: str, before: Mapping[str, object], after: Mapping[str, object]) -> None:
+    def _walk_mapping(self, path: _Path, before: Mapping[str, object], after: Mapping[str, object]) -> None:
         for key in _ordered_keys(before, after):
             self.walk(
-                _child_path(path, key),
+                path.key(key),
                 before.get(key, ABSENT),
                 after.get(key, ABSENT),
             )
 
-    def _walk_sequence(self, path: str, before: Sequence[object], after: Sequence[object]) -> None:
+    def _walk_sequence(self, path: _Path, before: Sequence[object], after: Sequence[object]) -> None:
         identity = _identity_key(before, after)
         if identity is not None:
             self._walk_identified(path, before, after, identity)
@@ -370,7 +388,7 @@ class _DiffBuilder:
 
     def _walk_identified(
         self,
-        path: str,
+        path: _Path,
         before: Sequence[object],
         after: Sequence[object],
         identity: str,
@@ -383,14 +401,14 @@ class _DiffBuilder:
             self._add_reorder(path, before_keys, after_keys)
         for key in before_keys:
             if key not in after_map:
-                self.walk_one_sided(f"{path}[{key}]", before_map[key], DiffChangeKind.REMOVED)
+                self.walk_one_sided(path.item(key), before_map[key], DiffChangeKind.REMOVED)
         for key in after_keys:
             if key in before_map:
-                self.walk(f"{path}[{key}]", before_map[key], after_map[key])
+                self.walk(path.item(key), before_map[key], after_map[key])
             else:
-                self.walk_one_sided(f"{path}[{key}]", after_map[key], DiffChangeKind.ADDED)
+                self.walk_one_sided(path.item(key), after_map[key], DiffChangeKind.ADDED)
 
-    def _walk_positional(self, path: str, before: Sequence[object], after: Sequence[object]) -> None:
+    def _walk_positional(self, path: _Path, before: Sequence[object], after: Sequence[object]) -> None:
         if _is_pure_reorder(before, after):
             self._add_reorder(
                 path,
@@ -399,32 +417,33 @@ class _DiffBuilder:
             )
             return
         for index in range(min(len(before), len(after))):
-            self.walk(f"{path}[{index}]", before[index], after[index])
+            self.walk(path.item(index), before[index], after[index])
         for index in range(len(after), len(before)):
-            self.walk_one_sided(f"{path}[{index}]", before[index], DiffChangeKind.REMOVED)
+            self.walk_one_sided(path.item(index), before[index], DiffChangeKind.REMOVED)
         for index in range(len(before), len(after)):
-            self.walk_one_sided(f"{path}[{index}]", after[index], DiffChangeKind.ADDED)
+            self.walk_one_sided(path.item(index), after[index], DiffChangeKind.ADDED)
 
-    def _add_reorder(self, path: str, before_keys: Sequence[str], after_keys: Sequence[str]) -> None:
+    def _add_reorder(self, path: _Path, before_keys: Sequence[str], after_keys: Sequence[str]) -> None:
         note = (
-            f"{path} entries were reordered; the same {len(after_keys)} "
+            f"{path.text} entries were reordered; the same {len(after_keys)} "
             f"{'item' if len(after_keys) == 1 else 'items'} are still present."
         )
-        category = notable_category(path, DiffChangeKind.MODIFIED)
+        category = notable_category(path.text, DiffChangeKind.MODIFIED)
         if category is not None:
             note = f"{note} {_CATEGORY_CLAUSES[category]}"
         self._count(DiffChangeKind.MODIFIED)
         if len(self.entries) >= self._max_entries:
             self.truncated = True
             return
+        self.paths.append(path.segments)
         self.entries.append(
             DiffEntry(
-                field=path,
+                field=path.text,
                 kind=DiffChangeKind.MODIFIED,
                 before=_render_order(before_keys),
                 after=_render_order(after_keys),
                 note=note,
-                section=section_key(path),
+                section=section_key(path.text),
                 notable=category is not None,
                 reordered=True,
             )
@@ -632,7 +651,7 @@ def diff_configurations(
     before = comparison_document(before)
     after = comparison_document(after)
     builder = _DiffBuilder(max_entries=max_entries)
-    builder.walk("", before, after)
+    builder.walk(_Path(), before, after)
     builder.entries.sort(key=lambda entry: (entry.secret, entry.secret_unknown))
     counts = builder.counts
     mode = "chips" if counts.changed <= COMPACT_MODE_LIMIT else "sections"
@@ -655,13 +674,44 @@ def diff_configurations(
     )
 
 
-def comparison_document(configuration: Mapping[str, object]) -> dict[str, object]:
+def comparison_document(
+    configuration: Mapping[str, object], ignored: Collection[str] = COMPARISON_IGNORED_FIELDS
+) -> dict[str, object]:
     """Drop volatile metadata for comparisons, preserving immutable snapshots."""
     return {
-        key: canonicalize(value, ignored_fields=COMPARISON_IGNORED_FIELDS)
-        for key, value in configuration.items()
-        if key not in COMPARISON_IGNORED_FIELDS
+        key: canonicalize(value, ignored_fields=ignored) for key, value in configuration.items() if key not in ignored
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedPaths:
+    """Where two configurations differ, as whole path segments. It never carries a value.
+
+    ``complete`` is false when the walker stopped at :data:`MAX_ENTRIES`, so later changes are not listed.
+    """
+
+    paths: tuple[tuple[str, ...], ...]
+    complete: bool
+
+
+def _walk_changes(before: Mapping[str, object], after: Mapping[str, object], ignored: Collection[str]) -> _DiffBuilder:
+    builder = _DiffBuilder()
+    builder.walk(_Path(), comparison_document(before, ignored), comparison_document(after, ignored))
+    return builder
+
+
+def changed_paths(before: Mapping[str, object], after: Mapping[str, object], ignored: Collection[str]) -> ChangedPaths:
+    """The locations the visible diff reports, walked the same way, as segment tuples without their values."""
+    builder = _walk_changes(before, after, ignored)
+    return ChangedPaths(paths=tuple(builder.paths), complete=not builder.truncated)
+
+
+def changed_entries(
+    before: Mapping[str, object], after: Mapping[str, object], ignored: Collection[str]
+) -> tuple[tuple[tuple[str, ...], DiffEntry], ...]:
+    """Each changed location's segments with its display entry, whose values are already masked and shortened."""
+    builder = _walk_changes(before, after, ignored)
+    return tuple(zip(builder.paths, builder.entries, strict=True))
 
 
 def redact_document(configuration: Mapping[str, object]) -> dict[str, object]:

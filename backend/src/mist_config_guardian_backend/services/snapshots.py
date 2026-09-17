@@ -302,7 +302,9 @@ class SnapshotService:
             changed_fields=(
                 []
                 if previous_configuration is None
-                else changed_top_level_fields(previous_configuration, configuration)
+                else changed_top_level_fields(
+                    previous_configuration, configuration, ignored_fields=definition.ignored_fields
+                )
             ),
             references=extract_uuid_references(configuration),
             actor=context.actor,

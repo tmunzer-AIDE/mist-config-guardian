@@ -416,8 +416,11 @@ def test_guardian_code_never_touches_the_legacy_engine():
         "mist_config_guardian_backend.services",
         "mist_config_guardian_backend.integrations",
     )
+    # The design's change model reuses the pure, secret-safe diff walker; it serves the diff API and outlives the
+    # legacy engine. Only that module is shared.
+    shared = "mist_config_guardian_backend.services.diff"
     for path in guardian_sources():
-        imports = imported_modules(path)
+        imports = {m for m in imported_modules(path) if m != shared and not m.startswith(f"{shared}.")}
         assert not {m for m in imports if m.startswith(legacy_modules)}, path
         text = path.read_text()
         assert not {name for name in LEGACY_COLLECTIONS if f'"{name}"' in text}, path

@@ -31,6 +31,7 @@ MAX_STATUS_REASON_CHARS = 400
 MAX_TEXT_CHARS = 500
 MAX_SUMMARY_CHARS = 2_000
 MAX_DETAIL_CHARS = 1_000
+MAX_IDENTIFIER_CHARS = 128
 
 Band = Literal["none", "info", "warning", "critical"]
 BANDS: tuple[Band, ...] = ("none", "info", "warning", "critical")
@@ -67,8 +68,8 @@ EvidenceSource = Annotated[
 VerdictSource = Annotated[str, StringConstraints(pattern=rf"^(monitoring|deployment|agent|rule:{_PLUGIN})$")]
 GapSource = Annotated[str, StringConstraints(pattern=rf"^(core|monitoring|deployment|agent|rule:{_PLUGIN})$")]
 DeviceMac = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{12}$")]
-Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128)]
-PathSegment = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+Identifier = Annotated[str, StringConstraints(min_length=1, max_length=MAX_IDENTIFIER_CHARS)]
+PathSegment = Annotated[str, StringConstraints(min_length=1, max_length=MAX_IDENTIFIER_CHARS)]
 ConfigPath = Annotated[tuple[PathSegment, ...], Field(min_length=1)]
 Text = Annotated[str, StringConstraints(min_length=1, max_length=MAX_TEXT_CHARS)]
 Summary = Annotated[str, StringConstraints(max_length=MAX_SUMMARY_CHARS)]
@@ -132,6 +133,13 @@ class Target(Contract):
     site_id: Identifier | None = None
     port_id: Identifier | None = None
     wlan_id: Identifier | None = None
+
+
+class ExpectedDevice(Contract):
+    """A device with an audit-linked deployment trigger: an applicable target of every org- and site-level atom."""
+
+    mac: DeviceMac
+    site_id: Identifier
 
 
 class Obligation(Contract):

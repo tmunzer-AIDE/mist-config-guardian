@@ -158,7 +158,9 @@ class RestoreBaselineService:
                 configuration=protect_configuration(current, self._vault, sensitive_fields=definition.sensitive_fields),
                 configuration_hash=fingerprint(definition, current),
                 changed_fields=changed_top_level_fields(
-                    reveal_configuration(previous.configuration, self._vault), current
+                    reveal_configuration(previous.configuration, self._vault),
+                    current,
+                    ignored_fields=definition.ignored_fields,
                 ),
                 references=extract_uuid_references(current),
                 actor=actor,

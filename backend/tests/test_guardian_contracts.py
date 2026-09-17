@@ -15,6 +15,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     DeviceImpact,
     Evidence,
     Exclusion,
+    ExpectedDevice,
     Finding,
     Gap,
     LedgerRow,
@@ -297,6 +298,14 @@ def test_ledger_rows_resolve_to_one_of_three_outcomes():
             obligation_ids=("O1",),
             uncovered_paths=(("dns_suffix",),),
         )
+
+
+def test_an_expected_device_is_one_mac_at_one_site():
+    device = ExpectedDevice(mac=MAC, site_id=SITE)
+    assert (device.mac, device.site_id) == (MAC, SITE)
+    for values in ({"mac": "5C:5B:35:00:00:01", "site_id": SITE}, {"mac": MAC, "site_id": ""}, {"mac": MAC}):
+        with pytest.raises(ValidationError):
+            ExpectedDevice.model_validate(values)
 
 
 def test_run_budget_is_capped_by_the_per_attempt_limits():
