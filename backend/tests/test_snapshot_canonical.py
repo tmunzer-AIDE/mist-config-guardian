@@ -6,12 +6,12 @@ import json
 from mist_config_guardian_backend.snapshots.canonical import (
     CURRENT_HASH_GENERATION,
     canonicalize,
-    changed_top_level_fields,
     configuration_hash,
     configuration_hash_matches,
     is_legacy_hash,
     legacy_configuration_hash,
 )
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
 from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS
 
 _WLAN = {"name": "NW-Corp", "psk": "correct-horse-battery-staple", "vlan": 12}

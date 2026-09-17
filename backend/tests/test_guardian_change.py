@@ -14,13 +14,8 @@ from mist_config_guardian_backend.guardian.change import (
 )
 from mist_config_guardian_backend.guardian.contracts import ChangeAtom
 from mist_config_guardian_backend.guardian.evidence import CHANGE_VIEW_BUDGET, json_size
-from mist_config_guardian_backend.services.diff import (
-    COMPARISON_IGNORED_FIELDS,
-    MAX_ENTRIES,
-    changed_entries,
-    changed_paths,
-    diff_configurations,
-)
+from mist_config_guardian_backend.services.diff import COMPARISON_IGNORED_FIELDS, diff_configurations
+from mist_config_guardian_backend.snapshots.diffing import MAX_ENTRIES, changed_entries, changed_paths
 from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS
 
 SECRET = {"$encrypted": "ciphertext-one", "$fingerprint": "fingerprint-one"}

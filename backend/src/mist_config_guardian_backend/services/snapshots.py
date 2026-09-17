@@ -22,7 +22,7 @@ from mist_config_guardian_backend.models.snapshot import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.service_credentials import service_token
-from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
 from mist_config_guardian_backend.snapshots.fingerprint import fingerprint, fingerprint_matches, normalize
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (

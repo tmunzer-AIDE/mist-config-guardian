@@ -1,6 +1,8 @@
 """Guardian persistence: a small root per audit, one bounded run per attempt, disjoint from legacy and dormant."""
 
 import ast
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -416,14 +418,52 @@ def test_guardian_code_never_touches_the_legacy_engine():
         "mist_config_guardian_backend.services",
         "mist_config_guardian_backend.integrations",
     )
-    # The design's change model reuses the pure, secret-safe diff walker; it serves the diff API and outlives the
-    # legacy engine. Only that module is shared.
-    shared = "mist_config_guardian_backend.services.diff"
     for path in guardian_sources():
-        imports = {m for m in imported_modules(path) if m != shared and not m.startswith(f"{shared}.")}
+        imports = imported_modules(path)
         assert not {m for m in imports if m.startswith(legacy_modules)}, path
         text = path.read_text()
         assert not {name for name in LEGACY_COLLECTIONS if f'"{name}"' in text}, path
+
+
+# The deterministic core: it may use the pure snapshot helpers (registry, canonical form, diff walker), never the
+# service, settings, security, persistence or transport layers. Later pure modules join this list.
+PURE_GUARDIAN_MODULES = ("change", "contracts", "evidence", "ledger", "repository")
+IMPURE_LAYERS = (
+    "beanie",
+    "motor",
+    "pymongo",
+    "mist_config_guardian_backend.api",
+    "mist_config_guardian_backend.config",
+    "mist_config_guardian_backend.integrations",
+    "mist_config_guardian_backend.models",
+    "mist_config_guardian_backend.schemas",
+    "mist_config_guardian_backend.security",
+    "mist_config_guardian_backend.services",
+    "mist_config_guardian_backend.snapshots.canonical",
+)
+
+
+def in_layer(module: str, layers: tuple[str, ...]) -> bool:
+    return any(module == layer or module.startswith(f"{layer}.") for layer in layers)
+
+
+def test_the_pure_guardian_core_imports_no_service_settings_or_database_layer():
+    for name in PURE_GUARDIAN_MODULES:
+        path = BACKEND / "guardian" / f"{name}.py"
+        assert not {m for m in imported_modules(path) if in_layer(m, IMPURE_LAYERS)}, path
+
+
+def test_the_pure_guardian_core_loads_no_database_driver_settings_or_service_transitively():
+    modules = ", ".join(f"mist_config_guardian_backend.guardian.{name}" for name in PURE_GUARDIAN_MODULES)
+    probe = (
+        f"import sys; import {modules}; "
+        f"layers = {IMPURE_LAYERS!r}; "
+        "loaded = sorted(m for m in sys.modules if any(m == l or m.startswith(l + '.') for l in layers)); "
+        "print(loaded)"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)  # noqa: S603
+
+    assert result.stdout.strip() == "[]"
 
 
 def test_guardian_stays_dormant_until_a_gated_path_is_wired():

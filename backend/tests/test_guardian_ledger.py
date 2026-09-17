@@ -66,7 +66,7 @@ from mist_config_guardian_backend.guardian.ledger import (
     ledger_view,
     resolve_statuses,
 )
-from mist_config_guardian_backend.services.diff import MAX_ENTRIES
+from mist_config_guardian_backend.snapshots.diffing import MAX_ENTRIES
 
 SITE_A = "site-a"
 SITE_B = "site-b"

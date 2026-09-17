@@ -1,51 +1,23 @@
 """Deterministic structured configuration comparison schemas."""
 
 from datetime import datetime
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.models.snapshot import ObjectVersion, VersionEvent
+from mist_config_guardian_backend.snapshots.diffing import DIFF_SECRET_MASK, DiffChangeKind, DiffCounts, DiffEntry
 
-DIFF_SECRET_MASK = "********"  # noqa: S105 - redaction sentinel, not a credential
-
-
-class DiffChangeKind(StrEnum):
-    """Classification of one changed configuration leaf."""
-
-    ADDED = "ADDED"
-    MODIFIED = "MODIFIED"
-    REMOVED = "REMOVED"
-
-
-class DiffEntry(BaseModel):
-    """One changed configuration leaf rendered for display.
-
-    ``before`` and ``after`` are display strings, never raw configuration
-    values: encrypted material is replaced by the redaction mask before it ever
-    reaches this model.
-    """
-
-    field: str
-    kind: DiffChangeKind
-    before: str | None = None
-    after: str | None = None
-    note: str
-    section: str
-    notable: bool = False
-    secret: bool = False
-    secret_unknown: bool = False
-    reordered: bool = False
-
-
-class DiffCounts(BaseModel):
-    """Change magnitude for a diff or one of its sections."""
-
-    changed: int = 0
-    added: int = 0
-    modified: int = 0
-    removed: int = 0
+__all__ = [
+    "DIFF_SECRET_MASK",
+    "ConfigurationDiff",
+    "DiffChangeKind",
+    "DiffCounts",
+    "DiffEntry",
+    "DiffSection",
+    "DiffVersionRef",
+    "RawConfigurationDiff",
+]
 
 
 class DiffSection(BaseModel):

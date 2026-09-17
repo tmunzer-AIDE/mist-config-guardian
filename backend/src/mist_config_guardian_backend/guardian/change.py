@@ -23,9 +23,8 @@ from mist_config_guardian_backend.guardian.contracts import (
     Identifier,
 )
 from mist_config_guardian_backend.guardian.evidence import CHANGE_VIEW_BUDGET, Bounded, bounded
-from mist_config_guardian_backend.schemas.diff import DiffChangeKind
-from mist_config_guardian_backend.services.diff import changed_entries, changed_paths
-from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.diffing import DiffChangeKind, changed_entries, changed_paths
 from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS, get_definition
 
 CHANGE_VIEW_CHANGES_PER_ATOM = 3

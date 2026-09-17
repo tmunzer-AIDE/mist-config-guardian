@@ -22,7 +22,7 @@ from mist_config_guardian_backend.services.restore_planner import (
     RestoreStateStore,
     latest_version,
 )
-from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
 from mist_config_guardian_backend.snapshots.fingerprint import fingerprint
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition

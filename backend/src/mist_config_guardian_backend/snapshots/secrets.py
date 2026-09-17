@@ -1,8 +1,11 @@
 """Field-level protection for secrets returned in Mist configuration."""
 
 from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
-from mist_config_guardian_backend.security.credentials import CredentialVault
+if TYPE_CHECKING:
+    # Annotations only: redaction stays importable without settings or cryptography.
+    from mist_config_guardian_backend.security.credentials import CredentialVault
 
 _ENCRYPTED_MARKER = "$encrypted"
 _FINGERPRINT_MARKER = "$fingerprint"
@@ -29,7 +32,7 @@ def protected_fingerprint(value: object) -> str | None:
 
 def protect_configuration(
     configuration: Mapping[str, object],
-    vault: CredentialVault,
+    vault: "CredentialVault",
     *,
     sensitive_fields: frozenset[str],
 ) -> dict[str, object]:
@@ -66,7 +69,7 @@ def protect_configuration(
 
 def reveal_configuration(
     configuration: Mapping[str, object],
-    vault: CredentialVault,
+    vault: "CredentialVault",
 ) -> dict[str, object]:
     """Decrypt protected fields for hashing, diffing, or delegated restore."""
 
