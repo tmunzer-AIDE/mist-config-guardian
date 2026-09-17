@@ -30,6 +30,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     Contract,
     DeviceImpact,
     DeviceMac,
+    DeviceType,
     Evidence,
     EvidenceScope,
     EvidenceWindow,
@@ -51,6 +52,12 @@ from mist_config_guardian_backend.guardian.ledger import Ledger, RowDevices
 
 PAIRING_BOUND = timedelta(minutes=30)
 USER_TRIGGER_EVENTS = frozenset({"AP_CONFIG_CHANGED_BY_USER", "SW_CONFIG_CHANGED_BY_USER", "GW_CONFIG_CHANGED_BY_USER"})
+# The device family each user trigger names, which is the only device type Guardian observes rather than infers.
+TRIGGER_DEVICE_TYPES: Mapping[str, DeviceType] = {
+    "AP_CONFIG_CHANGED_BY_USER": "ap",
+    "SW_CONFIG_CHANGED_BY_USER": "switch",
+    "GW_CONFIG_CHANGED_BY_USER": "gateway",
+}
 TRIGGER_EVENTS = USER_TRIGGER_EVENTS | {"AP_CONFIG_CHANGED_BY_RRM"}
 DEVICE_EVENT_PREFIXES = ("AP", "SW", "GW")
 SHOWN_OUTCOMES = 3
@@ -153,15 +160,22 @@ class ReplayFrame(Contract):
 def expected_devices(
     receipts: Iterable[DeviceEventReceipt], *, audit_id: str, as_of: datetime
 ) -> tuple[ExpectedDevice, ...]:
-    """Devices with a ``*_CONFIG_CHANGED_BY_USER`` receipt carrying this audit, by MAC, each at its latest site."""
-    latest: dict[str, tuple[tuple[datetime, datetime, str], str]] = {}
+    """Devices with a ``*_CONFIG_CHANGED_BY_USER`` receipt carrying this audit, by MAC, each at its latest site.
+
+    The trigger's own prefix names the device family, so a plug-in whose configuration mapping applies to one family
+    can target it without asking the provider what each device is.
+    """
+    latest: dict[str, tuple[tuple[datetime, datetime, str], str, str]] = {}
     for item in receipts:
         if item.event_type not in USER_TRIGGER_EVENTS or item.audit_id != audit_id or item.received_at > as_of:
             continue
         key = (_Event.of(item).second, item.received_at, item.receipt_id)
         if item.device_mac not in latest or key > latest[item.device_mac][0]:
-            latest[item.device_mac] = (key, item.site_id)
-    return tuple(ExpectedDevice(mac=mac, site_id=site) for mac, (_, site) in sorted(latest.items()))
+            latest[item.device_mac] = (key, item.site_id, item.event_type)
+    return tuple(
+        ExpectedDevice(mac=mac, site_id=site, device_type=TRIGGER_DEVICE_TYPES.get(event))
+        for mac, (_, site, event) in sorted(latest.items())
+    )
 
 
 def resolve_anchor(

@@ -438,6 +438,12 @@ PURE_GUARDIAN_MODULES = (
     "mcp_allowlist",
     "monitoring",
     "payloads",
+    "plugins",
+    "plugins.base",
+    "plugins.dns",
+    "plugins.switch_port",
+    "plugins.wlan_auth",
+    "plugins.wlan_removal",
     "reader",
     "repository",
 )
@@ -456,13 +462,20 @@ IMPURE_LAYERS = (
 )
 
 
+def module_path(name: str) -> Path:
+    """A pure module's file, whether it sits in the package or in a sub-package such as the plug-ins."""
+    parts = name.split(".")
+    stem = BACKEND / "guardian" / Path(*parts)
+    return stem / "__init__.py" if stem.is_dir() else stem.with_suffix(".py")
+
+
 def in_layer(module: str, layers: tuple[str, ...]) -> bool:
     return any(module == layer or module.startswith(f"{layer}.") for layer in layers)
 
 
 def test_the_pure_guardian_core_imports_no_service_settings_or_database_layer():
     for name in PURE_GUARDIAN_MODULES:
-        path = BACKEND / "guardian" / f"{name}.py"
+        path = module_path(name)
         assert not {m for m in imported_modules(path) if in_layer(m, IMPURE_LAYERS)}, path
 
 

@@ -212,17 +212,18 @@ def test_expected_devices_come_only_from_user_triggers_carrying_this_audit():
         trig(3, mac="0200000000aa", received=AS_OF + timedelta(seconds=1)),
     ]
 
+    # The trigger's own prefix names each device's family, which is all Guardian ever observes it from.
     assert expected_devices(receipts, audit_id=AUDIT, as_of=AS_OF) == (
-        ExpectedDevice(mac=X, site_id=SITE),
-        ExpectedDevice(mac=Z, site_id="site-b"),
-        ExpectedDevice(mac="020000000099", site_id=SITE),
+        ExpectedDevice(mac=X, site_id=SITE, device_type="ap"),
+        ExpectedDevice(mac=Z, site_id="site-b", device_type="switch"),
+        ExpectedDevice(mac="020000000099", site_id=SITE, device_type="ap"),
     )
 
 
 def test_a_device_reported_at_two_sites_is_expected_once_at_its_latest_site():
     receipts = [trig(0, site="site-old"), trig(60, site="site-new")]
     assert expected_devices(reversed(receipts), audit_id=AUDIT, as_of=AS_OF) == (
-        ExpectedDevice(mac=X, site_id="site-new"),
+        ExpectedDevice(mac=X, site_id="site-new", device_type="ap"),
     )
 
 

@@ -10,7 +10,7 @@ arrives inside the transport bound and above the evidence budget is kept as a di
 """
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from math import isfinite
 from typing import Any
 
@@ -75,6 +75,23 @@ def redact_text(text: str, *, secrets: Sequence[str] = (), max_chars: int) -> st
     redacted = redact(str(text), secrets=secrets)
     collapsed = _UNSAFE_RUN.sub(" ", str(redacted)).strip()
     return collapsed[:max_chars]
+
+
+def without_fields(value: Any, names: Collection[str], depth: int = 0) -> Any:
+    """The result with the named keys removed at any depth: what a read declares must never reach evidence.
+
+    A read that returns a field Guardian may not keep, such as the MAC an LLDP neighbour claims, drops it here,
+    before the result is measured, stored or handed back, so no caller can keep what was never returned to it.
+    """
+    if not names or depth > MAX_DEPTH:
+        return value
+    if isinstance(value, Mapping):
+        return {
+            str(key): without_fields(item, names, depth + 1) for key, item in value.items() if str(key) not in names
+        }
+    if isinstance(value, list):
+        return [without_fields(item, names, depth + 1) for item in value]
+    return value
 
 
 def payload_of(value: JsonValue) -> dict[str, JsonValue]:

@@ -65,6 +65,7 @@ from mist_config_guardian_backend.guardian.evidence import (
 CALL_TIMEOUT_CEILING = 20.0
 MAX_TRANSPORT_BYTES = 1_000_000
 MAX_CATALOGUE_TOOLS = 100
+MAX_OMITTED_FIELDS = 8
 WINDOW_CAP = timedelta(minutes=60)
 
 Phase = Literal["rule", "agent"]
@@ -244,6 +245,9 @@ class RuleRead(Contract):
     site_id: Identifier | None = None
     device_macs: tuple[DeviceMac, ...] = ()
     window: WindowName | None = None
+    # Field names this read must never keep. The Reader removes them from the result before it is measured, stored
+    # or returned, so a plug-in cannot hold data it declared it may not have.
+    omit_fields: tuple[Identifier, ...] = Field(default=(), max_length=MAX_OMITTED_FIELDS)
     # Platform constants belong to no organization. Every other read names one of Guardian's own scopes, so a
     # route that carries no organization and no site (``/self``, ``/self/apitokens``) cannot be read at all.
     org_neutral: bool = False
@@ -415,7 +419,9 @@ class Reader:
             raw = await self._rules.fetch(request.path, params, timeout=timeout, max_bytes=MAX_TRANSPORT_BYTES)
         except TransportError as exc:
             return self._failed(envelope, _detail(exc))
-        return self._recorded(envelope, raw, budget=RULE_EVIDENCE_ITEM_BUDGET)
+        return self._recorded(
+            envelope, payloads.without_fields(raw, request.omit_fields), budget=RULE_EVIDENCE_ITEM_BUDGET
+        )
 
     # -- internals ---------------------------------------------------------
     def _timeout(self, phase: Phase) -> float:

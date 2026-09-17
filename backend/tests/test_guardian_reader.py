@@ -847,6 +847,19 @@ async def test_a_rule_read_carries_the_window_the_plugin_named() -> None:
     assert json_size(evidence) <= RULE_EVIDENCE_ITEM_BUDGET
 
 
+async def test_a_read_that_declares_a_field_it_may_not_keep_never_sees_it_either() -> None:
+    """A plug-in that must not hold a value, such as the MAC an LLDP neighbour claims, declares it away."""
+    rules = FakeRuleTransport(result={"results": [{"mac": MAC, "neighbor_mac": "aabbccddeeff", "up": True}]})
+    guard = reader(rules=rules)
+
+    evidence = await guard.read(rule_read(window=None, omit_fields=("neighbor_mac",)))
+
+    assert evidence.payload["results"] == [{"mac": MAC, "up": True}]
+    assert "aabbccddeeff" not in evidence.model_dump_json()
+    # The read itself is unchanged: the field is removed from the answer, not from the question.
+    assert "neighbor_mac" not in rules.reads[0][1]
+
+
 async def test_a_snapshot_rule_read_carries_no_window() -> None:
     guard = reader()
 

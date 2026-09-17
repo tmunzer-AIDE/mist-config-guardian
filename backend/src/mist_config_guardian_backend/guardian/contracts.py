@@ -53,6 +53,7 @@ EmptyPolicy = Literal["not_exercised", "incomplete"]
 StatusValue = Literal["satisfied", "not_exercised", "unsatisfied"]
 LedgerResolution = Literal["claimed", "excluded", "uncovered"]
 AnchorSource = Literal["audit", "device_trigger", "receipt"]
+DeviceType = Literal["ap", "switch", "gateway"]
 
 CORE_OWNER = "core"
 CORE_OBLIGATION_KINDS: frozenset[ObligationKind] = frozenset({"anchor", "deployment"})
@@ -136,10 +137,16 @@ class Target(Contract):
 
 
 class ExpectedDevice(Contract):
-    """A device with an audit-linked deployment trigger: an applicable target of every org- and site-level atom."""
+    """A device with an audit-linked deployment trigger: an applicable target of every org- and site-level atom.
+
+    ``device_type`` is the family the provider's own trigger event named (``AP_``/``SW_``/``GW_``), so a plug-in whose
+    mapping applies to one family can target that family alone. It is ``None`` when no trigger established it, and a
+    family-scoped plug-in then leaves that device's rows uncovered rather than guessing.
+    """
 
     mac: DeviceMac
     site_id: Identifier
+    device_type: DeviceType | None = None
 
 
 class Obligation(Contract):

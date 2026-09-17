@@ -32,6 +32,7 @@ MAX_VIEW_PATH_CHARS = 200
 
 Scope = Literal["org", "site"]
 ChangeKind = Literal["added", "modified", "removed"]
+ObjectChangeKind = Literal["created", "modified", "deleted"]
 Name = Annotated[str, StringConstraints(max_length=MAX_IDENTIFIER_CHARS)]
 DisplayValue = Annotated[str, StringConstraints(max_length=MAX_TEXT_CHARS)]
 
@@ -66,9 +67,17 @@ class ObjectChange:
     after: Mapping[str, object]
     site_id: str | None = None
     device_mac: str | None = None
+    mist_id: str | None = None
 
 
 class ChangedObject(Contract):
+    """One changed logical object version: its identity and how the audit changed it, never its values.
+
+    ``mist_id`` is the provider's own identifier for the object, which a rule plug-in needs to ask Mist about it. It
+    is ``None`` when the change has no single provider identity, for example when the object was replaced by a new
+    incarnation, and a plug-in then cannot query that object.
+    """
+
     logical_object_id: Identifier
     scope: Scope
     object_type: Identifier
@@ -76,6 +85,8 @@ class ChangedObject(Contract):
     version: int = Field(ge=1)
     site_id: Identifier | None = None
     device_mac: DeviceMac | None = None
+    mist_id: Identifier | None = None
+    change_kind: ObjectChangeKind = "modified"
 
 
 class PathChange(Contract):
@@ -149,6 +160,8 @@ def build_change_set(changes: Iterable[ObjectChange]) -> ChangeSet:
                 version=change.version,
                 site_id=change.site_id,
                 device_mac=change.device_mac,
+                mist_id=change.mist_id,
+                change_kind=_object_change_kind(change),
             )
         )
         ignored = _ignored_fields(change)
@@ -200,6 +213,13 @@ def change_view(change: ChangeSet, *, budget: int = CHANGE_VIEW_BUDGET) -> Bound
         category=lambda view: view.object_type,
         build=lambda items, omitted: Bounded[AtomView](items=items, omitted=omitted),
     )
+
+
+def _object_change_kind(change: ObjectChange) -> ObjectChangeKind:
+    """Whether the audit created, modified or deleted the object: a deleted object has no configuration after it."""
+    if not change.after:
+        return "deleted"
+    return "created" if not change.before else "modified"
 
 
 def _ignored_fields(change: ObjectChange) -> frozenset[str]:
