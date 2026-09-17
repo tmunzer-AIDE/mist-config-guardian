@@ -192,20 +192,57 @@ def test_a_digest_that_cannot_fit_is_a_programming_error():
         rows_view(20, rows(5))
 
 
-def test_a_view_that_does_not_embed_its_items_as_measured_is_refused():
+def deployment_item(kept: tuple[Row, ...], omitted: dict[str, int]) -> Evidence:
+    """A wrapper that changes once anything is omitted, as a digest-bearing evidence item does."""
+    return Evidence(
+        id=WIDEST_EVIDENCE_ID,
+        source="deployment",
+        kind="deployment",
+        title="Deployment pairing",
+        captured_at=NOW,
+        collection="complete",
+        representation="digest" if omitted else "full",
+        payload={"rows": [row.model_dump() for row in kept], "omitted": omitted},
+    )
+
+
+def test_a_wrapper_that_changes_with_omission_degrades_at_every_budget_instead_of_failing():
+    items = rows(30)
+    digest_only = json_size(deployment_item((), {"g0": 10, "g1": 10, "g2": 10}))
+    assert digest_only < 400
+
+    for budget in range(400, 1_600):
+        view = bounded(
+            items,
+            budget=budget,
+            priority=lambda row: (row.rank, row.name),
+            category=lambda row: row.group,
+            build=deployment_item,
+        )
+        shown = [Row.model_validate(row) for row in view.payload["rows"]]
+        omitted = view.payload["omitted"]
+        assert json_size(view) <= budget, budget
+        assert shown == sorted(shown, key=lambda row: (row.rank, row.name)), budget
+        assert len(shown) + sum(omitted.values()) == len(items), budget
+        assert view.representation == ("digest" if omitted else "full"), budget
+
+
+def test_a_view_that_embeds_its_items_twice_still_degrades_to_fit():
     class Doubled(Contract):
         first: tuple[Row, ...]
         second: tuple[Row, ...]
         omitted: dict[str, int]
 
-    with pytest.raises(BudgetError, match="Doubled"):
-        bounded(
+    for budget in (600, 1_500, 3_000):
+        view = bounded(
             rows(20),
-            budget=1_500,
+            budget=budget,
             priority=lambda row: row.name,
             category=lambda row: row.group,
             build=lambda kept, omitted: Doubled(first=kept, second=kept, omitted=omitted),
         )
+        assert json_size(view) <= budget
+        assert len(view.first) + sum(view.omitted.values()) == 20
 
 
 def test_registry_assigns_ids_at_reservation_across_sources_and_never_renumbers():

@@ -4,8 +4,8 @@ Every E-id is assigned when its read is reserved and is never renumbered. The re
 source's budget, so what reaches a run or a prompt is bounded before persistence, not after.
 
 Each source degrades to a count-only digest that always fits: :func:`pack` keeps items in priority order while they
-fit and counts the rest per category, and :func:`bounded` does that for a view that embeds its kept items as one list
-beside their counts. Budgets count serialized UTF-8 JSON bytes, with KB = 1,000 bytes.
+fit and counts the rest per category, and :func:`bounded` builds a view from that and re-measures it, dropping more
+items until it fits. Budgets count serialized UTF-8 JSON bytes, with KB = 1,000 bytes.
 """
 
 from collections import Counter
@@ -76,7 +76,7 @@ def json_size(value: object) -> int:
 
 
 class BudgetError(ValueError):
-    """A count-only digest did not fit its budget, or a view did not embed its items as :func:`bounded` expects."""
+    """Even a count-only digest does not fit: its categories are not a small closed set. A programming error."""
 
 
 class EvidenceError(ValueError):
@@ -104,9 +104,10 @@ def pack[T](  # noqa: PLR0913 - every argument is one decision of the budget
 
     ``priority`` must order items totally, so the result does not depend on input order. ``overhead(omitted, kept)``
     returns every byte besides the kept items themselves: the envelope, separators and the digest of those omitted
-    counts. Categories must come from a small closed set, so the digest alone always fits; if it does not, that is
-    a programming error and :class:`BudgetError` is raised. An item too large for the space left is counted and
-    packing continues with the next one.
+    counts. The result fits only as far as ``overhead`` is exact or an upper bound; :func:`bounded` re-measures what it
+    builds instead of relying on that. Categories must come from a small closed set, so the digest alone always fits;
+    if it does not, that is a programming error and :class:`BudgetError` is raised. An item too large for the space
+    left is counted and packing continues with the next one.
     """
     ordered = sorted(items, key=priority)
     omitted = Counter(category(item) for item in ordered)
@@ -150,23 +151,31 @@ def bounded[T, V: BaseModel](
     category: Callable[[T], str],
     build: Callable[[tuple[T, ...], dict[str, int]], V],
 ) -> V:
-    """Build a view within ``budget`` as :func:`pack` keeps items, where ``build`` embeds them as one JSON list.
+    """Build a view within ``budget`` from the items :func:`pack` keeps; it degrades, it never fails on size.
 
-    ``build(items, omitted)`` must serialize each item exactly as :func:`json_size` measures it and the counts as
-    one JSON object, as a :class:`Bounded` field does. The finished view is measured again, so a view that breaks
-    that rule raises :class:`BudgetError` instead of exceeding its budget.
+    ``build(items, omitted)`` embeds the kept items and their omitted counts. Packing estimates the wrapper as it is
+    emitted, with nothing omitted and with a digest (a wrapper may change then, as a ``full``/``digest``
+    representation does). The built view is then measured, and while it is still too large the lowest-priority kept
+    item moves into the counts. That ends at the count-only digest, which :func:`pack` checks fits before anything
+    else, so the only error is :class:`BudgetError` for a digest that cannot fit at all.
     """
-    empty = json_size(build((), {}))
+    ordered = sorted(items, key=priority)
+    everything = _counts(Counter(category(item) for item in ordered))
+    digest_only = json_size(build((), everything))
+    whole_wrapper = json_size(build((), {})) - json_size({})
+    digest_wrapper = digest_only - json_size(everything)
 
     def overhead(omitted: Mapping[str, int], kept: int) -> int:
-        # ``{}`` is already in the empty view; the digest adds its contents, and items add separators.
-        return empty + json_size(_counts(omitted)) - 2 + max(kept - 1, 0)
+        counts = _counts(omitted)
+        return (digest_wrapper if counts else whole_wrapper) + json_size(counts) + max(kept - 1, 0)
 
-    packed = pack(items, budget=budget, priority=priority, category=category, overhead=overhead)
-    view = build(packed.kept, packed.omitted)
-    if json_size(view) > budget:
-        msg = f"{type(view).__name__} serializes above its {budget}-byte budget"
-        raise BudgetError(msg)
+    packed = pack(ordered, budget=budget, priority=priority, category=category, overhead=overhead)
+    kept = list(packed.kept)
+    omitted = Counter(packed.omitted)
+    view = build(tuple(kept), _counts(omitted))
+    while kept and json_size(view) > budget:
+        omitted[category(kept.pop())] += 1
+        view = build(tuple(kept), _counts(omitted))
     return view
 
 
