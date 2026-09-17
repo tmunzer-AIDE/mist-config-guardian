@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.models.adjudication import ImpactAdjudication
+from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianRun
 from mist_config_guardian_backend.models.investigation import (
     ImpactInvestigation,
     InvestigationRevision,
@@ -44,6 +45,8 @@ async def test_legacy_backfill_pins_org_policy_and_deletion_uses_only_proven_orp
         (InvestigationRevision, "generated_at"),
         (ModelRequestArtifact, "created_at"),
         (ImpactAdjudication, "reviewed_at"),
+        (GuardianInvestigation, "created_at"),
+        (GuardianRun, "created_at"),
         (NeighborBinding, None),
     ]:
         identifier, orphan = PydanticObjectId(), PydanticObjectId()
@@ -57,10 +60,10 @@ async def test_legacy_backfill_pins_org_policy_and_deletion_uses_only_proven_orp
         )
         monkeypatch.setattr(model, "get_pymongo_collection", lambda *_, c=collection: c)
         collections.append((collection, identifier, orphan))
-    assert await service.maintain_investigation_retention() == 9
+    assert await service.maintain_investigation_retention() == 13
     service.Organization.get.assert_awaited_once_with(ORG)
     for index, (collection, identifier, orphan) in enumerate(collections):
-        if index < 4:
+        if index < 6:
             assert collection.update_one.await_args.args == (
                 {"_id": identifier, "organization_id": ORG, "retained_until": None},
                 {"$set": {"retained_until": NOW + timedelta(days=30)}},
@@ -75,5 +78,42 @@ def test_every_public_investigation_artifact_has_ttl_including_unreferenced_inse
     for model in (ImpactInvestigation, InvestigationRevision, ModelRequestArtifact, ImpactAdjudication):
         assert any(
             i.document.get("expireAfterSeconds") == 0 and dict(i.document["key"]) == {"retained_until": 1}
+            for i in model.Settings.indexes
+        )
+
+
+async def test_guardian_cleanup_uses_the_organization_of_each_root_and_run(monkeypatch):
+    monkeypatch.setattr(service, "utc_now", lambda: NOW)
+    seen = {}
+    for model in (
+        ImpactInvestigation,
+        InvestigationRevision,
+        ModelRequestArtifact,
+        ImpactAdjudication,
+        GuardianInvestigation,
+        GuardianRun,
+        NeighborBinding,
+    ):
+        collection = SimpleNamespace(
+            find=lambda *_args, **_kwargs: Cursor([]),
+            aggregate=AsyncMock(return_value=Cursor([])),
+            delete_many=AsyncMock(),
+        )
+        monkeypatch.setattr(model, "get_pymongo_collection", lambda *_, c=collection: c)
+        seen[model] = collection
+    assert await service.maintain_investigation_retention() == 0
+    for model in (GuardianInvestigation, GuardianRun):
+        pipeline = seen[model].aggregate.await_args.args[0]
+        assert pipeline[0] == {"$match": {"created_at": {"$lt": NOW - timedelta(days=1)}}}
+        assert pipeline[1]["$lookup"]["localField"] == "organization_id"
+        seen[model].delete_many.assert_not_awaited()
+
+
+def test_guardian_collections_expire_through_partial_ttl_indexes():
+    for model in (GuardianInvestigation, GuardianRun):
+        assert any(
+            i.document.get("expireAfterSeconds") == 0
+            and dict(i.document["key"]) == {"retained_until": 1}
+            and i.document.get("partialFilterExpression") == {"retained_until": {"$exists": True}}
             for i in model.Settings.indexes
         )

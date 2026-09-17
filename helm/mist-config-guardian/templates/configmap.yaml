@@ -2,6 +2,10 @@
 {{- if not (has $impactEngineMode (list "legacy" "shadow" "agent_shadow")) -}}
 {{- fail "config.impactEngineMode must be legacy, shadow, or agent_shadow" -}}
 {{- end -}}
+{{- $guardianEnabled := default false .Values.config.guardianEnabled -}}
+{{- if not (kindIs "bool" $guardianEnabled) -}}
+{{- fail "config.guardianEnabled must be true or false" -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,6 +17,7 @@ data:
   APP_VERSION: {{ .Chart.AppVersion | quote }}
   ENVIRONMENT: {{ .Values.config.environment | quote }}
   IMPACT_ENGINE_MODE: {{ $impactEngineMode | quote }}
+  GUARDIAN_ENABLED: {{ $guardianEnabled | quote }}
   MIST_MCP_URL: {{ default "https://mcp.ai.juniper.net/mcp/mist" .Values.config.mistMcpUrl | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}

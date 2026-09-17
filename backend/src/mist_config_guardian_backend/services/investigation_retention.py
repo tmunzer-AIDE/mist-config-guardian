@@ -1,9 +1,10 @@
-"""Bounded legacy TTL backfill and cleanup of investigation data for deleted organizations."""
+"""Bounded TTL backfill and deleted-organization cleanup for legacy impact and Guardian investigation data."""
 
 from datetime import timedelta
 
 from mist_config_guardian_backend.models.adjudication import ImpactAdjudication
 from mist_config_guardian_backend.models.base import utc_now
+from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianRun
 from mist_config_guardian_backend.models.investigation import (
     ImpactInvestigation,
     InvestigationRevision,
@@ -26,6 +27,8 @@ async def maintain_investigation_retention() -> int:
         (InvestigationRevision, "generated_at"),
         (ModelRequestArtifact, "created_at"),
         (ImpactAdjudication, "reviewed_at"),
+        (GuardianInvestigation, "created_at"),
+        (GuardianRun, "created_at"),
     ]
     for model, timestamp in families:
         collection = model.get_pymongo_collection()

@@ -14,6 +14,7 @@ from mist_config_guardian_backend.models.challenge import (
     ThrottleBucket,
     WebAuthnChallenge,
 )
+from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianRun
 from mist_config_guardian_backend.models.investigation import (
     ImpactInvestigation,
     InvestigationRevision,
@@ -64,6 +65,8 @@ def document_models() -> list[type[Document]]:
         InvestigationRevision,
         ModelRequestArtifact,
         NeighborBinding,
+        GuardianInvestigation,
+        GuardianRun,
         Notification,
     ]
 
@@ -72,6 +75,8 @@ __all__ = [
     "AiRequestAudit",
     "ApplicationConfiguration",
     "AuditChangeGroup",
+    "GuardianInvestigation",
+    "GuardianRun",
     "LogicalObject",
     "LoginChallenge",
     "MonitoringSession",

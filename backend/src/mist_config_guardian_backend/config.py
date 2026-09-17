@@ -91,6 +91,8 @@ class Settings(BaseSettings):
     # Shadow runs deterministic audit rules and suppresses the old per-device AI narrator.
     mist_mcp_url: str = "https://mcp.ai.juniper.net/mcp/mist"
     impact_engine_mode: Literal["legacy", "shadow", "agent_shadow"] = "legacy"
+    # The Guardian audit impact investigation, which replaces impact_engine_mode once complete. Off by default.
+    guardian_enabled: bool = False
 
     ai_request_timeout_seconds: float = 45.0
     ai_max_response_tokens: int = 1500

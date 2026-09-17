@@ -85,6 +85,8 @@ config:
   # legacy, shadow (deterministic), or agent_shadow (requires AI provider setup).
   # Shadow modes retain legacy production verdicts and notifications.
   impactEngineMode: legacy
+  # Guardian, the audit impact investigation that replaces impactEngineMode once complete. Keep it off until then.
+  guardianEnabled: false
   # Existing Mist MCP HTTP endpoint, required for agent_shadow investigations.
   mistMcpUrl: "https://mcp.ai.juniper.net/mcp/mist"
   apiV1Prefix: /api/v1

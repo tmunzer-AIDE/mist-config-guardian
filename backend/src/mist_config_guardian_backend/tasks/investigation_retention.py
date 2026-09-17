@@ -1,4 +1,4 @@
-"""Hourly bounded impact artifact retention maintenance."""
+"""Hourly bounded retention maintenance for legacy impact artifacts and Guardian records."""
 
 import asyncio
 
