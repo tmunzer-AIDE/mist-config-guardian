@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 from pytest_httpx import HTTPXMock
 
@@ -33,6 +34,8 @@ from mist_config_guardian_backend.guardian.reader import (
     ReadRejectedError,
     RuleRead,
     SiteAuthority,
+    ToolCatalogue,
+    ToolSpec,
     TransportError,
     evidence_windows,
 )
@@ -240,32 +243,103 @@ async def test_discovery_keeps_only_read_only_allowlisted_tools_with_local_schem
     assert "schema" in catalogue.rejected["get_mist_stats"]
 
 
-@pytest.mark.parametrize(
-    ("properties", "missing"),
-    [
-        ({"search_type": {"type": "string"}, "site_id": {}, "start_time": {}, "end_time": {}}, "org_id"),
-        ({"search_type": {"type": "string"}, "org_id": {}, "start_time": {}, "end_time": {}}, "site_id"),
-        ({"search_type": {"type": "string"}, "org_id": {}, "site_id": {}}, "start_time"),
-    ],
-)
-async def test_a_schema_that_contradicts_the_frozen_allowlist_is_rejected(properties: dict, missing: str) -> None:
-    rows = [
+def advertised(tool: str, properties: dict) -> list[dict]:
+    """One catalogue row for ``tool`` that advertises exactly ``properties``."""
+    return [
         {
-            "name": "search_mist_data",
+            "name": tool,
             "inputSchema": {"type": "object", "properties": properties},
             "annotations": {"readOnlyHint": True},
         }
     ]
-    guard = reader(mcp=FakeMcp(tools=rows))
+
+
+@pytest.mark.parametrize(
+    ("tool", "properties", "named"),
+    [
+        ("search_mist_data", {"search_type": {}, "site_id": {}, "start_time": {}, "end_time": {}}, "org_id"),
+        ("search_mist_data", {"search_type": {}, "org_id": {}, "start_time": {}, "end_time": {}}, "site_id"),
+        ("search_mist_data", {"search_type": {}, "org_id": {}, "site_id": {}}, "start_time"),
+        ("get_mist_constants", {"constant_type": {}, "org_id": {}}, "org_id"),
+        ("get_mist_constants", {"constant_type": {}, "site_id": {}}, "site_id"),
+        ("get_mist_config", {"resource_type": {}, "org_id": {}, "site_id": {}, "start_time": {}}, "start_time"),
+        ("get_mist_config", {"resource_type": {}, "org_id": {}, "site_id": {}, "end_time": {}}, "end_time"),
+    ],
+)
+async def test_a_schema_that_contradicts_the_frozen_allowlist_is_rejected(
+    tool: str, properties: dict, named: str
+) -> None:
+    guard = reader(mcp=FakeMcp(tools=advertised(tool, properties)))
 
     catalogue = await guard.tools()
 
     assert catalogue.tools == {}
-    assert missing in catalogue.rejected["search_mist_data"]
-    assert "frozen allowlist" in catalogue.rejected["search_mist_data"]
+    assert named in catalogue.rejected[tool]
+    assert "frozen allowlist" in catalogue.rejected[tool]
     with pytest.raises(ReadRejectedError) as rejection:
-        await guard.call("search_mist_data", search())
+        await guard.call(tool, search())
     assert rejection.value.category == "tool_not_allowed"
+
+
+def smuggled(guard: Reader, tool: str, properties: dict) -> None:
+    """Put a tool whose schema the freeze denies into the catalogue, as if discovery had let it through."""
+    entry = allowlist.ALLOWLIST[tool]
+    schema = {"type": "object", "properties": properties}
+    guard._catalogue = ToolCatalogue(  # noqa: SLF001 - the second layer is only reachable past discovery
+        tools={
+            tool: ToolSpec(
+                name=tool,
+                discriminator=entry.discriminator,
+                input_schema=schema,
+                prompt_schema=schema,
+                validator=Draft202012Validator(schema),
+                properties=properties,
+                requires_org=entry.requires_org,
+                site_scopable=entry.site_scopable,
+                time_ranged=entry.time_ranged,
+            )
+        },
+        rejected={},
+    )
+
+
+async def test_a_foreign_organization_is_rejected_even_where_the_freeze_expects_none() -> None:
+    mcp = FakeMcp()
+    guard = reader(mcp=mcp)
+    smuggled(guard, "get_mist_constants", {"constant_type": {}, "org_id": {}})
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await guard.call("get_mist_constants", {"constant_type": "device_events", "org_id": OTHER_ORG})
+
+    assert rejection.value.category == "out_of_scope"
+    assert mcp.calls == []
+
+
+async def test_a_time_range_is_never_forwarded_by_a_tool_that_takes_none() -> None:
+    mcp = FakeMcp()
+    guard = reader(mcp=mcp)
+    smuggled(guard, "get_mist_config", {"resource_type": {}, "org_id": {}, "start_time": {}, "end_time": {}})
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await guard.call(
+            "get_mist_config",
+            {"resource_type": "networktemplates", "start_time": BEFORE[0], "end_time": BEFORE[1]},
+        )
+
+    assert rejection.value.category == "out_of_scope"
+    assert mcp.calls == []
+
+
+async def test_a_site_outside_the_authority_is_rejected_even_where_the_freeze_expects_none() -> None:
+    mcp = FakeMcp()
+    guard = reader(mcp=mcp)
+    smuggled(guard, "get_mist_constants", {"constant_type": {}, "site_id": {}})
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await guard.call("get_mist_constants", {"constant_type": "device_events", "site_id": OTHER_SITE})
+
+    assert rejection.value.category == "out_of_scope"
+    assert mcp.calls == []
 
 
 async def test_the_guards_read_the_frozen_facts_and_not_the_advertised_schema() -> None:
@@ -826,6 +900,36 @@ async def test_a_rule_read_names_a_scope_or_is_a_declared_constant_read(override
 
     assert rejection.value.category == "out_of_scope"
     assert rules.reads == []
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"org_id": ORG}, {"site_id": SITE}, {"org_id": ORG, "site_id": SITE}],
+)
+async def test_a_tenant_correct_parameter_does_not_replace_a_scope_segment(params: dict) -> None:
+    rules = FakeRuleTransport()
+
+    with pytest.raises(ReadRejectedError) as rejection:
+        await reader(rules=rules).read(rule_read(path="/api/v1/self", params=params, site_id=None, window=None))
+
+    assert rejection.value.category == "out_of_scope"
+    assert rules.reads == []
+
+
+async def test_an_organization_read_may_carry_its_own_parameters() -> None:
+    rules = FakeRuleTransport(result={"results": []})
+    guard = reader(rules=rules)
+
+    evidence = await guard.read(
+        rule_read(
+            path=f"/api/v1/orgs/{ORG}/devices/search",
+            params={"org_id": ORG, "site_id": SITE, "type": "ap"},
+            site_id=SITE,
+        )
+    )
+
+    assert evidence.collection == "complete"
+    assert rules.reads[0][1]["type"] == "ap"
 
 
 async def test_a_declared_constant_read_is_reference_evidence_with_no_scope() -> None:

@@ -430,11 +430,13 @@ class Reader:
         self, spec: ToolSpec, arguments: Mapping[str, JsonValue], kind: EvidenceKind
     ) -> tuple[dict[str, JsonValue], EvidenceWindow | None, WindowName | None]:
         prepared = {name: value for name, value in arguments.items() if self._argument_allowed(spec, name)}
+        # Whatever the freeze says the tool takes, an organization that reaches the arguments is compared: a
+        # catalogue that lies about its schema must not be able to turn a guard off by omission.
+        supplied = prepared.get("org_id")
+        if supplied is not None and str(supplied) != self._org_id:
+            msg = "Guardian reads one organization; another was requested."
+            raise ReadRejectedError(msg, category="out_of_scope")
         if spec.requires_org:
-            supplied = prepared.get("org_id")
-            if supplied is not None and str(supplied) != self._org_id:
-                msg = "Guardian reads one organization; another was requested."
-                raise ReadRejectedError(msg, category="out_of_scope")
             prepared["org_id"] = self._org_id
         self._check_site(spec, prepared, kind)
         window, name = self._check_window(spec, prepared)
@@ -471,6 +473,9 @@ class Reader:
         self, spec: ToolSpec, prepared: dict[str, JsonValue]
     ) -> tuple[EvidenceWindow | None, WindowName | None]:
         if not spec.time_ranged:
+            if any(name in prepared for name in _TIME_ARGUMENTS):
+                msg = "This read takes no time range, so it reads current state and cannot be given one."
+                raise ReadRejectedError(msg, category="out_of_scope")
             return None, None
         matched = self._windows.match(prepared.get("start_time"), prepared.get("end_time"))
         if matched is None:
@@ -497,8 +502,11 @@ class Reader:
         return params
 
     def _check_rule_scope(self, request: RuleRead) -> None:
+        # Only a path segment puts a read inside an organization or a site. A parameter is read alongside it and
+        # checked, but a route that reads something else entirely (``/self``) is not made tenant-scoped by one.
+        routed: list[tuple[str, str]] = _PATH_SCOPE.findall(request.path)
         identities: Iterable[tuple[str, str]] = [
-            *_PATH_SCOPE.findall(request.path),
+            *routed,
             *(("orgs", value) for name, value in request.params.items() if name == "org_id"),
             *(("sites", value) for name, value in request.params.items() if name == "site_id"),
             *(("sites", request.site_id) for _ in (1,) if request.site_id),
@@ -507,7 +515,7 @@ class Reader:
             if not request.path.startswith(_ORG_NEUTRAL_PREFIX) or request.kind != "reference":
                 msg = f"Only a reference read under {_ORG_NEUTRAL_PREFIX} may be organization neutral."
                 raise ReadRejectedError(msg, category="out_of_scope")
-        elif not identities:
+        elif not routed:
             msg = "A rule read names one of this investigation's organizations or sites in its path."
             raise ReadRejectedError(msg, category="out_of_scope")
         for collection, identity in identities:
@@ -697,17 +705,22 @@ def _tool_spec(  # noqa: PLR0911 - one return per reason a discovered tool canno
 
 
 def _contradicted(entry: mcp_allowlist.AllowedTool, properties: Mapping[str, Any]) -> str | None:
-    """The scope argument a frozen fact promises and the advertised schema leaves out, if any.
+    """How the advertised schema disagrees with the frozen scope facts, if it does.
 
-    Guardian's guards read the frozen facts, so a schema that cannot carry them is refused rather than silently
-    read without an organization, a site or a window.
+    The disagreement is refused in both directions. A schema that drops a scope argument the freeze promises would
+    read without an organization, a site or a window; a schema that adds one the freeze denies would carry a scope
+    Guardian never decided on. Either way the tool is not the one that was frozen, so it is not used.
     """
-    if entry.requires_org and "org_id" not in properties:
-        return "org_id, which Guardian injects"
-    if entry.site_scopable and "site_id" not in properties:
-        return "site_id, which the site authority needs"
-    if entry.time_ranged and not set(_TIME_ARGUMENTS) <= set(properties):
-        return "start_time and end_time, which every historical read must carry"
+    for argument, frozen in (
+        ("org_id", entry.requires_org),
+        ("site_id", entry.site_scopable),
+        ("start_time", entry.time_ranged),
+        ("end_time", entry.time_ranged),
+    ):
+        if frozen and argument not in properties:
+            return f"{argument}, which the frozen allowlist says this tool takes"
+        if not frozen and argument in properties:
+            return f"a frozen allowlist that denies its {argument}"
     return None
 
 
