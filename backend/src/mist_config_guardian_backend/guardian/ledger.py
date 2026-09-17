@@ -113,15 +113,15 @@ def build_ledger(
     targeted = _ByTarget[str]()
     for global_id, obligation in claims:
         targeted.add(obligation.target, global_id)
-    row_devices = {target.device_mac: target for _, target in rows if target.device_mac is not None}
-    for mac in sorted(mac for mac, target in row_devices.items() if targeted.reaching(target)):
+    row_devices = RowDevices(target for _, target in rows)
+    for mac in [mac for mac, target in row_devices.targets.items() if targeted.reaching(target)]:
         obligations.append(
             Obligation(
                 id=f"O{len(obligations) + 1}",
                 owner=CORE_OWNER,
                 role="precondition",
                 kind="deployment",
-                target=row_devices[mac],
+                target=row_devices.targets[mac],
             )
         )
 
@@ -248,31 +248,71 @@ def deterministic_view(
     )
 
 
-class _ByTarget[T]:
-    """Obligations or exclusions by the device or site their target names: which of them reach a row's device.
+def reaches(target: Target, row: Target) -> bool:
+    """The one targeting rule: whether an obligation or exclusion target reaches a row's device.
 
     A device target reaches the row of that device, unless it names another site. A site target with no device
     reaches every row device at that site. A target naming neither reaches no row. ``port_id`` and ``wlan_id`` narrow
     what is observed on the device; the paths say which changes that covers.
     """
+    if target.device_mac is not None:
+        return target.device_mac == row.device_mac and target.site_id in (None, row.site_id)
+    return target.site_id is not None and target.site_id == row.site_id
+
+
+class RowDevices:
+    """Every device a ledger row targets, and the row devices a target reaches under :func:`reaches`.
+
+    Replays evaluate exactly these devices, so monitoring, deployment pairing and the deployment preconditions agree
+    on which devices a change applies to and which of them an obligation targets.
+    """
+
+    def __init__(self, row_targets: Iterable[Target]) -> None:
+        targets: dict[str, Target] = {}
+        for target in row_targets:
+            if target.device_mac is not None:
+                targets[target.device_mac] = target
+        self._targets = dict(sorted(targets.items()))
+        self._by_site: defaultdict[str, list[str]] = defaultdict(list)
+        for mac, target in self._targets.items():
+            if target.site_id is not None:
+                self._by_site[target.site_id].append(mac)
+
+    @classmethod
+    def of(cls, ledger: Ledger) -> "RowDevices":
+        return cls(row.target for row in ledger.rows)
+
+    @property
+    def targets(self) -> Mapping[str, Target]:
+        """Each row device's target, by MAC in order."""
+        return self._targets
+
+    def reached_by(self, target: Target) -> tuple[str, ...]:
+        """The row devices ``target`` reaches, by MAC."""
+        if target.device_mac is not None:
+            indexed: Sequence[str] = (target.device_mac,) if target.device_mac in self._targets else ()
+        else:
+            indexed = self._by_site.get(target.site_id or "", ())
+        return tuple(mac for mac in indexed if reaches(target, self._targets[mac]))
+
+
+class _ByTarget[T]:
+    """Obligations or exclusions indexed by the device or site their target names, answering which of them reach a
+    row under :func:`reaches`."""
 
     def __init__(self) -> None:
-        self._devices: defaultdict[str, list[tuple[str | None, T]]] = defaultdict(list)
-        self._sites: defaultdict[str, list[T]] = defaultdict(list)
+        self._devices: defaultdict[str, list[tuple[Target, T]]] = defaultdict(list)
+        self._sites: defaultdict[str, list[tuple[Target, T]]] = defaultdict(list)
 
     def add(self, target: Target, item: T) -> None:
         if target.device_mac is not None:
-            self._devices[target.device_mac].append((target.site_id, item))
+            self._devices[target.device_mac].append((target, item))
         elif target.site_id is not None:
-            self._sites[target.site_id].append(item)
+            self._sites[target.site_id].append((target, item))
 
     def reaching(self, row: Target) -> list[T]:
-        found = [
-            item for site_id, item in self._devices.get(row.device_mac or "", ()) if site_id in (None, row.site_id)
-        ]
-        if row.site_id is not None:
-            found.extend(self._sites.get(row.site_id, ()))
-        return found
+        indexed = (*self._devices.get(row.device_mac or "", ()), *self._sites.get(row.site_id or "", ()))
+        return [item for target, item in indexed if reaches(target, row)]
 
 
 class _RowResolver:

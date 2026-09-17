@@ -34,7 +34,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     ObligationStatus,
     RulePlan,
     StatusValue,
-    Target,
     Text,
     band_rank,
 )
@@ -52,7 +51,7 @@ from mist_config_guardian_backend.guardian.evidence import (
     EvidenceRegistry,
     bounded,
 )
-from mist_config_guardian_backend.guardian.ledger import Ledger
+from mist_config_guardian_backend.guardian.ledger import Ledger, RowDevices
 
 # assess_impact's default thresholds on a metric's success-rate delta.
 WARNING_DELTA = 10.0
@@ -296,7 +295,7 @@ def replay_monitoring(  # noqa: PLR0913 - the attempt's frame, coverage inputs a
     expected: Sequence[ExpectedDevice],
     deployment: DeploymentReplay,
 ) -> MonitoringReplay:
-    """Replay every device a plug-in obligation targets and resolve each monitoring obligation over them.
+    """Replay every row device a plug-in obligation reaches and resolve each monitoring obligation over them.
 
     A device's metrics come from the monitoring obligations reaching it; its incident types and finding kinds from
     the plans of every plug-in with an obligation reaching it. Sessions are this audit's, created by ``as_of``; the
@@ -349,11 +348,11 @@ class _Selection:
 def _selections(
     ledger: Ledger, plans: Mapping[str, RulePlan]
 ) -> tuple[defaultdict[str, _Selection], dict[str, tuple[str, ...]]]:
-    """Each targeted device's selection, and the devices each plug-in obligation reaches."""
-    sites: dict[str, str | None] = {}
-    for row in ledger.rows:
-        if row.target.device_mac is not None:
-            sites.setdefault(row.target.device_mac, row.target.site_id)
+    """Each row device a plug-in obligation reaches with its selection, and the row devices each obligation reaches.
+
+    Reach is the ledger's own rule, so these are exactly the devices that carry deployment preconditions.
+    """
+    devices = RowDevices.of(ledger)
     owners: defaultdict[str, set[str]] = defaultdict(set)
     for plugin, ids in ledger.plan_ids.items():
         for global_id in ids.values():
@@ -361,29 +360,16 @@ def _selections(
     selections: defaultdict[str, _Selection] = defaultdict(_Selection)
     reach: dict[str, tuple[str, ...]] = {}
     for obligation in (o for o in ledger.obligations if o.owner != CORE_OWNER):
-        reach[obligation.id] = _reach(obligation.target, sites)
+        reach[obligation.id] = devices.reached_by(obligation.target)
         for mac in reach[obligation.id]:
             selection = selections[mac]
-            selection.site_id = selection.site_id or sites.get(mac) or obligation.target.site_id
+            selection.site_id = devices.targets[mac].site_id
             for plugin in owners[obligation.id]:
                 selection.incident_types.update(plans[plugin].incident_types if plugin in plans else ())
                 selection.finding_kinds.update(plans[plugin].finding_kinds if plugin in plans else ())
             if obligation.kind == "monitoring" and obligation.metric and obligation.empty_policy:
                 selection.checks[obligation.metric].append((obligation.id, obligation.empty_policy))
     return selections, reach
-
-
-def _reach(target: Target, sites: Mapping[str, str | None]) -> tuple[str, ...]:
-    """The ledger's targeting rule: a device target reaches its device unless it names another site of that row; a
-    site target with no device reaches every row device at that site."""
-    if target.device_mac is not None:
-        elsewhere = (
-            target.device_mac in sites and target.site_id is not None and sites[target.device_mac] != target.site_id
-        )
-        return () if elsewhere else (target.device_mac,)
-    if target.site_id is not None:
-        return tuple(mac for mac, site in sorted(sites.items()) if site == target.site_id)
-    return ()
 
 
 def _replay_device(

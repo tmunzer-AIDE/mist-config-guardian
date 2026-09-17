@@ -842,6 +842,26 @@ def test_a_target_naming_another_site_or_nothing_reaches_no_device():
     assert [device.mac for device in result.devices] == [Y]
 
 
+def test_a_device_target_outside_every_row_is_neither_evaluated_nor_counted():
+    ledger, result = replay(
+        [session(observations=(sle(10, {METRIC: 99}),)), session(Z, observations=(sle(10, {METRIC: 10}, scope_id=Z),))],
+        obligation(X),
+        obligation(Target(device_mac=Z, site_id=SITE), owner="wlan-auth"),
+        selections={"wlan-auth": {"incident_types": ("AP_DISCONNECTED",)}},
+    )
+    outside = next(o.id for o in ledger.obligations if o.kind == "monitoring" and o.target.device_mac == Z)
+
+    assert [device.mac for device in result.devices] == [X]
+    assert [o.target.device_mac for o in ledger.obligations if o.kind == "deployment"] == [X]
+    assert result.reach[outside] == ()
+    assert result.statuses[outside] == ObligationStatus(status="unsatisfied", reason=NO_DEVICE_REASON)
+    assert (result.peak, result.current) == ("none", "none")
+    registry = EvidenceRegistry()
+    conclusion = record_monitoring(result, frame=frame(), registry=registry)
+    assert [item.scope.device_macs for item in registry.evidence] == [(X,)]
+    assert conclusion.statuses[outside].evidence_ids == ()
+
+
 # Evidence ----------------------------------------------------------------------------------------------------------
 
 

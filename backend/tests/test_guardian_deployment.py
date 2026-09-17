@@ -22,7 +22,6 @@ from mist_config_guardian_backend.guardian.deployment import (
     FAILED_REASON,
     NO_OUTCOME_REASON,
     NO_TRIGGER_REASON,
-    OUT_OF_BOUND_REASON,
     RECEIPT_TIME_REASON,
     REVERTED_REASON,
     TRIGGER_EVENTS,
@@ -301,10 +300,17 @@ ASSIGNMENT_CASES = [
     pytest.param([trig(0), out("configured", 30 * MINUTE)], "configured", "time", None, id="fallback at the bound"),
     pytest.param(
         [trig(0), out("configured", 30 * MINUTE + 1)],
-        "ambiguous",
-        "ambiguous",
-        "could not be attributed",
-        id="an unlinked outcome outside the bound is ambiguous",
+        "unknown",
+        "none",
+        "more than 30 minutes after every earlier trigger",
+        id="an unlinked outcome outside the bound is not paired, with a gap",
+    ),
+    pytest.param(
+        [trig(0), out("configured", 2), out("configured", 45 * MINUTE)],
+        "configured",
+        "time",
+        "more than 30 minutes after every earlier trigger",
+        id="a reconnect beyond the bound leaves a confirmed trigger confirmed",
     ),
     pytest.param(
         [trig(0), trig(10, OTHER), out("failed", 12)],
@@ -346,6 +352,42 @@ ASSIGNMENT_CASES = [
         id="same-second RRM trigger",
     ),
     pytest.param([trig(0), trig(0), out("configured", 2)], "configured", "time", None, id="duplicate own triggers"),
+    pytest.param(
+        [trig(0), out("configured", 2), rrm(60), out("failed", 60)],
+        "ambiguous",
+        "ambiguous",
+        "could not be attributed",
+        id="a foreign trigger in the outcome's own second",
+    ),
+    pytest.param(
+        [trig(0), out("configured", 2), trig(60, OTHER), out("failed", 60)],
+        "ambiguous",
+        "ambiguous",
+        "could not be attributed",
+        id="another audit's trigger in the outcome's own second",
+    ),
+    pytest.param(
+        [rrm(-10), trig(0), out("configured", 0)],
+        "ambiguous",
+        "ambiguous",
+        "could not be attributed",
+        id="this trigger in the outcome's own second after a foreign trigger",
+    ),
+    pytest.param([trig(0), out("configured", 0)], "configured", "time", None, id="this trigger alone in its second"),
+    pytest.param(
+        [trig(0), rrm(0), out("failed", 2), out("configured", 5, AUDIT)],
+        "configured",
+        "audit_id",
+        "could not be attributed",
+        id="an ambiguous outcome before the latest assigned outcome is only a gap",
+    ),
+    pytest.param(
+        [trig(0), rrm(0), out("configured", 5, AUDIT), out("failed", 5)],
+        "ambiguous",
+        "ambiguous",
+        "could not be attributed",
+        id="an ambiguous outcome in the latest assigned outcome's second",
+    ),
     pytest.param(
         [trig(0), trig(0, OTHER), out("configured", 2, AUDIT)],
         "configured",
@@ -390,7 +432,47 @@ ASSIGNMENT_CASES = [
         id="another audit's untimed trigger unsettles the time fallback",
     ),
     pytest.param(
-        [trig(0), out("configured", 2, AUDIT), out("failed", None, OTHER)],
+        [trig(None, OTHER, received=T0 - timedelta(minutes=1)), trig(0), out("configured", 2)],
+        "configured",
+        "time",
+        None,
+        id="an untimed trigger received before this trigger cannot intervene",
+    ),
+    pytest.param(
+        [trig(0), out("configured", 60, AUDIT), out("failed", None, received=T0 + timedelta(seconds=10))],
+        "configured",
+        "audit_id",
+        "receipt time only",
+        id="a receipt-time outcome before the latest assigned outcome is only a gap",
+    ),
+    pytest.param(
+        [trig(0), out("configured", 60, AUDIT), out("failed", None, received=T0 + timedelta(minutes=2))],
+        "ambiguous",
+        "ambiguous",
+        "receipt time only",
+        id="a receipt-time outcome that may be the latest",
+    ),
+    pytest.param(
+        [
+            trig(0),
+            out("configured", 2),
+            trig(30, OTHER),
+            out("failed", None, received=T0 + timedelta(seconds=60)),
+        ],
+        "ambiguous",
+        "ambiguous",
+        "receipt time only",
+        id="a receipt-time outcome may precede another audit's later trigger",
+    ),
+    pytest.param(
+        [trig(0), out("configured", 60, AUDIT), out("failed", None, AUDIT, received=T0 + timedelta(seconds=10))],
+        "configured",
+        "audit_id",
+        "receipt time only",
+        id="a linked receipt-time outcome before the latest assigned outcome is only a gap",
+    ),
+    pytest.param(
+        [trig(0), trig(0, OTHER), out("configured", 2, AUDIT), out("failed", None, OTHER)],
         "configured",
         "audit_id",
         None,
@@ -463,7 +545,12 @@ def test_an_outcome_occurring_after_as_of_is_not_yet_known():
         ([trig(0), out("reverted", 2, AUDIT)], REVERTED_REASON),
         ([trig(0), out("configured", 2, AUDIT), out("failed", 2, AUDIT)], CONFLICT_REASON),
         ([trig(0), rrm(0), out("configured", 2)], AMBIGUOUS_TRIGGERS_REASON),
-        ([trig(0), out("configured", 31 * MINUTE)], OUT_OF_BOUND_REASON),
+        ([trig(0), out("configured", 2), rrm(60), out("failed", 60)], AMBIGUOUS_TRIGGERS_REASON),
+        ([trig(0), out("configured", 30 * MINUTE + 1)], NO_OUTCOME_REASON),
+        (
+            [trig(0), rrm(0), out("configured", 2), out("failed", None, received=T0 + timedelta(seconds=60))],
+            RECEIPT_TIME_REASON,
+        ),
         ([trig(0), out("configured", None)], RECEIPT_TIME_REASON),
     ],
 )
@@ -546,10 +633,19 @@ STATE_MACHINE = [
         [("configured", 2), ("failed", 2)],
         "ambiguous",
         False,
-        "none",
+        "warning",
         "none",
         "unsatisfied",
         id="conflicting outcomes in one second",
+    ),
+    pytest.param(
+        [("failed", 2), ("reverted", 2)],
+        "ambiguous",
+        False,
+        "warning",
+        "warning",
+        "unsatisfied",
+        id="failed and reverted in one second",
     ),
 ]
 
@@ -588,7 +684,9 @@ PROJECTION = [
         [("configured", 2), ("reverted", 9)], "warning", "warning", "unsatisfied", id="latest failed or reverted"
     ),
     pytest.param([], "none", "none", "unsatisfied", id="none"),
-    pytest.param([("configured", 2), ("reverted", 2)], "none", "none", "unsatisfied", id="ambiguous"),
+    pytest.param(
+        [("configured", 2), ("reverted", 2)], "warning", "none", "unsatisfied", id="assigned in an unknown order"
+    ),
 ]
 
 
@@ -600,28 +698,121 @@ def test_deployment_state_projects_to_severity(steps, peak, current, preconditio
     assert replay.statuses[precondition_of(ledger, X)].status == precondition
 
 
-def test_ambiguous_outcomes_never_project_severity():
-    for receipts in (
-        [trig(0), rrm(0), out("failed", 2)],
-        [trig(0), out("failed", 31 * MINUTE)],
-        [trig(0), out("failed", None)],
-        [trig(0), out("failed", 2, AUDIT), out("configured", 2, AUDIT)],
-    ):
-        _, replay = pair(receipts)
-        assert (replay.peak, replay.current) == ("none", "none")
-        assert replay.device(X).state == "ambiguous"
+@pytest.mark.parametrize(
+    ("receipts", "state"),
+    [
+        pytest.param([trig(0), rrm(0), out("failed", 2)], "ambiguous", id="same-second foreign trigger"),
+        pytest.param([trig(0), out("failed", 2), rrm(2), out("reverted", 2)], "ambiguous", id="own-second foreign"),
+        pytest.param([trig(0), out("failed", 31 * MINUTE)], "unknown", id="outside the bound"),
+        pytest.param([trig(0), out("failed", None)], "ambiguous", id="receipt time only"),
+    ],
+)
+def test_outcomes_that_cannot_be_assigned_never_project_severity(receipts, state):
+    ledger, replay = pair(receipts)
+    device = replay.device(X)
+    assert device is not None
+    assert (device.state, device.peak, device.current, device.precondition) == (state, "none", "none", "unsatisfied")
+    assert replay.statuses[precondition_of(ledger, X)].status == "unsatisfied"
+
+
+@pytest.mark.parametrize(
+    ("receipts", "expected"),
+    [
+        pytest.param(
+            [trig(0), rrm(0), out("failed", 2, AUDIT), out("configured", 3)],
+            ("ambiguous", "warning", "none", "unsatisfied"),
+            id="an exact failed beside an RRM-tied outcome that may be the latest",
+        ),
+        pytest.param(
+            [trig(0), out("failed", 2, AUDIT), rrm(60), out("configured", 60)],
+            ("ambiguous", "warning", "none", "unsatisfied"),
+            id="an exact failed beside an outcome in a foreign trigger's second",
+        ),
+        pytest.param(
+            [trig(0), out("reverted", 2, AUDIT), out("configured", None, received=T0 + timedelta(minutes=1))],
+            ("ambiguous", "warning", "none", "unsatisfied"),
+            id="an exact reverted beside a receipt-time outcome that may be the latest",
+        ),
+        pytest.param(
+            [trig(0), out("failed", 2), out("configured", 2)],
+            ("ambiguous", "warning", "none", "unsatisfied"),
+            id="a conflicting set paired by time",
+        ),
+        pytest.param(
+            [trig(0), rrm(0), out("configured", 2), out("failed", 5, AUDIT)],
+            ("failed", "warning", "warning", "unsatisfied"),
+            id="an ambiguous outcome before the latest assigned one changes nothing",
+        ),
+    ],
+)
+def test_ambiguity_never_erases_a_warning_from_outcomes_assigned_to_this_trigger(receipts, expected):
+    _, replay = pair(receipts)
+    device = replay.device(X)
+    assert device is not None
+    assert (device.state, device.peak, device.current, device.precondition) == expected
+    assert (replay.peak, replay.current) == expected[1:3]
 
 
 # The same-second conflict matrix -----------------------------------------------------------------------------------
 
-KINDS = ("configured", "failed", "reverted")
-TROUBLE = {"failed", "reverted"}
+# Two outcomes in second 60, optionally an earlier one at 10 and a later one at 120, all linked to this audit:
+# first, second, earlier, later -> state, peak, current, precondition.
+SAME_SECOND = [
+    ("configured", "configured", None, None, "configured", "none", "none", "satisfied"),
+    ("configured", "configured", None, "configured", "configured", "none", "none", "satisfied"),
+    ("configured", "configured", None, "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("configured", "configured", None, "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("configured", "configured", "failed", None, "configured", "warning", "none", "satisfied"),
+    ("configured", "configured", "failed", "configured", "configured", "warning", "none", "satisfied"),
+    ("configured", "configured", "failed", "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("configured", "configured", "failed", "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("configured", "failed", None, None, "ambiguous", "warning", "none", "unsatisfied"),
+    ("configured", "failed", None, "configured", "configured", "warning", "none", "satisfied"),
+    ("configured", "failed", None, "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("configured", "failed", None, "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("configured", "failed", "failed", None, "ambiguous", "warning", "none", "unsatisfied"),
+    ("configured", "failed", "failed", "configured", "configured", "warning", "none", "satisfied"),
+    ("configured", "failed", "failed", "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("configured", "failed", "failed", "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("configured", "reverted", None, None, "ambiguous", "warning", "none", "unsatisfied"),
+    ("configured", "reverted", None, "configured", "configured", "warning", "none", "satisfied"),
+    ("configured", "reverted", None, "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("configured", "reverted", None, "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("configured", "reverted", "failed", None, "ambiguous", "warning", "none", "unsatisfied"),
+    ("configured", "reverted", "failed", "configured", "configured", "warning", "none", "satisfied"),
+    ("configured", "reverted", "failed", "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("configured", "reverted", "failed", "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("failed", "failed", None, None, "failed", "warning", "warning", "unsatisfied"),
+    ("failed", "failed", None, "configured", "configured", "warning", "none", "satisfied"),
+    ("failed", "failed", None, "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("failed", "failed", None, "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("failed", "failed", "failed", None, "failed", "warning", "warning", "unsatisfied"),
+    ("failed", "failed", "failed", "configured", "configured", "warning", "none", "satisfied"),
+    ("failed", "failed", "failed", "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("failed", "failed", "failed", "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("failed", "reverted", None, None, "ambiguous", "warning", "warning", "unsatisfied"),
+    ("failed", "reverted", None, "configured", "configured", "warning", "none", "satisfied"),
+    ("failed", "reverted", None, "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("failed", "reverted", None, "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("failed", "reverted", "failed", None, "ambiguous", "warning", "warning", "unsatisfied"),
+    ("failed", "reverted", "failed", "configured", "configured", "warning", "none", "satisfied"),
+    ("failed", "reverted", "failed", "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("failed", "reverted", "failed", "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("reverted", "reverted", None, None, "reverted", "warning", "warning", "unsatisfied"),
+    ("reverted", "reverted", None, "configured", "configured", "warning", "none", "satisfied"),
+    ("reverted", "reverted", None, "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("reverted", "reverted", None, "reverted", "reverted", "warning", "warning", "unsatisfied"),
+    ("reverted", "reverted", "failed", None, "reverted", "warning", "warning", "unsatisfied"),
+    ("reverted", "reverted", "failed", "configured", "configured", "warning", "none", "satisfied"),
+    ("reverted", "reverted", "failed", "failed", "failed", "warning", "warning", "unsatisfied"),
+    ("reverted", "reverted", "failed", "reverted", "reverted", "warning", "warning", "unsatisfied"),
+]
 
 
-@pytest.mark.parametrize("earlier", [None, *KINDS])
-@pytest.mark.parametrize("later", [None, *KINDS])
-@pytest.mark.parametrize(("first", "second"), list(itertools.combinations_with_replacement(KINDS, 2)))
-def test_same_second_outcome_matrix(first, second, earlier, later):
+@pytest.mark.parametrize(
+    ("first", "second", "earlier", "later", "state", "peak", "current", "precondition"), SAME_SECOND
+)
+def test_same_second_outcome_matrix(first, second, earlier, later, state, peak, current, precondition):  # noqa: PLR0913, PLR0917
     steps = [(first, 60), (second, 60)]
     if earlier is not None:
         steps.insert(0, (earlier, 10))
@@ -631,17 +822,17 @@ def test_same_second_outcome_matrix(first, second, earlier, later):
     device = replay.device(X)
     assert device is not None
 
-    kinds = {kind for kind, _ in steps}
-    # Only the final second decides the last outcome; failed or reverted anywhere is order-independent.
-    last = later if later is not None else (first if first == second else None)
-    if last is None:
-        expected = ("ambiguous", "none", "none", "unsatisfied")
-    elif last == "configured":
-        expected = ("configured", "warning" if kinds & TROUBLE else "none", "none", "satisfied")
-    else:
-        expected = (last, "warning", "warning", "unsatisfied")
-    assert (device.state, device.peak, device.current, device.precondition) == expected
-    assert replay.statuses[precondition_of(ledger, X)].status == expected[3]
+    assert (device.state, device.peak, device.current, device.precondition) == (state, peak, current, precondition)
+    assert replay.statuses[precondition_of(ledger, X)].status == precondition
+
+
+def test_the_same_second_matrix_covers_every_pair_before_and_after():
+    pairs = {(row[0], row[1]) for row in SAME_SECOND}
+    assert pairs == set(itertools.combinations_with_replacement(("configured", "failed", "reverted"), 2))
+    assert {(row[2], row[3]) for row in SAME_SECOND} == set(
+        itertools.product((None, "failed"), (None, "configured", "failed", "reverted"))
+    )
+    assert len(SAME_SECOND) == len(pairs) * 8
 
 
 # Same-second triggers from each identity, against an outcome linked to this audit, to another audit or to none.

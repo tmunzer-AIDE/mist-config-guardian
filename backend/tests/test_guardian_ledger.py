@@ -60,10 +60,12 @@ from mist_config_guardian_backend.guardian.ledger import (
     VIEW_REFERENCES,
     Ledger,
     LedgerError,
+    RowDevices,
     build_ledger,
     coverage,
     deterministic_view,
     ledger_view,
+    reaches,
     resolve_statuses,
 )
 from mist_config_guardian_backend.snapshots.diffing import MAX_ENTRIES
@@ -526,6 +528,45 @@ def test_deployment_preconditions_only_for_devices_an_obligation_targets(items, 
     assert [o.target for o in deployment] == [device(mac, SITES[mac]) for mac in preconditioned]
     assert {(o.owner, o.role) for o in deployment} <= {("core", "precondition")}
     assert not {o.id for o in deployment} & set(ledger.statuses)
+
+
+@pytest.mark.parametrize(
+    ("target", "row", "expected"),
+    [
+        pytest.param(device(X), device(X, SITE_A), True, id="device"),
+        pytest.param(device(X, SITE_A), device(X, SITE_A), True, id="device at its site"),
+        pytest.param(device(X, SITE_B), device(X, SITE_A), False, id="device naming another site"),
+        pytest.param(device(X, SITE_A), device(X), False, id="device naming a site its row lacks"),
+        pytest.param(device(Y), device(X, SITE_A), False, id="another device"),
+        pytest.param(site(SITE_A), device(X, SITE_A), True, id="site containing the device"),
+        pytest.param(site(SITE_B), device(X, SITE_A), False, id="another site"),
+        pytest.param(site(SITE_A), device(X), False, id="site of a row without a site"),
+        pytest.param(Target(), device(X, SITE_A), False, id="neither"),
+        pytest.param(device(X, SITE_A, port_id="ge-0/0/1"), device(X, SITE_A), True, id="port refinement"),
+    ],
+)
+def test_the_one_targeting_rule(target, row, expected):
+    assert reaches(target, row) is expected
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [monitoring("O1", "A1", DNS, device(X))],
+        [rule("O1", "A1", DNS, device(Y, SITE_A)), monitoring("O2", "A1", DNS, device(Z, SITE_A))],
+        [monitoring("O1", "A1", DNS, site(SITE_A)), rule("O2", "A1", DNS, device(OUTSIDER))],
+        [monitoring("O1", "A1", DNS, site(SITE_B)), monitoring("O2", "A1", DNS, Target())],
+        [exclusion("A1", DNS, device(X)), monitoring("O1", "A1", DNS, device(Z, SITE_B))],
+    ],
+)
+def test_row_devices_reached_by_obligations_are_exactly_the_deployment_preconditioned_devices(items):
+    ledger = build_ledger(change(DNS), DEVICES, plans(*items), "audit")
+    devices = RowDevices.of(ledger)
+    reached = {mac for o in ledger.obligations if o.owner != "core" for mac in devices.reached_by(o.target)}
+
+    assert list(devices.targets) == sorted(SITES)
+    assert reached == {o.target.device_mac for o in ledger.obligations if o.kind == "deployment"}
+    assert OUTSIDER not in reached
 
 
 def test_the_dnt_ntr_devices_excluded_from_a_client_mapping_get_no_deployment_precondition():
