@@ -1,9 +1,12 @@
 """Bounded Streamable HTTP client for the existing Mist MCP, not a Mist API adapter."""
 
-# Each ``timeout`` here is httpx's own request bound, which an asyncio timeout would not give httpx a chance to
-# apply, and which a caller with a phase deadline passes in per call.
+# Each ``timeout`` here bounds one exchange twice. httpx applies it to connecting, writing and every period of
+# read inactivity; an asyncio timeout bounds the whole streamed exchange around it, because an event stream that
+# keeps sending heartbeats is never inactive and would otherwise outlive the caller's phase deadline and its
+# lease. A caller with a phase deadline passes it in per call.
 # ruff: noqa: ASYNC109
 
+import asyncio
 import json
 from contextlib import AbstractAsyncContextManager
 from typing import Self
@@ -71,8 +74,17 @@ class MistMcpClient(AbstractAsyncContextManager["MistMcpClient"]):
     async def __aexit__(self, *_args: object) -> None:
         await self._client.aclose()
 
-    async def rpc(  # noqa: C901, PLR0912 - JSON/SSE protocol parsing
-        self, method: str, params: dict, *, notification: bool = False, timeout: float | None = None
+    async def rpc(self, method: str, params: dict, *, notification: bool = False, timeout: float | None = None) -> dict:
+        """One JSON-RPC exchange, bounded by ``timeout`` in wall-clock time as well as by httpx's own periods."""
+        try:
+            async with asyncio.timeout(timeout):
+                return await self._exchange(method, params, notification=notification, timeout=timeout)
+        except TimeoutError:
+            msg = "transport"
+            raise MistMcpError(msg) from None
+
+    async def _exchange(  # noqa: C901, PLR0912 - JSON/SSE protocol parsing
+        self, method: str, params: dict, *, notification: bool, timeout: float | None
     ) -> dict:
         self._next_id += 1
         identity = self._next_id

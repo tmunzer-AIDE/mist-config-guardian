@@ -8,10 +8,13 @@ drift.
 # The fake transports mirror the Reader's protocols, whose ``timeout`` is an HTTP bound, not an asyncio one.
 # ruff: noqa: ASYNC109
 
+import asyncio
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
@@ -1281,6 +1284,34 @@ async def test_the_mcp_client_reads_at_most_the_transport_bound_it_is_given(http
 
     assert failure.value.code == "response_limit"
     assert httpx_mock.get_requests()[-1].extensions["timeout"]["read"] == 3.0
+
+
+class _Heartbeats(httpx.AsyncByteStream):
+    """An event stream that stays active forever without ever answering: the shape a read timeout cannot catch."""
+
+    async def __aiter__(self):
+        while True:  # pragma: no cover - the client stops reading this stream, never the stream itself
+            await asyncio.sleep(0.005)
+            yield b": ping\n\n"
+
+
+async def test_an_endless_heartbeat_stream_ends_at_the_wall_clock_bound(httpx_mock: HTTPXMock) -> None:
+    """httpx sees activity the whole time, so only the exchange's own wall-clock bound can end this call."""
+    _handshake(httpx_mock)
+    httpx_mock.add_response(
+        method="POST", url=MCP_URL, headers={"content-type": "text/event-stream"}, stream=_Heartbeats()
+    )
+
+    # A small wire bound keeps the unfixed behaviour from hanging this test: without the wall-clock bound the
+    # call ends on the wire limit instead, seconds later and under a different code.
+    async with MistMcpClient(url=MCP_URL, token="service-token", cloud="api.mist.com", max_wire_bytes=4096) as client:
+        started = time.monotonic()
+        with pytest.raises(MistMcpError) as failure:
+            await client.call_tool("search_mist_data", {}, timeout=0.2)
+        elapsed = time.monotonic() - started
+
+    assert failure.value.code == "transport"
+    assert elapsed < 5
 
 
 async def test_the_mcp_client_keeps_its_configured_timeout_when_none_is_given(httpx_mock: HTTPXMock) -> None:
