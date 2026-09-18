@@ -4,6 +4,7 @@ import itertools
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from guardian_verification import load_fixture
 from mist_config_guardian_backend.guardian.change import (
@@ -620,6 +621,38 @@ def test_a_receipt_anchor_prevents_complete_coverage():
 
     assert coverage(known, everything_satisfied) == "complete"
     assert coverage(anchored, everything_satisfied) == "partial"
+
+
+def test_an_input_the_attempt_never_saw_prevents_complete_coverage():
+    items = plans(*(monitoring(f"O{n}", "A1", DNS, device(d.mac)) for n, d in enumerate(DEVICES, start=1)))
+    whole = build_ledger(change(DNS), DEVICES, items, "audit")
+    truncated = build_ledger(change(DNS), DEVICES, items, "audit", ("200 versions were not examined",))
+    everything_satisfied = {o.id: SATISFIED for o in truncated.obligations}
+
+    assert coverage(whole, everything_satisfied) == "complete"
+    # The input observation is the core's own unsatisfied status, so nothing a source reports can raise it.
+    assert coverage(truncated, everything_satisfied) == "partial"
+    missing = [o for o in truncated.obligations if o.kind == "input"]
+    assert len(missing) == 1
+    assert (missing[0].owner, missing[0].role, missing[0].target) == ("core", "observation", Target())
+    assert (missing[0].change_ref, missing[0].paths) == (None, ())
+    assert truncated.statuses[missing[0].id] == unsatisfied("200 versions were not examined")
+
+
+def test_an_input_observation_is_numbered_after_every_other_obligation():
+    items = plans(monitoring("O1", "A1", DNS, device(X)))
+    ledger = build_ledger(change(DNS), DEVICES, items, "receipt", ("one", "two"))
+
+    inputs = [o.id for o in ledger.obligations if o.kind == "input"]
+    assert inputs == [o.id for o in ledger.obligations][-2:]
+    assert [ledger.statuses[o].reason for o in inputs] == ["one", "two"]
+
+
+def test_no_rule_plan_may_carry_a_core_input_obligation():
+    missing = Obligation(id="O1", owner="core", role="observation", kind="input", target=Target())
+
+    with pytest.raises(ValidationError, match="rule and monitoring observations only"):
+        RulePlan(obligations=(missing,))
 
 
 PRECONDITION = Obligation(id="O1", owner="core", role="precondition", kind="deployment", target=device(X, SITE_A))

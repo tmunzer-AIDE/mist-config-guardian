@@ -20,6 +20,7 @@ polling. Nothing here runs otherwise.
 """
 
 import contextlib
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -169,6 +170,22 @@ NO_FAILURE_REASON = "The final run recorded no failure reason"
 ATTEMPT_FAILED = "The attempt could not be completed: {detail}"
 RUN_TOO_LARGE = "The run document exceeded its asserted bound: {detail}"
 
+# An input the attempt could not see in full. Each of these becomes both a core gap on the verdict and an
+# unsatisfied core obligation on the ledger, so a run can never publish complete coverage over what it never read.
+VERSION_CAP_GAP = (
+    "This audit changed more than {cap} object versions; the changed objects beyond that limit were not examined"
+)
+SESSION_CAP_GAP = (
+    "This audit is linked to more than {cap} monitoring sessions; the sessions beyond that limit were not examined"
+)
+RECEIPT_CAP_GAP = (
+    "More than {cap} device-event receipts match this audit; the receipts beyond that limit were not examined"
+)
+ELIDED_GAP = (
+    "Object {name} changed {count} time(s) within this audit and ended where it started; the configurations it "
+    "held in between were not examined"
+)
+
 
 def _encoded(model: BaseModel) -> dict[str, Any]:
     """One model as Beanie writes it, so a builder stores exactly what the document model validates."""
@@ -227,8 +244,34 @@ def device_identity(configuration: Mapping[str, object]) -> tuple[str, str] | No
 
 
 @dataclass(frozen=True, slots=True)
+class SupersededObject:
+    """A logical object this audit changed more than once, and how many versions it held in between.
+
+    Only the net change is compiled, so an object that ends where it started yields no atom at all. Nothing else
+    would record that the audit touched it, which is why the elision is reported rather than elided.
+    """
+
+    logical_object_id: str
+    name: str
+    intermediate: int
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedChanges:
+    """The audit's changes, what a read cap dropped, and the objects whose net change may have elided something."""
+
+    changes: tuple[ObjectChange, ...] = ()
+    gaps: tuple[str, ...] = ()
+    superseded: tuple[SupersededObject, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AttemptInputs:
-    """Everything one attempt reads from the database, loaded once before execution begins."""
+    """Everything one attempt reads from the database, loaded once before execution begins.
+
+    ``gaps`` and ``superseded`` are what loading itself could not see in full. Both end as core gaps and as
+    unsatisfied core obligations, never as silence.
+    """
 
     organization_id: PydanticObjectId
     audit_id: str
@@ -237,6 +280,8 @@ class AttemptInputs:
     changes: tuple[ObjectChange, ...] = ()
     receipts: tuple[DeviceEventReceipt, ...] = ()
     sessions: tuple[MonitoringRecord, ...] = ()
+    gaps: tuple[str, ...] = ()
+    superseded: tuple[SupersededObject, ...] = ()
 
 
 def _sle_sample(observation: SleObservation | None) -> SleSample | None:
@@ -322,13 +367,34 @@ def device_receipt(row: Mapping[str, Any]) -> DeviceEventReceipt | None:
     )
 
 
-async def _object_changes(organization_id: PydanticObjectId, audit_id: str) -> tuple[ObjectChange, ...]:
+async def _audit_versions(
+    organization_id: PydanticObjectId, audit_id: str
+) -> tuple[list[ObjectVersion], tuple[str, ...]]:
+    """This audit's object versions, ordered so the retained window is deterministic, and the cap's own gap.
+
+    The order is ``(logical object, version)``, so every object's versions are contiguous. When the cap truncates
+    an object's own versions, that object is dropped whole rather than half-read: its net change would otherwise
+    be taken from an arbitrary surviving version, which is wrong rather than merely incomplete. An object the
+    window contains entirely is kept, and the gap says the rest were not examined.
+    """
+    rows = await (
+        ObjectVersion.find({"organization_id": organization_id, "audit_id": audit_id})
+        .sort("+logical_object_id", "+version")
+        .to_list(MAX_AUDIT_VERSIONS + 1)
+    )
+    if len(rows) <= MAX_AUDIT_VERSIONS:
+        return rows, ()
+    kept, overflow = rows[:MAX_AUDIT_VERSIONS], rows[MAX_AUDIT_VERSIONS]
+    if overflow.logical_object_id == kept[-1].logical_object_id:
+        kept = [row for row in kept if row.logical_object_id != overflow.logical_object_id]
+    return kept, (VERSION_CAP_GAP.format(cap=MAX_AUDIT_VERSIONS),)
+
+
+async def _object_changes(organization_id: PydanticObjectId, audit_id: str) -> LoadedChanges:
     """Every logical object this audit changed, as its net change, from protected configurations alone."""
-    versions = await ObjectVersion.find(
-        {"organization_id": organization_id, "audit_id": audit_id},
-    ).to_list(MAX_AUDIT_VERSIONS)
+    versions, gaps = await _audit_versions(organization_id, audit_id)
     if not versions:
-        return ()
+        return LoadedChanges(gaps=gaps)
     spans: dict[PydanticObjectId, list[ObjectVersion]] = {}
     for version in versions:
         spans.setdefault(version.logical_object_id, []).append(version)
@@ -364,10 +430,15 @@ async def _object_changes(organization_id: PydanticObjectId, audit_id: str) -> t
         ).to_list()
     }
     changes = []
+    superseded = []
     for key, after in sorted(latest.items(), key=lambda entry: str(entry[0])):
         logical = logicals.get(key)
         if logical is None:
             continue
+        if len(spans[key]) > 1:
+            superseded.append(
+                SupersededObject(logical_object_id=str(key), name=logical.name, intermediate=len(spans[key]) - 1)
+            )
         prior = priors.get((key, earliest[key].version - 1))
         if prior is not None and prior.is_deleted:
             prior = None
@@ -396,7 +467,7 @@ async def _object_changes(organization_id: PydanticObjectId, audit_id: str) -> t
                 mist_id=incarnation.mist_object_id if single and incarnation is not None else None,
             )
         )
-    return tuple(changes)
+    return LoadedChanges(changes=tuple(changes), gaps=gaps, superseded=tuple(superseded))
 
 
 async def _device_receipts(
@@ -405,11 +476,12 @@ async def _device_receipts(
     candidates: Sequence[PydanticObjectId],
     *,
     as_of: datetime,
-) -> tuple[DeviceEventReceipt, ...]:
+) -> tuple[tuple[DeviceEventReceipt, ...], tuple[str, ...]]:
     """Audit-linked and session-candidate device events, normalized for pairing and never carrying a payload.
 
-    A receipt the legacy normalizer could not classify carries no ``deployment`` and is invisible here, which is why
-    :data:`UNOBSERVABLE_EVENT_TYPES` is stated rather than assumed away.
+    Oldest first, because pairing needs each outcome's earlier trigger. A receipt the legacy normalizer could not
+    classify carries no ``deployment`` and is invisible here, which is why :data:`UNOBSERVABLE_EVENT_TYPES` is
+    stated rather than assumed away.
     """
     rows = (
         await WebhookReceipt.get_pymongo_collection()
@@ -425,30 +497,51 @@ async def _device_receipts(
             {"audit_id": 1, "created_at": 1, "deployment": 1},
         )
         .sort([("created_at", 1), ("_id", 1)])
-        .to_list(length=MAX_DEVICE_RECEIPTS)
+        .to_list(length=MAX_DEVICE_RECEIPTS + 1)
     )
-    return tuple(receipt for row in rows if (receipt := device_receipt(row)) is not None)
+    gaps = (RECEIPT_CAP_GAP.format(cap=MAX_DEVICE_RECEIPTS),) if len(rows) > MAX_DEVICE_RECEIPTS else ()
+    kept = rows[:MAX_DEVICE_RECEIPTS]
+    return tuple(receipt for row in kept if (receipt := device_receipt(row)) is not None), gaps
 
 
-async def linked_sessions(organization_id: PydanticObjectId, audit_id: str) -> list[MonitoringSession]:
-    """Every monitoring session that names this audit. Its transitions are a trigger signal, never evidence."""
-    return await MonitoringSession.find(
-        {"organization_id": organization_id, "audit_ids": audit_id},
-    ).to_list(MAX_LINKED_SESSIONS)
+async def linked_sessions(
+    organization_id: PydanticObjectId, audit_id: str
+) -> tuple[list[MonitoringSession], tuple[str, ...]]:
+    """Every monitoring session that names this audit, and the cap's own gap when one was dropped.
+
+    Active sessions come first and the newest next, so the cap can never hide the one fact the final's
+    revalidation asks for — whether any linked session is still active — nor the latest session of a device. The
+    transitions read from these are a trigger signal, never evidence.
+    """
+    rows = await (
+        MonitoringSession.find({"organization_id": organization_id, "audit_ids": audit_id})
+        .sort("-active", "-created_at", "-_id")
+        .to_list(MAX_LINKED_SESSIONS + 1)
+    )
+    gaps = (SESSION_CAP_GAP.format(cap=MAX_LINKED_SESSIONS),) if len(rows) > MAX_LINKED_SESSIONS else ()
+    return rows[:MAX_LINKED_SESSIONS], gaps
 
 
 async def load_attempt_inputs(root: GuardianInvestigation, *, as_of: datetime) -> AttemptInputs:
-    """Load every database input of one attempt once, at the attempt's fixed evidence instant."""
-    sessions = await linked_sessions(root.organization_id, root.audit_id)
+    """Load every database input of one attempt once, at the attempt's fixed evidence instant.
+
+    Every read cap that fires is carried out as a gap rather than swallowed, so the attempt can report what it
+    never saw instead of judging as if it had seen everything.
+    """
+    sessions, session_gaps = await linked_sessions(root.organization_id, root.audit_id)
     receipt_ids = sorted({receipt_id for session in sessions for receipt_id in session.receipt_ids})
+    loaded = await _object_changes(root.organization_id, root.audit_id)
+    receipts, receipt_gaps = await _device_receipts(root.organization_id, root.audit_id, receipt_ids, as_of=as_of)
     return AttemptInputs(
         organization_id=root.organization_id,
         audit_id=root.audit_id,
         received_at=root.changed_at,
         audit_time=root.changed_at if root.anchor_known else None,
-        changes=await _object_changes(root.organization_id, root.audit_id),
-        receipts=await _device_receipts(root.organization_id, root.audit_id, receipt_ids, as_of=as_of),
+        changes=loaded.changes,
+        receipts=receipts,
         sessions=tuple(record for session in sessions if (record := monitoring_record(session)) is not None),
+        gaps=(*loaded.gaps, *session_gaps, *receipt_gaps),
+        superseded=loaded.superseded,
     )
 
 
@@ -467,13 +560,17 @@ class MistRuleTransport:
         await self._client.aclose()
 
     async def fetch(self, path: str, params: Mapping[str, str], *, timeout: float, max_bytes: int) -> Any:  # noqa: ANN401, ASYNC109 - the transport's own bound, and dynamic JSON validated by the Reader
+        """One bounded Mist read. The wire is bounded as it arrives, not after the whole body is buffered."""
         try:
-            response = await self._client.get(path, params=dict(params), timeout=timeout)
-            response.raise_for_status()
-            if len(response.content) > max_bytes:
-                msg = f"The response is above the {max_bytes}-byte transport bound."
-                raise TransportError(msg)  # noqa: TRY301 - one place builds the transport failure
-            return response.json()
+            async with self._client.stream("GET", path, params=dict(params), timeout=timeout) as response:
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        msg = f"The response is above the {max_bytes}-byte transport bound."
+                        raise TransportError(msg)  # noqa: TRY301 - one place builds the transport failure
+                return json.loads(body)
         except TransportError:
             raise
         except Exception as exc:
@@ -569,6 +666,15 @@ class GuardianTools(AbstractAsyncContextManager["AttemptTools"]):
         self._stack = AsyncExitStack()
 
     async def __aenter__(self) -> AttemptTools:
+        # ``__aexit__`` never runs when ``__aenter__`` raises, so whatever is already open is closed here instead;
+        # otherwise a failing provider or endpoint would leak one HTTP client per failed attempt.
+        try:
+            return await self._build()
+        except BaseException:
+            await self._stack.aclose()
+            raise
+
+    async def _build(self) -> AttemptTools:
         settings = get_settings()
         token = await service_token(self._organization, self._vault)
         rule = MistRuleTransport(token=token, base_url=REGION_HOSTS[self._organization.cloud_region])
@@ -643,6 +749,23 @@ def _fit_conclusion[T: Conclusion | AgentConclusion](conclusion: T | None, budge
     return trimmed
 
 
+def _unseen_inputs(inputs: AttemptInputs, change: ChangeSet) -> tuple[str, ...]:
+    """What this attempt was asked to judge but never saw in full, as bounded reasons.
+
+    A read cap that fired says so directly. A net change is subtler: an object the audit changed more than once
+    can end exactly where it started, which compiles to no atom at all, so no ledger row, no obligation and no
+    gap would otherwise record that the audit touched it — and another object's clean change could then publish
+    complete coverage over it.
+    """
+    changed = {atom.logical_object_id for atom in change.atoms}
+    elided = [
+        ELIDED_GAP.format(name=item.name or item.logical_object_id, count=item.intermediate)
+        for item in inputs.superseded
+        if item.logical_object_id not in changed
+    ]
+    return (*inputs.gaps, *elided)
+
+
 def _site_authority(change: ChangeSet, devices: Sequence[ExpectedDevice]) -> SiteAuthority:
     """The sites this attempt may read, fixed before the first read from what the change itself names."""
     sites = {device.site_id for device in devices}
@@ -677,6 +800,7 @@ async def execute_attempt(
         received_at=inputs.received_at,
         as_of=instant,
     )
+    unseen = _unseen_inputs(inputs, change)
     frame = ReplayFrame(audit_id=inputs.audit_id, anchor=anchor, as_of=instant)
     expected = expected_devices(inputs.receipts, audit_id=inputs.audit_id, as_of=instant)
     reader = Reader(
@@ -693,7 +817,7 @@ async def execute_attempt(
     )
     rules = await run_rules(PLUGINS, change, expected, reader)
     try:
-        ledger = build_ledger(change, expected, rules.plans, anchor.source)
+        ledger = build_ledger(change, expected, rules.plans, anchor.source, unseen)
     except Exception as exc:  # noqa: BLE001 - the ledger is the attempt's coverage; without it nothing can publish
         return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))
     deployment_replay = pair_deployments(inputs.receipts, frame=frame, ledger=ledger)
@@ -733,6 +857,7 @@ async def execute_attempt(
             agent=agent.conclusion,
             evidence=registry.evidence,
             devices=_device_severities(monitoring_replay.devices),
+            core_gaps=unseen,
         )
     except Exception as exc:  # noqa: BLE001 - composition is the attempt's product; a broken verdict is a failure
         return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))
@@ -922,7 +1047,7 @@ class GuardianService:
         if root.attempts.final >= MAX_ATTEMPTS_PER_KIND and root.final_run_id is None:
             await self._exhaust(root)
             return
-        sessions = await linked_sessions(root.organization_id, root.audit_id)
+        sessions, _gaps = await linked_sessions(root.organization_id, root.audit_id)
         kind = due_kind(root, utc_now(), sessions)
         if kind is None:
             write = repo.nothing_due(root.id)
@@ -932,7 +1057,7 @@ class GuardianService:
 
     async def _revalidated(self, root: GuardianInvestigation, *, kind: RunKind, forced: bool) -> bool:
         """The kind's cross-collection conditions, re-read under the lease with the claim's own server branch."""
-        sessions = await linked_sessions(root.organization_id, root.audit_id)
+        sessions, _gaps = await linked_sessions(root.organization_id, root.audit_id)
         if kind == "final":
             return forced or not any(session.active for session in sessions)
         return degraded(sessions, root.changed_at)
@@ -1121,7 +1246,7 @@ class GuardianService:
         claim = root.claim
         if claim is None or claim.attempt is None or claim.started_at is None:
             return None
-        scope = {"_id": fence.token, "organization_id": root.organization_id, "investigation_id": fence.root_id}
+        scope = repo.claimed_run(fence, organization_id=root.organization_id)
         attempt = repo.CommittedAttempt(
             token=fence.token,
             organization_id=root.organization_id,
@@ -1149,18 +1274,11 @@ class GuardianService:
         """Complete a root whose final attempts all failed, with the last final run's own recorded reason."""
         if root.id is None:
             return
+        read = repo.last_failed_final_run(root.id, organization_id=root.organization_id)
         rows = (
             await self._runs()
-            .find(
-                {
-                    "organization_id": root.organization_id,
-                    "investigation_id": root.id,
-                    "kind": "final",
-                    "failure_reason": {"$ne": None},
-                },
-                {"attempt": 1, "failure_reason": 1},
-            )
-            .sort([("attempt", -1)])
+            .find(read.filter, read.projection)
+            .sort(list(read.sort))
             .to_list(length=MAX_ATTEMPTS_PER_KIND)
         )
         reason = str(rows[0]["failure_reason"]) if rows else NO_FAILURE_REASON

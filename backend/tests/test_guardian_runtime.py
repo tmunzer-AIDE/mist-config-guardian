@@ -12,7 +12,9 @@ import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from beanie import PydanticObjectId
 
@@ -29,6 +31,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     FINAL_FORCED,
     FINAL_MINIMUM,
     RECHECK_DELAY,
+    Gap,
     Verdict,
 )
 from mist_config_guardian_backend.guardian.deployment import DeviceEventReceipt, outcome_kind
@@ -51,7 +54,7 @@ from mist_config_guardian_backend.models.monitoring import (
     MonitoringTimelineEvent,
     SleObservation,
 )
-from mist_config_guardian_backend.models.organization import Organization
+from mist_config_guardian_backend.models.organization import MistCloudRegion, Organization
 from mist_config_guardian_backend.models.telemetry import (
     DeviceStateComparison,
     DeviceStateFinding,
@@ -65,6 +68,7 @@ from mist_config_guardian_backend.services.guardian import (
     AttemptInputs,
     AttemptTools,
     GuardianService,
+    SupersededObject,
     _status_reason,
     degraded,
     device_receipt,
@@ -686,3 +690,135 @@ async def test_the_worker_polls_nothing_new_while_the_feature_is_off(monkeypatch
 
 async def test_the_worker_polls_guardian_once_the_feature_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await _tick_worker(monkeypatch, guardian_enabled=True) == ["guardian"]
+
+
+# -- inputs the attempt never saw in full ------------------------------------------------------------------------
+
+
+def _core_obligations(outcome: Any) -> list[Any]:
+    return [item for item in outcome.fields["obligations"] if item.obligation.kind == "input"]
+
+
+async def test_a_read_cap_that_fired_is_a_core_gap_and_an_unsatisfied_core_obligation() -> None:
+    dropped = (
+        "This audit changed more than 200 object versions; the changed objects beyond that limit were not examined"
+    )
+    outcome = await run_attempt(gaps=(dropped,))
+
+    missing = _core_obligations(outcome)
+    assert [item.status.status for item in missing] == ["unsatisfied"]
+    assert [item.status.reason for item in missing] == [dropped]
+    assert Gap(source="core", text=dropped) in outcome.fields["verdict"].gaps
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_a_net_change_that_ends_where_it_started_is_reported_rather_than_elided() -> None:
+    # Disabled, then re-enabled: two versions inside one audit whose net configuration is identical, so the
+    # change set has the object but no atom at all, and nothing else would record that the audit touched it.
+    unchanged = ObjectChange(
+        logical_object_id="00000000000000000000c003",
+        scope="org",
+        object_type="networktemplates",
+        name="DNT-NTR",
+        version=9,
+        before={"dns_servers": ["10.0.0.1"]},
+        after={"dns_servers": ["10.0.0.1"]},
+    )
+    superseded = (SupersededObject(logical_object_id=unchanged.logical_object_id, name="DNT-NTR", intermediate=1),)
+    outcome = await run_attempt(changes=(unchanged,), superseded=superseded)
+
+    missing = _core_obligations(outcome)
+    assert len(missing) == 1
+    assert "DNT-NTR" in (missing[0].status.reason or "")
+    assert "ended where it started" in (missing[0].status.reason or "")
+    assert outcome.fields["verdict"].coverage != "complete"
+    assert any(gap.source == "core" and "DNT-NTR" in gap.text for gap in outcome.fields["verdict"].gaps)
+
+
+async def test_a_superseded_object_that_still_changed_something_is_not_reported_as_elided() -> None:
+    changed = inputs().changes[0]
+    superseded = (SupersededObject(logical_object_id=changed.logical_object_id, name="DNT-NTR", intermediate=2),)
+    outcome = await run_attempt(superseded=superseded)
+
+    assert _core_obligations(outcome) == []
+
+
+async def test_a_single_version_change_with_no_atom_is_not_reported_as_elided() -> None:
+    unchanged = ObjectChange(
+        logical_object_id="00000000000000000000c004",
+        scope="org",
+        object_type="networktemplates",
+        name="DNT-NTR",
+        version=1,
+        before={"dns_servers": ["10.0.0.1"]},
+        after={"dns_servers": ["10.0.0.1"]},
+    )
+    outcome = await run_attempt(changes=(unchanged,))
+
+    assert _core_obligations(outcome) == []
+
+
+# -- transports ---------------------------------------------------------------------------------------------------
+
+
+async def test_building_the_attempts_tools_closes_whatever_it_already_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[str] = []
+
+    class Recording(service.MistRuleTransport):
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            closed.append("rule")
+
+    async def unavailable(_self: object) -> None:
+        msg = "the provider settings could not be read"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(service, "MistRuleTransport", Recording)
+    monkeypatch.setattr(service, "service_token", AsyncMock(return_value="token"))
+    monkeypatch.setattr(service.ApplicationConfigurationService, "ai_runtime", unavailable)
+    organization = Organization.model_construct(id=ORG, mist_org_id="org-1", cloud_region=MistCloudRegion.GLOBAL_01)
+
+    with pytest.raises(RuntimeError, match="provider settings"):
+        async with service.GuardianTools(organization, vault=vault()):
+            pass
+
+    assert closed == ["rule"]
+
+
+async def test_a_mist_read_is_bounded_while_it_streams() -> None:
+    transport = service.MistRuleTransport(token="token", base_url="https://api.example.invalid")
+    sent: list[int] = []
+
+    async def stream() -> Any:
+        for _chunk in range(10):
+            sent.append(1)
+            yield b"x" * 64
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=stream())
+
+    transport._client = httpx.AsyncClient(
+        base_url="https://api.example.invalid", transport=httpx.MockTransport(handler)
+    )
+    try:
+        with pytest.raises(TransportError, match="transport bound"):
+            await transport.fetch("/api/v1/self", {}, timeout=1.0, max_bytes=100)
+    finally:
+        await transport.aclose()
+
+    # The read stopped as soon as the bound was passed rather than buffering the whole body first.
+    assert len(sent) < 10
+
+
+async def test_a_bounded_mist_read_returns_its_parsed_result() -> None:
+    transport = service.MistRuleTransport(token="token", base_url="https://api.example.invalid")
+    transport._client = httpx.AsyncClient(
+        base_url="https://api.example.invalid",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"results": [], "total": 0})),
+    )
+    try:
+        assert await transport.fetch("/api/v1/self", {}, timeout=1.0, max_bytes=1000) == {"results": [], "total": 0}
+    finally:
+        await transport.aclose()

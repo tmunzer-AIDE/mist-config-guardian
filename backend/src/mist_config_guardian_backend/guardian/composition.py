@@ -79,12 +79,14 @@ def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argume
     agent: AgentConclusion | None = None,
     evidence: Iterable[Evidence] = (),
     devices: Iterable[DeviceSeverity] = (),
+    core_gaps: Iterable[str] = (),
 ) -> Verdict:
     """Compose one attempt's verdict from its stored conclusions, in the spec's numbered order.
 
     ``devices`` are the deterministic per-device bands, and they also identify a device a rule or the agent names.
     ``evidence`` decides one thing only: whether the agent cited a service-health item, which is what lets its
-    assessment contribute at all.
+    assessment contribute at all. ``core_gaps`` are what the attempt itself could not see, such as an input its
+    read caps truncated; each one also carries an unsatisfied core obligation, so coverage already reflects it.
     """
     plugins = dict(sorted((rules or {}).items()))
     base: Band = "none" if coverage == "complete" else "info"
@@ -98,7 +100,9 @@ def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argume
     confidence: Confidence = "medium" if contribution.contributes and contribution.peak == peak else "low"
 
     listed, unidentified = _impacted(rows, monitoring, deployment, plugins, contribution)
-    gaps = _gaps(monitoring, deployment, plugins, agent, contribution, peak=peak, unidentified=unidentified)
+    gaps = _gaps(
+        monitoring, deployment, plugins, agent, contribution, peak=peak, unidentified=unidentified, core=core_gaps
+    )
     return Verdict(
         peak=peak,
         current=current,
@@ -257,9 +261,10 @@ def _gaps(  # noqa: PLR0913 - one gap source per argument
     *,
     peak: Band,
     unidentified: int,
+    core: Iterable[str] = (),
 ) -> tuple[Gap, ...]:
     """Every source's gaps under its own name, then what composition itself found, deduplicated and bounded."""
-    collected: list[tuple[GapSource, str]] = []
+    collected: list[tuple[GapSource, str]] = [("core", text) for text in core]
     for name, conclusion in (("monitoring", monitoring), ("deployment", deployment)):
         collected.extend((name, text) for text in (conclusion.gaps if conclusion is not None else ()))
     collected.extend((f"rule:{plugin}", text) for plugin, item in rules.items() for text in item.gaps)

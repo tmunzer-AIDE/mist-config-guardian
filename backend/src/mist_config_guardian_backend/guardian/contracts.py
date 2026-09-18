@@ -48,7 +48,7 @@ EvidenceKind = Literal["service_health", "deployment", "configuration", "referen
 EvidenceCollection = Literal["complete", "partial", "error"]
 EvidenceRepresentation = Literal["full", "digest"]
 ObligationRole = Literal["precondition", "observation"]
-ObligationKind = Literal["anchor", "deployment", "monitoring", "rule"]
+ObligationKind = Literal["anchor", "deployment", "monitoring", "rule", "input"]
 EmptyPolicy = Literal["not_exercised", "incomplete"]
 StatusValue = Literal["satisfied", "not_exercised", "unsatisfied"]
 LedgerResolution = Literal["claimed", "excluded", "uncovered"]
@@ -57,6 +57,11 @@ DeviceType = Literal["ap", "switch", "gateway"]
 
 CORE_OWNER = "core"
 CORE_OBLIGATION_KINDS: frozenset[ObligationKind] = frozenset({"anchor", "deployment"})
+# ``input`` is the one core observation that names no change atom: an input the attempt could not see in full, such
+# as a truncated version or session read, or a net change whose intermediate configurations were never examined.
+# It is always unsatisfied, so coverage over inputs the run never saw can never read complete.
+INPUT_OBLIGATION_KIND: ObligationKind = "input"
+CORE_ONLY_KINDS: frozenset[ObligationKind] = CORE_OBLIGATION_KINDS | {INPUT_OBLIGATION_KIND}
 
 _PLUGIN = r"[a-z][a-z0-9-]{0,39}"
 EvidenceId = Annotated[str, StringConstraints(pattern=r"^E[1-9][0-9]{0,5}$")]
@@ -168,6 +173,14 @@ class Obligation(Contract):
             if self.owner != CORE_OWNER or self.role != "precondition":
                 msg = f"{self.kind} obligations are core-owned preconditions"
                 raise ValueError(msg)
+        elif self.kind == INPUT_OBLIGATION_KIND:
+            # An input the attempt never saw claims no atom, because the atom is exactly what it could not build.
+            if self.owner != CORE_OWNER or self.role != "observation":
+                msg = "input obligations are core-owned observations"
+                raise ValueError(msg)
+            if self.change_ref is not None or self.paths:
+                msg = "An input obligation names no change atom and no paths"
+                raise ValueError(msg)
         else:
             if self.role != "observation":
                 msg = f"{self.kind} obligations are observations"
@@ -215,7 +228,7 @@ class RulePlan(Contract):
 
     @model_validator(mode="after")
     def plugin_observations_only(self) -> "RulePlan":
-        if any(obligation.kind in CORE_OBLIGATION_KINDS for obligation in self.obligations):
+        if any(obligation.kind in CORE_ONLY_KINDS for obligation in self.obligations):
             msg = "A rule plan holds rule and monitoring observations only"
             raise ValueError(msg)
         ids = [obligation.id for obligation in self.obligations]

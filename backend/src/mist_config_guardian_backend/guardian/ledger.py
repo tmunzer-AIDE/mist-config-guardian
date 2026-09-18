@@ -14,6 +14,7 @@ from pydantic import Field
 from mist_config_guardian_backend.guardian.change import ChangeSet, covers
 from mist_config_guardian_backend.guardian.contracts import (
     CORE_OWNER,
+    INPUT_OBLIGATION_KIND,
     MAX_TEXT_CHARS,
     AnchorSource,
     AtomId,
@@ -92,12 +93,18 @@ def build_ledger(
     devices: Iterable[ExpectedDevice],
     plans: Mapping[str, RulePlan],
     anchor: AnchorSource,
+    inputs: Sequence[str] = (),
 ) -> Ledger:
     """Resolve every atom-target row and number every obligation.
 
     Ids follow one order: the anchor precondition, plug-in obligations (plug-ins by id, each in plan order, a
-    duplicate monitoring obligation folded into the first), deployment preconditions by MAC, then one unsatisfied
-    observation per uncovered row in row order.
+    duplicate monitoring obligation folded into the first), deployment preconditions by MAC, one unsatisfied
+    observation per uncovered row in row order, and last one unsatisfied ``input`` observation per input the
+    attempt could not see in full.
+
+    ``inputs`` are those inputs, each already a bounded reason. They claim no atom, because the atom is exactly
+    what could not be built, and they are always unsatisfied, so a run that silently dropped part of what it was
+    asked to judge can never publish complete coverage.
     """
     expected = _expected_devices(devices)
     atoms = {atom.id: atom for atom in change.atoms}
@@ -142,6 +149,16 @@ def build_ledger(
             )
             obligations.append(observation)
             statuses[observation.id] = ObligationStatus(status="unsatisfied", reason=_uncovered_reason(atom, row))
+    for reason in inputs:
+        missing = Obligation(
+            id=f"O{len(obligations) + 1}",
+            owner=CORE_OWNER,
+            role="observation",
+            kind=INPUT_OBLIGATION_KIND,
+            target=Target(),
+        )
+        obligations.append(missing)
+        statuses[missing.id] = ObligationStatus(status="unsatisfied", reason=_bounded(reason))
     return Ledger(rows=tuple(ledger_rows), obligations=tuple(obligations), statuses=statuses, plan_ids=plan_ids)
 
 
@@ -415,6 +432,11 @@ def _row_targets(change: ChangeSet, atom: ChangeAtom, expected: Mapping[str, Exp
     return [Target(device_mac=item.mac, site_id=item.site_id) for item in expected.values()]
 
 
+def _bounded(reason: str) -> Text:
+    """One stored reason within what a contract holds."""
+    return reason if len(reason) <= MAX_TEXT_CHARS else f"{reason[: MAX_TEXT_CHARS - 1]}…"
+
+
 def _uncovered_reason(atom: ChangeAtom, row: LedgerRow) -> str:
     if atom.paths_complete:
         shown = ", ".join(".".join(path) for path in row.uncovered_paths[:VIEW_REFERENCES])
@@ -422,8 +444,7 @@ def _uncovered_reason(atom: ChangeAtom, row: LedgerRow) -> str:
         paths = f"{shown} and {more} more" if more > 0 else shown
     else:
         paths = f"{atom.attribute} (changed paths truncated)"
-    reason = f"no plugin addressed {atom.id} {paths} on {row.target.device_mac}"
-    return reason if len(reason) <= MAX_TEXT_CHARS else f"{reason[: MAX_TEXT_CHARS - 1]}…"
+    return _bounded(f"no plugin addressed {atom.id} {paths} on {row.target.device_mac}")
 
 
 def _row_view(row: LedgerRow) -> RowView:

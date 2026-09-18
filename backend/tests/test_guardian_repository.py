@@ -360,6 +360,42 @@ def attempt(**overrides) -> repo.CommittedAttempt:
     return repo.CommittedAttempt(**(values | overrides))
 
 
+def test_a_committed_claim_reads_its_run_inside_its_own_tenant_and_investigation():
+    scope = repo.claimed_run(COMMITTED, organization_id=ORG)
+
+    assert scope == {"_id": TOKEN, "organization_id": ORG, "investigation_id": ROOT}
+
+
+def test_an_uncommitted_claim_owns_no_run():
+    with pytest.raises(ValueError, match="committed claim"):
+        repo.claimed_run(UNCOMMITTED, organization_id=ORG)
+
+
+def test_exhaustion_reads_the_last_final_attempt_that_recorded_a_reason():
+    read = repo.last_failed_final_run(ROOT, organization_id=ORG)
+
+    assert read.filter == {
+        "organization_id": ORG,
+        "investigation_id": ROOT,
+        "kind": "final",
+        "failure_reason": {"$ne": None},
+    }
+    # The highest attempt first, and only the two fields the completion reason is built from.
+    assert read.sort == (("attempt", -1),)
+    assert read.projection == {"attempt": 1, "failure_reason": 1}
+
+
+def test_every_run_read_is_scoped_to_one_tenant_and_investigation():
+    reads = [
+        repo.claimed_run(COMMITTED, organization_id=ORG),
+        repo.last_failed_final_run(ROOT, organization_id=ORG).filter,
+    ]
+
+    for query in reads:
+        assert query["organization_id"] == ORG
+        assert query.get("investigation_id") == ROOT
+
+
 def test_run_inserts_are_rebuilt_from_the_committed_claim():
     identity = {
         "_id": TOKEN,

@@ -818,13 +818,23 @@ async def test_poll_due_runs_a_tick_for_every_candidate(organization: Organizati
 # -- loading one attempt's inputs -------------------------------------------------------------------------------------
 
 
-async def seed_change(root: GuardianInvestigation, *, secret: str) -> PydanticObjectId:
-    """One site device the audit changed, stored exactly as the snapshot writer stores it."""
+async def seed_change(
+    root: GuardianInvestigation,
+    *,
+    secret: str,
+    suffix: str = "",
+    dns: tuple[str, ...] = ("10.0.0.1", "10.0.0.2"),
+) -> PydanticObjectId:
+    """One site device the audit changed, stored exactly as the snapshot writer stores it.
+
+    ``dns`` is one resolver per stored version: the first is the pre-audit baseline and every later one is a
+    version this audit produced, so three entries make an audit that changed the object twice.
+    """
     logical = await LogicalObject(
         organization_id=root.organization_id,
         scope="site",
         object_type="devices",
-        source_key=f"devices:{root.audit_id}",
+        source_key=f"devices:{root.audit_id}{suffix}",
         current_mist_id="40000000-0000-4000-8000-000000000001",
         site_mist_id=SITE,
         name="SEA-SW-1",
@@ -838,14 +848,15 @@ async def seed_change(root: GuardianInvestigation, *, secret: str) -> PydanticOb
         ordinal=1,
     ).insert()
     identity = {"mac": MAC, "type": "switch", "site_id": SITE}
-    for version, dns, audit in ((1, "10.0.0.1", None), (2, "10.0.0.2", root.audit_id)):
+    for index, resolver in enumerate(dns):
+        version, audit = index + 1, None if index == 0 else root.audit_id
         await ObjectVersion(
             organization_id=root.organization_id,
             logical_object_id=logical.id,
             incarnation_id=incarnation.id,
             version=version,
             event="updated",
-            configuration={**identity, "dns_servers": [dns], "root_password": secret},
+            configuration={**identity, "dns_servers": [resolver], "root_password": secret},
             configuration_hash=f"hash-{version}",
             changed_fields=["dns_servers"],
             audit_id=audit,
@@ -853,7 +864,7 @@ async def seed_change(root: GuardianInvestigation, *, secret: str) -> PydanticOb
     await WebhookReceipt(
         organization_id=root.organization_id,
         topic="device-events",
-        event_id=f"{root.audit_id}-trigger",
+        event_id=f"{root.audit_id}-trigger{suffix}",
         audit_id=root.audit_id,
         payload_hash="hash",
         encrypted_payload="",
@@ -928,6 +939,127 @@ async def test_a_run_above_its_asserted_bound_fails_rather_than_being_stored(
     assert stored.state == "failed"
     assert stored.verdict is None
     assert "bound" in (stored.failure_reason or "")
+
+
+async def test_an_audit_above_the_version_cap_reports_what_it_did_not_examine(
+    organization: Organization, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = await new_root(organization)
+    for index in range(4):
+        await seed_change(root, secret="hunter2", suffix=f"-{index}")
+    monkeypatch.setattr(guardian, "MAX_AUDIT_VERSIONS", 3)
+
+    loaded = await guardian._object_changes(organization.id, root.audit_id)
+
+    assert loaded.gaps == (guardian.VERSION_CAP_GAP.format(cap=3),)
+    # The window is a deterministic prefix, so an object it contains whole is still examined.
+    assert len(loaded.changes) == 3
+    assert [change.logical_object_id for change in loaded.changes] == sorted(
+        change.logical_object_id for change in loaded.changes
+    )
+
+    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    outcome = await guardian.execute_attempt(
+        inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
+    )
+
+    assert outcome.state == "succeeded"
+    assert outcome.fields["verdict"].coverage != "complete"
+    assert any(gap.source == "core" and "not examined" in gap.text for gap in outcome.fields["verdict"].gaps)
+    assert [item.status.status for item in outcome.fields["obligations"] if item.obligation.kind == "input"] == [
+        "unsatisfied"
+    ]
+
+
+async def test_an_object_the_version_cap_cut_in_half_is_dropped_whole(
+    organization: Organization, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = await new_root(organization)
+    for index in range(2):
+        await seed_change(root, secret="hunter2", suffix=f"-{index}", dns=("10.0.0.1", "10.0.0.2", "10.0.0.3"))
+    monkeypatch.setattr(guardian, "MAX_AUDIT_VERSIONS", 3)
+
+    loaded = await guardian._object_changes(organization.id, root.audit_id)
+
+    # Four audit versions over two objects: the second object's own versions straddle the cap, so its net change
+    # would be taken from an arbitrary half. It is dropped whole, and the gap says so.
+    assert loaded.gaps == (guardian.VERSION_CAP_GAP.format(cap=3),)
+    assert len(loaded.changes) == 1
+    assert loaded.changes[0].version == 3
+
+
+async def test_a_change_above_the_session_cap_reports_what_it_did_not_examine(
+    organization: Organization, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = await new_root(organization)
+    await seed_change(root, secret="hunter2")
+    for index in range(3):
+        await MonitoringSession(
+            organization_id=organization.id,
+            audit_ids=[root.audit_id],
+            site_id=SITE,
+            device_mac=f"{MAC[:-2]}{index:02d}",
+            device_type=DeviceType.SWITCH,
+            status=MonitoringStatus.COMPLETED,
+            active=index == 2,
+        ).insert()
+    monkeypatch.setattr(guardian, "MAX_LINKED_SESSIONS", 2)
+
+    sessions, gaps = await guardian.linked_sessions(organization.id, root.audit_id)
+
+    assert gaps == (guardian.SESSION_CAP_GAP.format(cap=2),)
+    # An active session is never the one the cap drops, so the final's revalidation cannot be fooled by it.
+    assert len(sessions) == 2
+    assert sessions[0].active is True
+
+    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    outcome = await guardian.execute_attempt(
+        inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
+    )
+
+    assert outcome.fields["verdict"].coverage != "complete"
+    assert any(gap.source == "core" and "monitoring sessions" in gap.text for gap in outcome.fields["verdict"].gaps)
+
+
+async def test_a_net_change_that_ends_where_it_started_is_loaded_as_superseded(organization: Organization) -> None:
+    root = await new_root(organization)
+    await seed_change(root, secret="hunter2", dns=("10.0.0.1", "10.0.0.2", "10.0.0.1"))
+
+    loaded = await guardian._object_changes(organization.id, root.audit_id)
+
+    assert [item.intermediate for item in loaded.superseded] == [1]
+    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    outcome = await guardian.execute_attempt(
+        inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
+    )
+    assert any(gap.source == "core" and "ended where it started" in gap.text for gap in outcome.fields["verdict"].gaps)
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_the_exhaustion_read_quotes_the_last_final_attempt_that_recorded_a_reason(
+    organization: Organization,
+) -> None:
+    root = await new_root(organization)
+    reasons = []
+    for _attempt in range(repo.MAX_ATTEMPTS_PER_KIND):
+        current = await load(root.id)
+        attempt = await commit(current, await take_lease(current))
+        await insert_run(attempt)
+        reasons.append((await finalize(attempt, state="failed")).failure_reason)
+        await service()._publish(await GuardianRun.find_one({"_id": attempt.token}))
+        await shift(root.id, next_check_at=-PAST)
+    # A run of another investigation, and of another kind, must never be the one quoted.
+    other = await new_root(organization)
+    other_attempt = await commit(await load(other.id), await take_lease(other))
+    await insert_run(other_attempt)
+    await finalize(other_attempt, state="failed")
+
+    read = repo.last_failed_final_run(root.id, organization_id=organization.id)
+    rows = await runs().find(read.filter, read.projection).sort(list(read.sort)).to_list(length=10)
+
+    assert [row["attempt"] for row in rows] == [2, 1]
+    assert set(rows[0]) == {"_id", "attempt", "failure_reason"}
+    assert rows[0]["failure_reason"] == reasons[-1]
 
 
 # -- indexes and retention -------------------------------------------------------------------------------------------

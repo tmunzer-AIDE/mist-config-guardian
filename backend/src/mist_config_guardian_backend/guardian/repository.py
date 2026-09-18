@@ -71,6 +71,15 @@ class Write:
 
 
 @dataclass(frozen=True, slots=True)
+class Read:
+    """One tenant-scoped run query: the filter, and the projection and sort it is read with."""
+
+    filter: dict[str, Any]
+    projection: dict[str, int] | None = None
+    sort: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimFence:
     """A claim token and its phase: ``attempt`` is null until the attempt is committed."""
 
@@ -273,6 +282,35 @@ def expired_committed_claim_filter(fence: ClaimFence) -> dict[str, Any]:
     ``publish_failed_run`` on the same fence.
     """
     return {**_committed(fence), "$expr": {"$lte": ["$claim.lease_until", NOW]}}
+
+
+def claimed_run(fence: ClaimFence, *, organization_id: ObjectId) -> dict[str, Any]:
+    """The one run a committed claim owns, inside its own tenant and investigation.
+
+    Recovery reads a run by the claim's token alone only in the sense that the token is an ``ObjectId`` nobody else
+    holds; the tenant and investigation are still part of the filter, so a claim can never resolve, abandon or
+    adopt another organization's run.
+    """
+    _committed(fence)
+    return {"_id": fence.token, "organization_id": organization_id, "investigation_id": fence.root_id}
+
+
+def last_failed_final_run(root_id: ObjectId, *, organization_id: ObjectId) -> Read:
+    """The final run whose recorded reason closes an exhausted root: the highest attempt that recorded one.
+
+    Recovery runs before exhaustion, so every consumed final attempt already has a terminal run; this picks the
+    last one that recorded a reason, which is the reason the root's completion quotes.
+    """
+    return Read(
+        filter={
+            "organization_id": organization_id,
+            "investigation_id": root_id,
+            "kind": "final",
+            "failure_reason": {"$ne": None},
+        },
+        projection={"attempt": 1, "failure_reason": 1},
+        sort=(("attempt", -1),),
+    )
 
 
 def publish_succeeded_run(
