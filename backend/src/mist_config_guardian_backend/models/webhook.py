@@ -8,9 +8,9 @@ from beanie import Document, PydanticObjectId
 from pydantic import BaseModel, Field
 from pymongo import IndexModel
 
-from mist_config_guardian_backend.impact.deployment import DeploymentSignal
 from mist_config_guardian_backend.models.base import TimestampedModel
 from mist_config_guardian_backend.models.monitoring import ImpactSeverity
+from mist_config_guardian_backend.webhooks.deployment import DeploymentSignal
 
 
 class WebhookProcessingStatus(StrEnum):

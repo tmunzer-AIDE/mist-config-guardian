@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "label": "Mist device-event and audit-event timestamp contract excerpt",
+  "source": {
+    "document": "Mist OpenAPI specification (mist.openapi.json)",
+    "repository": "https://github.com/mistsys/mist_openapi",
+    "commit": "609ea461439fd4268c8336164335d135bd484141",
+    "api_version": "2609.1.0",
+    "sha256": "a4ceca342e1862255e5e232dec076ee0781bd94ff2d888714b7e9712493ab721"
+  },
+  "device_event": {
+    "pointer": "#/components/schemas/device_event",
+    "description": "Device event payload returned by search and webhook APIs",
+    "additional_properties": false,
+    "required": ["org_id", "timestamp", "type"],
+    "properties": ["ap", "ap_name", "apfw", "audit_id", "bandwidth", "channel", "chassis_mac", "count", "device_name", "device_type", "ev_type", "ext_ip", "job_id", "mac", "model", "node", "org_id", "port_id", "power", "pre_bandwidth", "pre_channel", "pre_power", "pre_usage", "reason", "site_id", "site_name", "status", "template_id", "text", "timestamp", "tunnel_name", "type", "usage", "version"],
+    "timestamp": {
+      "pointer": "#/components/schemas/timestamp",
+      "description": "Epoch timestamp, in seconds",
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "webhook_device_events": {
+    "pointer": "#/components/schemas/webhook_device_events",
+    "properties": ["events", "topic"]
+  },
+  "audit_event": {
+    "pointer": "#/components/schemas/log_event",
+    "properties": ["admin_id", "admin_name", "after", "before", "device_id", "for_site", "id", "message", "org_id", "site_id", "src_ip", "timestamp"],
+    "timestamp": {
+      "pointer": "#/components/schemas/timestamp"
+    }
+  },
+  "webhook_audits": {
+    "pointer": "#/components/schemas/webhook_audits",
+    "properties": ["events", "topic"]
+  }
+}

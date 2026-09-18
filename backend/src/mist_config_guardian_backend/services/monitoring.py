@@ -609,7 +609,9 @@ class MonitoringPollService:
         assessment: ImpactAssessment,
         configuration: ImpactAiRuntimeConfiguration,
     ) -> None:
-        if get_settings().impact_engine_mode != "legacy":
+        # Guardian investigates the audit that caused the change, so the old per-device narrator is suppressed
+        # while it is on; the deterministic monitoring verdict beside it is unchanged either way.
+        if get_settings().guardian_enabled:
             return
         async with OpenAiCompatibleImpactProvider(
             base_url=configuration.base_url,

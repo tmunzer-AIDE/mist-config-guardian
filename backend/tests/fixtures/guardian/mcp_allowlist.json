@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "label": "Guardian MCP read allowlist: (tool, discriminator) -> evidence kind",
+  "source": {
+    "catalogue": "backend/tests/fixtures/mist_mcp_catalog.json",
+    "catalogue_sha256": "8531cc4c9f7d1e846fdfd7cc4fdf5feb4ef6420229d92b0b1ca5ff7cf7077294",
+    "note": "Recorded tools/list catalogue; no live MCP discovery was performed."
+  },
+  "schema_normalization": "sha256 of the tool inputSchema serialized as UTF-8 JSON with sorted keys, separators (',', ':') and ensure_ascii=false",
+  "kind_rules": {
+    "service_health": "events, statistics, SLE, insights and operational searches",
+    "configuration": "configuration and schema reads",
+    "reference": "constants and documentation"
+  },
+  "tools": {
+    "get_mist_config": {
+      "input_schema_sha256": "b31c334b71aebc3105707d491476bb3c6f14bb24a4d63ace8486b476fbfb730f",
+      "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": false,
+      "discriminator": "resource_type",
+      "rule": "Configuration reads are configuration, except secret-bearing objects.",
+      "kinds": {
+        "sites": "configuration",
+        "alarmtemplates": "configuration",
+        "deviceprofiles": "configuration",
+        "gatewaytemplates": "configuration",
+        "networktemplates": "configuration",
+        "networks": "configuration",
+        "rftemplates": "configuration",
+        "services": "configuration",
+        "servicepolicies": "configuration",
+        "sitegroups": "configuration",
+        "sitetemplates": "configuration",
+        "vpns": "configuration",
+        "wlantemplates": "configuration",
+        "wlans": "configuration",
+        "wxrules": "configuration",
+        "wxtags": "configuration",
+        "evpn_topologies": "configuration",
+        "nactags": "configuration",
+        "nacrules": "configuration",
+        "avprofiles": "configuration",
+        "idpprofiles": "configuration",
+        "aamwprofiles": "configuration",
+        "mxclusters": "configuration",
+        "mxedges": "configuration",
+        "mxtunnels": "configuration",
+        "devices": "configuration",
+        "maps": "configuration"
+      },
+      "excluded": {
+        "psks": "Secret-bearing configuration object; excluded for minimal exposure and no investigation value.",
+        "webhooks": "Secret-bearing configuration object; excluded for minimal exposure and no investigation value."
+      }
+    },
+    "get_mist_constants": {
+      "input_schema_sha256": "b000ae291a01026c1ebad86a414f4195ada4ed754a270c3136f38f0f91258cb7",
+      "read_only_hint": true,
+      "requires_org": false,
+      "site_scopable": false,
+      "time_ranged": false,
+      "discriminator": "constant_type",
+      "rule": "Platform constants are reference.",
+      "kinds": {
+        "insight_metrics": "reference",
+        "device_events": "reference",
+        "client_events": "reference",
+        "nac_events": "reference",
+        "mxedge_events": "reference",
+        "system_events": "reference",
+        "otherdevice_events": "reference",
+        "alarm_definitions": "reference",
+        "device_models": "reference",
+        "mxedge_models": "reference",
+        "otherdevice_models": "reference",
+        "ap_channels": "reference",
+        "ap_led_status": "reference",
+        "default_gateway_config": "reference",
+        "traffic_types": "reference",
+        "app_categories": "reference",
+        "app_subcategories": "reference",
+        "applications": "reference",
+        "gateway_applications": "reference",
+        "license_types": "reference",
+        "fingerprint_types": "reference",
+        "webhook_topics": "reference",
+        "ap_esl_versions": "reference",
+        "marvisclient_versions": "reference",
+        "countries": "reference",
+        "states": "reference",
+        "languages": "reference"
+      },
+      "excluded": {}
+    },
+    "get_mist_insights": {
+      "input_schema_sha256": "62aeb5b8db5efd518ac272c2a8d20951e0fbc73c8ef1d58b78f9f55fd50d56d5",
+      "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": true,
+      "discriminator": "insight_type",
+      "rule": "Insights and SLE analytics are service_health.",
+      "kinds": {
+        "marvis_actions": "service_health",
+        "troubleshoot": "service_health",
+        "insight_metrics": "service_health",
+        "sle": "service_health"
+      },
+      "excluded": {}
+    },
+    "get_mist_stats": {
+      "input_schema_sha256": "b04e19914a7419793044065612b33db4ef8d0b9fb12ef87cb416b02322008def",
+      "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": true,
+      "discriminator": "stats_type",
+      "rule": "Statistics are service_health.",
+      "kinds": {
+        "org": "service_health",
+        "sites": "service_health",
+        "org_mxedges": "service_health",
+        "org_devices": "service_health",
+        "org_bgp": "service_health",
+        "org_ospf": "service_health",
+        "org_peer_paths": "service_health",
+        "org_ports": "service_health",
+        "org_tunnels": "service_health",
+        "site_mxedges": "service_health",
+        "site_wireless_clients": "service_health",
+        "site_devices": "service_health",
+        "site_bgp": "service_health",
+        "site_ospf": "service_health",
+        "site_ports": "service_health"
+      },
+      "excluded": {}
+    },
+    "search_mist_data": {
+      "input_schema_sha256": "b586f8eb861b995f6dfca7ff239e591e9f07d1df481eb8ae02a9b7b201a5a206",
+      "read_only_hint": true,
+      "requires_org": true,
+      "site_scopable": true,
+      "time_ranged": true,
+      "discriminator": "search_type",
+      "rule": "Events, alarms and operational client/device/session searches are service_health.",
+      "kinds": {
+        "devices": "service_health",
+        "wireless_clients": "service_health",
+        "wired_clients": "service_health",
+        "wan_clients": "service_health",
+        "nac_clients": "service_health",
+        "device_events": "service_health",
+        "wireless_client_events": "service_health",
+        "wan_client_events": "service_health",
+        "nac_client_events": "service_health",
+        "mxedge_events": "service_health",
+        "alarms": "service_health",
+        "client_sessions": "service_health"
+      },
+      "excluded": {
+        "sites": "Site discovery by name or address; it neither observes service health nor reads configuration.",
+        "inventory": "Claimed-device inventory regardless of connection state; not clearly service health or configuration.",
+        "mxedges": "Mist Edge appliance lookup by hostname; not clearly classifiable.",
+        "usermacs": "User-to-MAC assignment records; identity data that is not clearly classifiable.",
+        "guest_authorizations": "Guest portal authorization records; not clearly classifiable.",
+        "rogue_events": "Rogue AP security detections; events about foreign radios, not service health."
+      }
+    }
+  },
+  "excluded_tools": {
+    "find_mist_entity": "Cross-type entity lookup with no discriminating argument; it is not an event, statistics, SLE, insight, configuration, schema, constants or documentation read under the kind rules.",
+    "get_mist_self": "Identity and organization discovery; Guardian injects org_id and the tool reads no evidence."
+  },
+  "scope_flags": "Per-tool scope facts frozen from the recorded catalogue: requires_org (the tool takes org_id, which Guardian injects), site_scopable (the tool takes site_id) and time_ranged (the tool takes start_time and end_time, so it must be asked for one fixed window). A discovered schema that contradicts a flag is rejected, so a server cannot disable a guard by dropping an argument from what it advertises."
+}

@@ -22,7 +22,7 @@ from mist_config_guardian_backend.services.restore_planner import (
     RestoreStateStore,
     latest_version,
 )
-from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
 from mist_config_guardian_backend.snapshots.fingerprint import fingerprint
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition
@@ -158,7 +158,9 @@ class RestoreBaselineService:
                 configuration=protect_configuration(current, self._vault, sensitive_fields=definition.sensitive_fields),
                 configuration_hash=fingerprint(definition, current),
                 changed_fields=changed_top_level_fields(
-                    reveal_configuration(previous.configuration, self._vault), current
+                    reveal_configuration(previous.configuration, self._vault),
+                    current,
+                    ignored_fields=definition.ignored_fields,
                 ),
                 references=extract_uuid_references(current),
                 actor=actor,

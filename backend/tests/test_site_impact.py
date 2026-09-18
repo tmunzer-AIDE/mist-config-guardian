@@ -12,15 +12,19 @@ from fastapi.testclient import TestClient
 
 from mist_config_guardian_backend.api.dependencies import get_credential_vault, require_organization, require_viewer
 from mist_config_guardian_backend.api.routes import impact
+from mist_config_guardian_backend.guardian.contracts import CompactImpactedDevice
 from mist_config_guardian_backend.integrations.mist_topology import fetch_site_topology, topology_from_stats
+from mist_config_guardian_backend.models.guardian import GuardianResult
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
 from mist_config_guardian_backend.models.organization import MistCloudRegion
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
+from mist_config_guardian_backend.schemas.guardian import GuardianImpactedDevices, GuardianSummary
 from mist_config_guardian_backend.schemas.impact import ImpactSite, ImpactSiteList, SiteTopology
 from mist_config_guardian_backend.services import site_impact
 
 NOW = datetime(2026, 9, 9, 12, tzinfo=UTC)
 SITE = "d6fb4f96-3ba4-4cf5-8af2-a8d7b85087ac"
+OTHER_SITE = "1c7f5d2a-6ef6-11e6-8bbf-02e208b2d34f"
 MAC = "aabbccddeeff"
 
 
@@ -233,6 +237,93 @@ async def test_event_page_scopes_both_collections_before_expanding_devices(monke
     projection = queries[1][-1]["$project"]
     assert "device_comparisons" not in projection
     assert "configuration" not in projection
+
+
+def guardian_summary(devices, omitted=0):
+    """One published Guardian root, with the compact device rows its run recorded."""
+    return GuardianSummary(
+        status="done",
+        status_reason="Final run published",
+        result=GuardianResult(
+            run_id=PydanticObjectId(),
+            run_kind="final",
+            evaluated_at=NOW,
+            peak="warning",
+            current="none",
+            recovery="recovered",
+            confidence="low",
+            coverage="complete",
+            sources=("monitoring",),
+            impacted_devices=(devices[0],),
+            impacted_device_count=len(devices) + omitted,
+            summary="Peak impact warning (coverage complete); current none.",
+        ),
+        impacted=GuardianImpactedDevices(devices=tuple(devices), omitted=omitted),
+    )
+
+
+def guardian_page(monkeypatch, *, guardian_enabled=True):
+    """One change-group page with one audit, and the Guardian reader the overlay would call."""
+    monkeypatch.setattr(
+        site_impact,
+        "get_settings",
+        lambda: SimpleNamespace(impact_engine_mode="legacy", guardian_enabled=guardian_enabled),
+    )
+    group = {"_id": str(PydanticObjectId()), "audit_id": "audit", "at": NOW}
+    monkeypatch.setattr(
+        AuditChangeGroup,
+        "aggregate",
+        lambda _pipeline: SimpleNamespace(
+            to_list=AsyncMock(return_value=[{"items": [group], "count": [{"total": 1}]}])
+        ),
+    )
+    monkeypatch.setattr(
+        MonitoringSession, "aggregate", lambda _pipeline: SimpleNamespace(to_list=AsyncMock(return_value=[session()]))
+    )
+    here = CompactImpactedDevice(mac=MAC, site_id=SITE, name="Switch 1", peak="warning", current="none")
+    elsewhere = CompactImpactedDevice(
+        mac="112233445566", site_id=OTHER_SITE, name="AP 9", peak="warning", current="none"
+    )
+    reader = SimpleNamespace(
+        summaries=AsyncMock(return_value={"audit": guardian_summary([here, elsewhere], omitted=4)})
+    )
+    monkeypatch.setattr(site_impact, "PublishedGuardianReader", lambda: reader)
+    return reader, here
+
+
+async def test_the_overlay_shows_the_published_runs_rows_for_this_site_and_what_it_omitted(monkeypatch):
+    org = PydanticObjectId()
+    reader, here = guardian_page(monkeypatch)
+
+    result = await site_impact.list_changes(org, SITE, range_key="24h", end=None, skip=0, limit=50)
+
+    overlay = result.items[0].guardian
+    assert overlay is not None
+    assert overlay.impacted is not None
+    # The run's own rows, kept to this site; the count of what the run could not record stands unchanged.
+    assert overlay.impacted.devices == (here,)
+    assert overlay.impacted.omitted == 4
+    assert overlay.result is not None
+    assert overlay.result.peak == "warning"
+    # The root's list is capped across every site the audit touched, so a site page carries none of it; the
+    # audit-wide count stays as context beside this site's rows.
+    assert overlay.result.impacted_devices == ()
+    assert overlay.result.impacted_device_count == 6
+    # No field of a site projection names a device of another site.
+    assert OTHER_SITE not in result.model_dump_json()
+    reader.summaries.assert_awaited_once_with(org, ["audit"], include_devices=True)
+
+
+async def test_a_historical_or_dormant_site_page_carries_no_guardian_outcome(monkeypatch):
+    org = PydanticObjectId()
+    reader, _here = guardian_page(monkeypatch)
+    past = await site_impact.list_changes(org, SITE, range_key="24h", end=NOW, skip=0, limit=50)
+    assert past.items[0].guardian is None
+
+    reader, _here = guardian_page(monkeypatch, guardian_enabled=False)
+    live = await site_impact.list_changes(org, SITE, range_key="24h", end=None, skip=0, limit=50)
+    assert live.items[0].guardian is None
+    reader.summaries.assert_not_awaited()
 
 
 @pytest.fixture

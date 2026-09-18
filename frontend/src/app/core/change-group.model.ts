@@ -5,7 +5,7 @@
  * together with every object version it produced and every device it touched.
  */
 
-import { AuditImpactSummary } from './audit-impact.model';
+import { GuardianSummary } from './guardian.model';
 
 export type ImpactSeverity = 'none' | 'info' | 'warning' | 'critical';
 export type RecoveryState = 'not_applicable' | 'monitoring' | 'recovered' | 'unrecovered' | 'completed';
@@ -71,7 +71,12 @@ export interface ChangeGroupSummary {
    */
   impact_known?: boolean;
   impact_source?: 'legacy' | null;
-  shadow_impact?: AuditImpactSummary | null;
+  /**
+   * The audit's Guardian investigation, or `null` when none was recorded for
+   * it — which is an answer, and is not the same as a result that could not be
+   * read (`availability: 'unavailable'`).
+   */
+  guardian?: GuardianSummary | null;
   is_mine: boolean;
 }
 

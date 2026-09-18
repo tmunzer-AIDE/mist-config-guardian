@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "label": "DNT-NTR audit change, reconstructed from API projections",
+  "provenance": {
+    "reconstructed_from": "API projections (change-group and legacy investigation responses) copied from the production application on 2026-09-17. No raw webhook body or database document exists for this audit.",
+    "pseudonymized": ["organization_id", "site_id", "audit_id", "logical_object_id", "device MACs", "device names"],
+    "preserved": ["timestamps", "changed fields", "object type", "object name", "device types"],
+    "actor": "Not present in the source projections; none is recorded.",
+    "derived": {
+      "object_scope_and_type": "The projection title 'Network template updated · DNT-NTR' is rendered by services/change_groups.py as '<registry label> <verb> · <object name>'; the label 'Network template' belongs only to the org registry key 'networktemplates'."
+    }
+  },
+  "organization_id": "10000000-0000-4000-8000-000000000001",
+  "site_id": "20000000-0000-4000-8000-000000000001",
+  "audit": {
+    "audit_id": "30000000-0000-4000-8000-000000000001",
+    "occurred_at": "2026-09-16T04:41:35.242000Z",
+    "title": "Network template updated · DNT-NTR"
+  },
+  "changed_objects": [
+    {
+      "logical_object_id": "00000000000000000000c001",
+      "scope": "org",
+      "object_type": "networktemplates",
+      "object_name": "DNT-NTR",
+      "event": "updated",
+      "changed_fields": ["dns_servers", "modified_time"]
+    }
+  ],
+  "devices": [
+    {"device_mac": "020000000011", "device_name": "SW-1", "device_type": "switch"},
+    {"device_mac": "020000000012", "device_name": "SW-2", "device_type": "switch"},
+    {"device_mac": "020000000013", "device_name": "SW-3", "device_type": "switch"},
+    {"device_mac": "020000000021", "device_name": "AP-1", "device_type": "ap"},
+    {"device_mac": "020000000022", "device_name": "AP-2", "device_type": "ap"},
+    {"device_mac": "020000000023", "device_name": "AP-3", "device_type": "ap"},
+    {"device_mac": "020000000031", "device_name": "GW-1", "device_type": "gateway"}
+  ]
+}

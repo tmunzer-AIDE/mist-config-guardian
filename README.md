@@ -89,6 +89,17 @@ Digests written before this change are still recognised wherever one is
 compared, and the `hashes.backfill_configuration_hashes` worker task rewrites
 them in the background, so no deployment step is required.
 
+`last_seen` is no longer shown or exported as a configuration change. It joins
+`created_time` and `modified_time` in the one metadata set every comparison
+ignores, so the configuration diff page, the diff JSON export
+(`GET /api/v1/organizations/{organization_id}/diff/export`) and its RFC 6902
+JSON-Patch form all omit it — the patch no longer carries an operation for
+`last_seen` either. Snapshot hashing and change detection already ignored the
+field: it records when a device last reported in, not when its configuration
+changed, so a diff that listed it reported a change nobody made. A client that
+counted operations in an exported patch, or diffed the exported diffs, will see
+fewer entries for device objects after this upgrade.
+
 A production deployment whose resolved `public_base_url` is `http` now
 **refuses to start**. This is the URL invitation emails build activation links
 from, and a production deployment already forces `session_cookie_secure`, so
@@ -124,7 +135,9 @@ Replace every development secret in `.env`, then run:
 docker compose up --build
 ```
 
-The application is served at `http://localhost:8080`.
+The application is served at `http://localhost:8080`. Guardian stays off unless
+`GUARDIAN_ENABLED` is set to `true` in the shell or in the project's `.env`; the
+API and both workers read the same value.
 
 ## Helm
 
@@ -132,21 +145,39 @@ The chart includes `questions.yaml` for guided installation in Rancher-compatibl
 catalog UIs. Configure the container images, workload sizing, the datastores,
 networking, and application secrets through the form.
 
-Set `config.impactEngineMode` to `legacy` (default), `shadow` (deterministic
-audit investigations), or `agent_shadow` (also runs the configured AI provider).
-Both shadow modes retain legacy production verdicts and notifications. The setting
-is also available in the Rancher Workloads form. ConfigMap checksums roll the API,
-worker and scheduler when it changes. For an existing release, preserve its values:
+Set `config.guardianEnabled` to `true` to run Guardian, the audit impact
+investigation. It is `false` by default: no investigation is started, the pages
+show nothing for it, and the per-device monitoring verdicts, badges and
+notifications are unaffected either way. The setting is also available in the
+Rancher Workloads form. ConfigMap checksums roll the API, worker and scheduler
+when it changes. For an existing release, preserve its values:
 
 ```bash
 helm upgrade config-guardian ./helm/mist-config-guardian \
   --namespace mist --reuse-values \
-  --set config.impactEngineMode=shadow --wait --timeout 5m
+  --set config.guardianEnabled=true --wait --timeout 5m
 ```
 
-Use your own release name and namespace if different. `agent_shadow` additionally
-requires AI provider configuration in the application. Changing this value does
-not promote audit verdicts to production.
+Use your own release name and namespace if different. Guardian additionally
+requires AI provider configuration in the application, and reads the Mist MCP
+endpoint in `config.mistMcpUrl`. Per audit it spends at most 2 runs x 2 attempts
+x (10 model turns + 7 MCP calls + 8 rule reads), plus one MCP catalogue
+discovery per attempt. Changing this value does not promote audit verdicts to
+production.
+
+The engine Guardian replaced left five collections behind:
+`impact_investigations`, `investigation_revisions`,
+`impact_model_request_artifacts`, `impact_adjudications` and `neighbor_bindings`.
+Nothing reads or writes them any more. After the release is rolled out, an
+operator can remove them:
+
+```bash
+cd backend && uv run python ../scripts/drop-legacy-impact-collections.py          # report only
+cd backend && uv run python ../scripts/drop-legacy-impact-collections.py --apply  # drop them
+```
+
+It reports each collection with its document count, drops nothing without
+`--apply`, touches no other collection, and can be re-run safely.
 
 MongoDB, Redis, and InfluxDB are deployed with the release by default, each with
 a persistent volume. Set `mongodb.enabled`, `redis.enabled`, or

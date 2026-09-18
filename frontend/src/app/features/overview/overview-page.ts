@@ -18,13 +18,13 @@ import { TimeContextService } from '../../core/time-context.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { AuthService } from '../../core/auth.service';
 import { toneOf } from '../../core/tone';
-import { AuditImpactSummaryComponent } from '../../shared/audit-impact-summary';
+import { GuardianBadge } from '../../shared/guardian-badge';
 
 type FeedFilter = 'all' | 'impacting' | 'mine';
 
 @Component({
   selector: 'app-overview-page',
-  imports: [AuditImpactSummaryComponent],
+  imports: [GuardianBadge],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-page.html',
   styleUrl: './overview-page.scss',

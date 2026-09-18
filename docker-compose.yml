@@ -10,6 +10,8 @@ services:
       # origin that is not the one the browser reports, so the origin is pinned
       # here rather than left to the development default of the Angular server.
       WEBAUTHN_ORIGIN: http://localhost:8080
+      # Guardian stays off unless GUARDIAN_ENABLED is set in the shell or the project's .env file.
+      GUARDIAN_ENABLED: ${GUARDIAN_ENABLED:-false}
       MONGODB_URL: mongodb://mongodb:27017
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
@@ -49,6 +51,7 @@ services:
       - path: .env
         required: false
     environment:
+      GUARDIAN_ENABLED: ${GUARDIAN_ENABLED:-false}
       MONGODB_URL: mongodb://mongodb:27017
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1

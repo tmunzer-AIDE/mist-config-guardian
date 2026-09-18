@@ -1,12 +1,25 @@
-"""Canonical configuration serialization and hashing."""
+"""Canonical configuration serialization and hashing.
+
+The canonical structure itself is ``canonical_form``, which needs no key; it is re-exported here for existing callers.
+"""
 
 import hashlib
 import hmac
 import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping
 from functools import lru_cache
 
 from mist_config_guardian_backend.config import get_settings
+from mist_config_guardian_backend.snapshots.canonical_form import canonicalize
+
+__all__ = [
+    "CURRENT_HASH_GENERATION",
+    "canonicalize",
+    "configuration_hash",
+    "configuration_hash_matches",
+    "is_legacy_hash",
+    "legacy_configuration_hash",
+]
 
 # The generation marker every keyed digest carries. Digests written before the
 # hash was keyed carry no marker at all, which is what makes them recognisable
@@ -16,19 +29,6 @@ CURRENT_HASH_GENERATION = "v2"
 # Purpose separation: this subkey hashes configuration and nothing else, so it
 # is never the key that encrypts a credential or fingerprints one.
 _HASH_CONTEXT = b"mist-config-guardian/configuration-hash/v2"
-
-
-def canonicalize(value: object, *, ignored_fields: Collection[str] = ()) -> object:
-    """Return a deterministic structure while preserving list order."""
-    if isinstance(value, Mapping):
-        return {
-            str(key): canonicalize(child, ignored_fields=ignored_fields)
-            for key, child in sorted(value.items(), key=lambda item: str(item[0]))
-            if str(key) not in ignored_fields
-        }
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [canonicalize(item, ignored_fields=ignored_fields) for item in value]
-    return value
 
 
 def _canonical_json(value: Mapping[str, object], *, ignored_fields: Collection[str] = ()) -> bytes:
@@ -93,12 +93,3 @@ def configuration_hash_matches(
         else configuration_hash(value, ignored_fields=ignored_fields)
     )
     return hmac.compare_digest(stored, expected)
-
-
-def changed_top_level_fields(
-    before: Mapping[str, object],
-    after: Mapping[str, object],
-) -> list[str]:
-    """Return sorted top-level fields whose canonical values differ."""
-    all_keys = set(before) | set(after)
-    return sorted(key for key in all_keys if canonicalize(before.get(key)) != canonicalize(after.get(key)))

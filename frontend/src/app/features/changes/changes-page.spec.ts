@@ -5,6 +5,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 
 import { ChangeGroupDetail, ChangeGroupSummary, ImpactSeverity } from '../../core/change-group.model';
+import { GuardianSummary } from '../../core/guardian.model';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { ChangesPage } from './changes-page';
 
@@ -77,6 +78,19 @@ function detail(base: ChangeGroupSummary): ChangeGroupDetail {
     competing_change_group_ids: [],
   };
 }
+
+/** A published final result: a warning peak the devices recovered from. */
+const GUARDIAN_RECOVERED: GuardianSummary = {
+  availability: 'projected',
+  status: 'done',
+  status_reason: 'Final result published',
+  result: {
+    run_id: 'run-final', run_kind: 'final', evaluated_at: '2026-09-07T09:22:00Z',
+    peak: 'warning', current: 'none', recovery: 'recovered', confidence: 'low', coverage: 'partial',
+    sources: ['monitoring', 'agent'], impacted_devices: [], impacted_device_count: 0,
+    summary: 'Two access points lost service after the change and recovered.',
+  },
+};
 
 /** Monday 07 Sep and Sunday 06 Sep 2026, the two days the design shows. */
 const MONDAY_CRITICAL = summary('cg1', '2026-09-07T09:12:00Z', 'critical');
@@ -328,19 +342,34 @@ describe('ChangesPage', () => {
       'No impact',
     ]);
   });
-  it('shows the shadow projection alongside the production badge without changing its filter', async () => {
-    const request = await load([{ ...MONDAY_CRITICAL, impact_source: 'legacy', shadow_impact: {
-      mode: 'shadow', assessment_source: 'audit_investigation', result: 'insufficient_evidence',
-      investigation_id: 'i1', report_id: 'r3', revision: 3, status: 'monitoring', stop_reason: '',
-      policy_version: 'wlan-removal.v1', evaluated_at: '2026-09-07T09:22:00Z',
-      impact: 'info', confidence: 'low', coverage: 'partial', gap_count: 1, unmapped_count: 2,
-    } }]);
+  it('shows the Guardian result beside the production badge without changing its filter', async () => {
+    const request = await load([{ ...MONDAY_CRITICAL, impact_source: 'legacy', guardian: GUARDIAN_RECOVERED }]);
+
+    // The production badge and the impact filter are untouched by Guardian.
     expect(text('.cell-impact .cg-badge')).toEqual(['CRITICAL −29']);
-    expect(text('app-audit-impact-summary')[0]).toContain('Shadow · Insufficient evidence');
-    expect(text('app-audit-impact-summary')[0]).toContain('Confidence: low');
-    expect(text('app-audit-impact-summary')[0]).toContain('Revision 3');
     expect(request.request.params.get('severity')).toBe('any');
-    expect(text('.head-sub').join(' ')).toContain('filters and alerts still use the legacy assessment');
+    expect(text('app-guardian-badge')[0]).toContain('Guardian · Possible disruption');
+    expect(text('app-guardian-badge')[0]).toContain('Recovered');
+    expect(text('.head-sub').join(' ')).toContain('alerts still use the legacy assessment');
+  });
+
+  it('says which row has no investigation rather than leaving it to look clean', async () => {
+    await load([
+      { ...MONDAY_CRITICAL, guardian: GUARDIAN_RECOVERED },
+      { ...MONDAY_WARNING, guardian: null },
+    ]);
+
+    const badges = text('app-guardian-badge');
+    expect(badges.length).toBe(2);
+    expect(badges[1]).toContain('No investigation recorded');
+    expect(badges[1]).not.toContain('No impact observed');
+  });
+
+  it('shows no Guardian badge at all when nothing in the feed records one', async () => {
+    await load([MONDAY_CRITICAL, MONDAY_WARNING]);
+
+    expect(text('app-guardian-badge')).toEqual([]);
+    expect(text('.head-sub').join(' ')).not.toContain('Guardian');
   });
 
 });

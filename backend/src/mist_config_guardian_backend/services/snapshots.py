@@ -22,7 +22,7 @@ from mist_config_guardian_backend.models.snapshot import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.service_credentials import service_token
-from mist_config_guardian_backend.snapshots.canonical import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
 from mist_config_guardian_backend.snapshots.fingerprint import fingerprint, fingerprint_matches, normalize
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import (
@@ -302,7 +302,9 @@ class SnapshotService:
             changed_fields=(
                 []
                 if previous_configuration is None
-                else changed_top_level_fields(previous_configuration, configuration)
+                else changed_top_level_fields(
+                    previous_configuration, configuration, ignored_fields=definition.ignored_fields
+                )
             ),
             references=extract_uuid_references(configuration),
             actor=context.actor,

@@ -103,6 +103,17 @@ async def test_backup_pins_admin_response_and_encrypts_root_password(capture):
     assert manifest.created_versions == 1
 
 
+async def test_a_fresh_backup_lists_functional_changed_fields_without_metadata(capture):
+    service, client, org, objects, manifest, versions, _vault = capture
+    previous = await baseline_module.latest_version(next(iter(objects)))
+    previous.configuration = {"name": "test", "modified_time": 1}
+    client.get_current.return_value = {**client.get_current.return_value, "modified_time": 2}
+
+    await service._capture(client, org, objects, manifest, "admin")
+
+    assert [version.changed_fields for version in versions] == [["id", "switch_mgmt"]]
+
+
 async def test_an_unchanged_object_keeps_its_latest_version_as_the_baseline(capture, monkeypatch):
     """A new row per preparation would move every baseline-derived id, and an approval keyed on them with it."""
     service, client, org, objects, manifest, versions, _vault = capture

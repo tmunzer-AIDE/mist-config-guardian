@@ -9,8 +9,8 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { TimeContextService } from '../../core/time-context.service';
 import { Tone, toneInk, toneOf } from '../../core/tone';
 import { UiStateService } from '../../core/ui-state.service';
-import { ShadowInvestigation } from './shadow-investigation';
-import { AuditImpactSummaryComponent } from '../../shared/audit-impact-summary';
+import { GuardianPanel } from './guardian-panel';
+import { GuardianBadge } from '../../shared/guardian-badge';
 
 /** The table asks for one large page; the design has no paging control. */
 const PAGE_SIZE = 100;
@@ -48,7 +48,7 @@ interface ChangeDay {
 
 @Component({
   selector: 'app-changes-page',
-  imports: [ShadowInvestigation, AuditImpactSummaryComponent],
+  imports: [GuardianPanel, GuardianBadge],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './changes-page.html',
   styleUrl: './changes-page.scss',
@@ -70,8 +70,14 @@ export class ChangesPage {
   readonly actor = input<string>();
 
   protected readonly severity = signal<SeverityFilter>('any');
-  protected readonly hasShadow = computed(() =>
-    !this.time.isHistorical() && this.changeGroups.items().some((group) => !!group.shadow_impact),
+  /**
+   * Whether Guardian records anything for this feed at all. With Guardian off
+   * every row carries `null`, and printing "no investigation recorded" against
+   * all of them would be noise; where some row does carry one, a row without
+   * one is worth saying.
+   */
+  protected readonly hasGuardian = computed(() =>
+    !this.time.isHistorical() && this.changeGroups.items().some((group) => !!group.guardian),
   );
 
   /** Derived rather than mirrored: the URL is the only thing that sets an
@@ -171,7 +177,7 @@ export class ChangesPage {
     const occurred = new Date(detail.occurred_at);
     return {
       id: detail.id,
-      shadowImpact: detail.shadow_impact,
+      guardian: detail.guardian ?? null,
       tone: toneOf(detail.impact_severity),
       level: detail.impact_label,
       title: detail.title,

@@ -183,15 +183,16 @@
         />
       }
     </div>
-    @if (selectedChange()?.shadow_impact?.impacted_devices) {
+    @if (guardianDevices().length) {
       <div class="notice"><button class="text-button" type="button" (click)="auditOverlay.set(!auditOverlay())" [attr.aria-pressed]="auditOverlay()">
-        {{ auditOverlay() ? 'Hide' : 'Show' }} shadow service associations
-      </button><p>Highlights identify observed service associations. Colors remain live connectivity; serving APs are not classified as failed.</p></div>
+        {{ auditOverlay() ? 'Hide' : 'Show' }} Guardian impacted devices
+      </button><p>Highlights are the devices Guardian recorded as impacted at this site. Colors remain live connectivity; a highlighted device is not classified as failed.</p>
+      @if (guardianOmitted(); as note) { <p>{{ note }}</p> }</div>
     }
     <footer class="topology-foot">
       <span
         >{{
-          auditOverlay() ? 'Shadow service associations · Colors: connectivity · ' : selectedChange()
+          auditOverlay() ? 'Guardian impacted devices · Colors: connectivity · ' : selectedChange()
             ? 'Affected devices: change impact · Others: connectivity · '
             : 'Colors: connectivity · '
         }}{{ topology()?.source === 'mist' ? 'Mist statistics' : 'Stored inventory' }}
@@ -217,9 +218,24 @@
     "
   >
     @if (selectedChange(); as change) {
-      <app-audit-impact-summary [assessment]="change.shadow_impact" />
-      @if (change.change_group_id && !time.isHistorical()) {
-        <app-shadow-investigation [groupId]="change.change_group_id" />
+      @if (guardianShown()) {
+        <app-guardian-badge [summary]="change.guardian ?? null" scope="For this audit, across all sites" />
+        @if (guardianDevices().length) {
+          <section class="detail-section" aria-label="Guardian impacted devices at this site">
+            <h3 class="eyebrow">Guardian impacted devices at this site</h3>
+            @for (device of guardianDevices(); track device.mac) {
+              <p>{{ device.name || device.mac }} · {{ device.mac }} · peak {{ device.peak }} · current {{ device.current }}</p>
+            }
+            @if (guardianOmitted(); as note) { <p>{{ note }}</p> }
+          </section>
+        } @else if (guardianOmitted(); as note) {
+          <section class="detail-section" aria-label="Guardian impacted devices at this site">
+            <p>Guardian recorded no impacted device at this site. {{ note }}</p>
+          </section>
+        }
+        @if (change.change_group_id && !time.isHistorical()) {
+          <app-guardian-panel [groupId]="change.change_group_id" />
+        }
       }
     }
     @if (selectedDevice(); as device) {

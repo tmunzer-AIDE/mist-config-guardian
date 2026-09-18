@@ -1,12 +1,17 @@
 """Generalised OpenAI-compatible provider adapter tests."""
 
+import json
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from mist_config_guardian_backend.guardian.agent_schema import ACTION_SCHEMA, ACTION_SCHEMA_STRICT, strict_subset
 from mist_config_guardian_backend.integrations.ai_provider import (
+    JSON_OBJECT,
     AiMessage,
     AiProviderError,
+    JsonSchemaFormat,
     OpenAiCompatibleProvider,
 )
 
@@ -53,19 +58,68 @@ async def test_complete_returns_content_and_usage(httpx_mock: HTTPXMock) -> None
     assert completion.response_tokens == 40
 
 
-async def test_complete_requests_json_object_when_asked(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(
-        method="POST",
-        url=COMPLETIONS_URL,
-        json={"choices": [{"message": {"content": "{}"}}]},
-    )
+async def test_text_completions_ask_for_no_response_format(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "hi"}}]})
 
     async with _provider() as provider:
-        await provider.complete([AiMessage(role="user", content="e")], json_object=True)
+        await provider.complete([AiMessage(role="user", content="e")])
 
     request = httpx_mock.get_request()
     assert request is not None
-    assert "json_object" in request.read().decode()
+    assert "response_format" not in json.loads(request.read())
+
+
+async def test_complete_requests_a_json_object_when_asked(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "{}"}}]})
+
+    async with _provider() as provider:
+        await provider.complete([AiMessage(role="user", content="e")], response_format=JSON_OBJECT)
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert json.loads(request.read())["response_format"] == {"type": "json_object"}
+
+
+async def test_complete_sends_a_named_json_schema(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "{}"}}]})
+    schema = {"type": "object", "properties": {"action": {"const": "report"}}, "required": ["action"]}
+
+    async with _provider() as provider:
+        await provider.complete(
+            [AiMessage(role="user", content="e")],
+            response_format=JsonSchemaFormat(name="guardian_action", schema=schema),
+        )
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert json.loads(request.read())["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "guardian_action", "schema": schema, "strict": True},
+    }
+
+
+async def test_a_schema_outside_the_strict_subset_asks_for_no_strictness(httpx_mock: HTTPXMock) -> None:
+    """Controller ruling R35: a root ``oneOf`` is refused or downgraded under strict mode, so no flag is sent."""
+    httpx_mock.add_response(method="POST", url=COMPLETIONS_URL, json={"choices": [{"message": {"content": "{}"}}]})
+
+    async with _provider() as provider:
+        await provider.complete(
+            [AiMessage(role="user", content="e")],
+            response_format=JsonSchemaFormat(name="guardian_action", schema=ACTION_SCHEMA, strict=False),
+        )
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert json.loads(request.read())["response_format"]["json_schema"] == {
+        "name": "guardian_action",
+        "schema": ACTION_SCHEMA,
+    }
+
+
+async def test_guardians_own_action_schema_is_outside_the_strict_subset() -> None:
+    assert ACTION_SCHEMA_STRICT is False
+    assert "oneOf" in ACTION_SCHEMA
+    assert strict_subset({"type": "object", "properties": {}}) is True
 
 
 async def test_complete_maps_malformed_responses_to_provider_error(httpx_mock: HTTPXMock) -> None:

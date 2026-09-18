@@ -28,14 +28,15 @@ import {
   SiteChange,
   SiteTopology,
 } from './site-impact.model';
-import { AuditImpactSummaryComponent } from '../../shared/audit-impact-summary';
-import { ShadowInvestigation } from '../changes/shadow-investigation';
+import { GuardianBadge } from '../../shared/guardian-badge';
+import { GuardianPanel } from '../changes/guardian-panel';
+import { omittedSiteDeviceNote } from '../../core/guardian.model';
 import { TopologyCanvas } from './topology-canvas';
 import { metricLabel } from './monitoring.model';
 
 @Component({
   selector: 'app-site-impact-page',
-  imports: [TopologyCanvas, RouterLink, AuditImpactSummaryComponent, ShadowInvestigation],
+  imports: [TopologyCanvas, RouterLink, GuardianBadge, GuardianPanel],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './site-impact-page.html',
   styleUrl: './site-impact-page.scss',
@@ -130,9 +131,27 @@ export class SiteImpactPage implements OnDestroy {
       (this.selectedChange()?.impacts ?? []).map((i) => [i.device_id, i.severity]),
     ),
   );
+  /**
+   * Whether Guardian records anything for the changes on this page. With
+   * Guardian off every change carries `null`, and saying "no investigation
+   * recorded" for all of them would be noise rather than news.
+   */
+  protected readonly guardianShown = computed(() => this.changes().some((change) => !!change.guardian));
+  /**
+   * The devices the overlay highlights. Guardian's rows are the published run's
+   * own, already filtered to this site by the server; the capped root list is
+   * never used here because it spans every site the audit touched.
+   */
+  protected readonly guardianDevices = computed(
+    () => this.selectedChange()?.guardian?.impacted?.devices ?? [],
+  );
+  /** Impacted devices this investigation never recorded: their site is unknown, so this site cannot claim them. */
+  protected readonly guardianOmitted = computed(() =>
+    omittedSiteDeviceNote(this.selectedChange()?.guardian?.impacted?.omitted ?? 0),
+  );
   protected readonly impacted = computed(
     () => this.auditOverlay()
-      ? [...new Set((this.selectedChange()?.shadow_impact?.impacted_devices ?? []).map(d => d.device_mac))]
+      ? [...new Set(this.guardianDevices().map((device) => device.mac))]
       : this.selectedChange()?.impacts.map((i) => i.device_id) ?? [],
   );
   protected readonly decorations = computed(() => {

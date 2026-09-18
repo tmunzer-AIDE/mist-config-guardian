@@ -10,6 +10,7 @@ from mist_config_guardian_backend.api.routes.overview import get_overview_servic
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.approval import ApprovalStatus, RestoreApproval
+from mist_config_guardian_backend.models.guardian import GuardianResult
 from mist_config_guardian_backend.models.monitoring import ImpactSeverity
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
@@ -29,6 +30,8 @@ from mist_config_guardian_backend.models.snapshot import (
 )
 from mist_config_guardian_backend.models.user import User, UserRole
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup, RecoveryState
+from mist_config_guardian_backend.schemas.change_group import ChangeGroupSummaryResponse
+from mist_config_guardian_backend.schemas.guardian import GuardianSummary
 from mist_config_guardian_backend.services.change_groups import ChangeGroupService
 from mist_config_guardian_backend.services.overview import (
     ChangeGroupCounts,
@@ -40,6 +43,7 @@ from mist_config_guardian_backend.services.overview import (
     build_safety_net,
     cron_cadence_minutes,
     format_cadence,
+    guardian_feed_counts,
 )
 
 ORGANIZATION_ID = PydanticObjectId()
@@ -717,6 +721,48 @@ async def test_overview_scopes_every_query_to_one_organization() -> None:
 # ----------------------------------------------------------------------- api
 
 
+def test_guardian_feed_counts_are_exclusive_and_never_call_an_unread_root_clean():
+    """One bucket per returned row, and a row Guardian could not read is never counted as a band."""
+    result = GuardianResult(
+        run_id=PydanticObjectId(),
+        run_kind="final",
+        evaluated_at=NOW,
+        peak="critical",
+        current="critical",
+        recovery="unrecovered",
+        confidence="low",
+        coverage="partial",
+        summary="Peak impact critical.",
+    )
+    summaries = [
+        GuardianSummary.unavailable(),
+        GuardianSummary(status="waiting"),
+        GuardianSummary(status="done", status_reason="Final run published", result=result),
+        GuardianSummary(
+            status="done",
+            status_reason="Final run published",
+            result=result.model_copy(
+                update={"peak": "none", "current": "none", "recovery": "none", "coverage": "complete"}
+            ),
+        ),
+    ]
+    rows = [ChangeGroupSummaryResponse.model_construct(guardian=item) for item in summaries]
+    rows.append(ChangeGroupSummaryResponse.model_construct(guardian=None))
+
+    counts = guardian_feed_counts(rows)
+
+    assert counts.total == 5
+    assert (counts.unavailable, counts.pending, counts.critical, counts.none) == (1, 1, 1, 1)
+    assert counts.not_recorded == 1
+    assert counts.total == sum(
+        getattr(counts, name)
+        for name in ("not_recorded", "unavailable", "pending", "none", "info", "warning", "critical")
+    )
+    assert guardian_feed_counts([]) is None
+    # Nothing projected at all — Guardian is off, or the window holds no root — so there is nothing to summarize.
+    assert guardian_feed_counts([ChangeGroupSummaryResponse.model_construct(guardian=None)]) is None
+
+
 def _app(service: OverviewService, organization: Organization) -> object:
     app = create_app(Settings(environment="test", database_enabled=False))
     app.dependency_overrides[get_current_user] = _viewer
@@ -748,7 +794,7 @@ async def test_overview_endpoint_returns_the_full_contract() -> None:
         "historical",
         "latest_snapshot_at",
         "latest_snapshot_objects",
-        "shadow_feed_counts",
+        "guardian_feed_counts",
     }
     assert set(body["counts"]) == {
         "impact_source",

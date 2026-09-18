@@ -6,12 +6,13 @@ import json
 from mist_config_guardian_backend.snapshots.canonical import (
     CURRENT_HASH_GENERATION,
     canonicalize,
-    changed_top_level_fields,
     configuration_hash,
     configuration_hash_matches,
     is_legacy_hash,
     legacy_configuration_hash,
 )
+from mist_config_guardian_backend.snapshots.canonical_form import changed_top_level_fields
+from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS
 
 _WLAN = {"name": "NW-Corp", "psk": "correct-horse-battery-staple", "vlan": 12}
 
@@ -40,7 +41,19 @@ def test_changed_fields_are_sorted() -> None:
     assert changed_top_level_fields(
         {"z": 1, "same": {"b": 2, "a": 1}},
         {"a": 2, "same": {"a": 1, "b": 2}},
+        ignored_fields=(),
     ) == ["a", "z"]
+
+
+def test_changed_fields_never_list_metadata_at_any_depth() -> None:
+    """A capture always moves ``modified_time``; only functional attributes are changes."""
+    before = {"modified_time": 1, "last_seen": 1, "created_time": 1, "nested": {"modified_time": 1, "vlan": 1}}
+    after = {"modified_time": 2, "last_seen": 2, "created_time": 2, "nested": {"modified_time": 2, "vlan": 1}}
+
+    assert changed_top_level_fields(before, after, ignored_fields=DEFAULT_IGNORED_FIELDS) == []
+    assert changed_top_level_fields(
+        before, {**after, "dns_servers": ["10.0.0.2"]}, ignored_fields=DEFAULT_IGNORED_FIELDS
+    ) == ["dns_servers"]
 
 
 def test_the_digest_cannot_be_reproduced_from_the_configuration_alone() -> None:

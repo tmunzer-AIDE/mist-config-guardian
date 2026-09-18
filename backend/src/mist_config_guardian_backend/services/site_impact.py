@@ -26,8 +26,8 @@ from mist_config_guardian_backend.schemas.impact import (
     SiteChangeList,
     SiteTopology,
 )
-from mist_config_guardian_backend.services.audit_impact_reads import PublishedAuditImpactReader
 from mist_config_guardian_backend.services.change_groups import as_utc, build_title, object_type_label
+from mist_config_guardian_backend.services.guardian_reads import PublishedGuardianReader
 from mist_config_guardian_backend.services.impact_evidence import legacy_assessment
 
 _MAX_SESSIONS = 5000
@@ -311,15 +311,23 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
     )
     complete = len(sessions) <= _MAX_SESSIONS
     sessions = sessions[:_MAX_SESSIONS]
-    shadow = (
-        await PublishedAuditImpactReader().summaries(org, audits, include_devices=True)
-        if not historical and get_settings().impact_engine_mode in {"shadow", "agent_shadow"}
+    guardian = (
+        await PublishedGuardianReader().summaries(org, audits, include_devices=True)
+        if not historical and get_settings().guardian_enabled
         else {}
     )
-    # Audit reports may span sites; an overlay must stay in the requested site.
-    for summary in shadow.values():
-        if summary.impacted_devices is not None:
-            summary.impacted_devices = tuple(d for d in summary.impacted_devices if str(d.site_id) == site)
+    # The published run's own rows, kept to this site. Its omitted count stands: those devices were never
+    # recorded, so their site is unknown and filtering cannot claim they were elsewhere. The root's own list is
+    # dropped instead of filtered: it is capped at 20 rows across every site the audit touched, so what it holds
+    # for this site is neither all of them nor none of them. A site page reads ``impacted`` and nothing else for
+    # devices; ``impacted_device_count`` stays as the audit-wide context beside it.
+    for summary in guardian.values():
+        if summary.result is not None:
+            summary.result = summary.result.model_copy(update={"impacted_devices": ()})
+        if summary.impacted is not None:
+            summary.impacted = summary.impacted.model_copy(
+                update={"devices": tuple(d for d in summary.impacted.devices if str(d.site_id) == site)}
+            )
     changes = []
     for row in items:
         relevant = [
@@ -356,7 +364,7 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
                     row.get("message"),
                 ),
                 summary="" if historical else row.get("summary") or "",
-                shadow_impact=shadow.get(row.get("audit_id", "")),
+                guardian=guardian.get(row.get("audit_id", "")),
                 impacts=[impact_from_session(session, end, historical=historical) for session in relevant],
             )
         )

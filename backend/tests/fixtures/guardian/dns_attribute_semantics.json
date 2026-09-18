@@ -1,0 +1,1491 @@
+{
+  "version": 1,
+  "label": "Mist configuration schema DNS semantics, frozen for the Guardian dns plug-in",
+  "source": {
+    "document": "Mist OpenAPI specification (mist.openapi.json)",
+    "repository": "https://github.com/mistsys/mist_openapi",
+    "commit": "609ea461439fd4268c8336164335d135bd484141",
+    "api_version": "2609.1.0",
+    "sha256": "a4ceca342e1862255e5e232dec076ee0781bd94ff2d888714b7e9712493ab721",
+    "object_types": "snapshots/registry.py ORG_OBJECTS and SITE_OBJECTS, each resolved to its GET response schema"
+  },
+  "method": "Every property whose name matches /dns/i, or whose description names DNS as a word, found recursively through $ref, allOf/oneOf/anyOf, additionalProperties and items. Sub-fields of a DNS-named object belong to that object. Path segment '*' matches one object key and '[]' one list index.",
+  "semantics": {
+    "management_resolution": "The device resolves names for its own management traffic with this setting.",
+    "client_resolution": "Clients served by the device receive or are forced onto these DNS settings.",
+    "management_and_client_resolution": "Both: the device's own management resolver, which its DHCP server also hands to clients by default.",
+    "unverified": "No single class is established by the cited schema text; the row stays uncovered."
+  },
+  "mappings": [
+    {
+      "object_type": "org:deviceprofiles",
+      "variant": null,
+      "attribute": "ip_config",
+      "semantics": "management_resolution",
+      "device_types": ["ap"],
+      "paths": [
+        ["ip_config", "dns"],
+        ["ip_config", "dns_suffix"]
+      ],
+      "schema": "deviceprofile_ap",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/ap_ip_config/properties/dns",
+          "description": "If `type`==`static`. DNS server IP addresses for AP management traffic"
+        },
+        {
+          "pointer": "#/components/schemas/ap_ip_config/properties/dns_suffix",
+          "description": "If `type`==`static`. DNS search suffixes applied to AP management lookups",
+          "referenced_description": "Required if `type`==`static`; DNS search suffixes applied to AP management lookups"
+        }
+      ],
+      "reason": "DNS used by the AP for its own management traffic."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "dhcpd_config",
+      "semantics": "client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dhcpd_config", "*", "dns_servers"],
+        ["dhcpd_config", "*", "dns_suffix"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_servers",
+          "description": "If `type`==`local` or `type6`==`local`, DNS servers advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        },
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_suffix",
+          "description": "If `type`==`local` or `type6`==`local`, DNS search suffixes advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        }
+      ],
+      "reason": "DNS settings advertised to DHCP clients served by the device."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "dnsOverride",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dnsOverride"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_template/properties/dnsOverride",
+          "description": "Whether DNS server and suffix settings in this template override inherited values"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "dns_servers",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_template/properties/dns_servers",
+          "description": "DNS servers provided by this gateway template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "dns_suffix",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_template/properties/dns_suffix",
+          "description": "DNS search suffixes provided by this gateway template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "gateway_matching",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["gateway_matching", "rules", "[]", "port_config", "*", "ip_config", "dns"],
+        ["gateway_matching", "rules", "[]", "port_config", "*", "ip_config", "dns_suffix"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns",
+          "description": "Resolver server IP addresses used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        }
+      ],
+      "reason": "Resolver of one gateway data interface; which traffic uses it is not established."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "oob_ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["oob_ip_config", "node1", "use_mgmt_vrf"],
+        ["oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config_node1/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "port_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["port_config", "*", "ip_config", "dns"],
+        ["port_config", "*", "ip_config", "dns_suffix"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns",
+          "description": "Resolver server IP addresses used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        }
+      ],
+      "reason": "Resolver of one gateway data interface; which traffic uses it is not established."
+    },
+    {
+      "object_type": "org:gatewaytemplates",
+      "variant": null,
+      "attribute": "service_policies",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["service_policies", "[]", "skyatp", "dns_dga_detection"],
+        ["service_policies", "[]", "skyatp", "dns_tunnel_detection"]
+      ],
+      "schema": "gateway_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_dga_detection",
+          "description": "Detection settings for DNS DGA threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS DGA detection settings"
+        },
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_tunnel_detection",
+          "description": "Detection settings for DNS tunneling threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS tunneling detection settings"
+        }
+      ],
+      "reason": "Threat inspection of DNS traffic, not resolver configuration."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "dhcpd_config",
+      "semantics": "client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dhcpd_config", "*", "dns_servers"],
+        ["dhcpd_config", "*", "dns_suffix"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_servers",
+          "description": "If `type`==`local` or `type6`==`local`, DNS servers advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        },
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_suffix",
+          "description": "If `type`==`local` or `type6`==`local`, DNS search suffixes advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        }
+      ],
+      "reason": "DNS settings advertised to DHCP clients served by the device."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "dnsOverride",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dnsOverride"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/deviceprofile_gateway/properties/dnsOverride",
+          "description": "Whether DNS server and suffix settings in this profile override inherited values"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "dns_servers",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/deviceprofile_gateway/properties/dns_servers",
+          "description": "DNS servers provided by this gateway profile",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "dns_suffix",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/deviceprofile_gateway/properties/dns_suffix",
+          "description": "DNS search suffixes provided by this gateway profile",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "gateway_matching",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["gateway_matching", "rules", "[]", "port_config", "*", "ip_config", "dns"],
+        ["gateway_matching", "rules", "[]", "port_config", "*", "ip_config", "dns_suffix"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns",
+          "description": "Resolver server IP addresses used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        }
+      ],
+      "reason": "Resolver of one gateway data interface; which traffic uses it is not established."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "oob_ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["oob_ip_config", "node1", "use_mgmt_vrf"],
+        ["oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config_node1/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "port_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["port_config", "*", "ip_config", "dns"],
+        ["port_config", "*", "ip_config", "dns_suffix"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns",
+          "description": "Resolver server IP addresses used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        }
+      ],
+      "reason": "Resolver of one gateway data interface; which traffic uses it is not established."
+    },
+    {
+      "object_type": "org:hubprofiles",
+      "variant": null,
+      "attribute": "service_policies",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["service_policies", "[]", "skyatp", "dns_dga_detection"],
+        ["service_policies", "[]", "skyatp", "dns_tunnel_detection"]
+      ],
+      "schema": "deviceprofile_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_dga_detection",
+          "description": "Detection settings for DNS DGA threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS DGA detection settings"
+        },
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_tunnel_detection",
+          "description": "Detection settings for DNS tunneling threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS tunneling detection settings"
+        }
+      ],
+      "reason": "Threat inspection of DNS traffic, not resolver configuration."
+    },
+    {
+      "object_type": "org:mxedges",
+      "variant": null,
+      "attribute": "oob_ip_config",
+      "semantics": "management_resolution",
+      "device_types": ["mxedge"],
+      "paths": [
+        ["oob_ip_config", "dns"]
+      ],
+      "schema": "mxedge",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/mxedge_oob_ip_config/properties/dns",
+          "description": "Name server addresses for out-of-band management",
+          "referenced_description": "IPv4 ignored if `type`!=`static`, IPv6 ignored if `type6`!=`static`"
+        }
+      ],
+      "reason": "Resolver of the Mist Edge out-of-band management interface."
+    },
+    {
+      "object_type": "org:mxedges",
+      "variant": null,
+      "attribute": "tunterm_multicast_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["tunterm_multicast_config", "mdns"]
+      ],
+      "schema": "mxedge",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/mxedge_tunterm_multicast_config/properties/mdns",
+          "description": "Settings for mDNS forwarding on tunnel termination VLANs",
+          "referenced_description": "mDNS forwarding settings for tunnel termination"
+        }
+      ],
+      "reason": "Multicast DNS (mDNS/Bonjour) forwarding, not unicast name resolution."
+    },
+    {
+      "object_type": "org:mxtunnels",
+      "variant": null,
+      "attribute": "ipsec",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["ipsec", "dns_servers"],
+        ["ipsec", "dns_suffix"]
+      ],
+      "schema": "mxtunnel",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/mxtunnel_ipsec/properties/dns_servers",
+          "description": "Name server addresses advertised for IPsec tunnel clients"
+        },
+        {
+          "pointer": "#/components/schemas/mxtunnel_ipsec/properties/dns_suffix",
+          "description": "Search suffixes advertised for IPsec tunnel clients",
+          "referenced_description": "Unique string values returned or accepted by this schema"
+        }
+      ],
+      "reason": "Advertised to IPsec tunnel clients whose device types are not established."
+    },
+    {
+      "object_type": "org:networktemplates",
+      "variant": null,
+      "attribute": "dns_servers",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "network_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/network_template/properties/dns_servers",
+          "description": "DNS servers provided by this network template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:networktemplates",
+      "variant": null,
+      "attribute": "dns_suffix",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "network_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/network_template/properties/dns_suffix",
+          "description": "DNS search suffixes provided by this network template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:networktemplates",
+      "variant": null,
+      "attribute": "switch_matching",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["switch_matching", "rules", "[]", "oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "network_template",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_matching_rule_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "org:secintelprofiles",
+      "variant": null,
+      "attribute": "profiles",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["profiles", "[]", "category"]
+      ],
+      "schema": "secintel_profile",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/secintel_profile_profile/properties/category",
+          "description": "SecIntel feed category configured by this profile entry. enum: `CC`, `DNS`, `IH`.",
+          "referenced_description": "enum: `CC`, `IH` (Infected Host), `DNS`"
+        }
+      ],
+      "reason": "Security-intelligence feed category, not resolver configuration."
+    },
+    {
+      "object_type": "org:secpolicies",
+      "variant": null,
+      "attribute": "wlans",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["wlans", "[]", "allow_mdns"]
+      ],
+      "schema": "secpolicy",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/allow_mdns",
+          "description": "Only applicable when `limit_bcast`==`true`, which allows mDNS / Bonjour packets to go through"
+        }
+      ],
+      "reason": "Multicast DNS (mDNS/Bonjour) forwarding, not unicast name resolution."
+    },
+    {
+      "object_type": "org:secpolicies",
+      "variant": null,
+      "attribute": "wlans",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["wlans", "[]", "dns_server_rewrite"],
+        ["wlans", "[]", "no_static_dns"]
+      ],
+      "schema": "secpolicy",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/dns_server_rewrite",
+          "description": "RADIUS group based DNS server rewrite settings for this WLAN",
+          "referenced_description": "For radius_group-based DNS server (rewrite DNS request depending on the Group RADIUS server returns)"
+        },
+        {
+          "pointer": "#/components/schemas/wlan/properties/no_static_dns",
+          "description": "Whether to only allow client to use DNS that we’ve learned from DHCP response"
+        }
+      ],
+      "reason": "Legacy security-policy copy of WLAN settings; which devices consume it is not established."
+    },
+    {
+      "object_type": "org:settings",
+      "variant": null,
+      "attribute": "gateway_mgmt",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["gateway_mgmt", "host_out_policies", "dns"]
+      ],
+      "schema": "org_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/org_setting_gateway_mgmt_host_out_policies/properties/dns",
+          "description": "Path preference policy for gateway-originated DNS traffic",
+          "referenced_description": "Host-out path policy for gateway-originated management traffic"
+        }
+      ],
+      "reason": "Path preference for gateway-originated DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "org:settings",
+      "variant": null,
+      "attribute": "simple_alert",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["simple_alert", "dns_failure"]
+      ],
+      "schema": "org_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/simple_alert/properties/dns_failure",
+          "description": "Thresholds for DNS failure heuristic alerts"
+        }
+      ],
+      "reason": "Alert thresholds for DNS failures, not resolver configuration."
+    },
+    {
+      "object_type": "org:switchprofiles",
+      "variant": null,
+      "attribute": "dhcpd_config",
+      "semantics": "client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dhcpd_config", "*", "dns_servers"],
+        ["dhcpd_config", "*", "dns_suffix"]
+      ],
+      "schema": "deviceprofile_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_property/properties/dns_servers",
+          "description": "If `type`==`server` or `type6`==`server`, DNS servers advertised to DHCP clients",
+          "referenced_description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_property/properties/dns_suffix",
+          "description": "If `type`==`server` or `type6`==`server`, DNS search suffixes advertised to DHCP clients",
+          "referenced_description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used"
+        }
+      ],
+      "reason": "DNS settings advertised to DHCP clients served by the device."
+    },
+    {
+      "object_type": "org:switchprofiles",
+      "variant": null,
+      "attribute": "dns_servers",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "deviceprofile_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/deviceprofile_switch/properties/dns_servers",
+          "description": "DNS servers provided by this switch profile",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:switchprofiles",
+      "variant": null,
+      "attribute": "dns_suffix",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "deviceprofile_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/deviceprofile_switch/properties/dns_suffix",
+          "description": "DNS search suffixes provided by this switch profile",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:switchprofiles",
+      "variant": null,
+      "attribute": "ip_config",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["ip_config", "dns"],
+        ["ip_config", "dns_suffix"]
+      ],
+      "schema": "deviceprofile_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/junos_ip_config/properties/dns",
+          "description": "Configured DNS server addresses for Junos management traffic",
+          "referenced_description": "Unique string values returned or accepted by this schema"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        },
+        {
+          "pointer": "#/components/schemas/junos_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes configured for Junos management traffic",
+          "referenced_description": "Unique string values returned or accepted by this schema"
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "org:switchprofiles",
+      "variant": null,
+      "attribute": "ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["ip_config", "network"]
+      ],
+      "schema": "deviceprofile_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/junos_ip_config/properties/network",
+          "description": "Management network for this IP configuration; used as the default source network for outbound SSH, DNS, NTP, TACACS+, RADIUS, syslog, and SNMP"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "org:switchprofiles",
+      "variant": null,
+      "attribute": "oob_ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "deviceprofile_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "org:wlans",
+      "variant": null,
+      "attribute": "allow_mdns",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["allow_mdns"]
+      ],
+      "schema": "wlan",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/allow_mdns",
+          "description": "Only applicable when `limit_bcast`==`true`, which allows mDNS / Bonjour packets to go through"
+        }
+      ],
+      "reason": "Multicast DNS (mDNS/Bonjour) forwarding, not unicast name resolution."
+    },
+    {
+      "object_type": "org:wlans",
+      "variant": null,
+      "attribute": "dns_server_rewrite",
+      "semantics": "client_resolution",
+      "device_types": ["ap"],
+      "paths": [
+        ["dns_server_rewrite"]
+      ],
+      "schema": "wlan",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/dns_server_rewrite",
+          "description": "RADIUS group based DNS server rewrite settings for this WLAN",
+          "referenced_description": "For radius_group-based DNS server (rewrite DNS request depending on the Group RADIUS server returns)"
+        }
+      ],
+      "reason": "Controls the DNS servers wireless clients of the WLAN use."
+    },
+    {
+      "object_type": "org:wlans",
+      "variant": null,
+      "attribute": "no_static_dns",
+      "semantics": "client_resolution",
+      "device_types": ["ap"],
+      "paths": [
+        ["no_static_dns"]
+      ],
+      "schema": "wlan",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/no_static_dns",
+          "description": "Whether to only allow client to use DNS that we’ve learned from DHCP response"
+        }
+      ],
+      "reason": "Controls the DNS servers wireless clients of the WLAN use."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "ap",
+      "attribute": "ip_config",
+      "semantics": "management_resolution",
+      "device_types": ["ap"],
+      "paths": [
+        ["ip_config", "dns"],
+        ["ip_config", "dns_suffix"]
+      ],
+      "schema": "device_ap",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/ap_ip_config/properties/dns",
+          "description": "If `type`==`static`. DNS server IP addresses for AP management traffic"
+        },
+        {
+          "pointer": "#/components/schemas/ap_ip_config/properties/dns_suffix",
+          "description": "If `type`==`static`. DNS search suffixes applied to AP management lookups",
+          "referenced_description": "Required if `type`==`static`; DNS search suffixes applied to AP management lookups"
+        }
+      ],
+      "reason": "DNS used by the AP for its own management traffic."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "gateway",
+      "attribute": "dhcpd_config",
+      "semantics": "client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dhcpd_config", "*", "dns_servers"],
+        ["dhcpd_config", "*", "dns_suffix"]
+      ],
+      "schema": "device_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_servers",
+          "description": "If `type`==`local` or `type6`==`local`, DNS servers advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        },
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_suffix",
+          "description": "If `type`==`local` or `type6`==`local`, DNS search suffixes advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        }
+      ],
+      "reason": "DNS settings advertised to DHCP clients served by the device."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "gateway",
+      "attribute": "dns_servers",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "device_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/device_gateway/properties/dns_servers",
+          "description": "DNS servers configured for this gateway",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "gateway",
+      "attribute": "dns_suffix",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "device_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/device_gateway/properties/dns_suffix",
+          "description": "DNS search suffixes configured for this gateway",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "gateway",
+      "attribute": "oob_ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["oob_ip_config", "node1", "use_mgmt_vrf"],
+        ["oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "device_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config_node1/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "gateway",
+      "attribute": "port_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["port_config", "*", "ip_config", "dns"],
+        ["port_config", "*", "ip_config", "dns_suffix"]
+      ],
+      "schema": "device_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns",
+          "description": "Resolver server IP addresses used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        }
+      ],
+      "reason": "Resolver of one gateway data interface; which traffic uses it is not established."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "gateway",
+      "attribute": "service_policies",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["service_policies", "[]", "skyatp", "dns_dga_detection"],
+        ["service_policies", "[]", "skyatp", "dns_tunnel_detection"]
+      ],
+      "schema": "device_gateway",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_dga_detection",
+          "description": "Detection settings for DNS DGA threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS DGA detection settings"
+        },
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_tunnel_detection",
+          "description": "Detection settings for DNS tunneling threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS tunneling detection settings"
+        }
+      ],
+      "reason": "Threat inspection of DNS traffic, not resolver configuration."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "switch",
+      "attribute": "dhcpd_config",
+      "semantics": "client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dhcpd_config", "*", "dns_servers"],
+        ["dhcpd_config", "*", "dns_suffix"]
+      ],
+      "schema": "device_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_property/properties/dns_servers",
+          "description": "If `type`==`server` or `type6`==`server`, DNS servers advertised to DHCP clients",
+          "referenced_description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_property/properties/dns_suffix",
+          "description": "If `type`==`server` or `type6`==`server`, DNS search suffixes advertised to DHCP clients",
+          "referenced_description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used"
+        }
+      ],
+      "reason": "DNS settings advertised to DHCP clients served by the device."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "switch",
+      "attribute": "dns_servers",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "device_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/device_switch/properties/dns_servers",
+          "description": "DNS servers configured for this switch",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "switch",
+      "attribute": "dns_suffix",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "device_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/device_switch/properties/dns_suffix",
+          "description": "DNS search suffixes configured for this switch",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "switch",
+      "attribute": "ip_config",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["ip_config", "dns"],
+        ["ip_config", "dns_suffix"]
+      ],
+      "schema": "device_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/junos_ip_config/properties/dns",
+          "description": "Configured DNS server addresses for Junos management traffic",
+          "referenced_description": "Unique string values returned or accepted by this schema"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        },
+        {
+          "pointer": "#/components/schemas/junos_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes configured for Junos management traffic",
+          "referenced_description": "Unique string values returned or accepted by this schema"
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "switch",
+      "attribute": "ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["ip_config", "network"]
+      ],
+      "schema": "device_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/junos_ip_config/properties/network",
+          "description": "Management network for this IP configuration; used as the default source network for outbound SSH, DNS, NTP, TACACS+, RADIUS, syslog, and SNMP"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "site:devices",
+      "variant": "switch",
+      "attribute": "oob_ip_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "device_switch",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "dns_servers",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["dns_servers"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/site_setting/properties/dns_servers",
+          "description": "Name server addresses configured for the site",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        }
+      ],
+      "reason": "Shared resolver schema, but the device types that consume the site-level value are not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "dns_suffix",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["dns_suffix"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/site_setting/properties/dns_suffix",
+          "description": "Search suffixes used for DNS lookups at the site",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        }
+      ],
+      "reason": "Shared resolver schema, but the device types that consume the site-level value are not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "gateway",
+      "semantics": "client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["gateway", "dhcpd_config", "*", "dns_servers"],
+        ["gateway", "dhcpd_config", "*", "dns_suffix"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_servers",
+          "description": "If `type`==`local` or `type6`==`local`, DNS servers advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        },
+        {
+          "pointer": "#/components/schemas/dhcpd_config_property/properties/dns_suffix",
+          "description": "If `type`==`local` or `type6`==`local`, DNS search suffixes advertised to DHCP clients",
+          "referenced_description": "If `type`==`local` or `type6`==`local` - optional, if not defined, system one will be used"
+        }
+      ],
+      "reason": "DNS settings advertised to DHCP clients served by the device."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "gateway",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["gateway"],
+      "paths": [
+        ["gateway", "dnsOverride"],
+        ["gateway", "dns_servers"],
+        ["gateway", "dns_suffix"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_template/properties/dnsOverride",
+          "description": "Whether DNS server and suffix settings in this template override inherited values"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        },
+        {
+          "pointer": "#/components/schemas/gateway_template/properties/dns_servers",
+          "description": "DNS servers provided by this gateway template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_template/properties/dns_suffix",
+          "description": "DNS search suffixes provided by this gateway template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "gateway",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["gateway", "oob_ip_config", "node1", "use_mgmt_vrf"],
+        ["gateway", "oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config_node1/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "gateway",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["gateway", "port_config", "*", "ip_config", "dns"],
+        ["gateway", "port_config", "*", "ip_config", "dns_suffix"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns",
+          "description": "Resolver server IP addresses used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        },
+        {
+          "pointer": "#/components/schemas/gateway_port_config_ip_config/properties/dns_suffix",
+          "description": "DNS search suffixes used by this interface, except on out-of-band interfaces such as vme, em0, or fxp0",
+          "referenced_description": "Except for out-of_band interface (vme/em0/fxp0)"
+        }
+      ],
+      "reason": "Resolver of one gateway data interface; which traffic uses it is not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "gateway",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["gateway", "service_policies", "[]", "skyatp", "dns_dga_detection"],
+        ["gateway", "service_policies", "[]", "skyatp", "dns_tunnel_detection"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_dga_detection",
+          "description": "Detection settings for DNS DGA threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS DGA detection settings"
+        },
+        {
+          "pointer": "#/components/schemas/service_policy_skyatp/properties/dns_tunnel_detection",
+          "description": "Detection settings for DNS tunneling threats provided by Sky ATP",
+          "referenced_description": "Sky ATP DNS tunneling detection settings"
+        }
+      ],
+      "reason": "Threat inspection of DNS traffic, not resolver configuration."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "simple_alert",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["simple_alert", "dns_failure"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/simple_alert/properties/dns_failure",
+          "description": "Thresholds for DNS failure heuristic alerts"
+        }
+      ],
+      "reason": "Alert thresholds for DNS failures, not resolver configuration."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "switch",
+      "semantics": "management_and_client_resolution",
+      "device_types": ["switch"],
+      "paths": [
+        ["switch", "dns_servers"],
+        ["switch", "dns_suffix"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/network_template/properties/dns_servers",
+          "description": "DNS servers provided by this network template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        },
+        {
+          "pointer": "#/components/schemas/switch_dhcpd_config_dns_servers",
+          "description": "If `type`==`server` or `type6`==`server` - optional, if not defined, system one will be used",
+          "note": "DHCP server fallback to the device resolver; #/components/schemas/dhcpd_config_dns_servers (gateways) states the same."
+        },
+        {
+          "pointer": "#/components/schemas/network_template/properties/dns_suffix",
+          "description": "DNS search suffixes provided by this network template",
+          "referenced_description": "Global dns settings. To keep compatibility, dns settings in `ip_config` and `oob_ip_config` will overwrite this setting"
+        }
+      ],
+      "reason": "Dual use: the device resolves names for its own management traffic with this setting (\"dns settings in `ip_config` and `oob_ip_config` will overwrite this setting\"), and its DHCP server hands the same resolver to clients of any scope that defines no DNS (\"if not defined, system one will be used\")."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "switch",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["switch", "switch_matching", "rules", "[]", "oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_matching_rule_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "switch_matching",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["switch_matching", "rules", "[]", "oob_ip_config", "use_mgmt_vrf"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/switch_matching_rule_oob_ip_config/properties/use_mgmt_vrf",
+          "description": "If supported on the platform. If enabled, DNS will be using this routing-instance, too"
+        }
+      ],
+      "reason": "Selects the routing instance or source network of the device's own DNS traffic; a resolver effect is not established."
+    },
+    {
+      "object_type": "site:settings",
+      "variant": null,
+      "attribute": "tunterm_multicast_config",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["tunterm_multicast_config", "mdns"]
+      ],
+      "schema": "site_setting",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/site_setting_tunterm_multicast_config/properties/mdns",
+          "description": "Multicast DNS forwarding settings for tunneled VLANs",
+          "referenced_description": "mDNS multicast forwarding settings for tunneled VLANs"
+        }
+      ],
+      "reason": "Multicast DNS (mDNS/Bonjour) forwarding, not unicast name resolution."
+    },
+    {
+      "object_type": "site:wlans",
+      "variant": null,
+      "attribute": "allow_mdns",
+      "semantics": "unverified",
+      "device_types": [],
+      "paths": [
+        ["allow_mdns"]
+      ],
+      "schema": "wlan",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/allow_mdns",
+          "description": "Only applicable when `limit_bcast`==`true`, which allows mDNS / Bonjour packets to go through"
+        }
+      ],
+      "reason": "Multicast DNS (mDNS/Bonjour) forwarding, not unicast name resolution."
+    },
+    {
+      "object_type": "site:wlans",
+      "variant": null,
+      "attribute": "dns_server_rewrite",
+      "semantics": "client_resolution",
+      "device_types": ["ap"],
+      "paths": [
+        ["dns_server_rewrite"]
+      ],
+      "schema": "wlan",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/dns_server_rewrite",
+          "description": "RADIUS group based DNS server rewrite settings for this WLAN",
+          "referenced_description": "For radius_group-based DNS server (rewrite DNS request depending on the Group RADIUS server returns)"
+        }
+      ],
+      "reason": "Controls the DNS servers wireless clients of the WLAN use."
+    },
+    {
+      "object_type": "site:wlans",
+      "variant": null,
+      "attribute": "no_static_dns",
+      "semantics": "client_resolution",
+      "device_types": ["ap"],
+      "paths": [
+        ["no_static_dns"]
+      ],
+      "schema": "wlan",
+      "evidence": [
+        {
+          "pointer": "#/components/schemas/wlan/properties/no_static_dns",
+          "description": "Whether to only allow client to use DNS that we’ve learned from DHCP response"
+        }
+      ],
+      "reason": "Controls the DNS servers wireless clients of the WLAN use."
+    }
+  ]
+}

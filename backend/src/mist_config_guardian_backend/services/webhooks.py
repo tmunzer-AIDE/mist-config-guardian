@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 
-from mist_config_guardian_backend.impact.deployment import normalize_deployment
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
 from mist_config_guardian_backend.models.webhook import (
@@ -16,6 +15,7 @@ from mist_config_guardian_backend.models.webhook import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.webhooks.audits import is_configuration_change
+from mist_config_guardian_backend.webhooks.deployment import normalize_deployment
 from mist_config_guardian_backend.webhooks.signatures import (
     SignatureVersion,
     verify_signature,

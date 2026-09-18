@@ -2,7 +2,6 @@
 
 from beanie import Document
 
-from mist_config_guardian_backend.models.adjudication import ImpactAdjudication
 from mist_config_guardian_backend.models.application_configuration import (
     AiRequestAudit,
     ApplicationConfiguration,
@@ -14,13 +13,8 @@ from mist_config_guardian_backend.models.challenge import (
     ThrottleBucket,
     WebAuthnChallenge,
 )
-from mist_config_guardian_backend.models.investigation import (
-    ImpactInvestigation,
-    InvestigationRevision,
-    ModelRequestArtifact,
-)
+from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianRun
 from mist_config_guardian_backend.models.monitoring import MonitoringSession
-from mist_config_guardian_backend.models.neighbor_binding import NeighborBinding
 from mist_config_guardian_backend.models.notification import Notification
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreLease, RestoreOperation, RestoreOperationStateRecord
@@ -59,11 +53,8 @@ def document_models() -> list[type[Document]]:
         RestoreLease,
         RestoreApproval,
         MonitoringSession,
-        ImpactAdjudication,
-        ImpactInvestigation,
-        InvestigationRevision,
-        ModelRequestArtifact,
-        NeighborBinding,
+        GuardianInvestigation,
+        GuardianRun,
         Notification,
     ]
 
@@ -72,6 +63,8 @@ __all__ = [
     "AiRequestAudit",
     "ApplicationConfiguration",
     "AuditChangeGroup",
+    "GuardianInvestigation",
+    "GuardianRun",
     "LogicalObject",
     "LoginChallenge",
     "MonitoringSession",

@@ -6,12 +6,14 @@ import pytest
 
 from mist_config_guardian_backend.schemas.diff import DIFF_SECRET_MASK, DiffChangeKind
 from mist_config_guardian_backend.services.diff import (
+    COMPARISON_IGNORED_FIELDS,
     build_json_patch,
     count_document_lines,
     diff_configurations,
     redact_document,
     section_label,
 )
+from mist_config_guardian_backend.snapshots.registry import DEFAULT_IGNORED_FIELDS
 
 
 def _entries(diff) -> dict[str, object]:
@@ -345,6 +347,14 @@ def test_comparison_ignores_image_and_url_metadata_at_every_depth():
     assert comparison_document(before) == {"nested": [{"ssid": "Staff"}]}
     assert not diff_configurations(before, after).entries
     assert before["image1_url"] == "before"
+
+
+def test_visible_diffs_ignore_the_canonical_metadata_set():
+    """The diff view hides at least what snapshot hashing ignores, so it never shows a change hashing cannot see."""
+    assert DEFAULT_IGNORED_FIELDS <= COMPARISON_IGNORED_FIELDS
+    before = dict.fromkeys(DEFAULT_IGNORED_FIELDS, 1) | {"vlan": 1}
+    after = dict.fromkeys(DEFAULT_IGNORED_FIELDS, 2) | {"vlan": 1}
+    assert diff_configurations(before, after).counts.changed == 0
 
 
 @pytest.mark.parametrize("scope", ["org", "site"])

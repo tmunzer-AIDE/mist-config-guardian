@@ -46,7 +46,7 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupSummaryResponse,
     ChangeMetricResponse,
 )
-from mist_config_guardian_backend.services.audit_impact_reads import AuditImpactReader, PublishedAuditImpactReader
+from mist_config_guardian_backend.services.guardian_reads import GuardianReader, PublishedGuardianReader
 from mist_config_guardian_backend.services.impact_evidence import evidence_coverage, evidence_rows
 from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, SITE_OBJECTS
 
@@ -1127,9 +1127,13 @@ class ChangeGroupFilters:
 class ChangeGroupService:
     """Read model behind the change-group index and detail endpoints."""
 
-    def __init__(self, store: ChangeGroupStore | None = None, audit_impacts: AuditImpactReader | None = None) -> None:
+    def __init__(
+        self,
+        store: ChangeGroupStore | None = None,
+        guardian: GuardianReader | None = None,
+    ) -> None:
         self._store = store if store is not None else BeanieChangeGroupStore()
-        self._audit_impacts = audit_impacts if audit_impacts is not None else PublishedAuditImpactReader()
+        self._guardian = guardian if guardian is not None else PublishedGuardianReader()
 
     async def list_groups(
         self,
@@ -1187,10 +1191,11 @@ class ChangeGroupService:
             )
             for group in groups
         ]
-        if get_settings().impact_engine_mode != "legacy":
-            impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id for group in groups])
+        audit_ids = [group.audit_id for group in groups]
+        if get_settings().guardian_enabled:
+            guardian = await self._guardian.summaries(organization_id, audit_ids)
             for summary in summaries:
-                summary.shadow_impact = impacts.get(summary.audit_id)
+                summary.guardian = guardian.get(summary.audit_id)
         return summaries
 
     async def get_group(
@@ -1238,9 +1243,9 @@ class ChangeGroupService:
             exclude_audit_id=group.audit_id,
         )
         summary = _summarize(group, sessions, names, viewer_email, historical=historical)
-        if not historical and get_settings().impact_engine_mode != "legacy":
-            impacts = await self._audit_impacts.summaries(organization_id, [group.audit_id])
-            summary.shadow_impact = impacts.get(group.audit_id)
+        if not historical and get_settings().guardian_enabled:
+            guardian = await self._guardian.summaries(organization_id, [group.audit_id])
+            summary.guardian = guardian.get(group.audit_id)
         return ChangeGroupDetailResponse(
             **summary.model_dump(by_alias=True),
             message=group.message,

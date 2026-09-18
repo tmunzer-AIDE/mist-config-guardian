@@ -7,11 +7,11 @@ the adapter itself never inspects or logs configuration values.
 import json
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Protocol, Self, runtime_checkable
+from typing import Any, Protocol, Self, runtime_checkable
 
 import httpx
 
@@ -35,6 +35,54 @@ class AiMessage:
 
     role: str
     content: str
+
+
+@dataclass(frozen=True, slots=True)
+class TextFormat:
+    """Free text: the request carries no ``response_format`` at all."""
+
+
+@dataclass(frozen=True, slots=True)
+class JsonObjectFormat:
+    """Any JSON object. The shape has to be described in the prompt."""
+
+
+@dataclass(frozen=True, slots=True)
+class JsonSchemaFormat:
+    """One named JSON schema the provider is asked to honor.
+
+    Some servers accept the parameter and ignore it, so a caller that depends on the shape validates the returned
+    content against the same schema rather than trusting the request was honored.
+
+    ``strict`` promises the schema is inside the provider's strict subset, and only a strict request carries the
+    flag. A schema the subset excludes, such as one with a root ``oneOf``, asks for no strictness rather than
+    asking for something the provider must refuse or downgrade.
+    """
+
+    name: str
+    schema: Mapping[str, Any] = field(default_factory=dict)
+    strict: bool = True
+
+
+# What a completion may be asked to return. ``json_schema`` is honored only by providers that support it.
+ResponseFormat = TextFormat | JsonObjectFormat | JsonSchemaFormat
+TEXT = TextFormat()
+JSON_OBJECT = JsonObjectFormat()
+
+
+def _response_format(response_format: ResponseFormat) -> dict[str, Any] | None:
+    """The provider payload fragment for one response format, or ``None`` for plain text."""
+    if isinstance(response_format, JsonObjectFormat):
+        return {"type": "json_object"}
+    if isinstance(response_format, JsonSchemaFormat):
+        # ``strict`` is sent only when it is asked for. A schema outside OpenAI-style strict mode, such as one with
+        # a root ``oneOf``, is refused or silently downgraded when the flag is set, so a caller that cannot promise
+        # strictness sends no flag at all and validates the returned content instead.
+        schema: dict[str, Any] = {"name": response_format.name, "schema": dict(response_format.schema)}
+        if response_format.strict:
+            schema["strict"] = True
+        return {"type": "json_schema", "json_schema": schema}
+    return None
 
 
 @dataclass(frozen=True)
@@ -67,7 +115,7 @@ class AiProvider(Protocol):
         messages: Sequence[AiMessage],
         *,
         max_tokens: int | None = None,
-        json_object: bool = False,
+        response_format: ResponseFormat = TEXT,
     ) -> AiCompletion:
         """Return a chat completion for the supplied messages."""
         ...
@@ -156,7 +204,7 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
         messages: Sequence[AiMessage],
         *,
         max_tokens: int | None = None,
-        json_object: bool = False,
+        response_format: ResponseFormat = TEXT,
     ) -> AiCompletion:
         """Return a chat completion, raising :class:`AiProviderError` on failure."""
         payload: dict[str, object] = {
@@ -165,8 +213,8 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
             "max_tokens": max_tokens or self._max_response_tokens,
             "messages": [{"role": message.role, "content": message.content} for message in messages],
         }
-        if json_object:
-            payload["response_format"] = {"type": "json_object"}
+        if (requested := _response_format(response_format)) is not None:
+            payload["response_format"] = requested
         started = time.perf_counter()
         try:
             async with self._client.stream("POST", "/chat/completions", json=payload) as response:

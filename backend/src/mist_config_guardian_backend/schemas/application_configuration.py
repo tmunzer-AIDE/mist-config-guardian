@@ -92,6 +92,18 @@ class AiProviderDraft(BaseModel):
         return self
 
 
+class StructuredOutputResponse(BaseModel):
+    """What the last setup-time probe proved, and whether it still describes the saved provider.
+
+    The fingerprint itself stays inside: an administrator needs the mode, whether it still applies and when it was
+    tested, not the value it is compared against.
+    """
+
+    mode: Literal["json_schema", "json_object"]
+    matches_fingerprint: bool
+    tested_at: datetime
+
+
 class AiSettingsResponse(BaseModel):
     """Safe AI provider settings without encrypted credential material."""
 
@@ -105,6 +117,7 @@ class AiSettingsResponse(BaseModel):
     last_test_at: datetime | None = None
     last_test_ok: bool | None = None
     last_test_detail: str | None = None
+    structured_output: StructuredOutputResponse | None = None
 
 
 class AiConnectionTestResponse(BaseModel):
