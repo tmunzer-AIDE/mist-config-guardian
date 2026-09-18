@@ -2,8 +2,8 @@
   <header class="head">
     <h1 class="cg-page-title">Changes</h1>
     <p class="head-sub">{{ subtitle() }}</p>
-    @if (hasShadow()) {
-      <p class="head-sub">Shadow results cover WLAN session evidence. Impact badges, filters and alerts still use the legacy assessment.</p>
+    @if (hasGuardian()) {
+      <p class="head-sub">Guardian investigates each audit and publishes an early and a final result; an early one is labelled as early. Impact badges, filters and alerts still use the legacy assessment.</p>
     }
     <div class="head-filters" role="group" aria-label="Filters">
       @for (option of severities(); track option.value) {
@@ -83,8 +83,8 @@
                   @if (row.recovery) {
                     <div class="row-recovery">{{ row.recovery }}</div>
                   }
-                  @if (!time.isHistorical() && row.group.shadow_impact) {
-                    <app-audit-impact-summary [assessment]="row.group.shadow_impact" [compact]="true" />
+                  @if (hasGuardian()) {
+                    <app-guardian-badge [summary]="row.group.guardian ?? null" [compact]="true" />
                   }
                 </td>
               </tr>
@@ -112,8 +112,8 @@
             <button class="panel-close" type="button" (click)="close()">Close</button>
           </div>
           <p class="panel-byline">{{ detail.byline }}</p>
-          @if (!time.isHistorical()) {
-            <app-audit-impact-summary [assessment]="detail.shadowImpact" />
+          @if (hasGuardian()) {
+            <app-guardian-badge [summary]="detail.guardian" />
           }
         </header>
 
@@ -147,8 +147,8 @@
                 </li>
               }
             </ul>
-            @if (!time.isHistorical()) {
-              <app-shadow-investigation [groupId]="detail.id" />
+            @if (hasGuardian()) {
+              <app-guardian-panel [groupId]="detail.id" />
             }
             <div class="panel-actions">
               @for (siteId of detail.impactSites; track siteId) {

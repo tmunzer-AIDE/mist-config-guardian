@@ -119,20 +119,22 @@ describe('OverviewPage under time travel', () => {
     again.flush(overview({ historical: true }));
     await fixture.whenStable();
   });
-  it('labels shadow counts as the loaded feed and keeps unknown separate from no observed disconnect', async () => {
+  it('counts the loaded feed by Guardian bucket and keeps unread and unrecorded apart', async () => {
     fixture.detectChanges();
     await fixture.whenStable();
     httpMock.expectOne((candidate) => candidate.url === OVERVIEW_URL).flush(overview({
-      shadow_feed_counts: { mode: 'shadow', scope: 'returned_feed', total: 6,
-        possible_disruption: 1, no_observed_disconnect: 1, insufficient_evidence: 1,
-        pending: 1, unavailable: 1, not_recorded: 1 },
+      guardian_feed_counts: { scope: 'returned_feed', total: 7, critical: 1, warning: 1, info: 1,
+        none: 1, pending: 1, unavailable: 1, not_recorded: 1 },
     }));
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(text('.shadow-counts')[0]).toContain('6 changes in the loaded feed');
-    expect(text('.shadow-counts')[0]).toContain('1 insufficient evidence');
-    expect(text('.shadow-counts')[0]).toContain('1 with no observed disconnect');
-    expect(text('.shadow-counts')[0]).toContain('totals and alerts still use the legacy assessment');
+    expect(text('.guardian-counts')[0]).toContain('7 changes in the loaded feed');
+    expect(text('.guardian-counts')[0]).toContain('1 impact not established');
+    expect(text('.guardian-counts')[0]).toContain('1 with no impact observed');
+    expect(text('.guardian-counts')[0]).toContain('1 could not be read');
+    expect(text('.guardian-counts')[0]).toContain('1 with no investigation recorded');
+    expect(text('.guardian-counts')[0]).toContain('not the whole window');
+    expect(text('.guardian-counts')[0]).toContain('alerts still use the legacy assessment');
   });
 
 });

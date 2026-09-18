@@ -6,7 +6,7 @@ import { orgPath } from './api';
 import { ScopedState } from './scoped-state';
 import { ChangeGroupSummary } from './change-group.model';
 import { TimeRange } from './time-context.service';
-import { ShadowFeedCounts } from './audit-impact.model';
+import { GuardianFeedCounts } from './guardian.model';
 
 export type SafetyNetStatus = 'ok' | 'warn' | 'crit';
 
@@ -58,7 +58,8 @@ export interface OrganizationOverview {
   latest_snapshot_objects: number | null;
   /** Built as of a past instant: the feed is historical and the live sections are empty. */
   historical?: boolean;
-  shadow_feed_counts?: ShadowFeedCounts | null;
+  /** One Guardian bucket per returned feed row, or null when no row carries a projection. */
+  guardian_feed_counts?: GuardianFeedCounts | null;
 }
 
 /** What an Overview read describes: one organization, over one window, ending at one instant. */

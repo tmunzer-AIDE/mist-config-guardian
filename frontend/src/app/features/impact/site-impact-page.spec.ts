@@ -314,6 +314,47 @@ describe('site Impact workspace', () => {
     expect(evidence.getAttribute('aria-disabled')).toBe('true');
     expect(evidence.getAttribute('href')).toBeNull();
   });
+  it('shows Guardian devices for this site and never claims the omitted ones for it', () => {
+    load();
+    chooseSite('site2');
+    flushSite([
+      change({
+        guardian: {
+          availability: 'projected',
+          status: 'done',
+          status_reason: null,
+          result: {
+            run_id: 'run-1', run_kind: 'final', evaluated_at: '2026-09-09T11:00:00Z',
+            peak: 'warning', current: 'none', recovery: 'recovered', confidence: 'low',
+            coverage: 'partial', sources: ['monitoring'],
+            // Empty by contract on a site projection: the root's capped list spans every site.
+            impacted_devices: [], impacted_device_count: 9,
+            summary: 'One access point reached warning and recovered.',
+          },
+          impacted: {
+            devices: [{ mac: 'aabbccddeeff', site_id: 'site2', name: 'Floor 2 AP', peak: 'warning', current: 'none' }],
+            omitted: 4,
+          },
+        },
+      }),
+    ]);
+    chooseRow();
+    const details = fixture.nativeElement.querySelector('.details').textContent.replace(/\s+/g, ' ');
+    expect(details).toContain('Guardian · Possible disruption');
+    expect(details).toContain('Floor 2 AP');
+    expect(details).toContain('4 further impacted devices were not recorded individually');
+    expect(details).toContain('their site, is unknown');
+    expect(details).toContain('not claimed for this site');
+    const notice = fixture.nativeElement.querySelector('.notice').textContent.replace(/\s+/g, ' ');
+    expect(notice).toContain('Show Guardian impacted devices');
+    expect(notice).toContain('not claimed for this site');
+  });
+  it('offers no Guardian surface for changes that record none', () => {
+    load();
+    chooseRow();
+    expect(fixture.nativeElement.querySelector('app-guardian-badge')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-guardian-panel')).toBeNull();
+  });
   it('clears the old organization before loading a new one', () => {
     load();
     org.set({ id: 'org2' });

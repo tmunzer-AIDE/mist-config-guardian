@@ -1,4 +1,4 @@
-import { AuditImpactSummary } from '../../core/audit-impact.model';
+import { GuardianSummary } from '../../core/guardian.model';
 export type Health = 'ok' | 'warning' | 'error' | 'critical' | 'unknown';
 export type EvidenceState = 'measured' | 'no_data' | 'pending' | 'missing' | 'error' | 'unsupported' | 'disabled';
 export interface MetricEvidence {
@@ -76,7 +76,13 @@ export interface DeviceImpact {
   collection_errors: string[];
 }
 export interface SiteChange {
-  shadow_impact?: AuditImpactSummary | null;
+  /**
+   * The audit's Guardian summary for THIS site: `impacted.devices` is already
+   * filtered to the site by the server, while `impacted.omitted` counts devices
+   * the run never recorded, whose site is unknown and who are therefore never
+   * claimed for this one. `result.impacted_devices` is empty by contract here.
+   */
+  guardian?: GuardianSummary | null;
   id: string;
   audit_id: string | null;
   change_group_id: string | null;
