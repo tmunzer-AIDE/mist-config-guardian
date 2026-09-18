@@ -94,6 +94,7 @@ NO_CAPABILITY = "No structured-output capability record matches this provider, m
 TURNS_SPENT = "The agent did not report within its {turns} model turns"
 DEADLINE_PASSED = "The agent phase deadline passed after {turns} model turn(s)"
 PROVIDER_FAILED = "The provider failed: {detail}"
+TURN_FAILED = "The agent turn failed: {detail}"
 DROPPED_TOOL = "The tool catalogue did not fit the prompt budget"
 DROPPED_GAP = "MCP tools were not offered to the agent because the catalogue did not fit: {names}"
 WITHHELD_LINE = "{identity}: withheld (not citable)"
@@ -382,6 +383,12 @@ async def run_agent(  # noqa: PLR0913 - one collaborator or attempt bound per ar
             # The turn was spent even though its call never started, so it is recorded before the loop ends.
             reason = _line(str(exc), MAX_DETAIL_CHARS, secrets)
             steps.append(_step(turn, prompt, _Outcome("call", detail=reason), output=output, secrets=secrets))
+            break
+        except Exception as exc:  # noqa: BLE001 - the design lets no agent failure fail an attempt, whatever it is
+            # Defence in depth: nothing below is known to raise anything else, and if it ever does, this turn ends
+            # the agent with its reason rather than the attempt. The steps already taken are kept.
+            reason = TURN_FAILED.format(detail=_line(str(exc), MAX_DETAIL_CHARS, secrets))
+            steps.append(_step(turn, prompt, _Outcome("invalid", detail=reason), output=output, secrets=secrets))
             break
         steps.append(_step(turn, prompt, outcome, output=output, secrets=secrets))
         if outcome.conclusion is not None:

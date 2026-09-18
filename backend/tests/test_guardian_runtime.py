@@ -19,6 +19,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
+from mist_config_guardian_backend.guardian import repository as repo
 from mist_config_guardian_backend.guardian.agent import (
     NO_CAPABILITY,
     NO_MCP_ENDPOINT,
@@ -27,6 +28,7 @@ from mist_config_guardian_backend.guardian.agent import (
 )
 from mist_config_guardian_backend.guardian.change import ObjectChange, build_change_set
 from mist_config_guardian_backend.guardian.contracts import (
+    ATTEMPT_DEADLINE,
     EARLY_CUTOFF,
     FINAL_FORCED,
     FINAL_MINIMUM,
@@ -44,7 +46,7 @@ from mist_config_guardian_backend.guardian.evidence import (
 )
 from mist_config_guardian_backend.guardian.reader import TransportError
 from mist_config_guardian_backend.guardian.repository import RUN_OUTCOME_FIELDS
-from mist_config_guardian_backend.models.guardian import GuardianInvestigation
+from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianRun
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
     ImpactSeverity,
@@ -68,8 +70,10 @@ from mist_config_guardian_backend.services.guardian import (
     AttemptTools,
     GuardianService,
     SupersededObject,
+    _fit,
     _status_reason,
     degraded,
+    device_identity,
     device_receipt,
     due_kind,
     execute_attempt,
@@ -173,6 +177,19 @@ def test_masking_reaches_a_sensitive_field_nested_under_a_list() -> None:
     masked = mask_secrets({"radius": [{"secret": "s3cret"}]}, frozenset({"secret"}))
 
     assert "s3cret" not in repr(masked)
+
+
+def test_a_device_identity_reads_every_separator_the_shared_normalizer_reads() -> None:
+    """A dotted MAC is the one the old local normalizer dropped, and dropping it is not a missing row.
+
+    A device object with no identity is treated as org- or site-level, and a site-level atom targets every
+    expected device, so one unrecognized separator would attach that object's atoms to the whole audit.
+    """
+    for written in ("5c5b350a0b01", "5c:5b:35:0a:0b:01", "5c-5b-35-0a-0b-01", "5c5b.350a.0b01", "5C5B350A0B01"):
+        assert device_identity({"mac": written, "site_id": SITE}) == (MAC, SITE)
+
+    assert device_identity({"mac": "not-a-mac", "site_id": SITE}) is None
+    assert device_identity({"mac": MAC, "site_id": ""}) is None
 
 
 def test_a_device_event_receipt_needs_a_mac_and_a_site() -> None:
@@ -581,6 +598,143 @@ async def test_every_stored_run_field_is_one_the_finalization_builder_accepts() 
     assert set(outcome.fields) <= RUN_OUTCOME_FIELDS
 
 
+def wide_change(attributes: int) -> ObjectChange:
+    """One org object whose audit changed many attributes at once: an atom per attribute, on every device."""
+    return ObjectChange(
+        logical_object_id=TEMPLATE,
+        scope="org",
+        object_type="networktemplates",
+        name="DNT-NTR",
+        version=7,
+        before={f"field_{index:03d}": ["10.0.0.1"] for index in range(attributes)},
+        after={f"field_{index:03d}": ["10.0.0.2"] for index in range(attributes)},
+    )
+
+
+async def test_a_run_stores_the_count_of_every_row_its_budgets_left_out() -> None:
+    """A stored view is capped; without the count beside it a capped list reads as the whole of the attempt."""
+    attributes = 200
+    outcome = await run_attempt(changes=(wide_change(attributes),))
+
+    assert outcome.state == "succeeded"
+    # Each view kept what fit and counted the rest, and the two together are everything the attempt evaluated.
+    assert 0 < len(outcome.fields["change"]) < attributes
+    assert len(outcome.fields["change"]) + outcome.fields["change_omitted"] == attributes
+    assert 0 < len(outcome.fields["ledger"]) < attributes
+    assert len(outcome.fields["ledger"]) + outcome.fields["ledger_omitted"] == attributes
+    assert outcome.fields["obligations_omitted"] > 0
+    # The verdict was still composed over all of them: every row is uncovered, so coverage cannot be complete.
+    assert outcome.fields["verdict"].coverage == "partial"
+    assert json_size(outcome.fields["change"]) <= CHANGE_VIEW_BUDGET
+    assert json_size(outcome.fields["ledger"]) <= LEDGER_VIEW_BUDGET
+
+
+def test_a_stored_view_counts_what_did_not_fit_rather_than_dropping_it() -> None:
+    """The steps view takes the same path; it is measured here because ten model turns cannot fill 40 KB."""
+    steps = [{"turn": index + 1, "output": "x" * 1_000} for index in range(200)]
+
+    kept, omitted = _fit(steps, budget=STEPS_BUDGET, priority=lambda step: step["turn"])
+
+    assert 0 < len(kept) < len(steps)
+    assert len(kept) + omitted == len(steps)
+    assert json_size(kept) <= STEPS_BUDGET
+
+
+# -- failure isolation --------------------------------------------------------------------------------------------
+
+
+async def test_a_deployment_pairing_that_raises_is_a_gap_and_never_a_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode(*_args: Any, **_kwargs: Any) -> Any:
+        msg = "an evidence id was recorded twice"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(service, "pair_deployments", explode)
+    outcome = await run_attempt()
+
+    assert outcome.state == "succeeded"
+    assert any("Deployment pairing failed" in gap.text for gap in outcome.fields["verdict"].gaps)
+    # The preconditions it would have resolved went unreported, so coverage cannot read complete.
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_a_monitoring_replay_that_raises_is_a_gap_and_never_a_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode(*_args: Any, **_kwargs: Any) -> Any:
+        msg = "a monitoring contract refused its own payload"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(service, "replay_monitoring", explode)
+    outcome = await run_attempt()
+
+    assert outcome.state == "succeeded"
+    assert any("Monitoring replay failed" in gap.text for gap in outcome.fields["verdict"].gaps)
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_an_agent_that_raises_outside_its_turns_is_a_reason_and_never_a_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def explode(**_kwargs: Any) -> Any:
+        msg = "the tool catalogue could not be read"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(service, "run_agent", explode)
+    tools = AttemptTools(rule_transport=FakeRuleTransport(), mcp_transport=FakeMcpTransport(), model_client=FakeModel())
+    outcome = await run_attempt(tools=tools)
+
+    assert outcome.state == "succeeded"
+    assert outcome.fields["agent"].concluded is False
+    assert "tool catalogue could not be read" in (outcome.fields["agent"].reason or "")
+
+
+async def test_an_isolated_failure_never_leaks_a_secret_into_its_gap(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def explode(**_kwargs: Any) -> Any:
+        msg = "the provider refused Bearer s3cret-token"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(service, "run_agent", explode)
+    tools = AttemptTools(
+        rule_transport=FakeRuleTransport(),
+        mcp_transport=FakeMcpTransport(),
+        model_client=FakeModel(),
+        secrets=("s3cret-token",),
+    )
+    outcome = await run_attempt(tools=tools)
+
+    assert "s3cret-token" not in repr(outcome.fields["agent"])
+
+
+def test_both_writers_of_a_run_deadline_derive_it_from_one_constant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The repository writes ``deadline_at`` when it inserts a run and the service rewrites it when it finalizes
+    one. Two constants that must stay equal are a constant that can drift; there is now only one."""
+    # Beanie refuses to build a document before init_beanie; this one is validated, never stored.
+    monkeypatch.setattr(GuardianRun, "get_pymongo_collection", lambda *_: None)
+    committed = repo.CommittedAttempt(
+        token=PydanticObjectId(),
+        organization_id=ORG,
+        investigation_id=PydanticObjectId(),
+        audit_id=AUDIT,
+        kind="final",
+        attempt=1,
+        started_at=NOW,
+        retained_until=NOW + timedelta(days=30),
+    )
+    outcome = await_nothing()
+
+    inserted = repo.running_run_document(committed, now=NOW)["deadline_at"]
+    finalized = GuardianService._validated(committed, outcome, now=NOW + timedelta(seconds=90)).deadline_at
+
+    assert inserted == finalized == NOW + ATTEMPT_DEADLINE
+
+
+def await_nothing() -> Any:
+    """The smallest failed outcome ``_validated`` accepts, so the test is about the deadline and nothing else."""
+    return service.AttemptOutcome(state="failed", failure_reason="Provider timed out")
+
+
 # -- publication text -----------------------------------------------------------------------------------------------
 
 
@@ -871,6 +1025,45 @@ async def test_building_the_attempts_tools_closes_whatever_it_already_opened(mon
             pass
 
     assert closed == ["rule"]
+
+
+async def test_the_rule_only_tools_still_name_the_service_token_as_a_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No AI runtime is the default deployment, and the rule transport authenticates with the token all the same."""
+
+    class Recording(service.MistRuleTransport):
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            return None
+
+    async def no_runtime(_self: object) -> None:
+        return None
+
+    monkeypatch.setattr(service, "MistRuleTransport", Recording)
+    monkeypatch.setattr(service, "service_token", AsyncMock(return_value="s3cret-token"))
+    monkeypatch.setattr(service.ApplicationConfigurationService, "ai_runtime", no_runtime)
+    organization = Organization.model_construct(id=ORG, mist_org_id="org-1", cloud_region=MistCloudRegion.GLOBAL_01)
+
+    async with service.GuardianTools(organization, vault=vault()) as tools:
+        assert tools.skip_reason == NO_RUNTIME
+        assert tools.secrets == ("s3cret-token",)
+
+
+async def test_the_service_token_never_reaches_stored_evidence_or_a_gap_without_an_ai_runtime() -> None:
+    """The reader scrubs what it is told to scrub, so the rule-only branch must tell it about the token."""
+    # Not a ``Bearer`` prefix: that shape is scrubbed by pattern whatever the attempt declares, and it would
+    # hide whether this branch declared the token at all.
+    failure = "Mist refused the credential s3cret-token for this organization"
+    tools = AttemptTools(
+        rule_transport=FakeRuleTransport(failure=failure), skip_reason=NO_RUNTIME, secrets=("s3cret-token",)
+    )
+    outcome = await run_attempt(tools=tools, **removal())
+
+    assert outcome.state == "succeeded"
+    assert any(item.collection == "error" for item in outcome.fields["evidence"])
+    assert "s3cret-token" not in repr(outcome.fields["evidence"])
+    assert "s3cret-token" not in repr(outcome.fields["verdict"].gaps)
 
 
 async def test_a_mist_read_is_bounded_while_it_streams() -> None:

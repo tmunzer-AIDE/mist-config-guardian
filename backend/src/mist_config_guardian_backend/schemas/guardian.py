@@ -55,15 +55,19 @@ CARRIED_RUN_FIELDS = frozenset(
         "anchor",
         "as_of",
         "change",
+        "change_omitted",
         "evidence",
         "ledger",
+        "ledger_omitted",
         "obligations",
+        "obligations_omitted",
         "monitoring",
         "deployment",
         "rules",
         "agent",
         "verdict",
         "steps",
+        "steps_omitted",
         "budget",
     }
 )
@@ -175,7 +179,8 @@ class GuardianRunResponse(GuardianRunReport):
     """One full run document, bounded by construction, with its rendered report.
 
     Everything below the identity is passed through as the run recorded it, including evidence payloads and the
-    agent's steps, which the report's attempts section expands.
+    agent's steps, which the report's attempts section expands. Each ``*_omitted`` count is what the run's own byte
+    budget left out of the list beside it, so a bounded list is never read as the whole of what the attempt saw.
     """
 
     investigation_id: str
@@ -187,15 +192,19 @@ class GuardianRunResponse(GuardianRunReport):
     anchor: RunAnchor | None = None
     as_of: AwareDatetime | None = None
     change: tuple[ChangeAtom, ...] = ()
+    change_omitted: int = Field(default=0, ge=0)
     evidence: tuple[Evidence, ...] = ()
     ledger: tuple[LedgerRow, ...] = ()
+    ledger_omitted: int = Field(default=0, ge=0)
     obligations: tuple[ObligationOutcome, ...] = ()
+    obligations_omitted: int = Field(default=0, ge=0)
     monitoring: Conclusion | None = None
     deployment: Conclusion | None = None
     rules: dict[PluginId, Conclusion] = Field(default_factory=dict)
     agent: AgentConclusion | None = None
     verdict: Verdict | None = None
     steps: tuple[dict[str, JsonValue], ...] = ()
+    steps_omitted: int = Field(default=0, ge=0)
     budget: RunBudget
 
     @classmethod

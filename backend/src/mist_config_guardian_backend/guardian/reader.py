@@ -789,8 +789,8 @@ def _tool_spec(  # noqa: PLR0911 - one return per reason a discovered tool canno
     properties = properties if isinstance(properties, Mapping) else {}
     if entry.discriminator not in properties:
         return None, "The input schema has no discriminating argument."
-    if (missing := _contradicted(entry, properties)) is not None:
-        return None, f"The advertised schema contradicts the frozen allowlist: it has no {missing}."
+    if (disagreement := _contradicted(entry, properties)) is not None:
+        return None, f"The advertised schema contradicts the frozen allowlist: {disagreement}."
     compact = payloads.compact_schema(schema, drop=("org_id",))
     return (
         ToolSpec(
@@ -809,7 +809,10 @@ def _tool_spec(  # noqa: PLR0911 - one return per reason a discovered tool canno
 
 
 def _contradicted(entry: mcp_allowlist.AllowedTool, properties: Mapping[str, Any]) -> str | None:
-    """How the advertised schema disagrees with the frozen scope facts, if it does.
+    """How the advertised schema disagrees with the frozen scope facts, if it does, as one whole clause.
+
+    The sentence is read by an operator and by the agent, so each direction says what is wrong on its own rather
+    than being fitted into a shared prefix that only suits one of them.
 
     The disagreement is refused in both directions. A schema that drops a scope argument the freeze promises would
     read without an organization, a site or a window; a schema that adds one the freeze denies would carry a scope
@@ -822,9 +825,9 @@ def _contradicted(entry: mcp_allowlist.AllowedTool, properties: Mapping[str, Any
         ("end_time", entry.time_ranged),
     ):
         if frozen and argument not in properties:
-            return f"{argument}, which the frozen allowlist says this tool takes"
+            return f"it has no {argument}, which the freeze says this tool takes"
         if not frozen and argument in properties:
-            return f"a frozen allowlist that denies its {argument}"
+            return f"it has {argument}, which the freeze says this tool does not take"
     return None
 
 

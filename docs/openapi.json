@@ -3441,7 +3441,7 @@
         "type": "object"
       },
       "GuardianRunResponse": {
-        "description": "One full run document, bounded by construction, with its rendered report.\n\nEverything below the identity is passed through as the run recorded it, including evidence payloads and the\nagent's steps, which the report's attempts section expands.",
+        "description": "One full run document, bounded by construction, with its rendered report.\n\nEverything below the identity is passed through as the run recorded it, including evidence payloads and the\nagent's steps, which the report's attempts section expands. Each ``*_omitted`` count is what the run's own byte\nbudget left out of the list beside it, so a bounded list is never read as the whole of what the attempt saw.",
         "properties": {
           "agent": {
             "anyOf": [
@@ -3493,6 +3493,12 @@
             },
             "title": "Change",
             "type": "array"
+          },
+          "change_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Change Omitted",
+            "type": "integer"
           },
           "deadline_at": {
             "anyOf": [
@@ -3571,6 +3577,12 @@
             "title": "Ledger",
             "type": "array"
           },
+          "ledger_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Ledger Omitted",
+            "type": "integer"
+          },
           "monitoring": {
             "anyOf": [
               {
@@ -3588,6 +3600,12 @@
             },
             "title": "Obligations",
             "type": "array"
+          },
+          "obligations_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Obligations Omitted",
+            "type": "integer"
           },
           "published": {
             "default": false,
@@ -3631,6 +3649,12 @@
             },
             "title": "Steps",
             "type": "array"
+          },
+          "steps_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Steps Omitted",
+            "type": "integer"
           },
           "verdict": {
             "anyOf": [

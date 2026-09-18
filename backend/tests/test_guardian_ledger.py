@@ -639,6 +639,52 @@ def test_an_input_the_attempt_never_saw_prevents_complete_coverage():
     assert truncated.statuses[missing[0].id] == unsatisfied("200 versions were not examined")
 
 
+def test_an_atom_with_no_applicable_target_is_recorded_rather_than_left_to_silence():
+    """An org atom whose applicable targets are the expected devices, of which this audit has none.
+
+    Without its own observation the atom reaches no row, no obligation and no gap, and coverage would be whatever
+    the remaining rows happened to leave — complete, when a device object in the same audit was fully claimed.
+    """
+    ledger = build_ledger(change(DNS), (), {}, "audit")
+
+    assert ledger.rows == ()
+    [untargeted] = [o for o in ledger.obligations if o.kind == "input"]
+    assert (untargeted.owner, untargeted.role, untargeted.target) == ("core", "observation", Target())
+    assert ledger.statuses[untargeted.id].status == "unsatisfied"
+    assert "A1" in ledger.statuses[untargeted.id].reason
+    # The caller composes exactly the gaps whose obligations already hold coverage down.
+    assert ledger.gaps == (ledger.statuses[untargeted.id].reason,)
+    assert coverage(ledger, {o.id: SATISFIED for o in ledger.obligations}) == "partial"
+
+
+def test_an_untargeted_atom_holds_coverage_down_beside_a_device_atom_that_is_fully_claimed():
+    """The case that matters: the audit also changed a device object, whose rows a plug-in claims in full."""
+    device_object = ChangedObject(
+        logical_object_id="switch", scope="site", object_type="devices", version=1, site_id="site-a", device_mac=X
+    )
+    org_atom = ChangeAtom(
+        id="A1", logical_object_id="template", version=1, attribute="dns_servers", paths=DNS, paths_complete=True
+    )
+    device_atom = ChangeAtom(
+        id="A2", logical_object_id="switch", version=1, attribute="port_config", paths=(P1,), paths_complete=True
+    )
+    both = ChangeSet(
+        objects=(
+            ChangedObject(logical_object_id="template", scope="org", object_type="networktemplates", version=1),
+            device_object,
+        ),
+        atoms=(org_atom, device_atom),
+    )
+    items = plans(monitoring("O1", "A2", (P1,), device(X)))
+
+    ledger = build_ledger(both, (), items, "audit")
+    reported = {o.id: SATISFIED for o in ledger.obligations}
+
+    assert [row.atom_id for row in ledger.rows] == ["A2"]
+    assert [row.resolution for row in ledger.rows] == ["claimed"]
+    assert coverage(ledger, reported) == "partial"
+
+
 def test_an_input_observation_is_numbered_after_every_other_obligation():
     items = plans(monitoring("O1", "A1", DNS, device(X)))
     ledger = build_ledger(change(DNS), DEVICES, items, "receipt", ("one", "two"))

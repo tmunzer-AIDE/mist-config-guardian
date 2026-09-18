@@ -283,6 +283,25 @@ async def test_a_schema_that_contradicts_the_frozen_allowlist_is_rejected(
     assert rejection.value.category == "tool_not_allowed"
 
 
+async def test_a_rejection_reads_as_a_sentence_in_both_directions() -> None:
+    """Operators and the agent both read this text, so neither direction may render as a broken phrase."""
+    without_org = {"search_type": {}, "site_id": {}, "start_time": {}, "end_time": {}}
+    missing = reader(mcp=FakeMcp(tools=advertised("search_mist_data", without_org)))
+    added = reader(mcp=FakeMcp(tools=advertised("get_mist_constants", {"constant_type": {}, "site_id": {}})))
+
+    dropped = (await missing.tools()).rejected["search_mist_data"]
+    extra = (await added.tools()).rejected["get_mist_constants"]
+
+    assert dropped == (
+        "The advertised schema contradicts the frozen allowlist: it has no org_id, which the freeze says this "
+        "tool takes."
+    )
+    assert extra == (
+        "The advertised schema contradicts the frozen allowlist: it has site_id, which the freeze says this tool "
+        "does not take."
+    )
+
+
 def smuggled(guard: Reader, tool: str, properties: dict) -> None:
     """Put a tool whose schema the freeze denies into the catalogue, as if discovery had let it through."""
     entry = allowlist.ALLOWLIST[tool]

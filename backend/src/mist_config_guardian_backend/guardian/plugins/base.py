@@ -120,7 +120,10 @@ async def run_rules(
     """Plan, collect and evaluate every plug-in in id order, isolating each phase of each plug-in.
 
     A plug-in whose planning fails contributes no plan, so it claims no ledger row. One whose collection fails is
-    still evaluated, over the evidence it did record, so its obligations carry their own reasons beside the gap.
+    still evaluated, but with no readings: :meth:`RulePlugin.collect` returns its readings only when it returns at
+    all, so what it had already read cannot be recovered here. The evidence those reads recorded is still on the
+    attempt — the Reader writes each one into the shared registry as it goes — but this plug-in cites none of it,
+    and its obligations carry their own reasons beside the gap.
     """
     run = RuleRun()
     for plugin in sorted(plugins, key=lambda item: item.id):
@@ -308,6 +311,8 @@ async def _collected(plugin: RulePlugin, plan: RulePlan, reader: Reader, gaps: l
     try:
         return tuple(await plugin.collect(plan, reader))
     except Exception as exc:  # noqa: BLE001 - a refused or failed read leaves this plug-in's obligations unanswered
+        # Whatever it read before it raised stays in the attempt's evidence registry, where the Reader put it; it
+        # is only unavailable to this plug-in, because ``collect`` yields its readings only as a returned list.
         gaps.append(f"{plugin.id} {COLLECTION_FAILED}: {bound_reason(str(exc))}")
         return ()
 

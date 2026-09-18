@@ -27,6 +27,10 @@ import {
  *
  * `summary` left unset renders nothing at all, which is how a page says it did
  * not ask; `null` renders "no investigation recorded", which is an answer.
+ *
+ * `scope` names what the printed bands are measured over. A page that shows the
+ * badge beside rows of its own narrower scope sets it, so an audit-wide peak is
+ * never read as the peak of the site or the device listed under it.
  */
 @Component({
   selector: 'app-guardian-badge',
@@ -39,6 +43,9 @@ import {
           <span class="early">{{ note }}</span>
         }
         @if (result(); as result) {
+          @if (scope(); as note) {
+            <span class="scope">{{ note }}</span>
+          }
           <span
             >Peak: {{ band(result.peak) }} · Current: {{ band(result.current) }}
             @if (recovery()) {
@@ -65,6 +72,7 @@ import {
       line-height: 1.4; overflow-wrap: anywhere; }
     strong { font-weight: 600; } span { opacity: .8; }
     .early { font-weight: 600; opacity: 1; }
+    .scope { font-style: italic; }
     [data-tone='crit'] strong { color: var(--tone-critical-ink); }
     [data-tone='warn'] strong { color: var(--tone-warning-ink); }
   `,
@@ -72,6 +80,8 @@ import {
 export class GuardianBadge {
   readonly summary = input<GuardianSummary | null | undefined>(undefined);
   readonly compact = input(false);
+  /** What the bands below are measured over, for a page whose surrounding rows are narrower. */
+  readonly scope = input('');
 
   /** Unset means the page asked nothing; every other value is an answer worth printing. */
   protected readonly shown = computed(() => this.summary() !== undefined);

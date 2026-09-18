@@ -89,6 +89,17 @@ Digests written before this change are still recognised wherever one is
 compared, and the `hashes.backfill_configuration_hashes` worker task rewrites
 them in the background, so no deployment step is required.
 
+`last_seen` is no longer shown or exported as a configuration change. It joins
+`created_time` and `modified_time` in the one metadata set every comparison
+ignores, so the configuration diff page, the diff JSON export
+(`GET /api/v1/organizations/{organization_id}/diff/export`) and its RFC 6902
+JSON-Patch form all omit it — the patch no longer carries an operation for
+`last_seen` either. Snapshot hashing and change detection already ignored the
+field: it records when a device last reported in, not when its configuration
+changed, so a diff that listed it reported a change nobody made. A client that
+counted operations in an exported patch, or diffed the exported diffs, will see
+fewer entries for device objects after this upgrade.
+
 A production deployment whose resolved `public_base_url` is `http` now
 **refuses to start**. This is the URL invitation emails build activation links
 from, and a production deployment already forces `session_cookie_secure`, so

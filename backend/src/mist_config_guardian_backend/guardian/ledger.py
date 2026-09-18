@@ -50,6 +50,13 @@ from mist_config_guardian_backend.guardian.evidence import (
 
 ANCHOR_REASON = "change time is unknown"
 NO_STATUS_REASON = "No status was reported"
+# An atom whose applicable targets are the expected devices, of which this audit has none, resolves to no row at
+# all. It is recorded here rather than left to the coverage that happens to remain, so an audit that also changed a
+# device object cannot publish complete coverage while this atom went unexamined.
+UNTARGETED_REASON = (
+    "{atom} changed {attribute} on {name}, whose applicable targets are this audit's expected devices, and it "
+    "linked none; no ledger row covers it"
+)
 VIEW_REFERENCES = 3
 
 _RESOLUTION_ORDER: tuple[LedgerResolution, ...] = ("uncovered", "claimed", "excluded")
@@ -63,12 +70,17 @@ class LedgerError(ValueError):
 
 
 class Ledger(Contract):
-    """Rows, every obligation numbered once, the statuses the core already knows, and each plug-in's id map."""
+    """Rows, every obligation numbered once, the statuses the core already knows, and each plug-in's id map.
+
+    ``gaps`` are the core gaps this ledger raised, each one paired with an unsatisfied core observation above, so
+    the caller composes exactly the gaps whose obligations already hold coverage down.
+    """
 
     rows: tuple[LedgerRow, ...] = ()
     obligations: tuple[Obligation, ...] = ()
     statuses: dict[ObligationId, ObligationStatus] = Field(default_factory=dict)
     plan_ids: dict[PluginId, dict[ObligationId, ObligationId]] = Field(default_factory=dict)
+    gaps: tuple[Text, ...] = ()
 
     def rule_statuses(
         self, plugin: str, statuses: Mapping[str, ObligationStatus]
@@ -100,11 +112,13 @@ def build_ledger(
     Ids follow one order: the anchor precondition, plug-in obligations (plug-ins by id, each in plan order, a
     duplicate monitoring obligation folded into the first), deployment preconditions by MAC, one unsatisfied
     observation per uncovered row in row order, and last one unsatisfied ``input`` observation per input the
-    attempt could not see in full.
+    attempt could not see in full and per atom that resolved to no row at all.
 
     ``inputs`` are those inputs, each already a bounded reason. They claim no atom, because the atom is exactly
     what could not be built, and they are always unsatisfied, so a run that silently dropped part of what it was
-    asked to judge can never publish complete coverage.
+    asked to judge can never publish complete coverage. An atom with no applicable target joins them for the same
+    reason: it is a change this attempt was asked to judge and placed on nothing, and without its own obligation
+    the only thing standing between it and complete coverage would be whatever other rows happen to be uncovered.
     """
     expected = _expected_devices(devices)
     atoms = {atom.id: atom for atom in change.atoms}
@@ -116,7 +130,9 @@ def build_ledger(
         statuses["O1"] = ObligationStatus(status="unsatisfied", reason=ANCHOR_REASON)
 
     plan_ids, claims = _number_plan_obligations(plans, obligations)
-    rows = [(atom, target) for atom in change.atoms for target in _row_targets(change, atom, expected)]
+    placed = {atom.id: _row_targets(change, atom, expected) for atom in change.atoms}
+    rows = [(atom, target) for atom in change.atoms for target in placed[atom.id]]
+    untargeted = [_untargeted_reason(change, atom) for atom in change.atoms if not placed[atom.id]]
     targeted = _ByTarget[str]()
     for global_id, obligation in claims:
         targeted.add(obligation.target, global_id)
@@ -149,7 +165,8 @@ def build_ledger(
             )
             obligations.append(observation)
             statuses[observation.id] = ObligationStatus(status="unsatisfied", reason=_uncovered_reason(atom, row))
-    for reason in inputs:
+    gaps = tuple(_bounded(reason) for reason in (*inputs, *untargeted))
+    for reason in gaps:
         missing = Obligation(
             id=f"O{len(obligations) + 1}",
             owner=CORE_OWNER,
@@ -158,8 +175,14 @@ def build_ledger(
             target=Target(),
         )
         obligations.append(missing)
-        statuses[missing.id] = ObligationStatus(status="unsatisfied", reason=_bounded(reason))
-    return Ledger(rows=tuple(ledger_rows), obligations=tuple(obligations), statuses=statuses, plan_ids=plan_ids)
+        statuses[missing.id] = ObligationStatus(status="unsatisfied", reason=reason)
+    return Ledger(
+        rows=tuple(ledger_rows),
+        obligations=tuple(obligations),
+        statuses=statuses,
+        plan_ids=plan_ids,
+        gaps=gaps,
+    )
 
 
 def resolve_statuses(ledger: Ledger, reported: Mapping[str, ObligationStatus]) -> dict[ObligationId, ObligationStatus]:
@@ -430,6 +453,14 @@ def _row_targets(change: ChangeSet, atom: ChangeAtom, expected: Mapping[str, Exp
     if changed.device_mac is not None:
         return [Target(device_mac=changed.device_mac, site_id=changed.site_id)]
     return [Target(device_mac=item.mac, site_id=item.site_id) for item in expected.values()]
+
+
+def _untargeted_reason(change: ChangeSet, atom: ChangeAtom) -> str:
+    """Why one atom sits on no row: its object is org- or site-level and this audit linked no expected device."""
+    changed = change.object_of(atom)
+    return UNTARGETED_REASON.format(
+        atom=atom.id, attribute=atom.attribute, name=changed.name or changed.logical_object_id
+    )
 
 
 def _bounded(reason: str) -> Text:

@@ -25,12 +25,13 @@ function summary(overrides: Partial<GuardianSummary> = {}): GuardianSummary {
   return { availability: 'projected', status: 'done', status_reason: null, result: result(), ...overrides };
 }
 
-function render(value: GuardianSummary | null | undefined, compact = false): HTMLElement {
+function render(value: GuardianSummary | null | undefined, compact = false, scope = ''): HTMLElement {
   const fixture = TestBed.createComponent(GuardianBadge);
   if (value !== undefined) {
     fixture.componentRef.setInput('summary', value);
   }
   fixture.componentRef.setInput('compact', compact);
+  fixture.componentRef.setInput('scope', scope);
   fixture.detectChanges();
   return fixture.nativeElement as HTMLElement;
 }
@@ -47,6 +48,15 @@ describe('GuardianBadge', () => {
     expect(element.textContent).toContain('No result has been published yet');
     expect(element.textContent).toContain('Early window not reached');
     expect(element.textContent).not.toContain('Peak:');
+  });
+
+  it('names the scope its bands are measured over when the page gives one', () => {
+    const impacted = summary({ result: result({ peak: 'warning', recovery: 'recovered' }) });
+    const scoped = render(impacted, false, 'For this audit, across all sites');
+    const unscoped = render(impacted);
+
+    expect(scoped.textContent).toContain('For this audit, across all sites');
+    expect(unscoped.textContent).not.toContain('across all sites');
   });
 
   it('distinguishes no investigation from a clean one', () => {

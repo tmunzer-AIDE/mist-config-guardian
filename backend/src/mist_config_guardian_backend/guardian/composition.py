@@ -85,8 +85,10 @@ def compose(  # noqa: PLR0913 - one conclusion, or one of its inputs, per argume
 
     ``devices`` are the deterministic per-device bands, and they also identify a device a rule or the agent names.
     ``evidence`` decides one thing only: whether the agent cited a service-health item, which is what lets its
-    assessment contribute at all. ``core_gaps`` are what the attempt itself could not see, such as an input its
-    read caps truncated; each one also carries an unsatisfied core obligation, so coverage already reflects it.
+    assessment contribute at all. ``core_gaps`` are what the attempt itself could not see or could not finish,
+    such as an input its read caps truncated or an isolated phase that failed. Coverage already reflects each one:
+    an input carries its own unsatisfied core obligation, and a failed phase reports no status for the obligations
+    it would have resolved, which leaves them unsatisfied too.
     """
     plugins = dict(sorted((rules or {}).items()))
     base: Band = "none" if coverage == "complete" else "info"

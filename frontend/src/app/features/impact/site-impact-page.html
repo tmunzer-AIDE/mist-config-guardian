@@ -219,7 +219,7 @@
   >
     @if (selectedChange(); as change) {
       @if (guardianShown()) {
-        <app-guardian-badge [summary]="change.guardian ?? null" />
+        <app-guardian-badge [summary]="change.guardian ?? null" scope="For this audit, across all sites" />
         @if (guardianDevices().length) {
           <section class="detail-section" aria-label="Guardian impacted devices at this site">
             <h3 class="eyebrow">Guardian impacted devices at this site</h3>

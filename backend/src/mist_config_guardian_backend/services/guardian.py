@@ -58,10 +58,12 @@ from mist_config_guardian_backend.guardian.agent_schema import (
 from mist_config_guardian_backend.guardian.change import ChangeSet, ObjectChange, build_change_set, change_view
 from mist_config_guardian_backend.guardian.composition import DeviceSeverity, compose
 from mist_config_guardian_backend.guardian.contracts import (
+    ATTEMPT_DEADLINE,
     EARLY_CUTOFF,
     FINAL_FORCED,
     FINAL_MINIMUM,
     MAX_ATTEMPTS_PER_KIND,
+    MAX_REASON_CHARS,
     MAX_STATUS_REASON_CHARS,
     AgentConclusion,
     Band,
@@ -76,6 +78,7 @@ from mist_config_guardian_backend.guardian.contracts import (
     bound_reason,
 )
 from mist_config_guardian_backend.guardian.deployment import (
+    DeploymentReplay,
     DeviceEventReceipt,
     ReplayFrame,
     expected_devices,
@@ -90,6 +93,7 @@ from mist_config_guardian_backend.guardian.evidence import (
     STEPS_BUDGET,
     EvidenceRegistry,
     json_size,
+    normalized_mac,
     pack,
 )
 from mist_config_guardian_backend.guardian.ledger import build_ledger, coverage, deterministic_view, resolve_statuses
@@ -99,10 +103,12 @@ from mist_config_guardian_backend.guardian.monitoring import (
     FindingRecord,
     IncidentRecord,
     MonitoringRecord,
+    MonitoringReplay,
     SleSample,
     record_monitoring,
     replay_monitoring,
 )
+from mist_config_guardian_backend.guardian.payloads import redact_text
 from mist_config_guardian_backend.guardian.plugins import PLUGINS
 from mist_config_guardian_backend.guardian.plugins.base import rule_allowances, run_rules
 from mist_config_guardian_backend.guardian.reader import (
@@ -145,9 +151,10 @@ from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, Ob
 logger = logging.getLogger(__name__)
 
 # The phases of the design's attempt-deadline table, on the local monotonic clock started just before the commit.
+# The last phase ends at the attempt deadline itself, so ``ATTEMPT_DEADLINE`` is the single constant both writers
+# of a run's ``deadline_at`` use: this module when it finalizes a run, and the repository when it inserts one.
 RULE_PHASE = timedelta(seconds=90)
 AGENT_PHASE = timedelta(seconds=210)
-PUBLISH_PHASE = timedelta(seconds=240)
 
 # The early trigger's signal: an append-only assessment transition recorded on a linked monitoring session.
 DEGRADATION_EVENTS = frozenset({"ASSESSMENT_WARNING", "ASSESSMENT_CRITICAL"})
@@ -169,6 +176,15 @@ MAX_RETENTION_DAYS = 36_500
 NO_FAILURE_REASON = "The final run recorded no failure reason"
 ATTEMPT_FAILED = "The attempt could not be completed: {detail}"
 RUN_TOO_LARGE = "The run document exceeded its asserted bound: {detail}"
+
+# A phase the design isolates: its failure is a core gap on the verdict and leaves its obligations unreported,
+# and therefore unsatisfied, rather than failing the attempt.
+PHASE_FAILED = "{phase} failed and this run has no answer from it: {detail}"
+DEPLOYMENT_PAIRING = "Deployment pairing"
+DEPLOYMENT_EVIDENCE = "Deployment evidence"
+MONITORING_REPLAY = "Monitoring replay"
+MONITORING_EVIDENCE = "Monitoring evidence"
+AGENT_FAILED = "The agent failed: {detail}"
 
 # An input the attempt could not see in full. Each of these becomes both a core gap on the verdict and an
 # unsatisfied core obligation on the ledger, so a run can never publish complete coverage over what it never read.
@@ -238,15 +254,18 @@ def protected_configuration(configuration: Mapping[str, object] | None, definiti
 
 
 def device_identity(configuration: Mapping[str, object]) -> tuple[str, str] | None:
-    """A device object's immutable ``(mac, site_id)``, read from the configuration rather than today's fields."""
-    mac = configuration.get("mac")
+    """A device object's immutable ``(mac, site_id)``, read from the configuration rather than today's fields.
+
+    The MAC goes through the one normalizer every Guardian device comparison uses (controller ruling R33), so a
+    separator this boundary did not think of cannot make a device object look like an org- or site-level one. That
+    mistake would not be a missing row: a site-level atom targets every expected device, so one dotted MAC would
+    attach that object's atoms to every device the audit touched.
+    """
     site = configuration.get("site_id")
-    if not isinstance(mac, str) or not isinstance(site, str) or not site:
+    mac = normalized_mac(configuration.get("mac"))
+    if mac is None or not isinstance(site, str) or not site:
         return None
-    normalized = mac.replace(":", "").replace("-", "").lower()
-    if len(normalized) != 12 or any(character not in "0123456789abcdef" for character in normalized):  # noqa: PLR2004
-        return None
-    return normalized, site
+    return mac, site
 
 
 @dataclass(frozen=True, slots=True)
@@ -712,7 +731,10 @@ class GuardianTools(AbstractAsyncContextManager["AttemptTools"]):
             capability=runtime is not None and runtime.structured_output is not None,
         )
         if reason is not None or runtime is None:
-            return AttemptTools(rule_transport=rule, skip_reason=reason)
+            # The default deployment takes this branch: no AI runtime, so rule plug-ins alone. The service token
+            # is still what the rule transport authenticates with, so it is still what a reader must scrub out of
+            # a stored payload, an evidence detail or a gap.
+            return AttemptTools(rule_transport=rule, skip_reason=reason, secrets=(token,))
         cloud = httpx.URL(REGION_HOSTS[self._organization.cloud_region]).host
         client = await self._stack.enter_async_context(
             MistMcpClient(url=settings.mist_mcp_url, token=token, cloud=cloud, max_wire_bytes=MAX_TRANSPORT_BYTES)
@@ -748,15 +770,37 @@ class AttemptOutcome:
     failure_reason: str | None = None
 
 
-def _fit[T](items: Iterable[T], *, budget: int, priority: Callable[[T], Any]) -> tuple[T, ...]:
-    """The rows that fit one stored budget, in priority order. Full lists stay in memory for evaluation only."""
-    return pack(
+def _isolate[T](phase: str, fallback: T, gaps: list[str], work: Callable[[], T]) -> T:
+    """Run one phase the design does not let fail an attempt, and turn any failure of it into a bounded gap.
+
+    Only change-set construction, the ledger, composition and the persistence invariants fail an attempt. Nothing
+    reached here is known to raise anything but its own errors; this is the defence in depth that keeps the rule
+    true whatever a phase raises, so a contract validation or an evidence bookkeeping error costs the attempt its
+    monitoring or deployment answer and no more. The phase reports nothing, so every obligation it would have
+    resolved stays unreported and is read as unsatisfied, and coverage can no longer reach complete.
+    """
+    try:
+        return work()
+    except Exception as exc:  # noqa: BLE001 - the phase's failure is this attempt's gap, never its failure
+        gaps.append(bound_reason(PHASE_FAILED.format(phase=phase, detail=exc)))
+        return fallback
+
+
+def _fit[T](items: Iterable[T], *, budget: int, priority: Callable[[T], Any]) -> tuple[tuple[T, ...], int]:
+    """The rows that fit one stored budget, in priority order, and how many did not.
+
+    Full lists stay in memory for evaluation only, so the verdict and coverage are always computed over all of
+    them. The count of what did not fit is stored beside the kept rows: without it a report would present a capped
+    list as the whole of what the attempt judged, and would count its own display limit against nothing.
+    """
+    packed = pack(
         items,
         budget=budget,
         priority=priority,
         category=lambda _item: "row",
         overhead=lambda omitted, kept: 2 + max(kept - 1, 0) + (8 * bool(omitted)),
-    ).kept
+    )
+    return packed.kept, sum(packed.omitted.values())
 
 
 def _fit_conclusion[T: Conclusion | AgentConclusion](conclusion: T | None, budget: int) -> T | None:
@@ -865,17 +909,41 @@ async def execute_attempt(
         ledger = build_ledger(change, expected, rules.plans, anchor.source, unseen)
     except Exception as exc:  # noqa: BLE001 - the ledger is the attempt's coverage; without it nothing can publish
         return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))
-    deployment_replay = pair_deployments(inputs.receipts, frame=frame, ledger=ledger)
-    deployment = record_deployment(deployment_replay, frame=frame, registry=registry)
-    monitoring_replay = replay_monitoring(
-        inputs.sessions,
-        frame=frame,
-        ledger=ledger,
-        plans=rules.plans,
-        expected=expected,
-        deployment=deployment_replay,
+    # Everything from here to composition is isolated: the design fails an attempt only on the change set, the
+    # ledger, composition and the persistence invariants. A phase that fails leaves its obligations unreported,
+    # so ``resolve_statuses`` marks them unsatisfied and coverage can no longer read complete.
+    isolated: list[str] = []
+    deployment_replay = _isolate(
+        DEPLOYMENT_PAIRING,
+        DeploymentReplay(),
+        isolated,
+        lambda: pair_deployments(inputs.receipts, frame=frame, ledger=ledger),
     )
-    monitoring = record_monitoring(monitoring_replay, frame=frame, registry=registry)
+    deployment = _isolate(
+        DEPLOYMENT_EVIDENCE,
+        Conclusion(),
+        isolated,
+        lambda: record_deployment(deployment_replay, frame=frame, registry=registry),
+    )
+    monitoring_replay = _isolate(
+        MONITORING_REPLAY,
+        MonitoringReplay(),
+        isolated,
+        lambda: replay_monitoring(
+            inputs.sessions,
+            frame=frame,
+            ledger=ledger,
+            plans=rules.plans,
+            expected=expected,
+            deployment=deployment_replay,
+        ),
+    )
+    monitoring = _isolate(
+        MONITORING_EVIDENCE,
+        Conclusion(),
+        isolated,
+        lambda: record_monitoring(monitoring_replay, frame=frame, registry=registry),
+    )
     reported: dict[str, ObligationStatus] = {**deployment.statuses, **monitoring.statuses}
     for plugin_id, conclusion in sorted(rules.conclusions.items()):
         if plugin_id in ledger.plan_ids and conclusion.statuses:
@@ -902,25 +970,36 @@ async def execute_attempt(
             agent=agent.conclusion,
             evidence=registry.evidence,
             devices=_device_severities(monitoring_replay.devices),
-            core_gaps=unseen,
+            # The ledger echoes the inputs it was given and adds the atoms it could place on no row; each of its
+            # gaps already carries an unsatisfied core observation, so coverage and the gap list agree.
+            core_gaps=(*ledger.gaps, *isolated),
         )
     except Exception as exc:  # noqa: BLE001 - composition is the attempt's product; a broken verdict is a failure
         return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))
     statuses = resolve_statuses(ledger, reported)
     share = CONCLUSIONS_BUDGET // (3 + max(len(rules.conclusions), 1))
+    atoms, atoms_omitted = _fit(change.atoms, budget=CHANGE_VIEW_BUDGET, priority=lambda atom: int(atom.id[1:]))
+    rows, rows_omitted = _fit(ledger.rows, budget=LEDGER_VIEW_BUDGET // 2, priority=_row_priority)
+    outcomes, outcomes_omitted = _fit(
+        [ObligationOutcome(obligation=o, status=statuses[o.id]) for o in ledger.obligations],
+        budget=LEDGER_VIEW_BUDGET // 2,
+        priority=lambda outcome: int(outcome.obligation.id[1:]),
+    )
+    steps, steps_omitted = _fit(
+        [step.model_dump(mode="json") for step in agent.steps], budget=STEPS_BUDGET, priority=lambda step: step["turn"]
+    )
     return AttemptOutcome(
         state="succeeded",
         fields={
             "anchor": anchor,
             "as_of": instant,
-            "change": _fit(change.atoms, budget=CHANGE_VIEW_BUDGET, priority=lambda atom: int(atom.id[1:])),
+            "change": atoms,
+            "change_omitted": atoms_omitted,
             "evidence": registry.evidence,
-            "ledger": _fit(ledger.rows, budget=LEDGER_VIEW_BUDGET // 2, priority=_row_priority),
-            "obligations": _fit(
-                [ObligationOutcome(obligation=o, status=statuses[o.id]) for o in ledger.obligations],
-                budget=LEDGER_VIEW_BUDGET // 2,
-                priority=lambda outcome: int(outcome.obligation.id[1:]),
-            ),
+            "ledger": rows,
+            "ledger_omitted": rows_omitted,
+            "obligations": outcomes,
+            "obligations_omitted": outcomes_omitted,
             "monitoring": _fit_conclusion(monitoring, share),
             "deployment": _fit_conclusion(deployment, share),
             "rules": {
@@ -930,11 +1009,8 @@ async def execute_attempt(
             },
             "agent": _fit_conclusion(agent.conclusion, share),
             "verdict": verdict,
-            "steps": _fit(
-                [step.model_dump(mode="json") for step in agent.steps],
-                budget=STEPS_BUDGET,
-                priority=lambda step: step["turn"],
-            ),
+            "steps": steps,
+            "steps_omitted": steps_omitted,
             "budget": RunBudget(
                 model_turns=agent.turns, mcp_calls=reader.budget.mcp_calls, rule_reads=reader.budget.rule_reads
             ),
@@ -966,18 +1042,30 @@ async def _agent_run(  # noqa: PLR0913 - one collaborator or attempt bound per a
     deadline: float,
     clock: Callable[[], float],
 ) -> AgentRun:
-    """The agent, or the explicit reason it was skipped. Nothing it does can fail the attempt."""
+    """The agent, or the explicit reason it was skipped. Nothing it does can fail the attempt.
+
+    :func:`run_agent` ends a failed turn itself, keeping the steps it took. This is the outer guarantee for what
+    happens around those turns — the tool catalogue, one prompt, the accepted report — where no failure is known
+    but any would otherwise reach the attempt.
+    """
     if tools.skip_reason is not None or tools.model_client is None:
         return AgentRun(conclusion=skipped(tools.skip_reason or "No AI runtime is configured"))
-    return await run_agent(
-        client=tools.model_client,
-        reader=reader,
-        registry=registry,
-        inputs=inputs,
-        deadline=deadline,
-        clock=clock,
-        secrets=tools.secrets,
-    )
+    try:
+        return await run_agent(
+            client=tools.model_client,
+            reader=reader,
+            registry=registry,
+            inputs=inputs,
+            deadline=deadline,
+            clock=clock,
+            secrets=tools.secrets,
+        )
+    except Exception as exc:  # noqa: BLE001 - an agent failure records its reason; the attempt still composes
+        return AgentRun(
+            conclusion=skipped(
+                AGENT_FAILED.format(detail=redact_text(str(exc), secrets=tools.secrets, max_chars=MAX_REASON_CHARS))
+            )
+        )
 
 
 # -- the tick procedure -------------------------------------------------------------------------------------------
@@ -1232,7 +1320,7 @@ class GuardianService:
             state="succeeded" if outcome.state == "succeeded" else "failed",
             started_at=committed.started_at,
             finished_at=now,
-            deadline_at=committed.started_at + PUBLISH_PHASE,
+            deadline_at=committed.started_at + ATTEMPT_DEADLINE,
             failure_reason=outcome.failure_reason,
             retained_until=committed.retained_until,
             **outcome.fields,

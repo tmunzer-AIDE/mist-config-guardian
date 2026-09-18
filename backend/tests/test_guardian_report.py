@@ -381,6 +381,37 @@ def test_every_section_stops_at_its_display_limit_and_counts_the_rest() -> None:
     assert report.change.omitted == 7
 
 
+def test_a_section_counts_what_the_run_left_out_as_well_as_what_the_display_limit_cuts() -> None:
+    """The run's own budget capped these lists before the report saw them; the display limit is only the rest."""
+    atoms = tuple(atom(f"A{index + 1}") for index in range(DISPLAY_ROWS + 7))
+
+    report = render_report(
+        run(change=atoms, change_omitted=459, ledger_omitted=942, obligations_omitted=461, steps_omitted=33)
+    )
+
+    assert report.change.omitted == 459 + 7
+    assert report.coverage.rows.omitted == 942
+    assert report.coverage.obligations.omitted == 461
+
+
+def test_an_empty_section_quotes_the_true_total_rather_than_what_survived_a_budget() -> None:
+    """A capped run must never render an explanation that counts only the rows it managed to store."""
+    report = render_report(run(ledger=(), obligations=(), change_omitted=459, ledger_omitted=1000))
+
+    assert "1000" in (report.coverage.obligations.explanation or "")
+    # The ledger itself stored nothing, so its own explanation says the budget left everything out, not that no
+    # target was found: the attempt did resolve 1000 rows.
+    assert "1000" in (report.coverage.rows.explanation or "")
+    assert "No applicable target" not in (report.coverage.rows.explanation or "")
+
+
+def test_an_empty_gap_section_counts_every_obligation_the_run_raised() -> None:
+    report = render_report(run(monitoring=Conclusion(), obligations_omitted=461, verdict=verdict(gaps=())))
+
+    assert report.gaps.items == ()
+    assert "462" in (report.gaps.explanation or "")
+
+
 # --- the run-document bound ------------------------------------------------------------------------------------------
 
 

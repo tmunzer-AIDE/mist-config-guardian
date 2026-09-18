@@ -154,11 +154,11 @@ def render_report(run: GuardianRun) -> Report:
         else ReportHeader(**run.verdict.model_dump(include=set(ReportHeader.model_fields))),
         header_note=None if run.verdict is not None else _no_verdict(run),
         summary=_summary(run),
-        change=_section(run.change, f"No changed attribute is recorded on this run for audit {run.audit_id}."),
+        change=_section(run.change, _no_change(run), omitted=run.change_omitted),
         coverage=CoverageSection(
             coverage=None if run.verdict is None else run.verdict.coverage,
-            rows=_section(run.ledger, f"No applicable target was found for {len(run.change)} change atom(s)."),
-            obligations=_section(run.obligations, f"No obligation was raised over {len(run.ledger)} ledger row(s)."),
+            rows=_section(run.ledger, _no_rows(run), omitted=run.ledger_omitted),
+            obligations=_section(run.obligations, _no_obligations(run), omitted=run.obligations_omitted),
         ),
         devices=_section(devices, _no_devices(run, digested), omitted=digested),
         impacted=_section(
@@ -172,18 +172,54 @@ def render_report(run: GuardianRun) -> Report:
             f"No read is recorded on this run, which used {run.budget.rule_reads} rule read(s) "
             f"and {run.budget.mcp_calls} MCP call(s).",
         ),
-        gaps=_section(_gaps(run), f"No gap is recorded over {len(run.obligations)} obligation(s)."),
+        gaps=_section(_gaps(run), f"No gap is recorded over {_obligation_total(run)} obligation(s)."),
     )
 
 
 def _section[T](items: Sequence[T], explanation: str, *, omitted: int = 0) -> Section[T]:
-    """The first rows within the display limit, the count of the rest, and an explanation only when empty."""
+    """The first rows within the display limit, the count of the rest, and an explanation only when empty.
+
+    ``omitted`` is what the run itself left out before this view saw anything: a budget that capped a stored list,
+    or a digest that counted rather than kept. It is added to what the display limit cuts, so the count is the
+    whole of what the section does not show rather than only the part this module could measure.
+    """
     kept = tuple(items[:DISPLAY_ROWS])
     return Section[T](
         items=kept,
         omitted=omitted + max(len(items) - DISPLAY_ROWS, 0),
         explanation=None if kept else _text(explanation),
     )
+
+
+def _atom_total(run: GuardianRun) -> int:
+    """Every atom the attempt compiled, stored or not: what its ledger and its coverage were evaluated over."""
+    return len(run.change) + run.change_omitted
+
+
+def _row_total(run: GuardianRun) -> int:
+    return len(run.ledger) + run.ledger_omitted
+
+
+def _obligation_total(run: GuardianRun) -> int:
+    return len(run.obligations) + run.obligations_omitted
+
+
+def _no_change(run: GuardianRun) -> str:
+    if run.change_omitted:
+        return f"None of the {run.change_omitted} changed attribute(s) this run compiled fit its stored change view."
+    return f"No changed attribute is recorded on this run for audit {run.audit_id}."
+
+
+def _no_rows(run: GuardianRun) -> str:
+    if run.ledger_omitted:
+        return f"None of the {run.ledger_omitted} ledger row(s) this run resolved fit its stored ledger view."
+    return f"No applicable target was found for {_atom_total(run)} change atom(s)."
+
+
+def _no_obligations(run: GuardianRun) -> str:
+    if run.obligations_omitted:
+        return f"None of the {run.obligations_omitted} obligation(s) this run raised fit its stored ledger view."
+    return f"No obligation was raised over {_row_total(run)} ledger row(s)."
 
 
 def _devices(run: GuardianRun) -> tuple[list[DeviceMonitoring], int]:

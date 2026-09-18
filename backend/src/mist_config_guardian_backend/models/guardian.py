@@ -214,16 +214,23 @@ class GuardianRun(TimestampedModel, Document):
     failure_reason: SafeReason | None = None
     anchor: RunAnchor | None = None
     as_of: AwareDatetime | None = None
+    # Each stored view holds what fit its byte budget, and the count beside it holds what did not. Coverage and the
+    # verdict are computed over the full in-memory lists, never over these, so the counts are what tells a reader
+    # that a capped list is not the whole of what the attempt evaluated.
     change: tuple[ChangeAtom, ...] = ()
+    change_omitted: int = Field(default=0, ge=0)
     evidence: tuple[Evidence, ...] = ()
     ledger: tuple[LedgerRow, ...] = ()
+    ledger_omitted: int = Field(default=0, ge=0)
     obligations: tuple[ObligationOutcome, ...] = ()
+    obligations_omitted: int = Field(default=0, ge=0)
     monitoring: Conclusion | None = None
     deployment: Conclusion | None = None
     rules: dict[PluginId, Conclusion] = Field(default_factory=dict)
     agent: AgentConclusion | None = None
     verdict: Verdict | None = None
     steps: tuple[dict[str, JsonValue], ...] = ()
+    steps_omitted: int = Field(default=0, ge=0)
     budget: RunBudget = Field(default_factory=RunBudget)
     retained_until: AwareDatetime | None = None
 
