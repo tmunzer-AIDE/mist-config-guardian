@@ -124,7 +124,9 @@ Replace every development secret in `.env`, then run:
 docker compose up --build
 ```
 
-The application is served at `http://localhost:8080`.
+The application is served at `http://localhost:8080`. Guardian stays off unless
+`GUARDIAN_ENABLED` is set to `true` in the shell or in the project's `.env`; the
+API and both workers read the same value.
 
 ## Helm
 

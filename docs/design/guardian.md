@@ -140,23 +140,45 @@ authoritative capability record. Without that record the agent is skipped.
 
 The replay fixtures are `dnt_ntr_change.json`, `dnt_ntr_monitoring.json` and `dnt_ntr_device_events.json`. They are
 reconstructed from API projections, and organization, site, audit, object, session, receipt and device identifiers
-are pseudonymized. Timestamps, event types, device types and metric values and states are kept as recorded. No
-raw webhook bodies or individual monitoring observations exist for this audit.
+are pseudonymized. Timestamps, event types, device types and metric values and states are kept as recorded. No raw
+webhook bodies or individual monitoring observations exist for this audit, so the replay rebuilds one baseline and
+one latest sample per session -- the only two the projection kept -- and supplies one placeholder resolver address
+per side of the change, because the projections record which attributes an audit changed and never their values.
+Only the changed path decides the mapping.
 
-The expected outcome is **conditional**, for two reasons. `SW_CONFIGURED` emission is unknown, and the choice of
-infrastructure and client metrics for the dual-use mapping belongs to Task 6. Only mapping-independent invariants
-are asserted now:
+`backend/tests/test_guardian_replay.py` drives the recorded audit through `services.guardian.execute_attempt`, the
+production attempt path, with the real change compiler, plug-ins, ledger, deployment pairing, monitoring replay and
+composition. The Mist API, the MCP server and the model provider are stood in for and record every call, so the
+replay can assert that none was made. `dnt_ntr_expected_outcomes` stays `conditional` in the record, because
+`SW_CONFIGURED` emission is still unknown; the replay closes that by asserting both variants.
 
-- At one-second precision every audit-linked trigger is at or after the anchor, with one trigger per device, and
-  every `*_CONFIGURED` outcome follows its trigger within 30 minutes. No device becomes deployment `unknown` because
-  of the 242 ms boundary.
-- The three switches have no confirming outcome, and the dual-use mapping targets them, so each one has an
-  unsatisfied deployment precondition.
+The dual-use mapping claims the DNS atom on the three switches, with one infrastructure and one client obligation
+each, and the core adds one deployment precondition per claimed switch. Nothing targets the three APs or the
+gateway, and no exclusion has a schema basis, so those four rows stay uncovered. That is thirteen obligations:
 
-The dual-use mapping handles the DNS atom on the three switches. The three APs and the gateway are not targeted by a
-switch mapping, so the atom stays uncovered on them. Under the recorded decisions, the spec's rules imply `info` peak
-and current, `partial` coverage, `low` confidence and no recovery, both as recorded and with `SW_CONFIGURED` added.
-No input reaches `warning`. Task 12 asserts the final result once the engine exists.
+| Obligation | Target | As recorded | With `SW_CONFIGURED` added |
+|---|---|---|---|
+| `switch-health` observation, `empty_policy=incomplete` | each switch | unsatisfied: no data in either window | unchanged |
+| `switch-stc` observation, `empty_policy=not_exercised` | SW-1 | not exercised: no client traffic either side | unchanged |
+| `switch-stc` observation, `empty_policy=not_exercised` | SW-2, SW-3 | satisfied: measured and comparable | unchanged |
+| deployment precondition | each switch | unsatisfied: no deployment outcome was observed | satisfied |
+| uncovered observation | three APs and the gateway | unsatisfied: no plug-in addressed the atom | unchanged |
+
+The verdict is the same either way: `info` peak and current, `partial` coverage, `low` confidence and no recovery,
+with `monitoring`, `deployment` and `rule:dns` as its sources and no impacted device. Coverage cannot leave
+`partial`, because unsatisfied observations survive in both variants. No deterministic input reaches `warning`, so
+nothing raises a floor above the base band. The one gap is the agent's absence: `structured_output_capability` is
+`inconclusive`, so no capability record exists and the agent is skipped. A fake provider whose report cites a
+monitoring item and concurs changes nothing but confidence, which rule 5 then raises to `medium`.
+
+Both mapping-independent invariants hold in both variants:
+
+- At one-second precision every audit-linked trigger is at or after the anchor, one per device, and every recorded
+  `*_CONFIGURED` outcome is paired with its device's trigger within 30 minutes. Each switch keeps its
+  `SW_CONFIG_CHANGED_BY_USER` trigger at 04:41:35 and is `unknown` only for want of an outcome, never for want of a
+  trigger. No device becomes deployment `unknown` because of the 242 ms boundary.
+- Every targeted switch without a confirming outcome has an unsatisfied deployment precondition, and adding the
+  three confirmations satisfies exactly those three.
 
 ## Refreshing a verification
 
