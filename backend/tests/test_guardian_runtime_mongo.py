@@ -1027,13 +1027,62 @@ async def test_a_net_change_that_ends_where_it_started_is_loaded_as_superseded(o
 
     loaded = await guardian._object_changes(organization.id, root.audit_id)
 
-    assert [item.intermediate for item in loaded.superseded] == [1]
+    assert [(item.versions, item.attributes) for item in loaded.superseded] == [(2, ("dns_servers",))]
     inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
     outcome = await guardian.execute_attempt(
         inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
     )
-    assert any(gap.source == "core" and "ended where it started" in gap.text for gap in outcome.fields["verdict"].gaps)
+    assert any(
+        gap.source == "core" and "dns_servers ended where they started" in gap.text
+        for gap in outcome.fields["verdict"].gaps
+    )
     assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_an_attribute_put_back_inside_one_audit_is_loaded_beside_the_one_that_changed(
+    organization: Organization,
+) -> None:
+    root = await new_root(organization)
+    # ntp_servers is set and then put back while dns_servers changes for good: only dns_servers survives as an
+    # atom, and the stored changed_fields of both audit versions are what records that ntp_servers was touched.
+    logical = await seed_change(root, secret="hunter2", dns=("10.0.0.1", "10.0.0.2", "10.0.0.3"))
+    versions = await ObjectVersion.find({"logical_object_id": logical}).sort("+version").to_list()
+    for version in versions[1:]:
+        version.configuration = {**version.configuration, "ntp_servers": ["10.1.0.1"] if version.version == 2 else []}
+        version.changed_fields = ["dns_servers", "ntp_servers"]
+        await version.save()
+    versions[0].configuration = {**versions[0].configuration, "ntp_servers": []}
+    await versions[0].save()
+
+    loaded = await guardian._object_changes(organization.id, root.audit_id)
+    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    outcome = await guardian.execute_attempt(
+        inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
+    )
+
+    assert [item.attributes for item in loaded.superseded] == [("dns_servers", "ntp_servers")]
+    assert "dns_servers" in [atom.attribute for atom in outcome.fields["change"]]
+    reasons = [item.status.reason for item in outcome.fields["obligations"] if item.obligation.kind == "input"]
+    assert len(reasons) == 1
+    assert "ntp_servers ended where they started" in (reasons[0] or "")
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_an_audit_version_with_no_stored_identity_is_reported(organization: Organization) -> None:
+    root = await new_root(organization)
+    logical = await seed_change(root, secret="hunter2")
+    await LogicalObject.find_one({"_id": logical}).delete()
+
+    loaded = await guardian._object_changes(organization.id, root.audit_id)
+
+    assert loaded.changes == ()
+    assert loaded.gaps == (guardian.UNIDENTIFIED_GAP.format(count=1),)
+    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    outcome = await guardian.execute_attempt(
+        inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
+    )
+    assert outcome.fields["verdict"].coverage != "complete"
+    assert any(gap.source == "core" and "no stored identity" in gap.text for gap in outcome.fields["verdict"].gaps)
 
 
 async def test_the_exhaustion_read_quotes_the_last_final_attempt_that_recorded_a_reason(

@@ -648,6 +648,24 @@ def test_an_input_observation_is_numbered_after_every_other_obligation():
     assert [ledger.statuses[o].reason for o in inputs] == ["one", "two"]
 
 
+def test_an_input_obligation_names_itself_in_every_view():
+    items = plans(monitoring("O1", "A1", DNS, device(X)))
+    ledger = build_ledger(change(DNS), DEVICES, items, "receipt", ("the versions beyond the cap",))
+    reported = {o.id: SATISFIED for o in ledger.obligations}
+
+    view = deterministic_view(ledger, reported)
+    kinds = [item.kind for item in view.unsatisfied.items]
+
+    # It is derived from no change at all, so it never reads as an uncovered row, and it sorts with the anchor
+    # ahead of the rows a plug-in could still have addressed.
+    assert "input" in kinds
+    assert kinds.index("input") < (kinds.index("rule") if "rule" in kinds else len(kinds))
+    assert kinds[0] == "anchor"
+    listed = [item for item in ledger_view(ledger, reported).obligations.items if item.kind == "input"]
+    assert [item.change_ref for item in listed] == [None]
+    assert [item.reason for item in listed] == ["the versions beyond the cap"]
+
+
 def test_no_rule_plan_may_carry_a_core_input_obligation():
     missing = Obligation(id="O1", owner="core", role="observation", kind="input", target=Target())
 

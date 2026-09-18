@@ -724,20 +724,60 @@ async def test_a_net_change_that_ends_where_it_started_is_reported_rather_than_e
         before={"dns_servers": ["10.0.0.1"]},
         after={"dns_servers": ["10.0.0.1"]},
     )
-    superseded = (SupersededObject(logical_object_id=unchanged.logical_object_id, name="DNT-NTR", intermediate=1),)
+    superseded = (
+        SupersededObject(
+            logical_object_id=unchanged.logical_object_id, name="DNT-NTR", versions=2, attributes=("dns_servers",)
+        ),
+    )
     outcome = await run_attempt(changes=(unchanged,), superseded=superseded)
 
     missing = _core_obligations(outcome)
     assert len(missing) == 1
-    assert "DNT-NTR" in (missing[0].status.reason or "")
-    assert "ended where it started" in (missing[0].status.reason or "")
+    reason = missing[0].status.reason or ""
+    assert "DNT-NTR" in reason
+    assert "was changed 2 times" in reason
+    assert "dns_servers ended where they started" in reason
     assert outcome.fields["verdict"].coverage != "complete"
     assert any(gap.source == "core" and "DNT-NTR" in gap.text for gap in outcome.fields["verdict"].gaps)
 
 
-async def test_a_superseded_object_that_still_changed_something_is_not_reported_as_elided() -> None:
+async def test_an_attribute_put_back_inside_one_audit_is_reported_even_beside_one_that_changed() -> None:
+    # The object changed dns_servers and reverted ntp_servers: the first compiles to an atom, a ledger row and a
+    # precondition a plug-in can satisfy, while the second leaves nothing at all behind.
     changed = inputs().changes[0]
-    superseded = (SupersededObject(logical_object_id=changed.logical_object_id, name="DNT-NTR", intermediate=2),)
+    superseded = (
+        SupersededObject(
+            logical_object_id=changed.logical_object_id,
+            name="DNT-NTR",
+            versions=2,
+            attributes=("dns_servers", "ntp_servers"),
+        ),
+    )
+    outcome = await run_attempt(superseded=superseded)
+
+    missing = _core_obligations(outcome)
+    assert len(missing) == 1
+    reason = missing[0].status.reason or ""
+    assert "ntp_servers ended where they started" in reason
+    assert "dns_servers" not in reason
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_an_object_with_no_stored_identity_is_reported_by_the_loader() -> None:
+    gap = service.UNIDENTIFIED_GAP.format(count=2)
+    outcome = await run_attempt(gaps=(gap,))
+
+    assert [item.status.reason for item in _core_obligations(outcome)] == [gap]
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
+async def test_an_object_whose_every_touched_attribute_is_in_its_net_change_is_not_reported() -> None:
+    changed = inputs().changes[0]
+    superseded = (
+        SupersededObject(
+            logical_object_id=changed.logical_object_id, name="DNT-NTR", versions=3, attributes=("dns_servers",)
+        ),
+    )
     outcome = await run_attempt(superseded=superseded)
 
     assert _core_obligations(outcome) == []

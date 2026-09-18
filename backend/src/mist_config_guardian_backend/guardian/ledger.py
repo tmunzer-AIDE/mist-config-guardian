@@ -54,7 +54,7 @@ VIEW_REFERENCES = 3
 
 _RESOLUTION_ORDER: tuple[LedgerResolution, ...] = ("uncovered", "claimed", "excluded")
 _STATUS_ORDER: tuple[StatusValue, ...] = ("unsatisfied", "not_exercised", "satisfied")
-_LABEL_ORDER = ("anchor", "uncovered", "rule", "monitoring", "deployment")
+_LABEL_ORDER = ("anchor", "input", "uncovered", "rule", "monitoring", "deployment")
 _STRICTNESS: tuple[EmptyPolicy, ...] = ("not_exercised", "incomplete")
 
 
@@ -480,6 +480,9 @@ def _obligation_views(ledger: Ledger, reported: Mapping[str, ObligationStatus]) 
 
 
 def _label(view: ObligationView) -> str:
+    """How a view names an obligation: an input names itself, because it is derived from no change at all."""
+    if view.kind == INPUT_OBLIGATION_KIND:
+        return INPUT_OBLIGATION_KIND
     return "uncovered" if view.owner == CORE_OWNER and view.role == "observation" else view.kind
 
 

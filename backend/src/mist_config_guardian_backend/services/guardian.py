@@ -182,9 +182,15 @@ RECEIPT_CAP_GAP = (
     "More than {cap} device-event receipts match this audit; the receipts beyond that limit were not examined"
 )
 ELIDED_GAP = (
-    "Object {name} changed {count} time(s) within this audit and ended where it started; the configurations it "
-    "held in between were not examined"
+    "Object {name} was changed {versions} times within this audit and {attributes} ended where they started; the "
+    "configurations they held in between were not examined"
 )
+ELIDED_WHOLE_GAP = (
+    "Object {name} was changed {versions} times within this audit and its net change is empty; the configurations "
+    "it held in between were not examined"
+)
+UNIDENTIFIED_GAP = "{count} object version(s) this audit changed have no stored identity and were not examined"
+LISTED_ATTRIBUTES = 3
 
 
 def _encoded(model: BaseModel) -> dict[str, Any]:
@@ -245,15 +251,20 @@ def device_identity(configuration: Mapping[str, object]) -> tuple[str, str] | No
 
 @dataclass(frozen=True, slots=True)
 class SupersededObject:
-    """A logical object this audit changed more than once, and how many versions it held in between.
+    """A logical object this audit changed more than once, with every attribute its versions touched.
 
-    Only the net change is compiled, so an object that ends where it started yields no atom at all. Nothing else
-    would record that the audit touched it, which is why the elision is reported rather than elided.
+    Only the net change is compiled, so an attribute the audit changed and then put back yields no atom. Nothing
+    else would record that the audit touched it: the object may still carry atoms for its other attributes, a
+    ledger row and a satisfied precondition, and the run would then publish complete coverage over an
+    intermediate configuration nobody examined. ``attributes`` is the union of the stored ``changed_fields`` of
+    the audit's own versions, written under the same ignored-field policy the change compiler applies, so the
+    comparison needs no further read.
     """
 
     logical_object_id: str
     name: str
-    intermediate: int
+    versions: int
+    attributes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,7 +391,8 @@ async def _audit_versions(
     rows = await (
         ObjectVersion.find({"organization_id": organization_id, "audit_id": audit_id})
         .sort("+logical_object_id", "+version")
-        .to_list(MAX_AUDIT_VERSIONS + 1)
+        .limit(MAX_AUDIT_VERSIONS + 1)
+        .to_list()
     )
     if len(rows) <= MAX_AUDIT_VERSIONS:
         return rows, ()
@@ -431,13 +443,23 @@ async def _object_changes(organization_id: PydanticObjectId, audit_id: str) -> L
     }
     changes = []
     superseded = []
+    unidentified = 0
     for key, after in sorted(latest.items(), key=lambda entry: str(entry[0])):
         logical = logicals.get(key)
         if logical is None:
+            # The version names an object whose identity row is gone, so nothing can say what it is or where it
+            # applies. It is reported rather than skipped: silence here reads as "this audit did not touch it".
+            unidentified += len(spans[key])
             continue
         if len(spans[key]) > 1:
+            touched = sorted({field for item in spans[key] for field in item.changed_fields})
             superseded.append(
-                SupersededObject(logical_object_id=str(key), name=logical.name, intermediate=len(spans[key]) - 1)
+                SupersededObject(
+                    logical_object_id=str(key),
+                    name=logical.name,
+                    versions=len(spans[key]),
+                    attributes=tuple(touched),
+                )
             )
         prior = priors.get((key, earliest[key].version - 1))
         if prior is not None and prior.is_deleted:
@@ -467,6 +489,8 @@ async def _object_changes(organization_id: PydanticObjectId, audit_id: str) -> L
                 mist_id=incarnation.mist_object_id if single and incarnation is not None else None,
             )
         )
+    if unidentified:
+        gaps = (*gaps, UNIDENTIFIED_GAP.format(count=unidentified))
     return LoadedChanges(changes=tuple(changes), gaps=gaps, superseded=tuple(superseded))
 
 
@@ -497,6 +521,7 @@ async def _device_receipts(
             {"audit_id": 1, "created_at": 1, "deployment": 1},
         )
         .sort([("created_at", 1), ("_id", 1)])
+        .limit(MAX_DEVICE_RECEIPTS + 1)
         .to_list(length=MAX_DEVICE_RECEIPTS + 1)
     )
     gaps = (RECEIPT_CAP_GAP.format(cap=MAX_DEVICE_RECEIPTS),) if len(rows) > MAX_DEVICE_RECEIPTS else ()
@@ -516,7 +541,8 @@ async def linked_sessions(
     rows = await (
         MonitoringSession.find({"organization_id": organization_id, "audit_ids": audit_id})
         .sort("-active", "-created_at", "-_id")
-        .to_list(MAX_LINKED_SESSIONS + 1)
+        .limit(MAX_LINKED_SESSIONS + 1)
+        .to_list()
     )
     gaps = (SESSION_CAP_GAP.format(cap=MAX_LINKED_SESSIONS),) if len(rows) > MAX_LINKED_SESSIONS else ()
     return rows[:MAX_LINKED_SESSIONS], gaps
@@ -749,20 +775,39 @@ def _fit_conclusion[T: Conclusion | AgentConclusion](conclusion: T | None, budge
     return trimmed
 
 
+def _named(attributes: Sequence[str]) -> str:
+    """A few attribute names and the count of the rest, so one gap line names what it means."""
+    listed = ", ".join(attributes[:LISTED_ATTRIBUTES])
+    more = len(attributes) - LISTED_ATTRIBUTES
+    return f"{listed} and {more} more" if more > 0 else listed
+
+
 def _unseen_inputs(inputs: AttemptInputs, change: ChangeSet) -> tuple[str, ...]:
     """What this attempt was asked to judge but never saw in full, as bounded reasons.
 
-    A read cap that fired says so directly. A net change is subtler: an object the audit changed more than once
-    can end exactly where it started, which compiles to no atom at all, so no ledger row, no obligation and no
-    gap would otherwise record that the audit touched it — and another object's clean change could then publish
-    complete coverage over it.
+    A read cap that fired says so directly. A net change is subtler, and the comparison is per attribute rather
+    than per object: an object the audit changed more than once can have changed one attribute and put another
+    back, which compiles to an atom for the first and nothing at all for the second. The object would then carry
+    a ledger row a plug-in can claim and a precondition that can be satisfied, and the run would publish complete
+    coverage over an intermediate configuration nobody examined.
     """
-    changed = {atom.logical_object_id for atom in change.atoms}
-    elided = [
-        ELIDED_GAP.format(name=item.name or item.logical_object_id, count=item.intermediate)
-        for item in inputs.superseded
-        if item.logical_object_id not in changed
-    ]
+    net: dict[str, set[str]] = {}
+    for atom in change.atoms:
+        net.setdefault(atom.logical_object_id, set()).add(atom.attribute)
+    elided = []
+    for item in inputs.superseded:
+        settled = net.get(item.logical_object_id, set())
+        reverted = tuple(name for name in item.attributes if name not in settled)
+        if reverted:
+            elided.append(
+                ELIDED_GAP.format(
+                    name=item.name or item.logical_object_id, versions=item.versions, attributes=_named(reverted)
+                )
+            )
+        elif not settled:
+            # The object produced no atom at all and recorded no changed attribute either, so nothing says what
+            # it held in between; it is still reported, because the audit demonstrably changed it more than once.
+            elided.append(ELIDED_WHOLE_GAP.format(name=item.name or item.logical_object_id, versions=item.versions))
     return (*inputs.gaps, *elided)
 
 
