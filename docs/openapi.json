@@ -4805,6 +4805,12 @@
             },
             "title": "Runs",
             "type": "array"
+          },
+          "unreadable_attempts": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unreadable Attempts",
+            "type": "integer"
           }
         },
         "required": [
@@ -5113,6 +5119,9 @@
             "title": "Audit Id",
             "type": "string"
           },
+          "budget": {
+            "$ref": "#/components/schemas/RunBudget"
+          },
           "change": {
             "default": [],
             "items": {
@@ -5278,7 +5287,8 @@
           "report",
           "investigation_id",
           "audit_id",
-          "started_at"
+          "started_at",
+          "budget"
         ],
         "title": "GuardianRunResponse",
         "type": "object"

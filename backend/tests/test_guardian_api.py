@@ -36,6 +36,7 @@ from mist_config_guardian_backend.guardian.contracts import (
 from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianResult, GuardianRun
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
+from mist_config_guardian_backend.schemas.guardian import CARRIED_RUN_FIELDS, GuardianRunResponse
 from mist_config_guardian_backend.services import guardian_reads
 from mist_config_guardian_backend.services.guardian_reads import (
     MAX_PROJECTED_AUDITS,
@@ -197,6 +198,9 @@ def matches(document: dict[str, Any], criteria: dict[str, Any]) -> bool:
 
 
 def fields(model: Any) -> dict[str, Any]:
+    """A stored document's fields. A raw mapping is already one: it stands for a document no model can build."""
+    if isinstance(model, dict):
+        return model
     data = {name: getattr(model, name, None) for name in type(model).model_fields}
     data["_id"] = model.id
     return data
@@ -204,7 +208,20 @@ def fields(model: Any) -> dict[str, Any]:
 
 def stored(model: Any) -> dict[str, Any]:
     """The document as Mongo holds it, so a projected read gets values rather than model objects."""
-    return dict(Encoder(to_db=True).encode(fields(model)))
+    return model if isinstance(model, dict) else dict(Encoder(to_db=True).encode(fields(model)))
+
+
+def drifted_root(audit_id: str, **overrides: Any) -> dict[str, Any]:
+    """A root a newer deploy wrote: the fields are there, but this build cannot make a model of them."""
+    return {
+        "_id": PydanticObjectId(),
+        "organization_id": ORG,
+        "audit_id": audit_id,
+        "status": "archived",
+        "status_reason": None,
+        "result": None,
+        **overrides,
+    }
 
 
 def project(document: dict[str, Any], projection: dict[str, int] | None) -> dict[str, Any]:
@@ -268,21 +285,31 @@ class _Documents:
             raise self.failure
         return [item for item in self.documents if matches(fields(item), criteria)]
 
+    def _as_model(self, item: Any) -> Any:
+        """What a document read through Beanie gives back: a model, or the validation error it raises."""
+        return self.model.model_validate(item) if isinstance(item, dict) else item
+
     async def _find_one(self, criteria: dict[str, Any], *_args: Any, **_kwargs: Any) -> Any:
         found = self._matching(criteria)
-        return found[0] if found else None
+        return self._as_model(found[0]) if found else None
 
     def _find(self, criteria: dict[str, Any], *_args: Any, **_kwargs: Any) -> _Query:
-        query = _Query(self._matching(criteria))
+        query = _Query([self._as_model(item) for item in self._matching(criteria)])
         self.queries.append(query)
         return query
 
     def _collection(self) -> SimpleNamespace:
         def find(criteria: dict[str, Any], projection: dict[str, int] | None = None) -> _Query:
             self.projections.append(projection)
-            return _Query([project(stored(item), projection) for item in self._matching(criteria)])
+            query = _Query([project(stored(item), projection) for item in self._matching(criteria)])
+            self.queries.append(query)
+            return query
 
-        return SimpleNamespace(find=find)
+        async def find_one(criteria: dict[str, Any], projection: dict[str, int] | None = None) -> Any:
+            found = await find(criteria, projection).to_list()
+            return found[0] if found else None
+
+        return SimpleNamespace(find=find, find_one=find_one)
 
 
 class _Legacy:
@@ -337,6 +364,53 @@ async def test_a_failed_projection_is_unavailable_and_never_a_clean_result(monke
     assert result[AUDIT].availability == "unavailable"
     assert (result[AUDIT].status, result[AUDIT].result, result[AUDIT].impacted) == (None, None, None)
     assert "internal connection" not in result[AUDIT].model_dump_json()
+
+
+async def test_a_root_this_build_cannot_read_is_unavailable_for_its_own_audit_alone(monkeypatch):
+    """A newer deploy's status value, or a half-written root, degrades one column and not the page."""
+    unknown_status = drifted_root("audit-2")
+    missing_status = drifted_root("audit-3")
+    del missing_status["status"]
+    _Documents(GuardianInvestigation, [done_root(), unknown_status, missing_status]).install(monkeypatch)
+
+    result = await PublishedGuardianReader().summaries(ORG, [AUDIT, "audit-2", "audit-3"])
+
+    assert result[AUDIT].status == "done"
+    assert result[AUDIT].result is not None
+    assert result["audit-2"].availability == result["audit-3"].availability == "unavailable"
+    assert result["audit-2"].result is result["audit-3"].result is None
+
+
+async def test_a_result_this_build_cannot_read_is_unavailable_rather_than_a_partial_verdict(monkeypatch):
+    _Documents(GuardianInvestigation, [drifted_root(AUDIT, status="done", result={"peak": "catastrophic"})]).install(
+        monkeypatch
+    )
+
+    summary = (await PublishedGuardianReader().summaries(ORG, [AUDIT]))[AUDIT]
+
+    assert summary.availability == "unavailable"
+    assert summary.status is None
+
+
+async def test_device_rows_this_build_cannot_read_leave_the_audit_unavailable(monkeypatch):
+    _Documents(GuardianInvestigation, [done_root()]).install(monkeypatch)
+    _Documents(
+        GuardianRun,
+        [
+            {
+                "_id": FINAL,
+                "organization_id": ORG,
+                "investigation_id": ROOT,
+                "verdict": {"impacted_devices": [{"mac": "not-a-mac"}], "impacted_devices_omitted": 1},
+            }
+        ],
+    ).install(monkeypatch)
+
+    summary = (await PublishedGuardianReader().summaries(ORG, [AUDIT], include_devices=True))[AUDIT]
+
+    # The caller asked for the rows the overlay renders; a result without them would look site-clean.
+    assert summary.availability == "unavailable"
+    assert summary.impacted is None
 
 
 async def test_empty_and_oversized_batches_do_not_query(monkeypatch):
@@ -470,6 +544,33 @@ async def test_a_published_pointer_to_a_missing_run_publishes_nothing(monkeypatc
     assert detail.root.final_run_id == str(FINAL)  # The root still says what it points at.
 
 
+async def test_a_root_this_build_cannot_read_is_not_served_as_an_investigation(monkeypatch):
+    investigation_documents(monkeypatch, roots=[drifted_root(AUDIT)])
+
+    assert await guardian_investigation(ORG, GROUP) is None
+    assert await guardian_run(ORG, GROUP, FINAL) is None
+
+
+async def test_an_attempt_this_build_cannot_read_is_counted_and_never_breaks_the_investigation(monkeypatch):
+    drifted = {
+        "_id": PydanticObjectId(),
+        "organization_id": ORG,
+        "investigation_id": ROOT,
+        "audit_id": AUDIT,
+        "kind": "final",
+        "attempt": 2,
+        "state": "quarantined",
+    }
+    investigation_documents(monkeypatch, runs=[run(), drifted])
+
+    detail = await guardian_investigation(ORG, GROUP)
+
+    assert detail is not None
+    assert [(item.kind, item.attempt) for item in detail.attempts] == [("final", 1)]
+    assert detail.unreadable_attempts == 1
+    assert detail.runs[0].report.header is not None
+
+
 # --- one run ----------------------------------------------------------------------------------------------------
 
 
@@ -503,6 +604,26 @@ async def test_an_unpublished_run_is_returned_and_says_it_is_unpublished(monkeyp
     assert detail.published is False
     assert detail.report.header is None
     assert detail.report.header_note is not None
+
+
+async def test_a_run_this_build_cannot_read_is_not_found_rather_than_an_error(monkeypatch):
+    token = PydanticObjectId()
+    investigation_documents(
+        monkeypatch,
+        runs=[
+            {
+                "_id": token,
+                "organization_id": ORG,
+                "investigation_id": ROOT,
+                "audit_id": AUDIT,
+                "kind": "final",
+                "attempt": 2,
+                "state": "quarantined",
+            }
+        ],
+    )
+
+    assert await guardian_run(ORG, GROUP, token) is None
 
 
 async def test_a_run_from_another_investigation_or_organization_is_not_found(monkeypatch):
@@ -584,6 +705,40 @@ def test_the_legacy_investigation_routes_are_still_served(api):
         f"{prefix}/guardian",
         f"{prefix}/guardian/runs/{{run_id}}",
     } <= paths
+
+
+def test_the_run_response_carries_a_pinned_set_of_the_run_document():
+    """A new field on the run document is a decision here, not a silent addition or omission."""
+    # Identity and tenancy the caller already has, retention and timestamps no reader acts on, and Beanie's own
+    # revision marker.
+    internal = {
+        "id",
+        "organization_id",
+        "investigation_id",
+        "retained_until",
+        "created_at",
+        "updated_at",
+        "revision_id",
+    }
+    assert set(GuardianRun.model_fields) - internal == CARRIED_RUN_FIELDS
+    assert set(GuardianRunResponse.model_fields) == CARRIED_RUN_FIELDS | {
+        "id",
+        "investigation_id",
+        "published",
+        "report",
+    }
+
+
+def test_a_drifted_run_answers_not_found_through_the_endpoint(api, monkeypatch):
+    token = PydanticObjectId()
+    investigation_documents(
+        monkeypatch,
+        runs=[{"_id": token, "organization_id": ORG, "investigation_id": ROOT, "state": "quarantined"}],
+    )
+
+    response = api.get(f"/api/v1/organizations/{ORG}/change-groups/{GROUP}/guardian/runs/{token}")
+
+    assert response.status_code == 404
 
 
 def test_the_run_read_filter_comes_from_the_repository():

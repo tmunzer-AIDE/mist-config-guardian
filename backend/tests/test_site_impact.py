@@ -305,6 +305,12 @@ async def test_the_overlay_shows_the_published_runs_rows_for_this_site_and_what_
     assert overlay.impacted.omitted == 4
     assert overlay.result is not None
     assert overlay.result.peak == "warning"
+    # The root's list is capped across every site the audit touched, so a site page carries none of it; the
+    # audit-wide count stays as context beside this site's rows.
+    assert overlay.result.impacted_devices == ()
+    assert overlay.result.impacted_device_count == 6
+    # No field of a site projection names a device of another site.
+    assert OTHER_SITE not in result.model_dump_json()
     reader.summaries.assert_awaited_once_with(org, ["audit"], include_devices=True)
 
 

@@ -39,6 +39,34 @@ from mist_config_guardian_backend.models.guardian import (
 GuardianAvailability = Literal["projected", "unavailable"]
 # The one bucket a feed row falls in: no root, an unreadable projection, a pending root, or the published peak.
 GuardianFeedBucket = Literal["not_recorded", "unavailable", "pending", "none", "info", "warning", "critical"]
+# The run-document fields :class:`GuardianRunResponse` carries verbatim, pinned rather than derived from the
+# document: a new field on a run is a decision here, never a silent addition or omission. Identity, tenancy and
+# retention stay out - the organization is the caller's, and the rest is bookkeeping no reader acts on.
+CARRIED_RUN_FIELDS = frozenset(
+    {
+        "audit_id",
+        "kind",
+        "attempt",
+        "state",
+        "started_at",
+        "finished_at",
+        "deadline_at",
+        "failure_reason",
+        "anchor",
+        "as_of",
+        "change",
+        "evidence",
+        "ledger",
+        "obligations",
+        "monitoring",
+        "deployment",
+        "rules",
+        "agent",
+        "verdict",
+        "steps",
+        "budget",
+    }
+)
 
 
 class GuardianImpactedDevices(BaseModel):
@@ -168,16 +196,16 @@ class GuardianRunResponse(GuardianRunReport):
     agent: AgentConclusion | None = None
     verdict: Verdict | None = None
     steps: tuple[dict[str, JsonValue], ...] = ()
+    budget: RunBudget
 
     @classmethod
     def from_run(cls, run: GuardianRun, *, published: bool = False) -> "GuardianRunResponse":
-        carried = (set(cls.model_fields) & set(GuardianRun.model_fields)) - {"id", "investigation_id"}
         return cls(
             id=str(run.id),
             investigation_id=str(run.investigation_id),
             published=published,
             report=render_report(run),
-            **run.model_dump(include=carried),
+            **run.model_dump(include=set(CARRIED_RUN_FIELDS)),
         )
 
 
@@ -219,3 +247,6 @@ class GuardianInvestigationResponse(BaseModel):
     root: GuardianRootResponse
     runs: list[GuardianRunReport] = Field(default_factory=list)
     attempts: list[GuardianAttemptSummary] = Field(default_factory=list)
+    # Attempts whose stored run this build could not read, and which are therefore absent from both lists above.
+    # Counted rather than dropped in silence, so the panel can say an attempt exists that it cannot show.
+    unreadable_attempts: int = Field(default=0, ge=0)
