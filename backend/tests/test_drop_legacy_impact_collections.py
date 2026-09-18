@@ -7,6 +7,8 @@ owned -- never one the application still reads or writes.
 
 import runpy
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Self
 
 import pytest
 
@@ -149,6 +151,63 @@ async def test_a_collection_that_cannot_be_counted_is_still_dropped_and_reported
 
     assert dropped == ["investigation_revisions"]
     assert "unknown" in capsys.readouterr().out
+
+
+class Bound:
+    """A stand-in for ``pymongo.timeout`` that records its deadline and what ran inside it."""
+
+    def __init__(self) -> None:
+        self.seconds: float | None = None
+        self.order: list[str] = []
+
+    def timeout(self, seconds: float) -> Self:
+        self.seconds = seconds
+        return self
+
+    def __enter__(self) -> Self:
+        self.order.append("enter")
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        self.order.append("exit")
+        return False
+
+
+@pytest.mark.asyncio
+async def test_the_cleanup_runs_under_a_deadline_of_its_own(command, monkeypatch, capsys) -> None:
+    """Selecting a server is bounded on its own; the listing, the counts and the drops after it are not."""
+    bound = Bound()
+    database = FakeDatabase(impact_adjudications=1)
+    listed = database.list_collection_names
+
+    async def record() -> list[str]:
+        bound.order.append("listed")
+        return await listed()
+
+    database.list_collection_names = record
+
+    class FakeClient:
+        def __init__(self, _url: str, **given: object) -> None:
+            bound.order.append(f"selection={given['serverSelectionTimeoutMS'] > 0}")
+            self.admin = SimpleNamespace(command=self._ping)
+
+        async def _ping(self, *_args: object) -> dict:
+            return {"ok": 1}
+
+        def __getitem__(self, _name: str) -> FakeDatabase:
+            return database
+
+        async def close(self) -> None:
+            return None
+
+    # run_path returns a copy of the namespace; the functions still read the live one.
+    monkeypatch.setitem(command["run"].__globals__, "AsyncMongoClient", FakeClient)
+    monkeypatch.setitem(command["run"].__globals__, "pymongo", bound)
+
+    assert await command["run"](apply=False) == 0
+    assert bound.seconds == command["OPERATION_TIMEOUT_SECONDS"]
+    assert bound.order == ["selection=True", "enter", "listed", "exit"]
+    assert "Would drop 1" in capsys.readouterr().out
 
 
 def test_the_application_never_runs_the_command_itself() -> None:

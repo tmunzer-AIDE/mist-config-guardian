@@ -8,7 +8,8 @@ bindings that no page can show. This removes them.
 It is operator tooling, not a migration: no startup path, task or schedule runs it, and it drops nothing until
 ``--apply`` is given. It names only the five collections below -- never a Guardian or application collection --
 reports every one of them with its document count whether or not it is present, and can be run again safely:
-a collection already gone is reported as absent and left alone.
+a collection already gone is reported as absent and left alone. Every operation it sends is bounded in time, so
+an unresponsive server ends the command instead of hanging it; re-running finishes what a bound cut short.
 """
 
 from __future__ import annotations
@@ -19,12 +20,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pymongo
 from pymongo import AsyncMongoClient
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from mist_config_guardian_backend.config import get_settings  # noqa: E402
+
+# One deadline for the whole cleanup. ``serverSelectionTimeoutMS`` bounds picking a server and nothing after it,
+# so a server selected and then unresponsive would hang the listing, a count or a drop forever. It is applied
+# around the cleanup rather than to the client, so connecting keeps its own short bound. A run this cuts short is
+# safe to repeat: every collection already dropped is reported as absent the next time.
+OPERATION_TIMEOUT_SECONDS = 60.0
 
 # The exact collections of the removed engine, in a stable order so two runs read the same way.
 LEGACY_COLLECTIONS = (
@@ -46,7 +54,8 @@ async def _documents(database: Any, name: str) -> int | None:
 
 async def drop_legacy_collections(database: Any, *, apply: bool) -> list[str]:
     """Report every legacy collection, drop the present ones when asked, and return what was dropped."""
-    present = [name for name in LEGACY_COLLECTIONS if name in set(await database.list_collection_names())]
+    existing = set(await database.list_collection_names())
+    present = [name for name in LEGACY_COLLECTIONS if name in existing]
     for name in LEGACY_COLLECTIONS:
         if name not in present:
             print(f"  {name:<32} absent")
@@ -84,7 +93,8 @@ async def run(*, apply: bool) -> int:
     try:
         await client.admin.command("ping")
         print(f"Database {settings.mongodb_db_name}:")
-        await drop_legacy_collections(client[settings.mongodb_db_name], apply=apply)
+        with pymongo.timeout(OPERATION_TIMEOUT_SECONDS):
+            await drop_legacy_collections(client[settings.mongodb_db_name], apply=apply)
     finally:
         await client.close()
     return 0
