@@ -22,7 +22,7 @@
       <section class="cg-card guardian-counts" aria-label="Guardian result counts">
         <strong>Guardian · {{ counts.total }} {{ counts.total === 1 ? 'change' : 'changes' }} in the loaded feed</strong>
         <p>{{ counts.critical }} service loss · {{ counts.warning }} possible disruption · {{ counts.info }} impact not established · {{ counts.none }} with no impact observed</p>
-        <p>{{ counts.pending }} still investigating · {{ counts.unavailable }} could not be read · {{ counts.not_recorded }} with no investigation recorded</p>
+        <p>{{ counts.pending }} awaiting a result · {{ counts.unavailable }} could not be read · {{ counts.not_recorded }} with no investigation recorded</p>
         <p>These counts cover the changes in this feed, not the whole window. Filters, totals and alerts still use the legacy assessment.</p>
       </section>
     }

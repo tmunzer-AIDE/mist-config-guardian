@@ -5,12 +5,13 @@ import { firstValueFrom } from 'rxjs';
 import { orgPath } from '../../core/api';
 import { formatInstant } from '../../core/format';
 import {
+  Band,
+  BAND_LABEL,
   COVERAGE_LABEL,
   GuardianInvestigation,
   GuardianRunDetail,
   GuardianRunReport,
   ObligationOutcome,
-  omittedDeviceNote,
   RECOVERY_LABEL,
   ReportSection,
   RUN_KIND_LABEL,
@@ -92,8 +93,8 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             <p class="note">{{ kindNote(run) }}</p>
             @if (run.report.header; as header) {
               <p class="ratings">
-                <strong>Peak: {{ header.peak }}</strong> ·
-                <strong>Current: {{ header.current }}</strong>
+                <strong>Peak: {{ band(header.peak) }}</strong> ·
+                <strong>Current: {{ band(header.current) }}</strong>
                 @if (recovery(header.recovery)) {
                   · {{ recovery(header.recovery) }}
                 }
@@ -134,6 +135,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (empty(run.report.change); as text) {
               <p>{{ text }}</p>
             }
+            @if (omittedRows(run.report.change); as note) {
+              <p>{{ note }}</p>
+            }
 
             <h5>Coverage</h5>
             @if (run.report.coverage.coverage; as value) {
@@ -151,6 +155,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (empty(run.report.coverage.rows); as text) {
               <p>{{ text }}</p>
             }
+            @if (omittedRows(run.report.coverage.rows); as note) {
+              <p>{{ note }}</p>
+            }
             @for (item of run.report.coverage.obligations.items; track $index) {
               <p>
                 {{ item.obligation.id }} · {{ item.obligation.kind }} ·
@@ -167,6 +174,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (empty(run.report.coverage.obligations); as text) {
               <p>{{ text }}</p>
             }
+            @if (omittedRows(run.report.coverage.obligations); as note) {
+              <p>{{ note }}</p>
+            }
 
             <h5>Devices</h5>
             @for (device of run.report.devices.items; track device.mac) {
@@ -179,12 +189,8 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (empty(run.report.devices); as text) {
               <p>{{ text }}</p>
             }
-            @if (run.report.devices.omitted > 0) {
-              <p>
-                {{ run.report.devices.omitted }} further
-                {{ run.report.devices.omitted === 1 ? 'device was' : 'devices were' }} counted in a
-                digest and are not listed individually.
-              </p>
+            @if (omittedDevices(run.report.devices); as note) {
+              <p>{{ note }}</p>
             }
 
             <h5>Impacted devices</h5>
@@ -197,7 +203,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (empty(run.report.impacted); as text) {
               <p>{{ text }}</p>
             }
-            @if (omitted(run.report.impacted.omitted); as note) {
+            @if (omittedImpacted(run.report.impacted); as note) {
               <p>{{ note }}</p>
             }
 
@@ -213,6 +219,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             }
             @if (empty(run.report.findings); as text) {
               <p>{{ text }}</p>
+            }
+            @if (omittedRows(run.report.findings); as note) {
+              <p>{{ note }}</p>
             }
 
             <h5>Evidence</h5>
@@ -254,6 +263,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (empty(run.report.evidence); as text) {
               <p>{{ text }}</p>
             }
+            @if (omittedRows(run.report.evidence); as note) {
+              <p>{{ note }}</p>
+            }
 
             <h5>Gaps</h5>
             @for (gap of run.report.gaps.items; track $index) {
@@ -261,6 +273,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             }
             @if (empty(run.report.gaps); as text) {
               <p>{{ text }}</p>
+            }
+            @if (omittedRows(run.report.gaps); as note) {
+              <p>{{ note }}</p>
             }
           </article>
         }
@@ -371,7 +386,8 @@ export class GuardianPanel {
   protected readonly recovery = (value: keyof typeof RECOVERY_LABEL) => RECOVERY_LABEL[value];
   protected readonly coverage = (value: keyof typeof COVERAGE_LABEL) => COVERAGE_LABEL[value];
   protected readonly kindLabel = (kind: 'early' | 'final') => RUN_KIND_LABEL[kind];
-  protected readonly omitted = (count: number) => omittedDeviceNote(count, false);
+  /** A severity band in words. The bare enum never appears beside a worded verdict. */
+  protected readonly band = (value: Band) => BAND_LABEL[value];
 
   /** Published runs, early first, so the Final tab is the later word when there is one. */
   protected readonly tabs = computed(() => {
@@ -467,6 +483,46 @@ export class GuardianPanel {
   /** An empty section's own explanation; a non-empty one has nothing to explain. */
   protected empty<T>(section: ReportSection<T>): string | null {
     return section.items.length ? null : section.explanation;
+  }
+
+  /**
+   * What a section left out. The report shows the first 50 rows and folds the
+   * rest into `omitted`, so a section that says nothing about it would offer 50
+   * rows as the whole set.
+   */
+  protected omittedRows<T>(section: ReportSection<T>): string | null {
+    const omitted = section.omitted;
+    return omitted > 0
+      ? `${omitted} further ${omitted === 1 ? 'row is' : 'rows are'} not shown here.`
+      : null;
+  }
+
+  /**
+   * Devices this section does not list. The count mixes two causes — monitoring
+   * counted some in a digest without recording them, and the rest fall past the
+   * display limit — and naming only one of them would be false for the others.
+   */
+  protected omittedDevices<T>(section: ReportSection<T>): string | null {
+    const omitted = section.omitted;
+    if (omitted <= 0) {
+      return null;
+    }
+    return (
+      `${omitted} further ${omitted === 1 ? 'device is' : 'devices are'} not listed here: ` +
+      'monitoring counted them in a digest without recording them, or they fall beyond the rows this section shows.'
+    );
+  }
+
+  /** The same two causes, for the impacted devices the verdict named. */
+  protected omittedImpacted<T>(section: ReportSection<T>): string | null {
+    const omitted = section.omitted;
+    if (omitted <= 0) {
+      return null;
+    }
+    return (
+      `${omitted} further impacted ${omitted === 1 ? 'device is' : 'devices are'} not named here: ` +
+      'this attempt did not record them individually, or they fall beyond the rows this section shows.'
+    );
   }
 
   protected paths(paths: string[][]): string {

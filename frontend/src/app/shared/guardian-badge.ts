@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 
 import { formatInstant } from '../core/format';
 import {
+  Band,
+  BAND_LABEL,
   COVERAGE_LABEL,
   earlyNote,
   GuardianSummary,
@@ -38,7 +40,7 @@ import {
         }
         @if (result(); as result) {
           <span
-            >Peak: {{ result.peak }} · Current: {{ result.current }}
+            >Peak: {{ band(result.peak) }} · Current: {{ band(result.current) }}
             @if (recovery()) {
               · {{ recovery() }}
             }</span
@@ -118,5 +120,8 @@ export class GuardianBadge {
     return state.kind === 'not_recorded' || state.kind === 'unavailable' ? null : state.reason;
   });
 
+  /** A band in words. Beside a worded headline the bare enum reads as its opposite: under an
+   *  "impact not established" verdict, a current of `none` looks like a clean current state. */
+  protected readonly band = (value: Band) => BAND_LABEL[value];
   protected readonly at = (value: string) => formatInstant(new Date(value));
 }

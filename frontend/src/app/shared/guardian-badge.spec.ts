@@ -74,17 +74,29 @@ describe('GuardianBadge', () => {
     const element = render(summary());
 
     expect(element.textContent).toContain('Guardian · No impact observed');
-    expect(element.textContent).toContain('Peak: none · Current: none');
+    expect(element.textContent).toContain('Peak: No impact observed · Current: No impact observed');
     expect(element.textContent).toContain('Confidence: medium · Deterministic coverage: complete');
     expect(element.textContent).toContain('No monitored device lost service');
     expect(element.textContent).toContain('Sources: Monitoring, Deployment');
   });
 
-  it('calls an info band not established rather than no impact', () => {
+  it('calls an info peak not established rather than no impact', () => {
     const element = render(summary({ result: result({ peak: 'info', current: 'info', coverage: 'partial', confidence: 'low' }) }));
 
     expect(element.textContent).toContain('Impact not established');
-    expect(element.textContent).not.toContain('No impact observed');
+    expect(element.textContent).toContain('Peak: Impact not established · Current: Impact not established');
+    expect(element.textContent).not.toContain('Peak: info');
+  });
+
+  it('words both bands, so an unestablished verdict never shows a bare band', () => {
+    // The bare enum beside a worded headline reads as its opposite: "Current: none"
+    // under an unestablished peak looks like a current state known to be clean.
+    const element = render(
+      summary({ result: result({ peak: 'info', current: 'none', recovery: 'none', coverage: 'complete', confidence: 'low' }) }),
+    );
+
+    expect(element.textContent).toContain('Peak: Impact not established · Current: No impact observed');
+    expect(element.textContent).not.toContain('Current: none');
   });
 
   it('shows a recovered warning as recovered without dropping the peak', () => {
@@ -93,7 +105,8 @@ describe('GuardianBadge', () => {
     );
 
     expect(element.textContent).toContain('Possible disruption');
-    expect(element.textContent).toContain('Peak: warning · Current: none');
+    expect(element.textContent).toContain('Peak: Possible disruption · Current: No impact observed');
+    expect(element.textContent).not.toContain('Peak: warning');
     expect(element.textContent).toContain('Recovered');
   });
 

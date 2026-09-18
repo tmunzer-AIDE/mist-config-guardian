@@ -261,8 +261,8 @@ describe('GuardianPanel', () => {
     await open();
 
     expect(text()).toContain('Finished · 1 early and 2 final attempts · Final attempts exhausted');
-    expect(text()).toContain('Peak: warning');
-    expect(text()).toContain('Current: none');
+    expect(text()).toContain('Peak: Possible disruption');
+    expect(text()).toContain('Current: No impact observed');
     expect(text()).toContain('Recovered');
     expect(text()).toContain('Confidence: low · Deterministic coverage: partial');
     expect(text()).toContain('Sources: Monitoring, AI agent');
@@ -304,12 +304,69 @@ describe('GuardianPanel', () => {
     expect(text()).toContain('The stored version was truncated');
   });
 
-  it('counts omitted impacted devices without naming a site for them', async () => {
+  it('counts omitted impacted devices truthfully, and without naming a site for them', async () => {
     await open();
 
-    expect(text()).toContain('3 further impacted devices were not recorded individually');
-    expect(text()).toContain('they are not named here');
-    expect(text()).toContain('2 further devices were counted in a digest');
+    // Each count mixes devices the attempt never recorded with rows past the
+    // display limit, so the note names both causes rather than only one.
+    expect(text()).toContain(
+      '3 further impacted devices are not named here: this attempt did not record them individually, ' +
+        'or they fall beyond the rows this section shows.',
+    );
+    expect(text()).toContain(
+      '2 further devices are not listed here: monitoring counted them in a digest without recording them, ' +
+        'or they fall beyond the rows this section shows.',
+    );
+    expect(text()).not.toContain('site-2');
+  });
+
+  it('says how many rows a capped section left out rather than offering the first ones as all of them', async () => {
+    await open(
+      investigation({
+        runs: [
+          run({
+            report: report({
+              evidence: { ...report().evidence, omitted: 12 },
+              gaps: { ...report().gaps, omitted: 1 },
+              findings: { ...report().findings, omitted: 7 },
+              change: { ...report().change, omitted: 4 },
+              coverage: {
+                coverage: 'partial',
+                rows: { ...report().coverage.rows, omitted: 5 },
+                obligations: { ...report().coverage.obligations, omitted: 6 },
+              },
+            }),
+          }),
+        ],
+      }),
+    );
+
+    expect(text()).toContain('12 further rows are not shown here.');
+    expect(text()).toContain('1 further row is not shown here.');
+    expect(text()).toContain('7 further rows are not shown here.');
+    expect(text()).toContain('4 further rows are not shown here.');
+    expect(text()).toContain('5 further rows are not shown here.');
+    expect(text()).toContain('6 further rows are not shown here.');
+  });
+
+  it('never prints a bare band beside a worded verdict', async () => {
+    await open(
+      investigation({
+        runs: [
+          run({
+            report: report({
+              header: { peak: 'info', current: 'none', recovery: 'none', confidence: 'low', coverage: 'complete', sources: [] },
+              devices: { items: [], omitted: 0, explanation: 'No monitoring replay is recorded on this run.' },
+              impacted: { items: [], omitted: 0, explanation: 'This attempt named no impacted device.' },
+              findings: { items: [], omitted: 0, explanation: 'No rule plug-in applied.' },
+            }),
+          }),
+        ],
+      }),
+    );
+
+    expect(text()).toContain('Peak: Impact not established · Current: No impact observed');
+    expect(text()).not.toContain('Current: none');
   });
 
   it('labels a finding the agent made as the AI agent', async () => {

@@ -30,7 +30,7 @@ import {
 } from './site-impact.model';
 import { GuardianBadge } from '../../shared/guardian-badge';
 import { GuardianPanel } from '../changes/guardian-panel';
-import { omittedDeviceNote } from '../../core/guardian.model';
+import { omittedSiteDeviceNote } from '../../core/guardian.model';
 import { TopologyCanvas } from './topology-canvas';
 import { metricLabel } from './monitoring.model';
 
@@ -147,7 +147,7 @@ export class SiteImpactPage implements OnDestroy {
   );
   /** Impacted devices this investigation never recorded: their site is unknown, so this site cannot claim them. */
   protected readonly guardianOmitted = computed(() =>
-    omittedDeviceNote(this.selectedChange()?.guardian?.impacted?.omitted ?? 0, true),
+    omittedSiteDeviceNote(this.selectedChange()?.guardian?.impacted?.omitted ?? 0),
   );
   protected readonly impacted = computed(
     () => this.auditOverlay()

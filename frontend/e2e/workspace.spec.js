@@ -670,6 +670,7 @@ test('Guardian result stays distinct from production in Changes and Overview', a
   const rowView = page.locator('.row--group').first();
   await expect(rowView).toContainText(row.impact_label);
   await expect(rowView).toContainText('Guardian · Possible disruption');
+  await expect(rowView).toContainText('Peak: Possible disruption · Current: No impact observed');
   await expect(rowView).toContainText('Early result');
   await page.screenshot({ path: info.outputPath('guardian-changes.png'), fullPage: true });
   await page.goto('/overview');
@@ -702,7 +703,7 @@ test('Guardian panel labels the AI summary, an early result and withheld evidenc
   await expect(panel).toContainText('Early result · attempt 1');
   await expect(panel).toContainText('ended without publishing a final result');
   await expect(panel).toContainText("AI summary · the AI agent's own words");
-  await expect(panel).toContainText('3 further impacted devices were not recorded individually');
+  await expect(panel).toContainText('3 further impacted devices are not named here: this attempt did not record them individually');
   await expect(panel).toContainText('no change atom · an input this attempt never saw in full');
   await expect(panel).toContainText('attempt could not be read by this build');
   await page.screenshot({ path: info.outputPath('guardian-panel.png'), fullPage: true });

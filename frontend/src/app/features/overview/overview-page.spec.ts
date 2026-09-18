@@ -131,6 +131,10 @@ describe('OverviewPage under time travel', () => {
     expect(text('.guardian-counts')[0]).toContain('7 changes in the loaded feed');
     expect(text('.guardian-counts')[0]).toContain('1 impact not established');
     expect(text('.guardian-counts')[0]).toContain('1 with no impact observed');
+    // The bucket holds every projected row with no result, including a root that
+    // finished without publishing one, so it does not claim they are all running.
+    expect(text('.guardian-counts')[0]).toContain('1 awaiting a result');
+    expect(text('.guardian-counts')[0]).not.toContain('still investigating');
     expect(text('.guardian-counts')[0]).toContain('1 could not be read');
     expect(text('.guardian-counts')[0]).toContain('1 with no investigation recorded');
     expect(text('.guardian-counts')[0]).toContain('not the whole window');

@@ -428,20 +428,21 @@ export function earlyNote(state: Extract<GuardianState, { kind: 'result' }>): st
 }
 
 /**
- * How many impacted devices an investigation never recorded individually.
+ * How many impacted devices an investigation never recorded individually, for a
+ * list the server has filtered to one site.
  *
- * `scoped` is true wherever the list beside this count is filtered to one site:
- * the omitted devices have no recorded identity, so their site is unknown and
- * they are never claimed for the site on screen.
+ * The site overlay's count is the published run's own omissions and nothing
+ * else: those devices have no recorded identity, so their site is unknown and
+ * this site never claims them. (A report section's count is a different number,
+ * because it also folds in the rows past the display limit; the panel words
+ * that one for itself.)
  */
-export function omittedDeviceNote(omitted: number, scoped: boolean): string | null {
+export function omittedSiteDeviceNote(omitted: number): string | null {
   if (omitted <= 0) {
     return null;
   }
   const devices = `${omitted} further impacted ${omitted === 1 ? 'device was' : 'devices were'} not recorded individually`;
-  return scoped
-    ? `${devices}. Their identity, and so their site, is unknown: they are not claimed for this site.`
-    : `${devices}, so ${omitted === 1 ? 'it is' : 'they are'} not named here.`;
+  return `${devices}. Their identity, and so their site, is unknown: they are not claimed for this site.`;
 }
 
 /** A source's name in words, with the agent always named as AI. */
