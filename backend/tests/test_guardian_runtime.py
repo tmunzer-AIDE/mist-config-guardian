@@ -674,6 +674,42 @@ async def test_a_monitoring_replay_that_raises_is_a_gap_and_never_a_failed_attem
     assert outcome.fields["verdict"].coverage != "complete"
 
 
+async def test_a_failed_phase_owns_a_gap_the_agent_view_and_the_verdict_both_show(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A phase can own no obligation at all, so its failure adds one of its own before coverage is read.
+
+    Three of the four plug-ins plan rule obligations only; a failed monitoring phase would otherwise leave every
+    planned obligation satisfied, and the agent would be told coverage was whatever the rest of the ledger said.
+    """
+    seen: dict[str, Any] = {}
+
+    def explode(*_args: Any, **_kwargs: Any) -> Any:
+        msg = "a monitoring contract refused its own payload"
+        raise ValueError(msg)
+
+    async def record(**kwargs: Any) -> Any:
+        seen["view"] = kwargs["inputs"].deterministic
+        msg = "the agent never ran"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(service, "replay_monitoring", explode)
+    monkeypatch.setattr(service, "run_agent", record)
+    tools = AttemptTools(rule_transport=FakeRuleTransport(), mcp_transport=FakeMcpTransport(), model_client=FakeModel())
+    outcome = await run_attempt(tools=tools)
+
+    view = seen["view"]
+    assert view.coverage != "complete"
+    assert any("Monitoring replay failed" in (item.reason or "") for item in view.unsatisfied.items)
+    # The gap leads the verdict's list, ahead of the per-change detail a cap would otherwise keep instead.
+    gaps = outcome.fields["verdict"].gaps
+    assert (gaps[0].source, gaps[0].text.startswith("Monitoring replay failed")) == ("core", True)
+    assert any(
+        item.status.status == "unsatisfied" and "Monitoring replay failed" in (item.status.reason or "")
+        for item in outcome.fields["obligations"]
+    )
+
+
 async def test_an_agent_that_raises_outside_its_turns_is_a_reason_and_never_a_failed_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -910,8 +910,8 @@ async def execute_attempt(
     except Exception as exc:  # noqa: BLE001 - the ledger is the attempt's coverage; without it nothing can publish
         return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))
     # Everything from here to composition is isolated: the design fails an attempt only on the change set, the
-    # ledger, composition and the persistence invariants. A phase that fails leaves its obligations unreported,
-    # so ``resolve_statuses`` marks them unsatisfied and coverage can no longer read complete.
+    # ledger, composition and the persistence invariants. A phase that fails leaves its own obligations
+    # unreported, so ``resolve_statuses`` marks them unsatisfied.
     isolated: list[str] = []
     deployment_replay = _isolate(
         DEPLOYMENT_PAIRING,
@@ -944,6 +944,11 @@ async def execute_attempt(
         isolated,
         lambda: record_monitoring(monitoring_replay, frame=frame, registry=registry),
     )
+    # A phase can fail while owning no obligation at all — three of the four plug-ins plan rule obligations only,
+    # so a failed monitoring phase would otherwise leave every obligation satisfied. Each failure becomes an
+    # unsatisfied core observation here, before coverage is read: coverage drops below complete, the agent's
+    # deterministic view shows what did not run, and the verdict lists it ahead of the per-change detail.
+    ledger = ledger.with_gaps(isolated)
     reported: dict[str, ObligationStatus] = {**deployment.statuses, **monitoring.statuses}
     for plugin_id, conclusion in sorted(rules.conclusions.items()):
         if plugin_id in ledger.plan_ids and conclusion.statuses:
@@ -970,9 +975,9 @@ async def execute_attempt(
             agent=agent.conclusion,
             evidence=registry.evidence,
             devices=_device_severities(monitoring_replay.devices),
-            # The ledger echoes the inputs it was given and adds the atoms it could place on no row; each of its
-            # gaps already carries an unsatisfied core observation, so coverage and the gap list agree.
-            core_gaps=(*ledger.gaps, *isolated),
+            # The ledger echoes the inputs it was given, the atoms it could place on no row and the phases that
+            # failed; each of its gaps carries an unsatisfied core observation, so coverage and the gaps agree.
+            core_gaps=ledger.gaps,
         )
     except Exception as exc:  # noqa: BLE001 - composition is the attempt's product; a broken verdict is a failure
         return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))

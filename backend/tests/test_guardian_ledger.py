@@ -685,6 +685,50 @@ def test_an_untargeted_atom_holds_coverage_down_beside_a_device_atom_that_is_ful
     assert coverage(ledger, reported) == "partial"
 
 
+def test_a_phase_that_fails_after_the_ledger_was_built_holds_complete_coverage_down():
+    """The case a plug-in cannot cover: it planned rule obligations only, so a failed phase owns nothing here.
+
+    Every planned obligation is satisfied and every row is claimed, so without a gap of its own the failure would
+    publish complete coverage over evidence nobody collected.
+    """
+    items = plans(*(rule(f"O{n}", "A1", DNS, device(d.mac)) for n, d in enumerate(DEVICES, start=1)))
+    ledger = build_ledger(change(DNS), DEVICES, items, "audit")
+    assert coverage(ledger, {o.id: SATISFIED for o in ledger.obligations}) == "complete"
+
+    failed = "Monitoring replay failed: a monitoring contract refused its own payload"
+    late = ledger.with_gaps((failed,))
+
+    assert coverage(late, {o.id: SATISFIED for o in late.obligations}) == "partial"
+    assert late.obligations[: len(ledger.obligations)] == ledger.obligations
+    [added] = [o for o in late.obligations if o.kind == "input"]
+    assert (added.id, added.owner, added.role) == (f"O{len(late.obligations)}", "core", "observation")
+    assert late.statuses[added.id] == unsatisfied(failed)
+    # The view the agent is given carries the failure, not only the verdict the run publishes.
+    assert failed in [item.reason for item in deterministic_view(late, {}).unsatisfied.items]
+
+
+def test_a_late_gap_leads_the_ledger_gaps_and_an_empty_one_changes_nothing():
+    """Gaps compose in order under a cap, so a phase that did not run is listed before the detail behind it."""
+    ledger = build_ledger(change(DNS), DEVICES, plans(rule("O1", "A1", DNS, device(X))), "audit", ("an input",))
+
+    late = ledger.with_gaps(("Deployment pairing failed: boom",))
+
+    assert late.gaps == ("Deployment pairing failed: boom", "an input")
+    assert ledger.with_gaps(()) is ledger
+
+
+def test_every_atom_that_sits_on_no_row_shares_one_gap():
+    """One per atom would fill the verdict's gap list and the agent's view with the same condition repeated."""
+    ledger = build_ledger(change(DNS, (("ntp_servers", "0"),), (("banner",),), (("motd",),)), (), {}, "audit")
+
+    [shared] = [o for o in ledger.obligations if o.kind == "input"]
+    reason = ledger.statuses[shared.id].reason
+    assert ledger.gaps == (reason,)
+    assert reason.startswith("4 changes (A1 dns_servers on template, A2 ntp_servers on template, A3 banner on ")
+    assert "and 1 more" in reason
+    assert coverage(ledger, {o.id: SATISFIED for o in ledger.obligations}) == "partial"
+
+
 def test_an_input_observation_is_numbered_after_every_other_obligation():
     items = plans(monitoring("O1", "A1", DNS, device(X)))
     ledger = build_ledger(change(DNS), DEVICES, items, "receipt", ("one", "two"))
