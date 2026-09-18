@@ -2,7 +2,34 @@
 
 Guardian is the audit-level impact investigation described in
 [the simplification design](../superpowers/specs/2026-09-16-guardian-simplification-design.md).
-This document starts with the external facts that design depends on. Later tasks add the implemented design.
+This document records the external facts that design depends on, and how the implemented engine is run.
+
+## Running Guardian
+
+Guardian is off by default: `GUARDIAN_ENABLED` (Helm `config.guardianEnabled`, `false`) on the API and the
+worker. That one boolean is every gate there is. While it is off, no webhook starts a root, the worker tick
+polls nothing, the changes, overview and site pages project nothing for it, and its two endpoints answer not
+found because no root exists to read. Turning it on changes nothing about the per-device monitoring
+subsystem -- its verdicts, badges and notifications stay the production ones -- except that it supersedes the
+old per-device AI narrator, which is then not run.
+
+When it is on, an investigation needs AI provider configuration and reads the Mist MCP endpoint in
+`MIST_MCP_URL`. External spend per audit is bounded by 2 runs x 2 attempts x (10 model turns + 7 MCP calls +
+8 rule reads), plus one MCP catalogue discovery per attempt.
+
+Guardian writes `guardian_investigations` and `guardian_runs` and nothing else. Both carry `retained_until`,
+derived from the organization's `monitoring_retention_days`, and expire through a partial TTL index. The hourly
+`guardian.maintain_retention` job exists only for what a TTL cannot see: documents whose organization has been
+deleted.
+
+### Removing the collections of the engine it replaced
+
+The engine Guardian replaced owned five collections: `impact_investigations`, `investigation_revisions`,
+`impact_model_request_artifacts`, `impact_adjudications` and `neighbor_bindings`. No code reads or writes them
+any more and no document model is registered for them. `scripts/drop-legacy-impact-collections.py` removes
+them, and nothing else. It never runs at startup or on a tick: an operator invokes it, and it only reports
+each collection and its document count until `--apply` is given. Running it again is safe -- a collection
+already gone is reported as absent.
 
 ## Verified external contracts
 

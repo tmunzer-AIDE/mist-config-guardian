@@ -88,10 +88,9 @@ class Settings(BaseSettings):
     webauthn_rp_name: str = "Mist Config Guardian"
     webauthn_origin: str = "http://localhost:4200"
 
-    # Shadow runs deterministic audit rules and suppresses the old per-device AI narrator.
     mist_mcp_url: str = "https://mcp.ai.juniper.net/mcp/mist"
-    impact_engine_mode: Literal["legacy", "shadow", "agent_shadow"] = "legacy"
-    # The Guardian audit impact investigation, which replaces impact_engine_mode once complete. Off by default.
+    # The Guardian audit impact investigation. Off by default: while it is off no investigation is started, the
+    # pages project nothing, and the per-device monitoring narrator keeps its own assessment.
     guardian_enabled: bool = False
 
     ai_request_timeout_seconds: float = 45.0

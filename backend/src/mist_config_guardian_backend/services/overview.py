@@ -27,7 +27,6 @@ from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.restore import RestoreOperation, RestoreStatus
 from mist_config_guardian_backend.models.snapshot import SnapshotKind, SnapshotManifest, SnapshotStatus
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup, RecoveryState
-from mist_config_guardian_backend.schemas.audit_impact import ShadowFeedCounts
 from mist_config_guardian_backend.schemas.change_group import ChangeGroupSummaryResponse
 from mist_config_guardian_backend.schemas.guardian import GuardianFeedBucket, GuardianFeedCounts, GuardianSummary
 from mist_config_guardian_backend.schemas.overview import (
@@ -65,14 +64,6 @@ _RESTORE_MODE_TITLES: Mapping[str, str] = {
 _CRON_STEP = re.compile(r"^\*/(\d+)$")
 _MINUTES_PER_HOUR = 60
 _MINUTES_PER_DAY = 24 * 60
-
-
-def shadow_feed_counts(summaries: Sequence[ChangeGroupSummaryResponse]) -> ShadowFeedCounts | None:
-    """Count the exact returned projections, without a racing second assessment read."""
-    if not summaries or any(item.shadow_impact is None for item in summaries):
-        return None
-    counts = Counter(item.shadow_impact.result for item in summaries if item.shadow_impact is not None)
-    return ShadowFeedCounts(total=len(summaries), **counts)
 
 
 def guardian_feed_counts(summaries: Sequence[ChangeGroupSummaryResponse]) -> GuardianFeedCounts | None:
@@ -672,7 +663,6 @@ class OverviewService:
             range_end=end,
             counts=counts,
             change_groups=summaries,
-            shadow_feed_counts=shadow_feed_counts(summaries),
             guardian_feed_counts=guardian_feed_counts(summaries),
             safety_net=build_safety_net(
                 SafetyNetInput(

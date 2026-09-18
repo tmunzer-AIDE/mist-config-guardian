@@ -9,21 +9,11 @@ questions:
     label: Mist MCP endpoint
     description: Worker read endpoint. Uses the organization service token and Mist cloud region.
     group: Workloads
-  - variable: config.impactEngineMode
-    default: legacy
-    type: enum
-    options:
-      - legacy
-      - shadow
-      - agent_shadow
-    label: Impact engine mode
-    description: Shadow modes retain legacy production verdicts and notifications. Agent shadow requires AI provider configuration.
-    group: Workloads
   - variable: config.guardianEnabled
     default: false
     type: boolean
     label: Enable Guardian
-    description: Audit impact investigation that replaces the impact engine mode once complete. Leave disabled.
+    description: Audit impact investigation. Requires AI provider configuration, and leaves per-device monitoring verdicts and notifications unchanged.
     group: Workloads
   - variable: replicaCount
     default: 1

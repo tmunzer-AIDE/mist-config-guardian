@@ -794,7 +794,6 @@ async def test_overview_endpoint_returns_the_full_contract() -> None:
         "historical",
         "latest_snapshot_at",
         "latest_snapshot_objects",
-        "shadow_feed_counts",
         "guardian_feed_counts",
     }
     assert set(body["counts"]) == {

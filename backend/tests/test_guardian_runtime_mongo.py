@@ -31,26 +31,19 @@ from mist_config_guardian_backend.guardian.contracts import (
     FINAL_MINIMUM,
     RECHECK_DELAY,
 )
-from mist_config_guardian_backend.models.adjudication import ImpactAdjudication
 from mist_config_guardian_backend.models.guardian import (
     GuardianInvestigation,
     GuardianRun,
     RunDocumentTooLargeError,
 )
-from mist_config_guardian_backend.models.investigation import (
-    ImpactInvestigation,
-    InvestigationRevision,
-    ModelRequestArtifact,
-)
 from mist_config_guardian_backend.models.monitoring import DeviceType, MonitoringSession, MonitoringStatus
-from mist_config_guardian_backend.models.neighbor_binding import NeighborBinding
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectIncarnation, ObjectVersion
 from mist_config_guardian_backend.models.webhook import WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services import guardian
 from mist_config_guardian_backend.services.guardian import AttemptOutcome, AttemptTools, GuardianService
-from mist_config_guardian_backend.services.investigation_retention import maintain_investigation_retention
+from mist_config_guardian_backend.services.guardian_retention import maintain_guardian_retention
 
 MONGO_URL = os.environ.get("MONGO_TEST_URL")
 DATABASE = "guardian_runtime"
@@ -73,12 +66,6 @@ DOCUMENTS = [
     ObjectVersion,
     LogicalObject,
     ObjectIncarnation,
-    # The retention job spans every investigation family, so they are registered too.
-    ImpactInvestigation,
-    InvestigationRevision,
-    ModelRequestArtifact,
-    ImpactAdjudication,
-    NeighborBinding,
 ]
 
 
@@ -1130,7 +1117,7 @@ async def test_retention_never_backfills_a_guardian_document(organization: Organ
     root = await new_root(organization)
     await service().tick(root)
 
-    await maintain_investigation_retention()
+    await maintain_guardian_retention()
 
     assert await roots().count_documents({"retained_until": None}) == 0
     assert await runs().count_documents({"retained_until": None}) == 0

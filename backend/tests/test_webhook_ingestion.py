@@ -16,7 +16,6 @@ from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services import webhook_processing
 from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
 from mist_config_guardian_backend.services.guardian import GuardianService
-from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
 from mist_config_guardian_backend.services.webhook_processing import WebhookProcessingService
 from mist_config_guardian_backend.services.webhooks import (
@@ -200,11 +199,7 @@ async def _process(monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: bool) -
     async def guardian_ensure(_self: object, org: object, audit_id: str, **kwargs: object) -> None:
         started.append(("guardian", (org, audit_id, kwargs["changed_at"], kwargs["anchor_known"])))
 
-    async def legacy_ensure(_self: object, *args: object, **_kwargs: object) -> None:
-        started.append(("legacy", args))
-
     monkeypatch.setattr(GuardianService, "ensure", guardian_ensure)
-    monkeypatch.setattr(ImpactInvestigationService, "ensure", legacy_ensure)
 
     await WebhookProcessingService(vault, projector=AsyncMock()).process(receipt.id)
     return started

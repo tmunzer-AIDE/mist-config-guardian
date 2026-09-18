@@ -11,7 +11,7 @@ either needs no collection at all or stands one in, so the phases, budgets and f
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import httpx
@@ -44,7 +44,6 @@ from mist_config_guardian_backend.guardian.evidence import (
 )
 from mist_config_guardian_backend.guardian.reader import TransportError
 from mist_config_guardian_backend.guardian.repository import RUN_OUTCOME_FIELDS
-from mist_config_guardian_backend.impact.deployment import normalize_deployment
 from mist_config_guardian_backend.models.guardian import GuardianInvestigation
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
@@ -78,10 +77,10 @@ from mist_config_guardian_backend.services.guardian import (
     monitoring_record,
     protected_configuration,
 )
-from mist_config_guardian_backend.services.impact_investigations import ImpactInvestigationService
 from mist_config_guardian_backend.services.monitoring import MonitoringPollService
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.tasks import monitoring as task
+from mist_config_guardian_backend.webhooks.deployment import normalize_deployment
 
 ORG = PydanticObjectId()
 AUDIT = "audit-1"
@@ -191,7 +190,7 @@ def test_a_device_event_receipt_needs_a_mac_and_a_site() -> None:
 
 
 def test_an_access_point_revert_is_named_as_unobservable_rather_than_assumed_away() -> None:
-    # The legacy normalizer classifies no AP_CONFIG_REVERTED, so no stored receipt can ever carry one, while
+    # Ingestion's normalizer classifies no AP_CONFIG_REVERTED, so no stored receipt can ever carry one, while
     # Guardian's own pairing does recognize the event type. The mapping states that gap instead of hiding it.
     assert outcome_kind("AP_CONFIG_REVERTED") == "reverted"
     assert normalize_deployment("device-events", {"type": "AP_CONFIG_REVERTED", "mac": MAC}) is None
@@ -671,14 +670,10 @@ async def _tick_worker(monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: boo
         polled.append("guardian")
         return 0
 
-    async def legacy_poll(_self: object) -> None:
-        polled.append("legacy")
-
     monkeypatch.setattr(task, "get_settings", lambda: Settings(guardian_enabled=guardian_enabled))
     monkeypatch.setattr(task, "DatabaseManager", FakeDatabase)
     monkeypatch.setattr(MonitoringPollService, "poll_active", poll_active)
     monkeypatch.setattr(GuardianService, "poll_due", guardian_poll)
-    monkeypatch.setattr(ImpactInvestigationService, "poll_due", legacy_poll)
 
     await task._poll_active_monitoring()
     return polled
@@ -690,6 +685,57 @@ async def test_the_worker_polls_nothing_new_while_the_feature_is_off(monkeypatch
 
 async def test_the_worker_polls_guardian_once_the_feature_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await _tick_worker(monkeypatch, guardian_enabled=True) == ["guardian"]
+
+
+async def _narrate(monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: bool) -> tuple[list[str], object]:
+    """Run the per-device AI narrator over one session and report whether the provider was reached."""
+    from mist_config_guardian_backend.services import monitoring  # noqa: PLC0415
+
+    reached: list[str] = []
+
+    class Provider:
+        def __init__(self, **kwargs: object) -> None:
+            reached.append(str(kwargs["model"]))
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+        async def assess(self, _assessment: object) -> str:
+            return "A device narration."
+
+    monkeypatch.setattr(monitoring, "get_settings", lambda: Settings(guardian_enabled=guardian_enabled))
+    monkeypatch.setattr(monitoring, "OpenAiCompatibleImpactProvider", Provider)
+    session = SimpleNamespace(ai_assessment=None, ai_assessment_error="An earlier failure.")
+    configuration = SimpleNamespace(base_url="https://provider.invalid", model="a-model", api_key="secret")
+    service = monitoring.MonitoringPollService(
+        CredentialVault(Settings(environment="test", database_enabled=False)),
+        AsyncMock(),
+    )
+    await service._assess_with_ai(session, object(), configuration)
+    return reached, session
+
+
+async def test_the_per_device_narrator_still_runs_while_guardian_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    reached, session = await _narrate(monkeypatch, guardian_enabled=False)
+
+    assert reached == ["a-model"]
+    assert session.ai_assessment == "A device narration."
+    assert session.ai_assessment_error is None
+
+
+async def test_guardian_supersedes_the_per_device_narrator_and_leaves_its_last_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Guardian investigates the audit that caused the change, so the old narrator is not run at all. It is
+    # suppressed, not failed: the session keeps whatever it already said rather than gaining an error.
+    reached, session = await _narrate(monkeypatch, guardian_enabled=True)
+
+    assert reached == []
+    assert session.ai_assessment is None
+    assert session.ai_assessment_error == "An earlier failure."
 
 
 # -- inputs the attempt never saw in full ------------------------------------------------------------------------

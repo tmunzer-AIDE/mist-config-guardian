@@ -11,7 +11,6 @@ from mist_config_guardian_backend.models.webhook import (
     ChangeSource,
     RecoveryState,
 )
-from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
 from mist_config_guardian_backend.schemas.guardian import GuardianSummary
 
 
@@ -83,9 +82,8 @@ class ChangeGroupSummaryResponse(BaseModel):
     # shown", not "no impact".
     impact_known: bool = True
     impact_source: Literal["legacy"] | None = "legacy"
-    shadow_impact: AuditImpactSummary | None = None
-    # Guardian's own projection, served beside the shadow one until the frontend has moved across. ``None`` means
-    # no Guardian root for this audit, which is not the same as one that could not be read.
+    # Guardian's own projection for this audit. ``None`` means no Guardian root for this audit, which is not the
+    # same as one that could not be read.
     guardian: GuardianSummary | None = None
     is_mine: bool = False
 

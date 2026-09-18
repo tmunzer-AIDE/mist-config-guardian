@@ -22,7 +22,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     Verdict,
 )
 from mist_config_guardian_backend.models import document_models
-from mist_config_guardian_backend.models.adjudication import ImpactAdjudication
 from mist_config_guardian_backend.models.guardian import (
     AttemptCounts,
     GuardianClaim,
@@ -33,12 +32,6 @@ from mist_config_guardian_backend.models.guardian import (
     bson_size,
     check_run_document_size,
 )
-from mist_config_guardian_backend.models.investigation import (
-    ImpactInvestigation,
-    InvestigationRevision,
-    ModelRequestArtifact,
-)
-from mist_config_guardian_backend.models.neighbor_binding import NeighborBinding
 from mist_config_guardian_backend.schemas.guardian import GuardianAttemptSummary, GuardianSummary
 
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
@@ -121,11 +114,12 @@ def index_keys(model) -> dict[str, dict]:
 def test_guardian_collections_are_registered_and_disjoint_from_legacy_collections():
     assert GuardianInvestigation.Settings.name == "guardian_investigations"
     assert GuardianRun.Settings.name == "guardian_runs"
-    legacy = {m.Settings.name for m in (ImpactInvestigation, InvestigationRevision, ModelRequestArtifact)}
-    legacy |= {ImpactAdjudication.Settings.name, NeighborBinding.Settings.name}
-    assert legacy <= LEGACY_COLLECTIONS
     assert {"guardian_investigations", "guardian_runs"}.isdisjoint(LEGACY_COLLECTIONS)
-    assert {GuardianInvestigation, GuardianRun} <= set(document_models())
+    registered = {model.Settings.name for model in document_models()}
+    assert {"guardian_investigations", "guardian_runs"} <= registered
+    # The removed engine's collections are unregistered: no document model can read or write one again, which is
+    # what makes the cleanup command safe to run.
+    assert registered.isdisjoint(LEGACY_COLLECTIONS)
 
 
 def test_indexes_match_the_design():
@@ -367,12 +361,13 @@ def test_api_summaries_expose_status_results_and_attempts_but_never_evidence():
 
 def test_guardian_is_disabled_by_default_everywhere(monkeypatch):
     monkeypatch.delenv("GUARDIAN_ENABLED", raising=False)
-    monkeypatch.delenv("IMPACT_ENGINE_MODE", raising=False)
-    defaults = Settings(_env_file=None)
-    assert defaults.guardian_enabled is False
-    assert defaults.impact_engine_mode == "legacy"
+    assert Settings(_env_file=None).guardian_enabled is False
     monkeypatch.setenv("GUARDIAN_ENABLED", "true")
     assert Settings(_env_file=None).guardian_enabled is True
+    # The engine Guardian replaced had its own mode setting; nothing may read one again.
+    assert not hasattr(Settings(_env_file=None), "impact_engine_mode")
+    configmap = (REPO_ROOT / "helm" / "mist-config-guardian" / "templates" / "configmap.yaml").read_text()
+    assert "IMPACT_ENGINE_MODE" not in configmap
 
     chart = REPO_ROOT / "helm" / "mist-config-guardian"
     assert yaml.safe_load((chart / "values.yaml").read_text())["config"]["guardianEnabled"] is False
@@ -412,6 +407,7 @@ def guardian_sources() -> list[Path]:
 
 
 def test_guardian_code_never_touches_the_legacy_engine():
+    # The first four packages no longer exist; naming them keeps a reintroduction from passing unnoticed.
     legacy_modules = (
         "mist_config_guardian_backend.impact",
         "mist_config_guardian_backend.models.investigation",
@@ -497,13 +493,14 @@ def test_the_pure_guardian_core_loads_no_database_driver_settings_or_service_tra
 def test_guardian_stays_dormant_until_a_gated_path_is_wired():
     # Persistence registration, retention and the setup-time capability probe reach Guardian code without a gate.
     # The probe reads Guardian's versioned action schema when an administrator tests the AI provider: it stores
-    # what the provider proved and starts no investigation. The orchestrator is imported by the two surfaces that
-    # gate it, and both do nothing at all while guardian_enabled is false. Later tasks extend this set.
+    # what the provider proved and starts no investigation. The orchestrator is imported by the surfaces that
+    # gate it, and they do nothing at all while guardian_enabled is false.
     allowed = {
         *(path.relative_to(BACKEND).as_posix() for path in guardian_sources()),
         "models/__init__.py",
-        # Retention pins Guardian TTLs and deletes orphaned Guardian documents; it starts nothing.
-        "services/investigation_retention.py",
+        # Retention deletes orphaned Guardian documents; it starts nothing.
+        "services/guardian_retention.py",
+        "tasks/guardian_retention.py",
         # The setup-time structured-output probe reads Guardian's action schema; it starts nothing.
         "services/application_configuration.py",
         # The orchestrator itself, and the two surfaces that call it only when guardian_enabled is set.
@@ -528,9 +525,9 @@ def test_guardian_stays_dormant_until_a_gated_path_is_wired():
     readers = {
         path.relative_to(BACKEND).as_posix() for path in BACKEND.rglob("*.py") if "guardian_enabled" in path.read_text()
     }
-    # Root creation, worker polling and the current-view projections are the surfaces gated so far; every legacy
-    # gate is untouched. The orchestrator names the setting in its own docstring, which is what says it never runs
-    # on its own.
+    # Every gate the removed engine held is now this one boolean: root creation, worker polling, the change-group
+    # and site projections, and the suppression of the per-device monitoring narrator. The orchestrator names the
+    # setting in its own docstring, which is what says it never runs on its own.
     assert readers == {
         "config.py",
         "services/guardian.py",
@@ -538,4 +535,5 @@ def test_guardian_stays_dormant_until_a_gated_path_is_wired():
         "tasks/monitoring.py",
         "services/change_groups.py",
         "services/site_impact.py",
+        "services/monitoring.py",
     }

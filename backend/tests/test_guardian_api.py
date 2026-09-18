@@ -34,7 +34,6 @@ from mist_config_guardian_backend.guardian.contracts import (
     Verdict,
 )
 from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianResult, GuardianRun
-from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup
 from mist_config_guardian_backend.schemas.guardian import CARRIED_RUN_FIELDS, GuardianRunResponse
 from mist_config_guardian_backend.services import guardian_reads
@@ -312,24 +311,10 @@ class _Documents:
         return SimpleNamespace(find=find, find_one=find_one)
 
 
-class _Legacy:
-    """Any read of a legacy collection is a failure, not a value."""
-
-    @staticmethod
-    def install(monkeypatch: pytest.MonkeyPatch) -> None:
-        def refuse(*_args: Any, **_kwargs: Any) -> None:
-            msg = "Guardian projections never read legacy collections"
-            raise AssertionError(msg)
-
-        for model in (ImpactInvestigation, InvestigationRevision):
-            monkeypatch.setattr(model, "get_pymongo_collection", refuse)
-
-
 # --- batch root projection --------------------------------------------------------------------------------------
 
 
-async def test_roots_are_projected_in_one_bounded_batch_without_evidence_or_legacy_collections(monkeypatch):
-    _Legacy.install(monkeypatch)
+async def test_roots_are_projected_in_one_bounded_batch_without_evidence(monkeypatch):
     roots = _Documents(GuardianInvestigation, [done_root()]).install(monkeypatch)
     runs = _Documents(GuardianRun, [run()]).install(monkeypatch)
 
@@ -458,7 +443,6 @@ async def test_an_unpublished_root_has_no_device_rows_to_overlay(monkeypatch):
 
 
 def investigation_documents(monkeypatch, *, runs: list[GuardianRun] | None = None, groups=None, roots=None):
-    _Legacy.install(monkeypatch)
     return (
         _Documents(AuditChangeGroup, [group()] if groups is None else groups).install(monkeypatch),
         _Documents(GuardianInvestigation, [done_root()] if roots is None else roots).install(monkeypatch),
@@ -692,19 +676,12 @@ def test_unknown_change_groups_roots_and_runs_answer_not_found(api, monkeypatch)
     assert api.get(f"/api/v1/organizations/{ORG}/change-groups/{GROUP}/guardian/runs/{missing}").status_code == 404
 
 
-def test_the_legacy_investigation_routes_are_still_served(api):
+def test_guardian_is_the_only_investigation_surface_a_change_group_serves(api):
     paths = set(api.app.openapi()["paths"])  # type: ignore[attr-defined]
     prefix = "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}"
-    assert {
-        f"{prefix}/investigation",
-        f"{prefix}/investigation/history",
-        f"{prefix}/investigation/model-requests/{{request_id}}",
-        f"{prefix}/investigation/mcp-requests/{{request_id}}",
-        f"{prefix}/investigation/adjudication",
-        f"{prefix}/investigation/acceptance",
-        f"{prefix}/guardian",
-        f"{prefix}/guardian/runs/{{run_id}}",
-    } <= paths
+    assert {f"{prefix}/guardian", f"{prefix}/guardian/runs/{{run_id}}"} <= paths
+    # The removed engine's six routes are gone, including the two that took a reviewer's own label.
+    assert not [path for path in paths if "/investigation" in path]
 
 
 def test_the_run_response_carries_a_pinned_set_of_the_run_document():
