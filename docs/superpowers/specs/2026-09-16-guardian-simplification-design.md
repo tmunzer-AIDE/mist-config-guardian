@@ -1,6 +1,6 @@
 # Guardian: a simpler, trustworthy audit impact investigation
 
-Status: draft for review
+Status: approved
 Date: 2026-09-16
 
 ## Problem
@@ -124,11 +124,11 @@ audit webhook ──► guardian_investigations (waiting)
 | Field | Meaning |
 |---|---|
 | `organization_id`, `audit_id` | Identity, unique together |
-| `changed_at`, `anchor_known` | Audit time; `anchor_known=false` when receipt time was used |
+| `changed_at`, `anchor_known` | Audit time from the audit payload; receipt time with `anchor_known=false` when absent. Used for trigger timing; each run resolves its own anchor (see "Attempt execution") |
 | `status` | `waiting` or `done` |
 | `status_reason` | Always set when `done` |
 | `next_check_at` | When the tick next evaluates triggers |
-| `claim` | `{token, kind, lease_until}` or null |
+| `claim` | `{token, kind, lease_until, attempt, started_at, final_forced}` or null; `attempt` and `started_at` stay null until the attempt is committed, and then suffice to rebuild the attempt record; `final_forced` is the server-evaluated +120 min branch |
 | `attempts` | `{early: int, final: int}` |
 | `early_run_id`, `final_run_id` | Published run pointers |
 | `result` | Published summary (below), null while pending |
@@ -177,64 +177,169 @@ only if the root points to it.
 
 ### Claim, execution, publication
 
-1. **Claim.** A conditional `find_one_and_update` requires `status=waiting` and
-   `claim` null or `claim.lease_until <= now`. It sets `claim={token: new ObjectId,
-   kind, lease_until: now + 300 s}` and increments `attempts[kind]`. If the
-   pre-increment count is already 2, the kind is exhausted instead (see
-   "Triggers").
-2. **Abandon stale attempts.** Mark every `guardian_runs` document for the
-   investigation with `state=running` and `_id != token` as `abandoned`. The
-   successful claim proves none of them is live.
-3. **Create the run.** Insert the run with `_id=token`, `state=running`.
-4. **Execute** within the attempt deadline.
-5. **Finalize** the run document to `succeeded` or `failed` with a conditional
-   update filtered on `_id == token` and `state == running`. This happens before
-   publication, so the root never points at a non-terminal run. If the update
-   matches nothing, a reclaim has already marked the run `abandoned`. The worker
-   then stops without attempting publication, so a stale worker can never turn
-   `abandoned` back into `succeeded`.
-6. **Publish** with a compare-and-set on the root, filtered on `claim.token ==
-   token` and `status == waiting`. It always clears `claim`.
-   - **A `succeeded` run:** set the kind's run pointer and `result`. For
-     `final`, also set `status=done` and a `status_reason`.
-   - **A `failed` run:** set no pointer and leave `result` unchanged. The run's
-     `failure_reason` stays visible through the attempt summaries.
-   - **A failed CAS** leaves the terminal run unpublished, which is derived as
-     superseded.
+Nothing uses transactions. Each step is one conditional update. Every root update
+that touches a claim filters on that exact token **and on the claim's phase**
+(uncommitted: `claim.attempt` null; committed: `claim.attempt` equals the run's
+attempt), so no two transitions can both apply to the same claim. A crash between
+any two steps leaves a state that the next tick can finish.
+
+**One clock for root time.** Every temporal predicate and assignment in a root
+CAS uses MongoDB's `$$NOW` through `$expr` filters and pipeline updates
+(MongoDB 8). That covers:
+- comparisons: `next_check_at`, lease expiry, the early cutoff, the final minimum,
+  and the forced-final threshold;
+- assignments: `next_check_at` (retry and idle delays), `lease_until`,
+  `started_at`, `claim.final_forced`.
+
+Examples are `$claim.lease_until > $$NOW` and `lease_until = $$NOW + 300 s`.
+"Unexpired" at commit, "expired" at recovery, "before +45 min" and "forced at
++120 min" are therefore judged on one clock, whatever the workers' clock skew or
+pauses.
+
+Worker time is used only for non-authoritative hints that a server-time CAS
+re-checks:
+- **read-only trigger evaluation;**
+- **the due query:** a plain indexed query on `(status, next_check_at)` for
+  candidate selection;
+- **the initial `next_check_at`** written by the webhook's `$setOnInsert` upsert.
+  `$$NOW` isn't available in a classic update, and an insert-then-pipeline split
+  could crash and leave a root that is never selected. Skew only shifts the first
+  check, because the lease CAS compares `next_check_at <= $$NOW`.
+
+Branches of the trigger rule that change what revalidation requires are recorded
+in the lease on server time, never taken from the worker's evaluation.
+
+Local phase deadlines stay monotonic. Their clock starts from a monotonic
+timestamp taken just before the commit is sent, so they always end before the
+server-side lease that the commit sets.
+
+**Tick procedure** for one root selected by the due query (below):
+
+1. **Resolve an expired claim** first, while the root still holds it (see "Claim
+   recovery"). The tick then stops for this root, and the next tick continues from
+   the resolved state.
+2. **Exhaust** if `attempts.final == 2` and `final_run_id` is null. A CAS on
+   `claim` null and `status=waiting` sets `status=done`, `next_check_at=null` and
+   `status_reason="Final run failed after 2 attempts: <failure_reason of the last
+   final run>"`. That run always exists, because recovery runs first. `result`
+   keeps the early result if one exists, and its `run_kind=early` tells the UI to
+   show it as an early assessment.
+3. **Evaluate triggers** read-only (see "Triggers"). If nothing is due, a CAS on
+   `claim` null sets `next_check_at = $$NOW + 1 min`.
+4. **Lease.** A CAS on `status=waiting`, `claim` null, `next_check_at <= $$NOW`,
+   `attempts.<kind> < 2` and the root-local trigger conditions for the kind:
+   - `early`: `early_run_id` null and `$$NOW < changed_at + 45 min`;
+   - `final`: `$$NOW >= changed_at + 60 min`.
+
+   It sets `claim={token: new ObjectId, kind, lease_until: $$NOW + 300 s, attempt:
+   null, started_at: null, final_forced}`. For `final`, `final_forced = ($$NOW >=
+   changed_at + 120 min)`; for `early` it is `false`. No attempt is consumed yet.
+5. **Revalidate** the kind's cross-collection trigger conditions under the lease,
+   using the branch recorded in the claim. `final` requires no `active` linked
+   session unless `claim.final_forced` is true; `early` requires the degradation
+   transition.
+   If they no longer hold, the worker **releases** the lease, and no attempt is
+   consumed. The release is a CAS on `claim.token == token` and `claim.attempt`
+   null that sets `claim=null` and `next_check_at = $$NOW + 1 min`. It is
+   idempotent with an uncommitted recovery of the same token.
+6. **Commit the attempt.** A CAS on all of:
+   - `claim.token == token` and `claim.attempt` null;
+   - `$claim.lease_until > $$NOW`;
+   - `status=waiting` and `attempts.<kind> < 2`;
+   - for `early`, also `$$NOW < changed_at + 45 min` and `early_run_id` null.
+
+   It increments `attempts.<kind>` and sets `claim.attempt = attempts.<kind> + 1`,
+   `claim.started_at = $$NOW` and `claim.lease_until = $$NOW + 300 s`. The attempt
+   deadline is measured from a monotonic timestamp taken just before the commit is
+   sent.
+   - **No match:** the worker issues the release CAS from step 5 and stops. If the
+     claim was still uncommitted (the early cutoff passed during a pause, the lease
+     expired, or attempts ran out), the release frees it without incrementing, and
+     a later tick proceeds with the final trigger. If recovery already cleared it,
+     the release matches nothing.
+   - **Ambiguous response** (timeout or connection error after sending): the
+     worker never retries the update. It reads the root instead. The commit
+     applied if `claim.token == token` and `claim.attempt` is not null, and the
+     worker continues with that attempt; otherwise it stops. A retry therefore
+     can't increment the counter twice, and a lost commit can't run unrecorded.
+7. **Create the run** with `_id=token`, `state=running`, from the claim. If the
+   insert hits a duplicate key, recovery has already resolved this token, and the
+   worker stops.
+8. **Execute** within the attempt deadline.
+9. **Finalize** the run to `succeeded` or `failed` with a conditional update on
+   `_id == token` and `state == running`. This happens before publication, so the
+   root never points at a non-terminal run. If nothing matches, recovery has
+   already marked it `abandoned`, and the worker stops without publishing.
+10. **Publish** (below).
+
+**Publication** is a CAS on `claim.token == token`, `claim.attempt == run.attempt`
+and `status=waiting`. It always clears `claim` and is idempotent: the worker and a
+recovering tick may both try it for the same run, and at most one matches.
+- **A `succeeded` run:** set the kind's run pointer and `result`. For `final`, also
+  set `status=done`, `status_reason` and `next_check_at=null`; for `early`, set
+  `next_check_at = $$NOW + 1 min`.
+- **A `failed` run:** set no pointer, leave `result` unchanged, and set
+  `next_check_at = $$NOW + 1 min`. The run's `failure_reason` stays visible through
+  the attempt summaries.
+- **A failed CAS** leaves the terminal run unpublished, which is derived as
+  superseded.
 
 Every external call (rule read, MCP call, provider request) starts only if the
 local monotonic clock is before its phase deadline. The phase deadline is always
-before the lease end. Claims require an expired lease, so a live local lease
-implies the token still matches, and no database read is needed per call.
+before the lease end. A lease is taken over only after it expires and its token is
+resolved, so a live local lease implies the token still matches, and no database
+read is needed per call.
 
-**Exhaustion.** A kind is exhausted when its due trigger finds `attempts[kind] ==
-2` and no published run for that kind.
-- **Early exhausted:** the early trigger simply stops firing.
-- **Final exhausted:** a conditional update (with `claim` null or expired) sets
-  `status=done` and `status_reason="Final run failed after 2 attempts: <last
-  failure_reason>"`. `result` keeps the early result if one exists, and its
-  `run_kind=early` tells the UI to show it as an early assessment.
-- **Expired-attempt cleanup:** an exhaustion update clears `claim`. It then
-  conditionally changes the expired run from `running` to `abandoned`. If the
-  stale worker won the run-finalization race first, that run remains terminal but
-  unpublished because the root is already exhausted; it can never publish over
-  `status=done`.
+### Claim recovery
+
+An expired claim `T` is resolved while the root still holds it. Only the final
+step clears or replaces it, and always with a CAS on `claim.token == T`. A
+recovering worker that crashes midway leaves `T` on the root for the next tick.
+
+1. **Uncommitted** (`claim.attempt` null): no attempt was consumed. A CAS on
+   `claim.token == T`, `claim.attempt` null and `$claim.lease_until <= $$NOW` clears
+   the claim.
+   - If a stale worker's commit wins first, `claim.attempt` is set, the clear
+     matches nothing, and the next tick sees a live, committed lease.
+   - If the clear wins first, the stale commit matches nothing, and the worker
+     stops. Either way, no consumed attempt loses its claim metadata.
+2. **Committed** (`claim.attempt == n`, `$claim.lease_until <= $$NOW`): read run `T`
+   and act on its state. Run states only move from `running` to terminal, so at
+   most two passes are needed. The closing publication or clear filters on
+   `claim.token == T` and `claim.attempt == n`.
+
+| Run `T` | Action |
+|---|---|
+| missing | insert an `abandoned` run from the claim (kind, attempt, `started_at`, reason "Lease expired before the attempt finished"); on a duplicate key, read it again |
+| `running` | conditional update to `abandoned` with the same reason; if nothing matches, read it again |
+| `succeeded` | publish it exactly as its worker would have |
+| `failed` or `abandoned` | publish it as a failed run: clear the claim and set `next_check_at = $$NOW + 1 min` |
+
+A succeeded run whose worker paused before publication is therefore adopted, never
+discarded. Every committed attempt ends with a terminal run record.
 
 ### Scheduling transitions
 
 | Event | Root update |
 |---|---|
-| Audit webhook (`ensure`, upsert with `$setOnInsert`) | `status=waiting`, `next_check_at = max(now, changed_at) + 1 min` |
-| Tick, nothing due (conditional on `claim` null or expired) | `next_check_at = now + 1 min` |
-| Claim | sets `claim`, increments `attempts[kind]`; `next_check_at` unchanged |
-| Early published, succeeded or failed | `claim=null`, `next_check_at = now + 1 min` |
+| Audit webhook (`ensure`, upsert with `$setOnInsert`) | `status=waiting`, `next_check_at = max(worker now, changed_at) + 1 min` (a hint; see "One clock for root time") |
+| Nothing due | `next_check_at = $$NOW + 1 min` (CAS on `claim` null) |
+| Lease | `claim` set with `attempt` null and `final_forced` evaluated on `$$NOW`; `next_check_at` unchanged |
+| Revalidation fails, or commit matched nothing | `claim=null`, `next_check_at = $$NOW + 1 min` (release CAS on token, `attempt` null) |
+| Attempt committed | `attempts.<kind>` incremented; `claim.attempt`, `claim.started_at`, `claim.lease_until` set (CAS on token, `attempt` null, lease unexpired by `$$NOW`, `status=waiting`, attempts below 2; early also `$$NOW` before +45 min) |
+| Early published, succeeded or failed | `claim=null`, `next_check_at = $$NOW + 1 min` |
 | Final succeeded | `claim=null`, `status=done`, `status_reason`, `next_check_at=null` |
-| Final failed with attempts left | `claim=null`, `next_check_at = now + 1 min` |
-| Final exhausted | `claim=null`, `status=done`, `status_reason`, `next_check_at=null`; conditionally abandon the expired running attempt |
-| Crash, lease loss, lost CAS | no root update; `next_check_at` is already due, so the root is reclaimed after `lease_until` |
+| Final failed with attempts left | `claim=null`, `next_check_at = $$NOW + 1 min` |
+| Final exhausted | `status=done`, `status_reason`, `next_check_at=null` (CAS on `claim` null) |
+| Uncommitted claim recovered | `claim=null` (CAS on token, `attempt` null, lease expired by `$$NOW`) |
+| Crash, lease loss | no root update; `next_check_at` is already due, so the next tick after `lease_until` resolves the claim |
 
-The due query is `status=waiting`, `next_check_at <= now`, and `claim` null or
-`claim.lease_until <= now`, sorted by `next_check_at`, limit 20.
+The due query is `status=waiting`, `next_check_at <= worker now`, and `claim` null
+or `claim.lease_until <= worker now`, sorted by `next_check_at`, limit 20. It is a
+plain query that uses the `(status, next_check_at)` index and only selects
+candidates. A candidate picked early by a fast worker clock fails the server-time
+CAS and is skipped until a later tick. Every claim-changing step re-checks its own
+conditions.
 
 ### Indexes
 
@@ -243,7 +348,6 @@ The due query is `status=waiting`, `next_check_at <= now`, and `claim` null or
 | `guardian_investigations` | unique `(organization_id, audit_id)` | Identity, `ensure` upsert, change-group reads |
 | `guardian_investigations` | `(status, next_check_at)` | Due-claim lookup |
 | `guardian_investigations` | TTL `retained_until` (partial: field exists) | Retention |
-| `guardian_runs` | `(investigation_id, state)` | Abandon-on-reclaim update |
 | `guardian_runs` | `(organization_id, investigation_id, kind, attempt)` | Tenant-safe reads and attempt summaries |
 | `guardian_runs` | TTL `retained_until` (partial: field exists) | Retention |
 
@@ -266,21 +370,45 @@ The one-minute worker tick evaluates up to 20 `waiting` investigations with
 
 - `final` wins when both are due, so an early degradation after +45 min
   merges into the final run.
+- **Root-local conditions** (time, attempts, `early_run_id`) are repeated in the
+  lease CAS, and the early cutoff again in the commit CAS, all on server time.
+- **Cross-collection conditions** (linked-session transitions and activity) are
+  revalidated under the lease before the attempt is committed. Whether the final
+  is forced past +120 min comes from `claim.final_forced`, which is set on server
+  time. The early signal is
+  an append-only timeline transition, so it can't become false once seen. The final
+  run's "no linked session is `active`" can, when a late device event opens a new
+  session. Revalidation narrows that window to the lease step; a session opening
+  after revalidation leaves its devices `unsatisfied` ("monitoring still active").
 - One claim at a time: a final run waits while an early attempt holds the lease.
 - Early and final attempts are counted separately. An exhausted early run never
   blocks or consumes the final run.
 - The timeline transitions are used only as a trigger. They were computed with
   `legacy_all` and never feed the verdict.
-- If nothing is due, `next_check_at = now + 1 min`.
+- If nothing is due, `next_check_at = $$NOW + 1 min`. The table above is the read-only
+  evaluation, where `now` is the worker clock; the CAS steps re-check it on server time.
 
 ## Attempt execution
 
-The deadline is measured on the local monotonic clock, starting when the claim
-returns:
+**Evidence instant.** An aware wall-clock `as_of` is captured once when attempt
+execution starts. Monitoring, deployment, rule and MCP windows use that fixed
+instant throughout the attempt; later phases never move the evidence boundary.
 
-An aware wall-clock `as_of` is captured once when attempt execution starts.
-Monitoring, deployment and MCP windows use that fixed instant throughout the
-attempt; later phase execution never moves the evidence boundary.
+**Anchor.** Each run resolves the change time used by every window in this
+specification (written `changed_at` in formulas):
+1. `source=audit`: the audit payload's event time (`anchor_known=true`);
+2. `source=device_trigger`: otherwise, the earliest occurrence time of a
+   `*_CONFIG_CHANGED_BY_USER` event carrying this `audit_id`;
+3. `source=receipt`: otherwise, the audit receipt time.
+
+`source=receipt` adds a core `anchor` precondition, "change time is unknown", which is
+always unsatisfied. Coverage can't be `complete`, so a receipt-anchored run can
+never publish `none`. The anchor and its source are stored on the run.
+
+**Deadline.** The attempt deadline is measured on the local monotonic clock,
+starting from a monotonic timestamp taken just before the attempt commit (tick
+step 6) is sent. A slow or ambiguous commit response only shortens the remaining
+time; it never extends past the lease:
 
 | Phase | Ends at | External calls |
 |---|---|---|
@@ -294,7 +422,11 @@ attempt; later phase execution never moves the evidence boundary.
   final 30 seconds make no external calls. The 300 s lease leaves a 60 s margin.
 - **Failure isolation:** a plugin exception or timeout produces error evidence,
   leaves that plugin's obligations `unsatisfied`, adds a gap, and lets other
-  plugins and the agent continue. An agent failure (provider, MCP, deadline)
+  plugins and the agent continue. A monitoring or deployment phase that fails
+  adds an unsatisfied core observation of its own, because such a phase may own
+  no planned obligation at all: coverage therefore never reads `complete` over a
+  phase that did not run, and the agent's deterministic view is told so before it
+  reasons. An agent failure (provider, MCP, deadline)
   records the reason and the attempt still composes a deterministic verdict.
   Only failures in change-set construction, the ledger, composition or
   persistence invariants fail the attempt.
@@ -383,11 +515,11 @@ MCP calls additionally require all of the following:
 - **Organization:** `org_id` is injected by Guardian, and any other organization
   is rejected.
 - **Site:** the initial scope is fixed from expected devices and changed objects.
-  A site-scoped change can never gain another site merely because an org-wide
-  result mentioned it. Evidence may add devices or services only inside an
-  already-authorized site. An explicitly org-scoped change may use organization
-  scope, but every result still passes the organization boundary and the normal
-  result and budget limits.
+  - A site-scoped change can never gain another site merely because an org-wide
+    result mentioned it.
+  - Evidence may add devices or services only inside an already-authorized site.
+  - An explicitly org-scoped change may use organization scope, but every result
+    still passes the organization boundary and the normal result and budget limits.
 - **Time:** a historical time range must equal exactly `before`, exactly `after`,
   or their combined interval. `duration = min(60 min, as_of − changed_at)`,
   `before = [changed_at − duration, changed_at]`, and `after = [changed_at,
@@ -424,7 +556,7 @@ RulePlan
 Obligation   id O<n>, owner, change_ref A<n>, paths (prefixes), role, kind, target, metric?, empty_policy?
 Exclusion    owner, change_ref A<n>, paths (prefixes), target, reason
 role         precondition | observation
-kind         deployment | monitoring | rule
+kind         anchor | deployment | monitoring | rule     # anchor and deployment are core-owned preconditions
 target       {device_mac?, site_id?, port_id?, wlan_id?}
 empty_policy not_exercised | incomplete            # monitoring observations only
 
@@ -489,9 +621,10 @@ Rows are every change atom × applicable target. Each row resolves one way:
 - When several plugins claim the same row, all distinct obligations are kept, and
   duplicate monitoring obligations for the same device and metric merge to the
   strictest `empty_policy` (`incomplete` over `not_exercised`).
-- The core adds one **deployment precondition** for every concrete device target of
-  any applicable plugin (monitoring or rule), and for devices contained in a
-  site-level target.
+- The core adds one **deployment precondition** for every device targeted by at
+  least one obligation (monitoring or rule), including devices contained in a
+  site-level obligation target. A target that only appears in exclusions gets no
+  precondition: an excluded device isn't claimed to be exposed.
 - An expected device that no plugin targets or excludes remains an uncovered row.
 
 **Deterministic coverage:**
@@ -513,6 +646,15 @@ Rows are every change atom × applicable target. Each row resolves one way:
   device's monitoring observations `unsatisfied` ("shared session").
 - **Terminal:** the session is no longer `active`. Otherwise the observation is
   `unsatisfied` ("monitoring still active"), so early runs never publish `none`.
+- **Window rule:** monitoring uses the session's own recorded observations,
+  incidents and comparisons up to `as_of`.
+  - The equal before/after windows govern only Guardian's own historical queries
+    (rule reads and MCP calls).
+  - Monitoring compares each SLE observation with the session baseline exactly as
+    monitoring recorded it.
+  - A terminal session records nothing after it ends, so a forced final run at
+    +120 min adds no data beyond the session. Incidents that were still unresolved
+    when the session ended count as active at `as_of`.
 - **Required check treatment**, using the device's latest observation:
 
 | Before | After | Treatment |
@@ -556,12 +698,17 @@ Inputs are normalized device-event receipts for the expected devices, over
 
 Assigning each outcome to a trigger:
 
-1. **Exact link:** the outcome's `audit_id` equals this audit, the device matches,
-   and the outcome is not before the trigger. When several preceding triggers for
-   that device carry the same audit ID, assign it to the latest one at the
-   provider's timestamp precision. Beyond 30 min it is accepted with a delay gap.
-2. **Otherwise:** the outcome goes to the latest trigger for that device at or
-   before it, within 30 min.
+1. **Exact link:** the outcome carries an `audit_id`. It pairs only with a trigger
+   carrying the same `audit_id` on the same device that is not after it; with
+   several, the latest at the provider's timestamp precision. Beyond 30 min it is
+   accepted with a delay gap.
+   - It pairs with this audit's trigger only when that ID is this audit.
+   - An outcome linked to another audit never pairs with this audit's trigger.
+   - An outcome whose audit has no matching trigger for the device is ignored,
+     with a gap.
+2. **Time fallback, only when the outcome has no `audit_id`:** the outcome goes to
+   the latest trigger for that device at or before it, within 30 min. That trigger
+   may belong to any audit, or to RRM.
 3. **Ambiguous:** triggers from different audits in the same second, an outcome
    outside the bound, or receipt-time-only ordering.
 4. **One trigger per outcome:** each outcome belongs to exactly one trigger and is
@@ -732,7 +879,7 @@ Prompts are not stored.
 | Findings | Rule and agent findings with evidence links |
 | Evidence | E-id tables with kind, collection and representation |
 | Gaps | Every gap with its source |
-| Attempts | Collapsed: state, budget used, steps, rejections, visible and withheld IDs |
+| Attempts | Collapsed summaries (kind, attempt, state, failure reason, budget); expanding one loads its full run through the run endpoint: steps, rejections, visible and withheld IDs |
 
 Every empty section explains why from state (for example "No rule plugin applied to
 A2 on 3 devices"). There are no fixed boilerplate strings.
@@ -746,6 +893,10 @@ A2 on 3 devices"). There are no fixed boilerplate strings.
   - the root;
   - the published early and final runs with rendered reports;
   - attempt summaries (id, kind, attempt, state, failure reason, budget).
+- `GET /organizations/{org}/change-groups/{id}/guardian/runs/{run_id}` returns
+  one full, bounded run document (published or not) with its rendered report.
+  The run must belong to that organization and to the change group's
+  investigation.
 - Site impact overlay: the published run's compact impacted-device rows filtered
   by site, plus the omitted count; not the capped root list.
 - The AI settings response exposes the structured-output capability (mode, whether
@@ -853,20 +1004,25 @@ digest that always fits its budget.
 - **Change model:** `changed_paths` completeness and truncation; segment-aware
   prefixes; ignored metadata fields.
 - **Ledger:** path unions, site containment, per-atom exclusions, strictest
-  `empty_policy`, and truncated paths preventing `none`.
+  `empty_policy`, truncated paths preventing `none`, and exclusion-only targets
+  getting no deployment precondition.
+- **Anchor:** audit, device-trigger and receipt sources; a receipt anchor
+  preventing `complete` coverage.
 - **Coverage:** each row of the coverage table; precondition vs observation roles.
 - **Monitoring:** every treatment row; exclusivity; non-terminal sessions.
 - **Monitoring severity components:** metric peak over observations and current
   from the final observation; an incident after the last observation still sets
   incident peak and current; incident activity at `as_of`; findings peak vs
-  current.
+  current; a forced +120 min final uses only the terminal session's recorded data.
 - **Deployment pairing:**
   - every state-machine row and every severity-projection row, including
     same-second duplicates and conflicts;
   - exact-link validation and delay gaps;
   - the 30 min bound;
   - receipt-time fallback;
-  - the 242 ms regression from the DNT-NTR payload.
+  - the 242 ms regression from the DNT-NTR payload;
+  - an outcome linked to another audit never confirming this audit's trigger;
+  - time fallback applied only to outcomes without an `audit_id`.
 - **Composition:** floors; `none`, `not_applicable` and `info` rules; uncited agent
   severity and confidence ignored or rejected; agent below the floor; recovery;
   sources.
@@ -904,11 +1060,48 @@ skipped without a valid record.
 
 **Mongo integration:**
 - claim and CAS publication;
-- a stale worker losing the root CAS;
-- a reclaim marking the run `abandoned` before the stale worker finalizes: the
-  conditional finalization matches nothing, and the worker never publishes;
-- final exhaustion clears an expired claim and leaves its last attempt either
-  `abandoned` or terminal-but-unpublished, never `running`;
+- **Crash at every step boundary of the tick procedure**, each followed by a later
+  tick. Before publication, the root still holds the token and the later tick
+  finishes recovery. After publication, the claim is already clear and the later
+  tick observes the idempotent terminal state:
+  - between lease and commit: no attempt consumed, claim cleared;
+  - between commit and run insert: an `abandoned` run carrying the attempt number;
+  - between finalize and publish: a `succeeded` run is adopted and published, and
+    a `failed` run is published as failed;
+  - after publication: no duplicate pointer, result, attempt or retry is created;
+  - a recovering worker crashing between marking the run `abandoned` and clearing
+    the claim: the next tick completes the clear.
+- **Two committed attempts that each crash before creating their run:** exhaustion
+  finds two `abandoned` records and uses the last one's reason.
+- **Recovery versus a stale commit, in both orders:** the commit winning (the
+  uncommitted clear matches nothing, and the claim stays committed with its
+  metadata); the clear winning (the commit matches nothing, and the worker stops
+  without a run or attempt increment).
+- **An ambiguous commit response:** a simulated timeout after the update applied
+  (the worker reads the root and continues with exactly one increment, its
+  deadline still measured from before the send) and before it applied (the worker
+  reads the root and stops).
+- **Lease comparisons under worker clock skew:** a worker clock ahead or behind
+  the server can't make a lease both unexpired at commit and expired at recovery.
+- **A publication whose `claim.attempt` doesn't match the run** matches nothing.
+- **Races between recovery and a stale worker:** recovery marking the run
+  `abandoned` before the stale worker finalizes (the finalization matches nothing,
+  and the worker never publishes); the stale worker finalizing `succeeded` first
+  (recovery adopts it; both publications are tried, exactly one matches).
+- **Triggers:**
+  - a stale decision can't lease after an early run was published, can't start a
+    second early run, can't skip the retry delay, and can't lease an early run
+    after +45 min;
+  - an early lease acquired before +45 min whose commit is attempted after +45 min:
+    the commit matches nothing, the release frees the lease without incrementing
+    `attempts.early`, and the final trigger later proceeds normally;
+  - a final whose linked session became active again fails revalidation without
+    consuming an attempt;
+  - a worker clock running ahead leases a final at server +119 min:
+    `final_forced` is false, so an active linked session still fails revalidation;
+    at server +120 min `final_forced` is true, and the final proceeds;
+  - a candidate selected by a fast worker clock before `next_check_at` or lease
+    expiry on server time matches no CAS and changes nothing.
 - every scheduling-transition row, including `next_check_at` after succeeded
   and failed attempts;
 - indexes created as specified;
@@ -920,7 +1113,8 @@ skipped without a valid record.
 - `drop-legacy-impact-collections` being idempotent and untouched by new code.
 
 **End to end:** webhook, then triggers, then early and final runs, then the published
-root projection and API.
+root projection and API, including the run endpoint's tenant and investigation
+checks.
 
 **Replay fixture:** the DNT-NTR payload. Both outcomes depend on the `dns`
 mapping verified during planning. For example, a client-facing mapping that
