@@ -97,6 +97,30 @@ async def test_applying_drops_only_the_legacy_collections_that_exist(command, ca
     output = capsys.readouterr().out
     for name in LEGACY:
         assert name in output
+    # And each drop is announced as it happens, not only in the closing summary.
+    assert "dropped impact_investigations" in output
+    assert "dropped neighbor_bindings" in output
+
+
+@pytest.mark.asyncio
+async def test_a_failure_partway_through_still_records_what_was_already_dropped(command, capsys) -> None:
+    class Failing(FakeDatabase):
+        async def drop_collection(self, name: str) -> None:
+            if name == "impact_investigations":
+                msg = "not authorized"
+                raise RuntimeError(msg)
+            await super().drop_collection(name)
+
+    database = Failing(impact_adjudications=1, impact_investigations=2)
+
+    with pytest.raises(RuntimeError):
+        await command["drop_legacy_collections"](database, apply=True)
+
+    # The operator is left knowing exactly what is already gone, so a re-run is unambiguous.
+    output = capsys.readouterr().out
+    assert "dropped impact_adjudications" in output
+    assert "dropped impact_investigations" not in output
+    assert database.dropped == ["impact_adjudications"]
 
 
 @pytest.mark.asyncio

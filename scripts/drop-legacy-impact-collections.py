@@ -60,10 +60,15 @@ async def drop_legacy_collections(database: Any, *, apply: bool) -> list[str]:
     if not apply:
         print("Re-run with --apply to drop them.")
         return []
+    dropped = []
+    # Each drop is announced as it happens, so a run that dies partway through -- a revoked permission, a
+    # stepdown -- still leaves the operator a record of exactly what is already gone.
     for name in present:
         await database.drop_collection(name)
-    print(f"Dropped {len(present)} collections: {', '.join(present) if present else 'none'}.")
-    return present
+        dropped.append(name)
+        print(f"  dropped {name}")
+    print(f"Dropped {len(dropped)} collections: {', '.join(dropped) if dropped else 'none'}.")
+    return dropped
 
 
 async def run(*, apply: bool) -> int:
