@@ -29,6 +29,7 @@ from mist_config_guardian_backend.models.snapshot import SnapshotKind, SnapshotM
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup, RecoveryState
 from mist_config_guardian_backend.schemas.audit_impact import ShadowFeedCounts
 from mist_config_guardian_backend.schemas.change_group import ChangeGroupSummaryResponse
+from mist_config_guardian_backend.schemas.guardian import GuardianFeedBucket, GuardianFeedCounts, GuardianSummary
 from mist_config_guardian_backend.schemas.overview import (
     FailedRestoreResponse,
     OrganizationOverviewResponse,
@@ -72,6 +73,28 @@ def shadow_feed_counts(summaries: Sequence[ChangeGroupSummaryResponse]) -> Shado
         return None
     counts = Counter(item.shadow_impact.result for item in summaries if item.shadow_impact is not None)
     return ShadowFeedCounts(total=len(summaries), **counts)
+
+
+def guardian_feed_counts(summaries: Sequence[ChangeGroupSummaryResponse]) -> GuardianFeedCounts | None:
+    """Bucket the exact returned rows by what Guardian recorded, counting every row exactly once.
+
+    A row Guardian never investigated is ``not_recorded`` and one whose projection failed is ``unavailable``;
+    neither is counted as a band. When no row carries a projection at all - Guardian is off, or the window holds
+    no root - there is nothing to summarize and the card is left out.
+    """
+    if not summaries or all(item.guardian is None for item in summaries):
+        return None
+    counts = Counter(_guardian_bucket(item.guardian) for item in summaries)
+    return GuardianFeedCounts(total=len(summaries), **counts)
+
+
+def _guardian_bucket(summary: GuardianSummary | None) -> GuardianFeedBucket:
+    """The one bucket a row falls in: no root, an unreadable projection, a pending root, or the published peak."""
+    if summary is None:
+        return "not_recorded"
+    if summary.availability == "unavailable":
+        return "unavailable"
+    return "pending" if summary.result is None else summary.result.peak
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +673,7 @@ class OverviewService:
             counts=counts,
             change_groups=summaries,
             shadow_feed_counts=shadow_feed_counts(summaries),
+            guardian_feed_counts=guardian_feed_counts(summaries),
             safety_net=build_safety_net(
                 SafetyNetInput(
                     organization=organization,

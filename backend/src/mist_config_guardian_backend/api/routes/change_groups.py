@@ -18,6 +18,7 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupDetailResponse,
     ChangeGroupListResponse,
 )
+from mist_config_guardian_backend.schemas.guardian import GuardianInvestigationResponse, GuardianRunResponse
 from mist_config_guardian_backend.schemas.investigation import (
     ModelRequestDetails,
     ReportHistory,
@@ -27,6 +28,7 @@ from mist_config_guardian_backend.services.change_groups import (
     ChangeGroupFilters,
     ChangeGroupService,
 )
+from mist_config_guardian_backend.services.guardian_reads import guardian_investigation, guardian_run
 from mist_config_guardian_backend.services.impact_acceptance import acceptance_status, adjudicate
 from mist_config_guardian_backend.services.investigation_reads import report_history, shadow_investigation
 from mist_config_guardian_backend.services.mcp_request_reads import mcp_request_details
@@ -123,6 +125,33 @@ async def read_change_group(
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Change group not found")
     return detail
+
+
+@router.get("/{change_group_id}/guardian")
+async def read_guardian_investigation(
+    change_group_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> GuardianInvestigationResponse:
+    """Read one audit's Guardian root, its published runs with their rendered reports, and every attempt."""
+    investigation = await guardian_investigation(_identifier(organization), change_group_id)
+    if investigation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Guardian investigation not found")
+    return investigation
+
+
+@router.get("/{change_group_id}/guardian/runs/{run_id}")
+async def read_guardian_run(
+    change_group_id: PydanticObjectId,
+    run_id: PydanticObjectId,
+    organization: Annotated[Organization, Depends(require_organization)],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> GuardianRunResponse:
+    """Read one full run, published or not, through the change group whose investigation owns it."""
+    run = await guardian_run(_identifier(organization), change_group_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Guardian run not found")
+    return run
 
 
 @router.get("/{change_group_id}/investigation")

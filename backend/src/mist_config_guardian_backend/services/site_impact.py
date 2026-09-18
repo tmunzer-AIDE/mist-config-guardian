@@ -28,6 +28,7 @@ from mist_config_guardian_backend.schemas.impact import (
 )
 from mist_config_guardian_backend.services.audit_impact_reads import PublishedAuditImpactReader
 from mist_config_guardian_backend.services.change_groups import as_utc, build_title, object_type_label
+from mist_config_guardian_backend.services.guardian_reads import PublishedGuardianReader
 from mist_config_guardian_backend.services.impact_evidence import legacy_assessment
 
 _MAX_SESSIONS = 5000
@@ -311,15 +312,28 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
     )
     complete = len(sessions) <= _MAX_SESSIONS
     sessions = sessions[:_MAX_SESSIONS]
+    settings = get_settings()
     shadow = (
         await PublishedAuditImpactReader().summaries(org, audits, include_devices=True)
-        if not historical and get_settings().impact_engine_mode in {"shadow", "agent_shadow"}
+        if not historical and settings.impact_engine_mode in {"shadow", "agent_shadow"}
         else {}
     )
     # Audit reports may span sites; an overlay must stay in the requested site.
     for summary in shadow.values():
         if summary.impacted_devices is not None:
             summary.impacted_devices = tuple(d for d in summary.impacted_devices if str(d.site_id) == site)
+    guardian = (
+        await PublishedGuardianReader().summaries(org, audits, include_devices=True)
+        if not historical and settings.guardian_enabled
+        else {}
+    )
+    # The published run's own rows, kept to this site. Its omitted count stands: those devices were never
+    # recorded, so their site is unknown and filtering cannot claim they were elsewhere.
+    for summary in guardian.values():
+        if summary.impacted is not None:
+            summary.impacted = summary.impacted.model_copy(
+                update={"devices": tuple(d for d in summary.impacted.devices if str(d.site_id) == site)}
+            )
     changes = []
     for row in items:
         relevant = [
@@ -357,6 +371,7 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
                 ),
                 summary="" if historical else row.get("summary") or "",
                 shadow_impact=shadow.get(row.get("audit_id", "")),
+                guardian=guardian.get(row.get("audit_id", "")),
                 impacts=[impact_from_session(session, end, historical=historical) for session in relevant],
             )
         )

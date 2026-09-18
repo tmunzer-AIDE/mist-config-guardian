@@ -7,9 +7,11 @@ import pytest
 from beanie import PydanticObjectId
 from pymongo.errors import ConnectionFailure
 
+from mist_config_guardian_backend.models.guardian import GuardianResult
 from mist_config_guardian_backend.models.investigation import ImpactInvestigation, InvestigationRevision
 from mist_config_guardian_backend.models.monitoring import ImpactSeverity
 from mist_config_guardian_backend.schemas.audit_impact import AuditImpactSummary
+from mist_config_guardian_backend.schemas.guardian import GuardianSummary
 from mist_config_guardian_backend.services import change_groups
 from mist_config_guardian_backend.services.audit_impact_reads import PublishedAuditImpactReader
 from mist_config_guardian_backend.services.change_groups import (
@@ -148,8 +150,29 @@ async def test_empty_and_oversized_batches_do_not_query(monkeypatch):
     artifacts.find.assert_not_called()
 
 
-def service(monkeypatch):
-    monkeypatch.setattr(change_groups, "get_settings", lambda: SimpleNamespace(impact_engine_mode="shadow"))
+def guardian_summary(peak="warning", **overrides):
+    """One published Guardian root, as the root projection hands it to a page."""
+    result = GuardianResult(
+        run_id=PydanticObjectId(),
+        run_kind="final",
+        evaluated_at=NOW,
+        peak=peak,
+        current="none",
+        recovery="recovered",
+        confidence="low",
+        coverage="complete",
+        sources=("monitoring",),
+        summary="Peak impact warning (coverage complete); current none.",
+    )
+    return GuardianSummary(status="done", status_reason="Final run published", result=result, **overrides)
+
+
+def service(monkeypatch, *, impact_engine_mode="shadow", guardian_enabled=True):
+    monkeypatch.setattr(
+        change_groups,
+        "get_settings",
+        lambda: SimpleNamespace(impact_engine_mode=impact_engine_mode, guardian_enabled=guardian_enabled),
+    )
     store = _MemoryChangeGroupStore()
     store.groups = [_group(impact_severity=ImpactSeverity.CRITICAL)]
     projection = AuditImpactSummary(
@@ -161,11 +184,12 @@ def service(monkeypatch):
         coverage="complete",
     )
     reader = SimpleNamespace(summaries=AsyncMock(return_value={"audit-1": projection}))
-    return ChangeGroupService(store, reader), store, reader
+    guardian = SimpleNamespace(summaries=AsyncMock(return_value={"audit-1": guardian_summary()}))
+    return ChangeGroupService(store, reader, guardian), store, reader, guardian
 
 
 async def test_changes_list_detail_and_overview_share_projection_without_replacing_production(monkeypatch):
-    changes, store, reader = service(monkeypatch)
+    changes, store, reader, _guardian = service(monkeypatch)
     [row], total = await changes.list_groups(ORGANIZATION_ID, ChangeGroupFilters(severity="critical"), viewer_email="")
     detail = await changes.get_group(ORGANIZATION_ID, store.groups[0].id, viewer_email="")
     overview_reader = _MemoryOverviewReader()
@@ -186,7 +210,7 @@ async def test_changes_list_detail_and_overview_share_projection_without_replaci
 
 
 async def test_historical_and_counts_only_reads_do_not_fetch_live_shadow(monkeypatch):
-    changes, store, reader = service(monkeypatch)
+    changes, store, reader, guardian = service(monkeypatch)
     [row] = await changes.summarize(ORGANIZATION_ID, store.groups, viewer_email="", historical=True)
     detail = await changes.get_group(ORGANIZATION_ID, store.groups[0].id, viewer_email="", as_of=NOW)
     overview_reader = _MemoryOverviewReader()
@@ -195,16 +219,63 @@ async def test_historical_and_counts_only_reads_do_not_fetch_live_shadow(monkeyp
     past = await overview.collect(_organization(), range_key="24h", viewer_email="", as_of=NOW)
     badges = await overview.collect(_organization(), range_key="24h", viewer_email="", counts_only=True)
     assert row.shadow_impact is detail.shadow_impact is past.shadow_feed_counts is badges.shadow_feed_counts is None
+    assert row.guardian is detail.guardian is past.guardian_feed_counts is badges.guardian_feed_counts is None
     assert row.impact_source is detail.impact_source is past.counts.impact_source is None
     reader.summaries.assert_not_awaited()
+    guardian.summaries.assert_not_awaited()
 
 
 async def test_legacy_mode_never_queries_shadow_collections(monkeypatch):
-    changes, store, reader = service(monkeypatch)
-    monkeypatch.setattr(change_groups, "get_settings", lambda: SimpleNamespace(impact_engine_mode="legacy"))
+    changes, store, reader, guardian = service(monkeypatch, impact_engine_mode="legacy", guardian_enabled=False)
     [row] = await changes.summarize(ORGANIZATION_ID, store.groups, viewer_email="")
     assert row.shadow_impact is None
+    assert row.guardian is None
     reader.summaries.assert_not_awaited()
+    guardian.summaries.assert_not_awaited()
+
+
+async def test_guardian_projects_beside_the_shadow_summary_without_replacing_production(monkeypatch):
+    changes, store, _reader, guardian = service(monkeypatch)
+    [row], _total = await changes.list_groups(ORGANIZATION_ID, ChangeGroupFilters(), viewer_email="")
+    detail = await changes.get_group(ORGANIZATION_ID, store.groups[0].id, viewer_email="")
+    overview_reader = _MemoryOverviewReader()
+    overview_reader.groups = store.groups
+    overview = await OverviewService(overview_reader, changes).collect(
+        _organization(), range_key="24h", viewer_email=""
+    )
+    assert row.guardian == detail.guardian == overview.change_groups[0].guardian
+    assert row.guardian.status == "done"
+    assert row.guardian.result.peak == "warning"
+    assert row.shadow_impact is not None  # Both projections are served while the frontend migrates.
+    assert row.impact_severity == ImpactSeverity.CRITICAL  # Production severity is still the legacy one.
+    assert overview.guardian_feed_counts.total == overview.guardian_feed_counts.warning == 1
+    assert guardian.summaries.await_count == 3
+    for call in guardian.summaries.await_args_list:
+        assert call.args == (ORGANIZATION_ID, ["audit-1"])
+
+
+async def test_a_guardian_projection_that_failed_is_reported_unavailable(monkeypatch):
+    changes, store, _reader, guardian = service(monkeypatch)
+    guardian.summaries.return_value = {"audit-1": GuardianSummary.unavailable()}
+    [row] = await changes.summarize(ORGANIZATION_ID, store.groups, viewer_email="")
+    overview_reader = _MemoryOverviewReader()
+    overview_reader.groups = store.groups
+    overview = await OverviewService(overview_reader, changes).collect(
+        _organization(), range_key="24h", viewer_email=""
+    )
+    assert row.guardian.availability == "unavailable"
+    assert row.guardian.result is None
+    assert overview.guardian_feed_counts.unavailable == 1
+    assert overview.guardian_feed_counts.none == 0
+
+
+async def test_guardian_stays_dormant_while_the_shadow_engine_runs(monkeypatch):
+    changes, store, reader, guardian = service(monkeypatch, guardian_enabled=False)
+    [row] = await changes.summarize(ORGANIZATION_ID, store.groups, viewer_email="")
+    assert row.guardian is None
+    assert row.shadow_impact is not None
+    guardian.summaries.assert_not_awaited()
+    reader.summaries.assert_awaited_once()
 
 
 async def test_incomplete_runtime_cannot_present_an_older_clean_checkpoint_as_complete(monkeypatch):
@@ -219,7 +290,7 @@ async def test_incomplete_runtime_cannot_present_an_older_clean_checkpoint_as_co
 
 
 async def test_shadow_disagreement_does_not_change_notification_decisions(monkeypatch):
-    changes, store, reader = service(monkeypatch)
+    changes, store, reader, _guardian = service(monkeypatch)
     notifications = SimpleNamespace(notify_impact_detected=AsyncMock())
     projector = ChangeGroupProjector(store, notifications=notifications)
     await changes.summarize(ORGANIZATION_ID, store.groups, viewer_email="")

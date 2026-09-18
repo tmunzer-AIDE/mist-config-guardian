@@ -360,6 +360,8 @@ def test_api_summaries_expose_status_results_and_attempts_but_never_evidence():
         "state": "failed",
         "failure_reason": "Provider timed out",
         "budget": {"model_turns": 0, "mcp_calls": 0, "rule_reads": 0},
+        # Publication is derived from the root's pointers, so an attempt read on its own reports none.
+        "published": False,
     }
 
 
@@ -508,6 +510,14 @@ def test_guardian_stays_dormant_until_a_gated_path_is_wired():
         "services/guardian.py",
         "services/webhook_processing.py",
         "tasks/monitoring.py",
+        # The read path. It only ever reads what a gated attempt already wrote, so with Guardian off the pages
+        # project nothing and the endpoints answer not found.
+        "services/guardian_reads.py",
+        "services/overview.py",
+        "api/routes/change_groups.py",
+        "schemas/change_group.py",
+        "schemas/impact.py",
+        "schemas/overview.py",
     }
     importers = {
         path.relative_to(BACKEND).as_posix()
@@ -518,6 +528,14 @@ def test_guardian_stays_dormant_until_a_gated_path_is_wired():
     readers = {
         path.relative_to(BACKEND).as_posix() for path in BACKEND.rglob("*.py") if "guardian_enabled" in path.read_text()
     }
-    # Root creation and worker polling are the only surfaces this commit gates; every legacy gate is untouched.
-    # The orchestrator names the setting in its own docstring, which is what says it never runs on its own.
-    assert readers == {"config.py", "services/guardian.py", "services/webhook_processing.py", "tasks/monitoring.py"}
+    # Root creation, worker polling and the current-view projections are the surfaces gated so far; every legacy
+    # gate is untouched. The orchestrator names the setting in its own docstring, which is what says it never runs
+    # on its own.
+    assert readers == {
+        "config.py",
+        "services/guardian.py",
+        "services/webhook_processing.py",
+        "tasks/monitoring.py",
+        "services/change_groups.py",
+        "services/site_impact.py",
+    }

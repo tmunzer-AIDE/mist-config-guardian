@@ -1,7 +1,10 @@
-"""Raw PyMongo filters and updates for every Guardian claim and run lifecycle transition.
+"""Raw PyMongo filters and updates for every Guardian claim and run lifecycle transition, and for the API's reads.
 
 This is the only place lifecycle predicates are written. Each builder is pure and returns the filter and update for
 one conditional write; the orchestrator executes them and never inlines its own. Nothing uses transactions.
+
+- **Tenancy.** The read builders the API is served from name the organization, and a run read names the
+  investigation as well, so no read can resolve a run that belongs to another tenant or another audit.
 
 - **One clock for root time.** Every authoritative temporal predicate and assignment on ``guardian_investigations``
   uses MongoDB's ``$$NOW`` through ``$expr`` filters and pipeline updates. Worker time appears only in the due query
@@ -13,7 +16,7 @@ one conditional write; the orchestrator executes them and never inlines its own.
 - **Immutable terminal runs.** Every run update filters on ``state == running``, so none can match a terminal run.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -293,6 +296,46 @@ def claimed_run(fence: ClaimFence, *, organization_id: ObjectId) -> dict[str, An
     """
     _committed(fence)
     return {"_id": fence.token, "organization_id": organization_id, "investigation_id": fence.root_id}
+
+
+def investigations_for_audits(organization_id: ObjectId, audit_ids: Sequence[str]) -> Read:
+    """The roots of one page of audits, projected to what a summary shows: status, reason, result and pointers."""
+    return Read(
+        filter={"organization_id": organization_id, "audit_id": {"$in": list(audit_ids)}},
+        projection={"audit_id": 1, "status": 1, "status_reason": 1, "result": 1, "early_run_id": 1, "final_run_id": 1},
+    )
+
+
+def investigation_identity(organization_id: ObjectId, audit_id: str) -> Read:
+    """One audit's root inside its tenant; the identity index makes it unique."""
+    return Read(filter={"organization_id": organization_id, "audit_id": audit_id})
+
+
+def investigation_runs(root_id: ObjectId, *, organization_id: ObjectId) -> Read:
+    """Every attempt one root consumed, in kind and attempt order, inside its tenant."""
+    return Read(
+        filter={"organization_id": organization_id, "investigation_id": root_id},
+        sort=(("kind", 1), ("attempt", 1)),
+    )
+
+
+def run_in_investigation(run_id: ObjectId, *, root_id: ObjectId, organization_id: ObjectId) -> Read:
+    """One run, and only when it belongs to this organization and to this root's investigation."""
+    return Read(filter={"_id": run_id, "organization_id": organization_id, "investigation_id": root_id})
+
+
+def published_runs(pointers: Sequence[tuple[ObjectId, ObjectId]], *, organization_id: ObjectId) -> Read:
+    """The exact runs a page of roots points at, projected to the impacted-device rows a site overlay shows.
+
+    Each pointer is ``(run_id, investigation_id)``, so a root can only ever reach the run it published itself.
+    """
+    return Read(
+        filter={
+            "organization_id": organization_id,
+            "$or": [{"_id": run_id, "investigation_id": root_id} for run_id, root_id in pointers],
+        },
+        projection={"investigation_id": 1, "verdict.impacted_devices": 1, "verdict.impacted_devices_omitted": 1},
+    )
 
 
 def last_failed_final_run(root_id: ObjectId, *, organization_id: ObjectId) -> Read:

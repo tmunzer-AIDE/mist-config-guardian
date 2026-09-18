@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from mist_config_guardian_backend.schemas.audit_impact import ShadowFeedCounts
 from mist_config_guardian_backend.schemas.change_group import ChangeGroupSummaryResponse
+from mist_config_guardian_backend.schemas.guardian import GuardianFeedCounts
 
 
 class OverviewCountsResponse(BaseModel):
@@ -68,3 +69,4 @@ class OrganizationOverviewResponse(BaseModel):
     # historical; the operational sections have no past and are left empty.
     historical: bool = False
     shadow_feed_counts: ShadowFeedCounts | None = None
+    guardian_feed_counts: GuardianFeedCounts | None = None

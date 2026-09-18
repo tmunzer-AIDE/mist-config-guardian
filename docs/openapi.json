@@ -335,6 +335,125 @@
         "title": "AgentCheckpoint",
         "type": "object"
       },
+      "AgentConclusion": {
+        "additionalProperties": false,
+        "description": "An accepted agent report, or the reason the agent did not conclude or was skipped.",
+        "properties": {
+          "concluded": {
+            "title": "Concluded",
+            "type": "boolean"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "pattern": "^E[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "impacted_devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/mist_config_guardian_backend__guardian__contracts__DeviceImpact"
+            },
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "peak": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "summary": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concluded"
+        ],
+        "title": "AgentConclusion",
+        "type": "object"
+      },
       "AgentMemory": {
         "additionalProperties": false,
         "properties": {
@@ -1032,6 +1151,27 @@
         "title": "ApprovalStatus",
         "type": "string"
       },
+      "AttemptCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "early": {
+            "default": 0,
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Early",
+            "type": "integer"
+          },
+          "final": {
+            "default": 0,
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Final",
+            "type": "integer"
+          }
+        },
+        "title": "AttemptCounts",
+        "type": "object"
+      },
       "AttributeDocumentation": {
         "additionalProperties": false,
         "properties": {
@@ -1443,6 +1583,61 @@
         "title": "BootstrapStateResponse",
         "type": "object"
       },
+      "ChangeAtom": {
+        "additionalProperties": false,
+        "description": "``A<n>``: one logical object version's top-level functional attribute, as changed paths only.",
+        "properties": {
+          "attribute": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Attribute",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^A[1-9][0-9]{0,5}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "logical_object_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Logical Object Id",
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "title": "Paths",
+            "type": "array"
+          },
+          "paths_complete": {
+            "title": "Paths Complete",
+            "type": "boolean"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "logical_object_id",
+          "version",
+          "attribute",
+          "paths",
+          "paths_complete"
+        ],
+        "title": "ChangeAtom",
+        "type": "object"
+      },
       "ChangeEvidenceResponse": {
         "description": "One deterministic statement supporting a group's assessment.",
         "properties": {
@@ -1543,6 +1738,16 @@
             },
             "title": "Evidence",
             "type": "array"
+          },
+          "guardian": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -1726,6 +1931,16 @@
           "devices_label": {
             "title": "Devices Label",
             "type": "string"
+          },
+          "guardian": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -1961,6 +2176,112 @@
         "title": "ChangedObjectResponse",
         "type": "object"
       },
+      "CheckView": {
+        "additionalProperties": false,
+        "description": "A required check with its treatment; exclusivity and terminal state are reported beside it, not in it.",
+        "properties": {
+          "after": {
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "enum": [
+              "measured",
+              "no_data",
+              "pending",
+              "missing",
+              "error",
+              "unsupported",
+              "disabled"
+            ],
+            "title": "Before",
+            "type": "string"
+          },
+          "comparable": {
+            "default": false,
+            "title": "Comparable",
+            "type": "boolean"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "metric": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Metric",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "treatment": {
+            "enum": [
+              "satisfied",
+              "not_exercised",
+              "unsatisfied"
+            ],
+            "title": "Treatment",
+            "type": "string"
+          },
+          "value_after": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value After"
+          },
+          "value_before": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Before"
+          }
+        },
+        "required": [
+          "metric",
+          "before",
+          "after",
+          "treatment"
+        ],
+        "title": "CheckView",
+        "type": "object"
+      },
       "CollectAction": {
         "additionalProperties": false,
         "properties": {
@@ -1985,6 +2306,56 @@
           "checks"
         ],
         "title": "CollectAction",
+        "type": "object"
+      },
+      "CompactImpactedDevice": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "mac": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Mac",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Name",
+            "type": "string"
+          },
+          "peak": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak",
+            "type": "string"
+          },
+          "site_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Site Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mac",
+          "site_id",
+          "peak",
+          "current"
+        ],
+        "title": "CompactImpactedDevice",
         "type": "object"
       },
       "ComponentHealthResponse": {
@@ -2027,6 +2398,37 @@
         "title": "ComponentHealthResponse",
         "type": "object"
       },
+      "ComponentSeverity": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "peak": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak",
+            "type": "string"
+          }
+        },
+        "required": [
+          "peak",
+          "current"
+        ],
+        "title": "ComponentSeverity",
+        "type": "object"
+      },
       "ComponentStatus": {
         "description": "Health of one component, and of the aggregate.",
         "enum": [
@@ -2036,6 +2438,71 @@
         ],
         "title": "ComponentStatus",
         "type": "string"
+      },
+      "Conclusion": {
+        "additionalProperties": false,
+        "description": "A deterministic source's conclusion: monitoring replay, deployment pairing or one rule plug-in.",
+        "properties": {
+          "current": {
+            "default": "none",
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "impacted_devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/mist_config_guardian_backend__guardian__contracts__DeviceImpact"
+            },
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "peak": {
+            "default": "none",
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak",
+            "type": "string"
+          },
+          "statuses": {
+            "patternProperties": {
+              "^O[1-9][0-9]{0,5}$": {
+                "$ref": "#/components/schemas/ObligationStatus"
+              }
+            },
+            "title": "Statuses",
+            "type": "object"
+          }
+        },
+        "title": "Conclusion",
+        "type": "object"
       },
       "ConfigurationDiff": {
         "description": "Deterministic comparison of two redacted configuration documents.",
@@ -2115,6 +2582,44 @@
           }
         },
         "title": "ConfigurationDiff",
+        "type": "object"
+      },
+      "CoverageSection": {
+        "additionalProperties": false,
+        "properties": {
+          "coverage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "insufficient",
+                  "not_applicable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "obligations": {
+            "$ref": "#/components/schemas/Section_ObligationOutcome_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "rows": {
+            "$ref": "#/components/schemas/Section_LedgerRow_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          }
+        },
+        "title": "CoverageSection",
         "type": "object"
       },
       "DeploymentDevice": {
@@ -2369,6 +2874,192 @@
           "device_type"
         ],
         "title": "DeploymentSignal",
+        "type": "object"
+      },
+      "DeviceMonitoring": {
+        "additionalProperties": false,
+        "description": "One targeted device's replay. Severity exists only for an exclusive session.",
+        "properties": {
+          "checks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CheckView"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "none",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unknown",
+                  "configured",
+                  "failed",
+                  "reverted",
+                  "ambiguous"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment"
+          },
+          "deployment_precondition": {
+            "anyOf": [
+              {
+                "enum": [
+                  "satisfied",
+                  "unsatisfied"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Precondition"
+          },
+          "device_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComponentSeverity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exclusive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusive"
+          },
+          "incidents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComponentSeverity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mac": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Mac",
+            "type": "string"
+          },
+          "metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComponentSeverity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Name",
+            "type": "string"
+          },
+          "peak": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "none",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "site_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Id"
+          },
+          "status": {
+            "enum": [
+              "satisfied",
+              "not_exercised",
+              "unsatisfied",
+              "no_checks"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "terminal": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal"
+          }
+        },
+        "required": [
+          "mac",
+          "status"
+        ],
+        "title": "DeviceMonitoring",
         "type": "object"
       },
       "DeviceStateComparison": {
@@ -3320,6 +4011,101 @@
         "title": "EmailChangeResponse",
         "type": "object"
       },
+      "Evidence": {
+        "additionalProperties": false,
+        "description": "One E-id envelope. The server owns ``kind``; payloads are validated per source before they get here.",
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "collection": {
+            "enum": [
+              "complete",
+              "partial",
+              "error"
+            ],
+            "title": "Collection",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^E[1-9][0-9]{0,5}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "service_health",
+              "deployment",
+              "configuration",
+              "reference"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Payload",
+            "type": "object"
+          },
+          "representation": {
+            "enum": [
+              "full",
+              "digest"
+            ],
+            "title": "Representation",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/EvidenceScope",
+            "default": {
+              "device_macs": [],
+              "site_ids": []
+            }
+          },
+          "source": {
+            "pattern": "^(monitoring|deployment|rule:[a-z][a-z0-9-]{0,39}|mcp:[a-z][a-z0-9_]{0,63})$",
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "kind",
+          "title",
+          "captured_at",
+          "collection",
+          "representation"
+        ],
+        "title": "Evidence",
+        "type": "object"
+      },
       "EvidenceDataset": {
         "additionalProperties": false,
         "description": "Rows are normalized server values; missing values remain null, never zero.",
@@ -3430,6 +4216,123 @@
           "explanation"
         ],
         "title": "EvidenceDataset",
+        "type": "object"
+      },
+      "EvidenceRow": {
+        "additionalProperties": false,
+        "description": "One E-id as the evidence table shows it; payloads stay in the run document.",
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "citable": {
+            "title": "Citable",
+            "type": "boolean"
+          },
+          "collection": {
+            "enum": [
+              "complete",
+              "partial",
+              "error"
+            ],
+            "title": "Collection",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^E[1-9][0-9]{0,5}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "service_health",
+              "deployment",
+              "configuration",
+              "reference"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "representation": {
+            "enum": [
+              "full",
+              "digest"
+            ],
+            "title": "Representation",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/EvidenceScope",
+            "default": {
+              "device_macs": [],
+              "site_ids": []
+            }
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "kind",
+          "title",
+          "captured_at",
+          "collection",
+          "representation",
+          "citable"
+        ],
+        "title": "EvidenceRow",
+        "type": "object"
+      },
+      "EvidenceScope": {
+        "additionalProperties": false,
+        "properties": {
+          "device_macs": {
+            "default": [],
+            "items": {
+              "pattern": "^[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "title": "Device Macs",
+            "type": "array"
+          },
+          "site_ids": {
+            "default": [],
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Site Ids",
+            "type": "array"
+          }
+        },
+        "title": "EvidenceScope",
         "type": "object"
       },
       "EvidenceView": {
@@ -3593,6 +4496,27 @@
         "title": "EvidenceView",
         "type": "object"
       },
+      "EvidenceWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "EvidenceWindow",
+        "type": "object"
+      },
       "FailedRestoreResponse": {
         "description": "One restore that stopped part way and may need compensation.",
         "properties": {
@@ -3626,6 +4550,799 @@
           "failed_at"
         ],
         "title": "FailedRestoreResponse",
+        "type": "object"
+      },
+      "Finding": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "pattern": "^E[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "severity": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "severity"
+        ],
+        "title": "Finding",
+        "type": "object"
+      },
+      "FindingRow": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "pattern": "^E[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "severity": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "pattern": "^(core|monitoring|deployment|agent|rule:[a-z][a-z0-9-]{0,39})$",
+            "title": "Source",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "text",
+          "severity"
+        ],
+        "title": "FindingRow",
+        "type": "object"
+      },
+      "Gap": {
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "pattern": "^(core|monitoring|deployment|agent|rule:[a-z][a-z0-9-]{0,39})$",
+            "title": "Source",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "text"
+        ],
+        "title": "Gap",
+        "type": "object"
+      },
+      "GuardianAttemptSummary": {
+        "description": "One attempt, collapsed, with the publication state derived from the root. The full run is loaded separately.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/RunBudget"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "early",
+              "final"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "published": {
+            "default": false,
+            "title": "Published",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "attempt",
+          "state",
+          "failure_reason",
+          "budget"
+        ],
+        "title": "GuardianAttemptSummary",
+        "type": "object"
+      },
+      "GuardianFeedCounts": {
+        "description": "Mutually exclusive Guardian states over the returned feed rows, not the whole time window.",
+        "properties": {
+          "critical": {
+            "default": 0,
+            "title": "Critical",
+            "type": "integer"
+          },
+          "info": {
+            "default": 0,
+            "title": "Info",
+            "type": "integer"
+          },
+          "none": {
+            "default": 0,
+            "title": "None",
+            "type": "integer"
+          },
+          "not_recorded": {
+            "default": 0,
+            "title": "Not Recorded",
+            "type": "integer"
+          },
+          "pending": {
+            "default": 0,
+            "title": "Pending",
+            "type": "integer"
+          },
+          "scope": {
+            "const": "returned_feed",
+            "default": "returned_feed",
+            "title": "Scope",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unavailable": {
+            "default": 0,
+            "title": "Unavailable",
+            "type": "integer"
+          },
+          "warning": {
+            "default": 0,
+            "title": "Warning",
+            "type": "integer"
+          }
+        },
+        "title": "GuardianFeedCounts",
+        "type": "object"
+      },
+      "GuardianImpactedDevices": {
+        "description": "A published run's compact impacted-device rows, and how many the run itself could not keep.\n\nThe site overlay filters ``devices`` by site. ``omitted`` counts devices the run never recorded, whose site is\ntherefore unknown, so filtering by site leaves it unchanged.",
+        "properties": {
+          "devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CompactImpactedDevice"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "GuardianImpactedDevices",
+        "type": "object"
+      },
+      "GuardianInvestigationResponse": {
+        "description": "One audit's investigation: the root, the runs it published, and every attempt it consumed.",
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/GuardianAttemptSummary"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "root": {
+            "$ref": "#/components/schemas/GuardianRootResponse"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/GuardianRunReport"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "GuardianInvestigationResponse",
+        "type": "object"
+      },
+      "GuardianResult": {
+        "additionalProperties": false,
+        "description": "The root's published summary of one succeeded run, with at most 20 compact devices.",
+        "properties": {
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "current": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "impacted_device_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Impacted Device Count",
+            "type": "integer"
+          },
+          "impacted_devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CompactImpactedDevice"
+            },
+            "maxItems": 20,
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "peak": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak",
+            "type": "string"
+          },
+          "recovery": {
+            "enum": [
+              "none",
+              "recovered",
+              "unrecovered"
+            ],
+            "title": "Recovery",
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/PydanticObjectId"
+          },
+          "run_kind": {
+            "enum": [
+              "early",
+              "final"
+            ],
+            "title": "Run Kind",
+            "type": "string"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "pattern": "^(monitoring|deployment|agent|rule:[a-z][a-z0-9-]{0,39})$",
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 2000,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "run_kind",
+          "evaluated_at",
+          "peak",
+          "current",
+          "recovery",
+          "confidence",
+          "coverage",
+          "summary"
+        ],
+        "title": "GuardianResult",
+        "type": "object"
+      },
+      "GuardianRootResponse": {
+        "description": "The small root itself: identity, trigger timing, attempt counters, run pointers and the published result.",
+        "properties": {
+          "anchor_known": {
+            "title": "Anchor Known",
+            "type": "boolean"
+          },
+          "attempts": {
+            "$ref": "#/components/schemas/AttemptCounts"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "changed_at": {
+            "format": "date-time",
+            "title": "Changed At",
+            "type": "string"
+          },
+          "early_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Early Run Id"
+          },
+          "final_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Run Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "next_check_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Check At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "waiting",
+              "done"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          }
+        },
+        "required": [
+          "id",
+          "audit_id",
+          "changed_at",
+          "anchor_known",
+          "status",
+          "attempts"
+        ],
+        "title": "GuardianRootResponse",
+        "type": "object"
+      },
+      "GuardianRunReport": {
+        "description": "One run as a panel tab renders it: its identity and the report built from the stored run on read.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "early",
+              "final"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "published": {
+            "default": false,
+            "title": "Published",
+            "type": "boolean"
+          },
+          "report": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "attempt",
+          "state",
+          "report"
+        ],
+        "title": "GuardianRunReport",
+        "type": "object"
+      },
+      "GuardianRunResponse": {
+        "description": "One full run document, bounded by construction, with its rendered report.\n\nEverything below the identity is passed through as the run recorded it, including evidence payloads and the\nagent's steps, which the report's attempts section expands.",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentConclusion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "change": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChangeAtom"
+            },
+            "title": "Change",
+            "type": "array"
+          },
+          "deadline_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline At"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Conclusion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "investigation_id": {
+            "title": "Investigation Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "early",
+              "final"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledger": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LedgerRow"
+            },
+            "title": "Ledger",
+            "type": "array"
+          },
+          "monitoring": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Conclusion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "obligations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ObligationOutcome"
+            },
+            "title": "Obligations",
+            "type": "array"
+          },
+          "published": {
+            "default": false,
+            "title": "Published",
+            "type": "boolean"
+          },
+          "report": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "rules": {
+            "patternProperties": {
+              "^[a-z][a-z0-9-]{0,39}$": {
+                "$ref": "#/components/schemas/Conclusion"
+              }
+            },
+            "title": "Rules",
+            "type": "object"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "attempt",
+          "state",
+          "report",
+          "investigation_id",
+          "audit_id",
+          "started_at"
+        ],
+        "title": "GuardianRunResponse",
+        "type": "object"
+      },
+      "GuardianSummary": {
+        "description": "An audit's Guardian status as change groups, the overview and site impact show it.",
+        "properties": {
+          "availability": {
+            "default": "projected",
+            "enum": [
+              "projected",
+              "unavailable"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "impacted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianImpactedDevices"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "waiting",
+                  "done"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          }
+        },
+        "title": "GuardianSummary",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -4237,6 +5954,59 @@
         ],
         "title": "LandingPage",
         "type": "string"
+      },
+      "LedgerRow": {
+        "additionalProperties": false,
+        "description": "One change atom on one applicable target.",
+        "properties": {
+          "atom_id": {
+            "pattern": "^A[1-9][0-9]{0,5}$",
+            "title": "Atom Id",
+            "type": "string"
+          },
+          "obligation_ids": {
+            "default": [],
+            "items": {
+              "pattern": "^O[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            "title": "Obligation Ids",
+            "type": "array"
+          },
+          "resolution": {
+            "enum": [
+              "claimed",
+              "excluded",
+              "uncovered"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "uncovered_paths": {
+            "default": [],
+            "items": {
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "title": "Uncovered Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "atom_id",
+          "target",
+          "resolution"
+        ],
+        "title": "LedgerRow",
+        "type": "object"
       },
       "LogicalObjectListResponse": {
         "description": "Paginated logical object list.",
@@ -6622,6 +8392,165 @@
         "title": "ObjectVersionResponse",
         "type": "object"
       },
+      "Obligation": {
+        "additionalProperties": false,
+        "description": "Something coverage needs resolved. Anchor and deployment preconditions are core-owned.",
+        "properties": {
+          "change_ref": {
+            "anyOf": [
+              {
+                "pattern": "^A[1-9][0-9]{0,5}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Ref"
+          },
+          "empty_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_exercised",
+                  "incomplete"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Empty Policy"
+          },
+          "id": {
+            "pattern": "^O[1-9][0-9]{0,5}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "anchor",
+              "deployment",
+              "monitoring",
+              "rule",
+              "input"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "metric": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric"
+          },
+          "owner": {
+            "pattern": "^[a-z][a-z0-9-]{0,39}$",
+            "title": "Owner",
+            "type": "string"
+          },
+          "paths": {
+            "default": [],
+            "items": {
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "title": "Paths",
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "precondition",
+              "observation"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "role",
+          "kind",
+          "target"
+        ],
+        "title": "Obligation",
+        "type": "object"
+      },
+      "ObligationOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "obligation": {
+            "$ref": "#/components/schemas/Obligation"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObligationStatus"
+          }
+        },
+        "required": [
+          "obligation",
+          "status"
+        ],
+        "title": "ObligationOutcome",
+        "type": "object"
+      },
+      "ObligationStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "pattern": "^E[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "satisfied",
+              "not_exercised",
+              "unsatisfied"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ObligationStatus",
+        "type": "object"
+      },
       "OperationalHealthResponse": {
         "description": "Service health tab payload.",
         "properties": {
@@ -6738,6 +8667,16 @@
             "format": "date-time",
             "title": "Generated At",
             "type": "string"
+          },
+          "guardian_feed_counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianFeedCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "historical": {
             "default": false,
@@ -7872,6 +9811,104 @@
         "title": "RelevancePlan",
         "type": "object"
       },
+      "Report": {
+        "additionalProperties": false,
+        "description": "One rendered run. Nothing here is stored: it is built from the run document on every read.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/Section_ChangeAtom_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageSection",
+            "default": {
+              "obligations": {
+                "items": [],
+                "omitted": 0
+              },
+              "rows": {
+                "items": [],
+                "omitted": 0
+              }
+            }
+          },
+          "devices": {
+            "$ref": "#/components/schemas/Section_DeviceMonitoring_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/Section_EvidenceRow_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Section_FindingRow_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "gaps": {
+            "$ref": "#/components/schemas/Section_Gap_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "header": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportHeader"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "header_note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Note"
+          },
+          "impacted": {
+            "$ref": "#/components/schemas/Section_CompactImpactedDevice_",
+            "default": {
+              "items": [],
+              "omitted": 0
+            }
+          },
+          "run": {
+            "$ref": "#/components/schemas/ReportRun"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ReportSummary",
+            "default": {
+              "deterministic": ""
+            }
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "Report",
+        "type": "object"
+      },
       "ReportAction": {
         "additionalProperties": false,
         "properties": {
@@ -7889,6 +9926,76 @@
           "report"
         ],
         "title": "ReportAction",
+        "type": "object"
+      },
+      "ReportHeader": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "current": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "peak": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak",
+            "type": "string"
+          },
+          "recovery": {
+            "enum": [
+              "none",
+              "recovered",
+              "unrecovered"
+            ],
+            "title": "Recovery",
+            "type": "string"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "pattern": "^(monitoring|deployment|agent|rule:[a-z][a-z0-9-]{0,39})$",
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "peak",
+          "current",
+          "recovery",
+          "confidence",
+          "coverage"
+        ],
+        "title": "ReportHeader",
         "type": "object"
       },
       "ReportHistory": {
@@ -7929,6 +10036,99 @@
           "complete"
         ],
         "title": "ReportHistory",
+        "type": "object"
+      },
+      "ReportRun": {
+        "additionalProperties": false,
+        "description": "The attempt itself, as the panel's collapsed summary shows it.",
+        "properties": {
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/RunBudget"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "kind": {
+            "enum": [
+              "early",
+              "final"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "attempt",
+          "state",
+          "started_at",
+          "budget"
+        ],
+        "title": "ReportRun",
         "type": "object"
       },
       "ReportSection": {
@@ -7995,6 +10195,45 @@
           "gaps_and_next_checks"
         ],
         "title": "ReportSections",
+        "type": "object"
+      },
+      "ReportSummary": {
+        "additionalProperties": false,
+        "description": "The deterministic sentence, and the agent's own summary labelled as such, or why there is none.",
+        "properties": {
+          "ai": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai"
+          },
+          "ai_note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Note"
+          },
+          "deterministic": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Deterministic",
+            "type": "string"
+          }
+        },
+        "title": "ReportSummary",
         "type": "object"
       },
       "RestoreActionReason": {
@@ -8628,6 +10867,60 @@
         "title": "RestoreVerificationResponse",
         "type": "object"
       },
+      "RunAnchor": {
+        "additionalProperties": false,
+        "properties": {
+          "changed_at": {
+            "format": "date-time",
+            "title": "Changed At",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "audit",
+              "device_trigger",
+              "receipt"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "changed_at",
+          "source"
+        ],
+        "title": "RunAnchor",
+        "type": "object"
+      },
+      "RunBudget": {
+        "additionalProperties": false,
+        "description": "External calls an attempt used, each capped by its per-attempt limit.",
+        "properties": {
+          "mcp_calls": {
+            "default": 0,
+            "maximum": 7.0,
+            "minimum": 0.0,
+            "title": "Mcp Calls",
+            "type": "integer"
+          },
+          "model_turns": {
+            "default": 0,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Model Turns",
+            "type": "integer"
+          },
+          "rule_reads": {
+            "default": 0,
+            "maximum": 8.0,
+            "minimum": 0.0,
+            "title": "Rule Reads",
+            "type": "integer"
+          }
+        },
+        "title": "RunBudget",
+        "type": "object"
+      },
       "SafetyNetItemResponse": {
         "description": "One line of the Overview safety-net card.",
         "properties": {
@@ -8749,6 +11042,278 @@
           "target"
         ],
         "title": "SearchResultResponse",
+        "type": "object"
+      },
+      "Section_ChangeAtom_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChangeAtom"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[ChangeAtom]",
+        "type": "object"
+      },
+      "Section_CompactImpactedDevice_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CompactImpactedDevice"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[CompactImpactedDevice]",
+        "type": "object"
+      },
+      "Section_DeviceMonitoring_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeviceMonitoring"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[DeviceMonitoring]",
+        "type": "object"
+      },
+      "Section_EvidenceRow_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRow"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[EvidenceRow]",
+        "type": "object"
+      },
+      "Section_FindingRow_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FindingRow"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[FindingRow]",
+        "type": "object"
+      },
+      "Section_Gap_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[Gap]",
+        "type": "object"
+      },
+      "Section_LedgerRow_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LedgerRow"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[LedgerRow]",
+        "type": "object"
+      },
+      "Section_ObligationOutcome_": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ObligationOutcome"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "title": "Section[ObligationOutcome]",
         "type": "object"
       },
       "ServiceTokenUpdateRequest": {
@@ -9288,6 +11853,16 @@
             "default": "Configuration change",
             "title": "Change Type",
             "type": "string"
+          },
+          "guardian": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuardianSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -10009,6 +12584,64 @@
         "title": "StructuredOutputResponse",
         "type": "object"
       },
+      "Target": {
+        "additionalProperties": false,
+        "properties": {
+          "device_mac": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Mac"
+          },
+          "port_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Id"
+          },
+          "site_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Id"
+          },
+          "wlan_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wlan Id"
+          }
+        },
+        "title": "Target",
+        "type": "object"
+      },
       "TimelineMarkerListResponse": {
         "description": "Every marker inside the selected window.",
         "properties": {
@@ -10656,6 +13289,105 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "Verdict": {
+        "additionalProperties": false,
+        "description": "The composed result of one attempt.",
+        "properties": {
+          "confidence": {
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "insufficient",
+              "not_applicable"
+            ],
+            "title": "Coverage",
+            "type": "string"
+          },
+          "current": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "gaps": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "impacted_devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CompactImpactedDevice"
+            },
+            "title": "Impacted Devices",
+            "type": "array"
+          },
+          "impacted_devices_omitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Impacted Devices Omitted",
+            "type": "integer"
+          },
+          "peak": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Peak",
+            "type": "string"
+          },
+          "recovery": {
+            "enum": [
+              "none",
+              "recovered",
+              "unrecovered"
+            ],
+            "title": "Recovery",
+            "type": "string"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "pattern": "^(monitoring|deployment|agent|rule:[a-z][a-z0-9-]{0,39})$",
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 2000,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "peak",
+          "current",
+          "recovery",
+          "confidence",
+          "coverage",
+          "summary"
+        ],
+        "title": "Verdict",
+        "type": "object"
+      },
       "VerificationCheckResponse": {
         "description": "One named post-restore check and its outcome.",
         "properties": {
@@ -10938,6 +13670,41 @@
           "explanation"
         ],
         "title": "WlanFinding",
+        "type": "object"
+      },
+      "mist_config_guardian_backend__guardian__contracts__DeviceImpact": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "pattern": "^E[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "mac": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Mac",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "none",
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mac",
+          "severity"
+        ],
+        "title": "DeviceImpact",
         "type": "object"
       },
       "mist_config_guardian_backend__impact__report__DeviceImpact": {
@@ -13598,6 +16365,132 @@
           }
         ],
         "summary": "Read Change Group",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/guardian": {
+      "get": {
+        "description": "Read one audit's Guardian root, its published runs with their rendered reports, and every attempt.",
+        "operationId": "read_guardian_investigation_api_v1_organizations__organization_id__change_groups__change_group_id__guardian_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardianInvestigationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Guardian Investigation",
+        "tags": [
+          "Change Groups"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/change-groups/{change_group_id}/guardian/runs/{run_id}": {
+      "get": {
+        "description": "Read one full run, published or not, through the change group whose investigation owns it.",
+        "operationId": "read_guardian_run_api_v1_organizations__organization_id__change_groups__change_group_id__guardian_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_group_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PydanticObjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardianRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Read Guardian Run",
         "tags": [
           "Change Groups"
         ]
