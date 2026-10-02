@@ -81,10 +81,10 @@ from mist_config_guardian_backend.guardian.reader import (
 # Model output and tool arguments are untrusted JSON, validated and bounded at this boundary.
 # ruff: noqa: ANN401
 
-PROMPT_VERSION = f"{ACTION_SCHEMA_VERSION}.1"
+PROMPT_VERSION = f"{ACTION_SCHEMA_VERSION}.2"
 REPORT_ONLY_TURNS = 3
 # The plug-in hints, which share the fixed part's slack with the frame the sections are rendered in.
-HINTS_BUDGET = 1_000
+HINTS_BUDGET = 1_500
 # A stored call keeps its arguments; anything larger is a measurement of what the model asked for, not the ask.
 MAX_ARGUMENT_BYTES = 1_000
 
@@ -130,6 +130,11 @@ Facts about how your report is used, not instructions to agree:
 - Every warning or critical finding cites at least one item, and every impacted device is named by the evidence it
   cites, in its scope or its rows.
 - You may cite only evidence shown in this turn. An item marked withheld is not citable.
+
+Impact-rule hints are candidates, not findings or executed simulations. Test them with scoped before/after
+configuration and service-health evidence. RADIUS config does not prove admission; route config does not prove
+forwarding. Separate new failures from pre-existing conditions and overridden inherited edits. Unknown data stays
+a gap. Reads supplement rather than replace the SLE, event, monitoring and deployment evidence already shown.
 
 Every operational read covers the before window or the after window, never the present. There is
 no snapshot tool for current state, so current_impact rests on what the after window ends on and on the
@@ -769,7 +774,8 @@ def _hints(hints: Mapping[str, str]) -> str:
     a hint that would take the section past its budget is left out rather than cut in half.
     """
     kept: dict[str, str] = {}
-    for plugin in sorted(hints):
+    ordered = sorted(hints, key=lambda plugin: (not plugin.startswith("impact-rules-"), plugin))
+    for plugin in ordered:
         candidate = {**kept, str(plugin)[:MAX_IDENTIFIER_CHARS]: _line(hints[plugin])}
         if json_size(candidate) > HINTS_BUDGET:
             break
