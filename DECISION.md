@@ -129,3 +129,14 @@ across Overview, Changes, Site topology, Configuration and Settings. The keyboar
 test waits for the change list to become visible before focusing it, avoiding a
 race with the shell's loading overlay. No API or application behavior changes
 were needed for this visual pass.
+
+The user also requested removal of the generic decorative UI treatment. Recent
+change cards no longer carry colored left borders or duplicate severity dots.
+Slogan overlines, numbered section labels, ornamental icons and the illustrative
+topology thumbnail were removed. Dashboard cards now use neutral surfaces with
+the requested shadows; headings name the information directly. Status badges,
+functional selection states and the actual interactive topology remain.
+
+This cleanup passed the production build, all 19 affected component tests and
+all 16 browser scenarios. The saved dashboard, change and rollback previews
+were refreshed from that run.

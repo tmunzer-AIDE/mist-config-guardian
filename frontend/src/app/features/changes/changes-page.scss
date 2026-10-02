@@ -18,11 +18,6 @@
   gap: 20px;
   flex-wrap: wrap;
 }
-.eyebrow {
-  font: 600 10px var(--font-mono);
-  letter-spacing: 0.1em;
-  color: var(--brand);
-}
 .head h1 {
   font-size: 32px;
   letter-spacing: -1.2px;
@@ -123,7 +118,6 @@
   border-bottom: 1px solid var(--rule-soft);
   align-items: center;
   cursor: pointer;
-  border-left: 3px solid transparent;
 }
 .row--group:hover {
   background: var(--surface-selected-soft);
@@ -134,7 +128,6 @@
 }
 .row--group.row--on {
   background: var(--surface-selected);
-  border-left-color: var(--brand);
 }
 .cell {
   padding: 0;
@@ -267,21 +260,8 @@
   border-bottom: 1px solid var(--rule);
   background: var(--surface-sunken);
 }
-.verdict-icon {
-  font-size: 25px;
-  color: var(--brand);
-  line-height: 1.2;
-}
-.verdict-icon[data-tone='crit'] {
-  color: var(--tone-critical-ink);
-}
-.verdict-icon[data-tone='warn'] {
-  color: var(--tone-warning-ink);
-}
 .change-verdict strong {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 12px;
 }
 .change-verdict p {
   font-size: 13px;
@@ -458,7 +438,6 @@
   font-size: 24px;
   margin: 0;
 }
-.page--detail .head .eyebrow,
 .page--detail .head-sub {
   display: none;
 }

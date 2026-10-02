@@ -1,8 +1,5 @@
 <div class="section-heading">
-  <div>
-    <span class="eyebrow">02 / NETWORK IMPACT</span>
-    <h3>Where it matters</h3>
-  </div>
+  <h3>Site & device impact</h3>
 </div>
 @if (historical()) {
   <p class="notice">
@@ -59,8 +56,7 @@
           [attr.aria-pressed]="site()?.site_id === item.site_id"
           (click)="chooseSite(item.site_id)"
         >
-          <span class="site-icon" aria-hidden="true">⌘</span
-          ><span
+          <span
             ><strong>{{ item.site_name }}</strong
             ><small
               >{{ count(item) }} linked {{ count(item) === 1 ? 'device' : 'devices' }}</small
@@ -138,7 +134,7 @@
         <section class="device-detail" aria-label="Selected device impact">
           <div class="device-heading">
             <div>
-              <span class="eyebrow">LOCAL IMPACT</span>
+              <span class="device-context">Device impact</span>
               <h4 tabindex="-1">{{ device.name }}</h4>
               <code>{{ device.mac }}</code>
             </div>

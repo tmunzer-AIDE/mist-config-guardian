@@ -1,9 +1,8 @@
 <div class="page">
   <header class="head">
     <div>
-      <span class="eyebrow">YOUR NETWORK, IN FOCUS</span>
       <h1 class="cg-page-title">Change overview</h1>
-      <p class="head-sub">A clear view of what changed and what needs your attention.</p>
+      <p class="head-sub">Recent configuration changes and their recorded impact.</p>
     </div>
     <button class="cg-btn cg-btn--primary" (click)="openChanges()">
       Explore all changes <span aria-hidden="true">↗</span>
@@ -11,7 +10,7 @@
   </header>
   @if (counts(); as total) {
     <section class="dashboard-stats" aria-label="Changes in the selected period">
-      <button class="stat stat--primary" (click)="openChanges()">
+      <button class="stat" (click)="openChanges()">
         <span>Configuration changes <span aria-hidden="true">↗</span></span
         ><strong>{{ total.change_groups }}</strong
         ><small>in the selected period</small>
@@ -72,7 +71,7 @@
       @for (card of feed(); track card.id) {
         <article class="cg-card card" [attr.data-tone]="card.tone">
           <div class="entry-time">
-            <span class="entry-dot" [attr.data-tone]="card.tone"></span>{{ card.time }}
+            {{ card.time }}
             <span>UTC</span>
           </div>
           <div class="card-body">
@@ -142,15 +141,8 @@
     </section>
     <aside class="rail">
       <section class="topology-shortcut">
-        <span class="eyebrow">CONNECTED CONTEXT</span>
-        <div class="mini-topology" aria-hidden="true">
-          <span>◇</span><i></i>
-          <div><b>▤</b><b>▤</b></div>
-          <i></i>
-          <div><b>◉</b><b>◉</b><b>◉</b></div>
-        </div>
-        <h2>See the bigger picture.</h2>
-        <p>Explore your sites, follow the connections, and inspect individual devices.</p>
+        <h2>Site topology</h2>
+        <p>View network connections and inspect changes on individual devices.</p>
         <button class="cg-btn" (click)="openTopology()">Open site topology →</button>
       </section>
       @if (historical()) {

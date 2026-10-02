@@ -34,6 +34,11 @@ without enclosing borders or colored bands. Main content cards and tables use
 soft shadows; detail panes and floating menus sit a level higher. This shared
 styling also applies to Configuration, Site topology and Settings. Historical
 mode remains explicit through its warning text, marker and return-to-live action.
+Use direct, descriptive headings and reserve color for states and controls.
+Avoid decorative status rails, duplicate severity dots, slogan overlines,
+numbered section labels and illustrative network diagrams. The interactive
+topology remains an evidence view; its dashboard shortcut is a plain navigation
+card. Recent changes communicate severity through their labeled badges.
 
 Desktop previews use synthetic browser-test fixtures:
 [overview](change-overview-preview.png),

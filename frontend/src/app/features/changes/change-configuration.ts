@@ -18,10 +18,7 @@ import { DiffService } from '../history/diff.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="section-heading">
-      <div>
-        <span class="eyebrow">01 / CONFIGURATION</span>
-        <h3>What changed</h3>
-      </div>
+      <h3>What changed</h3>
       <span class="count"
         >{{ objects().length }} {{ objects().length === 1 ? 'object' : 'objects' }}</span
       >

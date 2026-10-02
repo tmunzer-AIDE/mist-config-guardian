@@ -1,9 +1,10 @@
 <div class="page" [class.page--detail]="selectedId() !== null">
   <header class="head">
     <div>
-      <span class="eyebrow">CONFIGURATION INTELLIGENCE</span>
       <h1 class="cg-page-title">Changes</h1>
-      <p class="head-sub">See what changed. Understand the impact. Act with confidence.</p>
+      <p class="head-sub">
+        Compare configuration changes, inspect impact, and review rollback options.
+      </p>
     </div>
     <form class="search" (submit)="$event.preventDefault(); search(searchInput.value)">
       <input
@@ -156,7 +157,6 @@
         </header>
         @if (rawDetail(); as change) {
           <div class="change-verdict">
-            <div class="verdict-icon" [attr.data-tone]="detail.tone" aria-hidden="true">◎</div>
             <div>
               <strong>Recorded impact</strong>
               <p>{{ detail.assessment }}</p>
@@ -169,7 +169,6 @@
             <section class="rollback-workspace" aria-label="Rollback review">
               <div class="rollback-heading">
                 <div>
-                  <span class="eyebrow">ROLLBACK / REVIEW & AUTHORIZE</span>
                   <h3>Restore the previous configuration</h3>
                   <p>
                     The previous versions are selected. Review the actions, capture a fresh backup,
@@ -202,7 +201,6 @@
                 />
                 @if (canRestore()) {
                   <section class="rollback-card">
-                    <span class="eyebrow">RECOVERY</span>
                     <h3>Roll back this change</h3>
                     <p>
                       Restore {{ restorable().length }}
