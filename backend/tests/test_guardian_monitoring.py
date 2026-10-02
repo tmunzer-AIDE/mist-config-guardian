@@ -97,6 +97,7 @@ def sle(
             "scope": "device",
             "scope_id": scope_id,
             "values": values,
+            "sample_counts": dict.fromkeys(values, 100),
             "no_data": no_data,
             "errors": errors,
             "requested_metrics": list(metrics),

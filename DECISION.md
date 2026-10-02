@@ -140,3 +140,25 @@ functional selection states and the actual interactive topology remain.
 This cleanup passed the production build, all 19 affected component tests and
 all 16 browser scenarios. The saved dashboard, change and rollback previews
 were refreshed from that run.
+
+
+Backup receipts without captured object differences are now hidden before
+change-feed pagination and counts. Network validation uses conservative,
+explicit exclusions for BLE asset tracking/filters, reporting zones,
+notifications, webhooks and administrator SSO; mixed and unrecognized changes
+stay eligible. The policy and complete registry review are documented in
+`docs/design/network-impact-policy.md`.
+
+SLE collection retains sampled event totals for its anchored numeric window.
+Unverified legacy zero percentages are unavailable, while measured zeroes and
+independent incidents/device findings can still establish degradation. Cached
+false zero alarms are corrected on reads; the existing bounded backfill updates
+older group projections after deployment. No source observations are erased.
+
+Validation: 2,640 backend tests passed; 110 environment-dependent checks were
+skipped, including MongoDB integration coverage because MONGO_TEST_URL is unset.
+All 436 frontend tests and 18 Chrome scenarios passed, along with production
+build, Ruff format/lint, source type checks and OpenAPI export verification.
+The browser scenarios include an excluded asset filter with its diff/rollback
+and a direct link to an unlinked audit without an empty rollback card. CodeRabbit
+is unavailable; changes received a local review. Mist validation used fixtures.

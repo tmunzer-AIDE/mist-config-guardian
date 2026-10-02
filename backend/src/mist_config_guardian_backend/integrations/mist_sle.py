@@ -108,7 +108,8 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         ]
         results = await asyncio.gather(*tasks)
         anchored = [
-            (metric, anchor_value(series, start, end, anchor), series, error) for metric, series, error in results
+            (metric, anchor_value(series, start, end, anchor), series, error)
+            for metric, series, _totals, error in results
         ]
         values = {metric: value for metric, value, _series, _error in anchored if value is not None}
         errors = [error for _metric, _value, _series, error in anchored if error is not None]
@@ -125,6 +126,15 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
             requested_metrics=[metric for metric, _api_metric in metrics],
             metric_errors={metric: error for metric, _value, _series, error in anchored if error is not None},
             values=values,
+            sample_counts={
+                metric: sum(
+                    totals[-len(anchor_tail(series, start, end, anchor)) :]
+                    if mean_of_series(anchor_tail(series, start, end, anchor)) is not None
+                    else totals
+                )
+                for metric, series, totals, error in results
+                if error is None
+            },
             trend={metric: series for metric, _value, series, error in anchored if error is None and series},
             baseline_window="last-hour" if narrowed else "full-window",
             no_data=[metric for metric, value, _series, error in anchored if value is None and error is None],
@@ -177,19 +187,21 @@ class MistSleClient(AbstractAsyncContextManager["MistSleClient"]):
         *,
         start: datetime,
         end: datetime,
-    ) -> tuple[str, list[float | None], str | None]:
+    ) -> tuple[str, list[float | None], list[float], str | None]:
         params = {"start": str(int(start.timestamp())), "end": str(int(end.timestamp()))}
         try:
             response = await self._client.get(path, params=params)
             response.raise_for_status()
-            series = extract_sle_series(response.json())
+            payload = response.json()
+            series = extract_sle_series(payload)
+            totals = [float(total or 0) for total in payload["sle"]["samples"]["total"]]
         except SlePayloadError:
-            return metric, [], f"{metric}: invalid SLE response"
+            return metric, [], [], f"{metric}: invalid SLE response"
         except httpx.HTTPStatusError as exc:
-            return metric, [], f"{metric}: HTTP {exc.response.status_code} from the SLE endpoint ({path})"
+            return metric, [], [], f"{metric}: HTTP {exc.response.status_code} from the SLE endpoint ({path})"
         except (httpx.HTTPError, ValueError):
-            return metric, [], f"{metric}: unavailable"
-        return metric, series, None
+            return metric, [], [], f"{metric}: unavailable"
+        return metric, series, totals, None
 
 
 def extract_sle_series(payload: object) -> list[float | None]:

@@ -17,6 +17,12 @@ from mist_config_guardian_backend.models.monitoring import MonitoringSession, Mo
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion
 from mist_config_guardian_backend.models.webhook import AuditChangeGroup, ChangedObjectRef
 from mist_config_guardian_backend.services import site_impact
+from mist_config_guardian_backend.services.change_groups import (
+    BeanieChangeGroupStore,
+    ChangeGroupFilters,
+    build_criteria,
+)
+from mist_config_guardian_backend.services.overview import BeanieOverviewReader
 
 MONGO_URL = os.environ.get("MONGO_TEST_URL")
 pytestmark = pytest.mark.skipif(not MONGO_URL, reason="MONGO_TEST_URL is not set")
@@ -187,3 +193,42 @@ async def test_stored_topology_uses_the_last_version_before_the_cutoff(inventory
     assert topology.devices[0].name == "Before"
     assert topology.devices[0].health == "unknown"
     assert "DO NOT RETURN" not in topology.model_dump_json()
+
+
+async def test_change_counts_and_severity_filters_exclude_empty_and_non_network_changes(inventory):
+    org, _other, now = inventory
+
+    def ref(kind, fields=()):
+        return ChangedObjectRef(
+            logical_object_id=PydanticObjectId(),
+            object_type=kind,
+            object_name=kind,
+            scope="org",
+            event="updated",
+            changed_fields=list(fields),
+        )
+
+    for audit, refs in [
+        ("backup", []),
+        ("asset", [ref("assetfilters")]),
+        ("network", [ref("networktemplates")]),
+        ("metadata", [ref("devices", ["name", "notes"])]),
+        ("mixed", [ref("assetfilters"), ref("devices", ["port_config"])]),
+    ]:
+        await AuditChangeGroup(
+            organization_id=org,
+            audit_id=audit,
+            occurred_at=now,
+            changed_objects=refs,
+            impact_severity="critical",
+            recovery_state="unrecovered",
+        ).insert()
+    store = BeanieChangeGroupStore()
+    assert await store.count(build_criteria(org, ChangeGroupFilters())) == 4
+    assert await store.count(build_criteria(org, ChangeGroupFilters(severity="critical"))) == 2
+    assert await store.count(build_criteria(org, ChangeGroupFilters(severity="none"))) == 2
+    counts = await BeanieOverviewReader().change_group_counts(
+        org, start=now - timedelta(hours=1), end=now, viewer_email="viewer@example.com"
+    )
+    assert counts.change_groups == 4
+    assert counts.impacting == counts.unrecovered == 2

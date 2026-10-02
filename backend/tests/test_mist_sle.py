@@ -54,6 +54,7 @@ async def test_sle_requests_exact_24_hour_baseline_for_the_changed_device(httpx_
     assert result.window_start == start
     assert result.window_end == end
     assert result.values["coverage"] == 98
+    assert result.sample_counts["coverage"] == 100
     assert result.scope_id == "00000000-0000-0000-1000-aabbccddeeff"
     assert set(result.requested_metrics) == set(AP_METRICS)
     assert len(httpx_mock.get_requests()) == 8

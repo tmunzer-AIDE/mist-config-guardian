@@ -16,17 +16,19 @@ BACKFILL_BATCH_SIZE = 200
 
 @celery_app.task(name="change_groups.backfill_projections")
 def backfill_change_group_projections() -> int:
-    """Fill in projections for change groups that do not have one yet."""
+    """Fill missing projections and upgrade older network-impact classifications."""
     return asyncio.run(_backfill_change_group_projections())
 
 
 async def _backfill_change_group_projections() -> int:
-    """Rebuild a bounded batch of unprojected change groups.
+    """Rebuild a bounded batch of missing or outdated change-group projections.
 
     Groups recorded before the projection existed carry none of the display
     data the Changes and Overview pages read, so they would render blank. The
     batch is bounded and the task is idempotent, so a large history is filled in
-    over successive runs without ever monopolizing a worker.
+    over successive runs without ever monopolizing a worker. Policy version 1
+    also repairs already-projected administrative changes and unverified SLE
+    zero alarms. Raw receipts, versions and monitoring observations are retained.
     """
     settings = get_settings()
     database = DatabaseManager(settings)
@@ -34,7 +36,7 @@ async def _backfill_change_group_projections() -> int:
     try:
         pending = (
             await AuditChangeGroup.find(
-                {"projection_updated_at": None},
+                {"$or": [{"projection_updated_at": None}, {"impact_policy_version": {"$ne": 1}}]},
             )
             .sort("-created_at")
             .limit(BACKFILL_BATCH_SIZE)

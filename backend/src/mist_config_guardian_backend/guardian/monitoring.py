@@ -88,6 +88,7 @@ class SleSample(Contract):
     scope: Literal["site", "device"] = "site"
     scope_id: str | None = None
     values: dict[str, float] = Field(default_factory=dict)
+    sample_counts: dict[str, float] = Field(default_factory=dict)
     no_data: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     requested_metrics: tuple[str, ...] = ()
@@ -209,18 +210,20 @@ def _metric_errors(sample: SleSample) -> dict[str, str]:
     return errors | sample.metric_errors
 
 
-def _state(sample: SleSample | None, metric: str) -> EvidenceState:
+def _state(sample: SleSample | None, metric: str) -> EvidenceState:  # noqa: PLR0911 - explicit evidence states
     if sample is None:
         return "pending"
     if metric in _metric_errors(sample):
         return "error"
+    if metric in sample.no_data or sample.sample_counts.get(metric) == 0:
+        return "no_data"
+    if sample.values.get(metric) == 0 and sample.sample_counts.get(metric, 0) <= 0:
+        return "missing"
     if metric in sample.metric_states:
         state = sample.metric_states[metric]
         return "missing" if state == "measured" and metric not in sample.values else state
     if metric in sample.values:
         return "measured"
-    if metric in sample.no_data:
-        return "no_data"
     return "missing"
 
 

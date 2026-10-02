@@ -9,7 +9,8 @@ import { GuardianSummary } from './guardian.model';
 import type { DeviceImpact } from '../features/impact/site-impact.model';
 
 export type ImpactSeverity = 'none' | 'info' | 'warning' | 'critical';
-export type RecoveryState = 'not_applicable' | 'monitoring' | 'recovered' | 'unrecovered' | 'completed';
+export type RecoveryState =
+  'not_applicable' | 'monitoring' | 'recovered' | 'unrecovered' | 'completed';
 export type BaselineConfidence = 'high' | 'medium' | 'low' | 'none';
 export type ChangeSource = 'webhook' | 'reconcile' | 'restore' | 'snapshot';
 
@@ -72,6 +73,8 @@ export interface ChangeGroupSummary {
    */
   impact_known?: boolean;
   impact_source?: 'legacy' | null;
+  impact_validation?: 'required' | 'excluded';
+  impact_validation_reason?: string | null;
   /**
    * The audit's Guardian investigation, or `null` when none was recorded for
    * it — which is an answer, and is not the same as a result that could not be

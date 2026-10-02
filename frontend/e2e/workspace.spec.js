@@ -799,7 +799,7 @@ test('change workspace brings configuration, cross-site reach and device evidenc
   await expect(page.getByRole('table', { name: 'Configuration changes' })).toContainText('true');
   await expect(page.getByLabel('Known impact across sites')).toContainText('2linked sites');
   await expect(page.getByLabel('Known impact across sites')).toContainText('4linked devices');
-  await expect(page.getByLabel('Known impact across sites')).toContainText('1with disruption');
+  await expect(page.getByLabel('Known impact across sites')).toContainText('1with measured degradation');
   await expect(page.locator('app-change-impact .node')).toHaveCount(6);
   await page.screenshot({ path: info.outputPath('change-workspace-desktop.png') });
   await page.locator('.device-list').getByRole('button', { name: /Access switch 1/ }).click();
@@ -883,4 +883,50 @@ test('failed comparisons and topology remain recoverable without claiming health
   await expect(page.getByRole('table', { name: 'Configuration changes' })).toBeVisible();
   await page.getByRole('button', { name: 'Retry topology' }).click();
   await expect(page.locator('app-change-impact .node')).toHaveCount(6);
+});
+
+
+test('asset filter changes explain why network validation is not applicable', async ({ page }, info) => {
+  await installChangeWorkspace(page);
+  const excluded = {
+    ...workspaceChange, title: 'Asset filter renamed', summary: 'Asset filters categorize BLE assets; they do not configure network service.', object_count: 1, device_count: 0,
+    impact_severity: 'none', impact_label: 'NOT APPLICABLE', recovery_state: 'not_applicable',
+    impact_validation: 'excluded', impact_validation_reason: 'Asset filters categorize BLE assets; they do not configure network service.',
+    deterministic_assessment: 'Asset filters categorize BLE assets; they do not configure network service.',
+    evidence: [], site_impacts: [], monitoring_session_ids: [], competing_change_group_ids: [],
+    changed_objects: [{ ...workspaceChange.changed_objects[0], object_type: 'assetfilters', object_name: 'Aeroscout', changed_fields: ['name'] }],
+  };
+  await page.route('**/change-groups/g0*', route => route.fulfill({ json: excluded }));
+  await page.route('**/change-groups?*', route => route.fulfill({ json: { items: [excluded, groups[1]], total: 2 } }));
+  await page.route('**/overview?*', route => route.fulfill({ json: {
+    generated_at: now, range_start: now, range_end: now,
+    counts: { change_groups: 2, impacting: 0, mine: 0, unrecovered: 0, pending_approvals: 0, failed_restores: 0 },
+    change_groups: [excluded, groups[1]], safety_net: [], pending_approvals: [], failed_restores: [],
+    latest_snapshot_at: now, latest_snapshot_objects: 100,
+  } }));
+  await page.route('**/diff*', route => route.fulfill({ json: {
+    ...workspaceDiff, summary: '1 field modified', counts: { changed: 1, added: 0, modified: 1, removed: 0 },
+    entries: [{ ...workspaceDiff.entries[0], field: 'name', before: 'A1', after: 'Aeroscout', note: '', section: 'other', notable: false }],
+  } }));
+  await page.goto('/changes?group=g0');
+  await expect(page.locator('.panel-title')).toHaveText('Asset filter renamed');
+  await expect(page.locator('app-change-impact')).toContainText('Network impact validation skipped.');
+  await expect(page.locator('app-change-impact')).toContainText('categorize BLE assets');
+  await expect(page.getByLabel('Known impact across sites')).toHaveCount(0);
+  await expect(page.locator('app-change-configuration')).toContainText('Aeroscout');
+  await expect(page.getByRole('button', { name: 'Review rollback' })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('excluded-network-validation.png'), fullPage: true, animations: 'disabled' });
+});
+
+test('unlinked audit detail has no zero-object rollback workflow', async ({ page }) => {
+  await installChangeWorkspace(page);
+  await page.route('**/change-groups/g0*', route => route.fulfill({ json: {
+    ...workspaceChange, title: 'Audit awaiting a captured configuration difference', changed_objects: [],
+    object_count: 0, site_impacts: [], affected_devices: [], competing_change_group_ids: [],
+    impact_severity: 'info', impact_label: 'NO DATA',
+  } }));
+  await page.goto('/changes?group=g0');
+  await expect(page.locator('.panel-title')).toHaveText('Audit awaiting a captured configuration difference');
+  await expect(page.getByRole('button', { name: 'Review rollback' })).toHaveCount(0);
+  await expect(page.locator('.rollback-card')).toHaveCount(0);
 });

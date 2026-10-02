@@ -170,7 +170,7 @@ export class ChangeImpact {
     ({
       ok: 'No impact observed',
       warning: 'Possible disruption',
-      critical: 'Service loss',
+      critical: 'Severe degradation',
       error: 'Collection failed',
       unknown: 'Not established',
     })[value];
@@ -193,7 +193,7 @@ export class ChangeImpact {
   }
   protected verdict(site: ChangeSiteImpact) {
     const disrupted = this.affected(site);
-    if (disrupted) return `${disrupted} with disruption`;
+    if (disrupted) return `${disrupted} with measured degradation`;
     if (!site.devices.length) return 'No measurements';
     if (
       site.unmonitored_devices.length ||

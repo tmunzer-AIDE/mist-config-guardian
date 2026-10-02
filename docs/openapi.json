@@ -1109,6 +1109,26 @@
             "default": "legacy",
             "title": "Impact Source"
           },
+          "impact_validation": {
+            "default": "required",
+            "enum": [
+              "required",
+              "excluded"
+            ],
+            "title": "Impact Validation",
+            "type": "string"
+          },
+          "impact_validation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impact Validation Reason"
+          },
           "is_mine": {
             "default": false,
             "title": "Is Mine",
@@ -1303,6 +1323,26 @@
             ],
             "default": "legacy",
             "title": "Impact Source"
+          },
+          "impact_validation": {
+            "default": "required",
+            "enum": [
+              "required",
+              "excluded"
+            ],
+            "title": "Impact Validation",
+            "type": "string"
+          },
+          "impact_validation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impact Validation Reason"
           },
           "is_mine": {
             "default": false,
@@ -8437,6 +8477,13 @@
             },
             "title": "Requested Metrics",
             "type": "array"
+          },
+          "sample_counts": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Sample Counts",
+            "type": "object"
           },
           "scope": {
             "default": "site",

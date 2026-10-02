@@ -20,6 +20,7 @@ from mist_config_guardian_backend.services.audit_versioning import AuditVersioni
 from mist_config_guardian_backend.services.change_groups import ChangeGroupProjector
 from mist_config_guardian_backend.services.guardian import GuardianService
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
+from mist_config_guardian_backend.services.network_impact_policy import exclusion_reason
 from mist_config_guardian_backend.services.notifications import NotificationService
 
 # Mist stamps audit and device events with an epoch timestamp. Values far in the
@@ -86,16 +87,33 @@ class WebhookProcessingService:
         if receipt.audit_id:
             await self._add_to_change_group(receipt, payload)
         await AuditVersioningService(self._vault).apply(receipt, payload, organization)
-        session = await MonitoringEventService(self._vault).handle(receipt, payload, organization)
+        linked = (
+            await AuditChangeGroup.find_one({"organization_id": receipt.organization_id, "audit_id": receipt.audit_id})
+            if receipt.topic == "device-events" and receipt.audit_id
+            else None
+        )
+        session = (
+            None
+            if linked and exclusion_reason(linked.changed_objects, linked.message)
+            else await MonitoringEventService(self._vault).handle(receipt, payload, organization)
+        )
         # The projection is rebuilt from scratch afterwards, so it does not
         # matter whether the audit event or the device events arrived first, or
         # how many times either was delivered.
-        await self.project(receipt, payload, session=session)
+        projected = await self.project(receipt, payload, session=session)
 
         if receipt.topic == "audits" and receipt.audit_id:
             settings = get_settings()
             event_time = self._event_time(payload)
-            if settings.guardian_enabled:
+            if (
+                settings.guardian_enabled
+                and (projected is None or projected.changed_objects)
+                and not (
+                    exclusion_reason(projected.changed_objects, projected.message)
+                    if projected
+                    else exclusion_reason([], self._first_string(payload, "message"))
+                )
+            ):
                 await GuardianService(self._vault).ensure(
                     organization,
                     receipt.audit_id,
@@ -114,15 +132,19 @@ class WebhookProcessingService:
         payload: dict[str, object],
         *,
         session: MonitoringSession | None = None,
-    ) -> None:
+    ) -> AuditChangeGroup | None:
         """Recompute every change-group projection this receipt can affect.
 
         ``session`` is the monitoring session the event handler changed, when
         the caller ran it. A device event without an audit identifier belongs
         to whichever administrator action that session was opened for.
         """
+        projected = None
         for audit_id in sorted(await self._affected_audit_ids(receipt, payload, session)):
-            await self._projector.rebuild(receipt.organization_id, audit_id)
+            group = await self._projector.rebuild(receipt.organization_id, audit_id)
+            if audit_id == receipt.audit_id:
+                projected = group
+        return projected
 
     @staticmethod
     async def _affected_audit_ids(

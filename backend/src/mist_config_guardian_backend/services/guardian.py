@@ -325,6 +325,7 @@ def _sle_sample(observation: SleObservation | None) -> SleSample | None:
         | {
             "metric_errors": dict(observation.metric_errors),
             "metric_states": dict(observation.metric_states),
+            "sample_counts": dict(observation.sample_counts),
         }
     )
 
