@@ -42,6 +42,7 @@ from mist_config_guardian_backend.services.change_groups import (
     format_duration,
     resolve_window,
 )
+from mist_config_guardian_backend.services.network_impact_policy import confirmed_changes, eligible_query
 
 # A snapshot attempt that finished, however it finished. The newest of these
 # is what the safety net reports: a failure is news, not something to skip.
@@ -177,6 +178,7 @@ class BeanieOverviewReader:
                 "$match": {
                     "organization_id": organization_id,
                     "occurred_at": {"$gte": start, "$lte": end},
+                    **confirmed_changes(),
                 }
             },
             {
@@ -187,7 +189,8 @@ class BeanieOverviewReader:
                             "$match": {
                                 "impact_severity": {
                                     "$in": [ImpactSeverity.WARNING.value, ImpactSeverity.CRITICAL.value]
-                                }
+                                },
+                                **eligible_query(),
                             }
                         },
                         {"$count": "value"},
@@ -197,7 +200,7 @@ class BeanieOverviewReader:
                         {"$count": "value"},
                     ],
                     "unrecovered": [
-                        {"$match": {"recovery_state": RecoveryState.UNRECOVERED.value}},
+                        {"$match": {"recovery_state": RecoveryState.UNRECOVERED.value, **eligible_query()}},
                         {"$count": "value"},
                     ],
                 }
@@ -235,6 +238,7 @@ class BeanieOverviewReader:
                 {
                     "organization_id": organization_id,
                     "occurred_at": {"$gte": start, "$lte": end},
+                    **confirmed_changes(),
                 }
             )
             .sort("-occurred_at")

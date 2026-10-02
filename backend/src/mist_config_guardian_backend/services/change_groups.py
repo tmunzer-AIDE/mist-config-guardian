@@ -50,7 +50,19 @@ from mist_config_guardian_backend.schemas.change_group import (
 )
 from mist_config_guardian_backend.services.device_impact_projection import impact_from_session
 from mist_config_guardian_backend.services.guardian_reads import GuardianReader, PublishedGuardianReader
-from mist_config_guardian_backend.services.impact_evidence import evidence_coverage, evidence_rows
+from mist_config_guardian_backend.services.impact_analysis import assess_impact, store_assessment
+from mist_config_guardian_backend.services.impact_evidence import (
+    evidence_coverage,
+    evidence_rows,
+    has_unverified_zero,
+    validate_zero_evidence,
+)
+from mist_config_guardian_backend.services.network_impact_policy import (
+    confirmed_changes,
+    eligible_query,
+    excluded_expression,
+    exclusion_reason,
+)
 from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, SITE_OBJECTS
 
 # The design prints impact deltas with a typographic minus, not a hyphen. The
@@ -481,6 +493,8 @@ class BeanieChangeGroupStore:
                 "affected_site_ids": {"$in": list(site_ids)},
                 "audit_id": {"$ne": exclude_audit_id},
                 "occurred_at": {"$gte": start, "$lte": end},
+                **confirmed_changes(),
+                **eligible_query(),
             }
         ).to_list()
 
@@ -696,7 +710,8 @@ def build_assessment(evidence: GroupEvidenceInput, recovery: RecoveryState) -> s
     metric = _metric_phrase(worst.metric).capitalize()
     points = abs(round(worst.delta))
     first = (
-        f"{metric} fell {points} points in the worst measured {worst.scope} scope; "
+        f"{metric} measured {worst.baseline:g}% before and {worst.latest:g}% after "
+        f"(down {points} percentage points) in {worst.scope} {worst.scope_id}; "
         f"{worst.degraded_sessions} of {worst.sessions} measured {worst.scope} scopes degraded"
     )
     if recovery is RecoveryState.UNRECOVERED and evidence.monitored_for is not None:
@@ -776,7 +791,7 @@ def measure_movements(sessions: Sequence[MonitoringSession]) -> tuple[MetricMove
         scope = session.baseline.scope
         scope_id = session.baseline.scope_id or (session.site_id if scope == "site" else session.device_mac)
         rows = (
-            session.assessment.metrics
+            validate_zero_evidence(session.assessment, session.baseline, latest).metrics
             if session.assessment
             else evidence_rows(session.baseline, latest, session.relevance_plan)
         )
@@ -936,8 +951,12 @@ class ChangeGroupProjector:
 
         changed_objects = await self._project_objects(organization_id, audit_id)
         sessions = _distinct_sessions(await self._store.sessions_for_audit(organization_id, audit_id))
+        sessions = validated_sessions(sessions)
 
         group.changed_objects = changed_objects
+        excluded = exclusion_reason(changed_objects, group.message)
+        if excluded:
+            sessions = []
         group.affected_devices = _project_devices(sessions)
         group.monitoring_session_ids = [session.id for session in sessions if session.id is not None]
         group.affected_site_ids = sorted(
@@ -965,7 +984,14 @@ class ChangeGroupProjector:
         group.deterministic_assessment = build_assessment(evidence, group.recovery_state)
         group.evidence = build_evidence(evidence, group.degraded_metrics, group.baseline_confidence)
         group.summary = build_summary(group, evidence, group.recovery_state)
+        if excluded:
+            group.deterministic_assessment = excluded
+            group.summary = (
+                f"{len(changed_objects)} configuration objects changed. Network impact validation skipped: {excluded}"
+            )
+            group.evidence = [ChangeEvidence(label=excluded)]
         group.projection_updated_at = utc_now()
+        group.impact_policy_version = 1
         group.touch()
         if not await self._store.save(group):
             return _CONTENDED
@@ -1055,7 +1081,7 @@ class ChangeGroupProjector:
         )
 
     async def _announce(self, group: AuditChangeGroup) -> None:
-        if self._notifications is None or group.id is None:
+        if self._notifications is None or group.id is None or not group.changed_objects:
             return
         if group.impact_severity is not ImpactSeverity.CRITICAL:
             return
@@ -1198,7 +1224,8 @@ class ChangeGroupService:
         if get_settings().guardian_enabled:
             guardian = await self._guardian.summaries(organization_id, audit_ids)
             for summary in summaries:
-                summary.guardian = guardian.get(summary.audit_id)
+                if summary.impact_validation != "excluded":
+                    summary.guardian = guardian.get(summary.audit_id)
         return summaries
 
     async def get_group(
@@ -1221,11 +1248,16 @@ class ChangeGroupService:
         group = await self._store.group_by_id(organization_id, group_id)
         if group is None:
             return None
+        excluded = exclusion_reason(group.changed_objects, group.message)
         if as_of is not None and as_utc(group.occurred_at or group.created_at) > as_utc(as_of):
             # It had not happened at the instant being viewed, so at that
             # instant there was nothing here to open.
             return None
-        sessions = [] if historical else await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
+        sessions = (
+            []
+            if historical or excluded
+            else await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
+        )
         known_sites = sorted(
             {
                 *group.affected_site_ids,
@@ -1235,6 +1267,7 @@ class ChangeGroupService:
             }
         )
         names = await self._store.site_names(organization_id, known_sites)
+        group, sessions = validated_group(group, sessions, names)
         start, end = _monitoring_window(group, sessions)
         sites = list(group.affected_site_ids)
         if as_of is not None:
@@ -1254,7 +1287,7 @@ class ChangeGroupService:
             exclude_audit_id=group.audit_id,
         )
         summary = _summarize(group, sessions, names, viewer_email, historical=historical)
-        if not historical and get_settings().guardian_enabled:
+        if not historical and not excluded and get_settings().guardian_enabled:
             guardian = await self._guardian.summaries(organization_id, [group.audit_id])
             summary.guardian = guardian.get(group.audit_id)
         return ChangeGroupDetailResponse(
@@ -1262,10 +1295,12 @@ class ChangeGroupService:
             message=group.message,
             method=group.method,
             baseline_confidence=BaselineConfidence.NONE if historical else group.baseline_confidence,
-            deterministic_assessment=None if historical else group.deterministic_assessment,
+            deterministic_assessment=None if historical else excluded or group.deterministic_assessment,
             evidence=(
                 []
                 if historical
+                else [ChangeEvidenceResponse(label=excluded)]
+                if excluded
                 else [ChangeEvidenceResponse(label=item.label, severity=item.severity) for item in group.evidence]
             ),
             changed_objects=[
@@ -1286,7 +1321,7 @@ class ChangeGroupService:
             ],
             affected_devices=(
                 []
-                if historical
+                if historical or excluded
                 else [
                     AffectedDeviceResponse(
                         device_mac=device.device_mac,
@@ -1298,9 +1333,11 @@ class ChangeGroupService:
                 ]
             ),
             competing_change_group_ids=sorted(str(item.id) for item in competing if item.id is not None),
-            site_impacts=[] if historical else _site_impacts(group, sessions, known_sites, names),
+            site_impacts=[] if historical or excluded else _site_impacts(group, sessions, known_sites, names),
             missing_monitoring_sessions=(
-                0 if historical else len(set(group.monitoring_session_ids) - {session.id for session in sessions})
+                0
+                if historical or excluded
+                else len(set(group.monitoring_session_ids) - {session.id for session in sessions})
             ),
         )
 
@@ -1314,6 +1351,7 @@ def build_criteria(
     criteria: dict[str, object] = {
         "organization_id": organization_id,
         "occurred_at": {"$gte": start, "$lte": end},
+        **confirmed_changes(),
     }
     # Impact severity is a single mutable column holding today's verdict, so a
     # past window cannot be filtered by it: the rows returned would be the ones
@@ -1322,10 +1360,19 @@ def build_criteria(
     if filters.as_of is None:
         if filters.severity == "critical":
             criteria["impact_severity"] = ImpactSeverity.CRITICAL.value
+            criteria.update(eligible_query())
         elif filters.severity == "warning":
             criteria["impact_severity"] = ImpactSeverity.WARNING.value
+            criteria.update(eligible_query())
         elif filters.severity == "none":
-            criteria["impact_severity"] = {"$in": [ImpactSeverity.NONE.value, ImpactSeverity.INFO.value]}
+            criteria["$and"] = [
+                {
+                    "$or": [
+                        {"impact_severity": {"$in": [ImpactSeverity.NONE.value, ImpactSeverity.INFO.value]}},
+                        {"$expr": excluded_expression()},
+                    ]
+                }
+            ]
     if filters.actor:
         # The actor filter selects one person, so it is anchored equality: an
         # unanchored pattern for "admin" would also return "admin2" and
@@ -1389,6 +1436,11 @@ def _summarize(
     *,
     historical: bool = False,
 ) -> ChangeGroupSummaryResponse:
+    if not historical:
+        group, sessions = validated_group(group, sessions, site_names)
+    excluded = exclusion_reason(group.changed_objects, group.message)
+    if excluded:
+        sessions = []
     movements = measure_movements(sessions)
     incidents = [incident for session in sessions for incident in session.incidents]
     types = {session.device_type for session in sessions}
@@ -1412,24 +1464,96 @@ def _summarize(
         occurred_at=as_utc(group.occurred_at or group.created_at),
         title=build_title(group.changed_objects, group.message),
         # The stored summary narrates the outcome, so it is withheld with it.
-        summary="" if historical else (group.summary or ""),
+        summary="" if historical else excluded or (group.summary or ""),
         object_count=len(group.changed_objects),
         # Devices and sites are accumulated from monitoring sessions as they
         # arrive, so they grow after the fact like the outcome does. A past
         # view would report today's reach, not the reach known then.
-        device_count=0 if historical else len(group.affected_devices),
+        device_count=0 if historical or excluded else len(group.affected_devices),
         affected_site_ids=[] if historical else list(group.affected_site_ids),
         devices_label="" if historical else build_devices_label(group.affected_devices, site_names),
-        impact_severity=ImpactSeverity.NONE if historical else group.impact_severity,
-        recovery_state=RecoveryState.NOT_APPLICABLE if historical else group.recovery_state,
-        impact_label="" if historical else build_impact_label(group.impact_severity, group.recovery_state, movements),
-        degraded_metrics=[] if historical else list(group.degraded_metrics),
-        metrics=[] if historical else build_metrics(evidence, group.impact_severity, group.recovery_state),
+        impact_severity=ImpactSeverity.NONE if historical or excluded else group.impact_severity,
+        recovery_state=RecoveryState.NOT_APPLICABLE if historical or excluded else group.recovery_state,
+        impact_label=""
+        if historical
+        else "NOT APPLICABLE"
+        if excluded
+        else build_impact_label(group.impact_severity, group.recovery_state, movements),
+        degraded_metrics=[] if historical or excluded else list(group.degraded_metrics),
+        metrics=[] if historical or excluded else build_metrics(evidence, group.impact_severity, group.recovery_state),
         # Sessions are live monitoring records; a past view does not link them.
-        monitoring_session_ids=([] if historical else [str(session_id) for session_id in group.monitoring_session_ids]),
+        monitoring_session_ids=(
+            [] if historical or excluded else [str(session_id) for session_id in group.monitoring_session_ids]
+        ),
         # False says the outcome was withheld, so a client renders "not shown"
         # rather than reading the neutral defaults above as "no impact".
         impact_known=not historical,
         impact_source=None if historical else "legacy",
+        impact_validation="excluded" if excluded else "required",
+        impact_validation_reason=excluded,
         is_mine=actor_matches(group.actor, viewer_email),
     )
+
+
+def validated_sessions(sessions: Sequence[MonitoringSession]) -> list[MonitoringSession]:
+    result = []
+    for session in sessions:
+        latest = session.observations[-1] if session.observations else None
+        if (
+            session.assessment
+            and validate_zero_evidence(session.assessment, session.baseline, latest) is session.assessment
+        ) or not any(has_unverified_zero(sample) for sample in [session.baseline, *session.observations]):
+            result.append(session)
+            continue
+        clean = session.model_copy(deep=True)
+        assessments = [
+            assess_impact(
+                session.baseline,
+                sample,
+                session.incidents,
+                relevance_plan=session.assessment.plan if session.assessment else session.relevance_plan,
+                device_findings=session.device_findings,
+            )
+            for sample in session.observations or [None]
+        ]
+        store_assessment(clean, assessments[-1])
+        clean.peak_impact_severity = worst_severity(
+            [assessment.severity for assessment in assessments] + [incident.severity for incident in session.incidents]
+        )
+        result.append(clean)
+    return result
+
+
+def validated_group(
+    group: AuditChangeGroup, sessions: Sequence[MonitoringSession], names: Mapping[str, str]
+) -> tuple[AuditChangeGroup, list[MonitoringSession]]:
+    """Correct already-stored false zero alarms at read time; never mutate a shared session."""
+    clean = validated_sessions(sessions)
+    if all(before is after for before, after in zip(sessions, clean, strict=True)):
+        return group, clean
+    group = group.model_copy(deep=True)
+    movements = measure_movements(clean)
+    group.impact_severity = worst_severity(session.impact_severity for session in clean)
+    group.recovery_state = resolve_recovery_state(clean, movements)
+    group.baseline_confidence = resolve_baseline_confidence(clean)
+    group.degraded_metrics = sorted({metric for session in clean for metric in session.degraded_metrics})
+    evidence = GroupEvidenceInput(
+        movements=movements,
+        session_count=len(clean),
+        device_count=len(group.affected_devices),
+        device_noun="devices",
+        sample_count=sum(len(session.observations) for session in clean),
+        incident_count=sum(len(session.incidents) for session in clean),
+        unresolved_incidents=sum(not incident.resolved for session in clean for incident in session.incidents),
+        competing_group_ids=(),
+        site_labels=tuple(names.get(site, site) for site in group.affected_site_ids),
+        monitored_for=None,
+    )
+    group.deterministic_assessment = "Zero SLE percentages without sampled-traffic evidence are unavailable. " + (
+        build_assessment(evidence, group.recovery_state)
+        if group.impact_severity in _IMPACTING
+        else "Those values do not establish network degradation."
+    )
+    group.summary = build_summary(group, evidence, group.recovery_state)
+    group.evidence = build_evidence(evidence, group.degraded_metrics, group.baseline_confidence)
+    return group, clean

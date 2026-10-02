@@ -56,6 +56,7 @@ from mist_config_guardian_backend.services.change_groups import (
     resolve_baseline_confidence,
     resolve_recovery_state,
 )
+from mist_config_guardian_backend.services.network_impact_policy import exclusion_reason
 from mist_config_guardian_backend.services.webhook_processing import WebhookProcessingService
 
 ORGANIZATION_ID = PydanticObjectId()
@@ -93,7 +94,15 @@ def _group(
         "receipt_ids": [],
         "affected_site_ids": list(sites),
         "affected_object_ids": [],
-        "changed_objects": [],
+        "changed_objects": [
+            ChangedObjectRef(
+                logical_object_id=PydanticObjectId(),
+                object_type="wlans",
+                object_name="Test WLAN",
+                scope="org",
+                event="updated",
+            )
+        ],
         "affected_devices": [],
         "monitoring_session_ids": [],
         "impact_severity": ImpactSeverity.NONE,
@@ -184,7 +193,12 @@ def _session(  # noqa: PLR0913 - a fixture builder mirrors the document's fields
     observations: list[SleObservation] = []
     if latest is not None:
         observations = [
-            SleObservation(captured_at=NOW - timedelta(minutes=index), values=dict(latest)) for index in range(samples)
+            SleObservation(
+                captured_at=NOW - timedelta(minutes=index),
+                values=dict(latest),
+                sample_counts=dict.fromkeys(latest, 100),
+            )
+            for index in range(samples)
         ]
     return MonitoringSession.model_construct(
         id=PydanticObjectId(),
@@ -197,7 +211,9 @@ def _session(  # noqa: PLR0913 - a fixture builder mirrors the document's fields
         device_type=device_type,
         status=status,
         active=status in {MonitoringStatus.AWAITING_CONFIG, MonitoringStatus.MONITORING},
-        baseline=SleObservation(captured_at=NOW, values=dict(baseline)) if baseline is not None else None,
+        baseline=SleObservation(captured_at=NOW, values=dict(baseline), sample_counts=dict.fromkeys(baseline, 100))
+        if baseline is not None
+        else None,
         observations=observations,
         incidents=list(incidents),
         config_applied_at=NOW,
@@ -383,8 +399,21 @@ class _MemoryChangeGroupStore:
         return [group for group in self.groups if _matches(group, criteria)]
 
 
-def _matches(group: AuditChangeGroup, criteria: Mapping[str, object]) -> bool:
+def _matches(group: AuditChangeGroup, criteria: Mapping[str, object]) -> bool:  # noqa: C901 - query operators
     for key, expected in criteria.items():
+        if key == "changed_objects.0":
+            if not group.changed_objects:
+                return False
+            continue
+        if key == "$expr":
+            excluded = bool(exclusion_reason(group.changed_objects))
+            if excluded == ("$not" in expected):
+                return False
+            continue
+        if key == "$and":
+            if not all(_matches(group, clause) for clause in expected):
+                return False
+            continue
         if key == "$or":
             clauses = expected if isinstance(expected, list) else []
             if not any(_matches(group, clause) for clause in clauses):
@@ -666,7 +695,10 @@ async def test_rebuild_writes_the_designs_evidence_lines() -> None:
     assert labels[2] == "Competing changes at this site: none"
     assert labels[3].startswith("Baseline confidence: high · ")
     assert group.deterministic_assessment is not None
-    assert "Capacity fell 29 points in the worst measured site scope" in group.deterministic_assessment
+    assert (
+        "Capacity measured 41% before and 12% after (down 29 percentage points) in site site-seattle"
+        in group.deterministic_assessment
+    )
     assert "1 of 1 measured site scopes degraded" in group.deterministic_assessment
     assert "no competing change was recorded at Seattle-DC" in group.deterministic_assessment
     assert "timing alone does not establish causation" in group.deterministic_assessment
@@ -885,6 +917,7 @@ async def test_summary_renders_the_designs_metric_tiles() -> None:
 
 async def test_summary_has_no_tiles_when_nothing_moved() -> None:
     store = _MemoryChangeGroupStore()
+    _record_wlan_change(store)
     store.groups.append(_group())
     store.sessions.append(_session(mac="aa", baseline={"capacity": 90.0}, latest={"capacity": 91.0}))
     await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
@@ -1313,6 +1346,7 @@ async def test_webhook_processing_skips_receipts_with_nothing_to_project() -> No
 
 async def test_rebuild_describes_a_dip_that_returned_to_baseline() -> None:
     store = _MemoryChangeGroupStore()
+    _record_wlan_change(store)
     store.groups.append(_group())
     store.logicals.append(_logical(name="Seattle-DC", object_type="sites", mist_id=SEATTLE))
     store.sessions.append(
@@ -1345,6 +1379,7 @@ async def test_rebuild_describes_a_dip_that_returned_to_baseline() -> None:
 
 async def test_rebuild_describes_a_change_that_is_still_settling() -> None:
     store = _MemoryChangeGroupStore()
+    _record_wlan_change(store)
     store.groups.append(_group(sites=[PORTLAND]))
     store.logicals.append(_logical(name="Portland-2", object_type="sites", mist_id=PORTLAND))
     store.sessions.append(
@@ -1377,6 +1412,7 @@ async def test_rebuild_describes_a_change_that_is_still_settling() -> None:
 
 async def test_rebuild_counts_incidents_and_spans_several_sites() -> None:
     store = _MemoryChangeGroupStore()
+    _record_wlan_change(store)
     store.groups.append(_group(sites=[]))
     store.logicals.extend(
         [
@@ -1428,6 +1464,7 @@ async def test_rebuild_counts_incidents_and_spans_several_sites() -> None:
 
 async def test_summary_reports_an_organization_wide_change_with_no_devices() -> None:
     store = _MemoryChangeGroupStore()
+    _record_wlan_change(store)
     store.groups.append(_group(sites=[]))
 
     group = await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
@@ -1439,7 +1476,7 @@ async def test_summary_reports_an_organization_wide_change_with_no_devices() -> 
 
     assert group is not None
     assert group.summary == (
-        "j.mercer changed 0 objects organization-wide. No device monitoring was correlated with this change."
+        "j.mercer updated 1 object organization-wide. No device monitoring was correlated with this change."
     )
     assert group.deterministic_assessment == (
         "No device monitoring was correlated with this change group, so no impact could be measured."
@@ -1712,3 +1749,80 @@ def test_movements_keep_site_and_device_scope_separate_and_reject_scope_mismatch
     assert [m.scope for m in measure_movements([site, device])] == ["site"]
     site.relevance_plan = RelevancePlan(metrics=[])
     assert measure_movements([site]) == ()
+
+
+async def test_zero_object_audits_are_filtered_before_pagination_and_totals():
+    store = _MemoryChangeGroupStore()
+    store.groups = [_group(audit_id="backup", changed_objects=[]), _group(audit_id="real")]
+    items, total = await ChangeGroupService(store).list_groups(
+        ORGANIZATION_ID, ChangeGroupFilters(limit=1), viewer_email="viewer@example.com"
+    )
+    assert total == 1
+    assert [item.audit_id for item in items] == ["real"]
+
+
+async def test_excluded_change_cannot_show_stale_disruption_or_a_guardian_result():
+    group = _group(
+        message='Update Asset Filter "Aeroscout"',
+        changed_objects=[
+            ChangedObjectRef(
+                logical_object_id=PydanticObjectId(),
+                object_type="assetfilters",
+                object_name="Aeroscout",
+                scope="org",
+                event="updated",
+            )
+        ],
+        impact_severity=ImpactSeverity.CRITICAL,
+        recovery_state=RecoveryState.UNRECOVERED,
+        deterministic_assessment="Roaming fell 100 points",
+        degraded_metrics=["roaming"],
+    )
+    store = _MemoryChangeGroupStore()
+    store.groups = [group]
+    service = ChangeGroupService(store)
+    detail = await service.get_group(ORGANIZATION_ID, group.id, viewer_email="viewer@example.com")
+    assert detail.impact_validation == "excluded"
+    assert detail.impact_label == "NOT APPLICABLE"
+    assert "categorize BLE assets" in detail.deterministic_assessment
+    assert detail.site_impacts == detail.metrics == detail.degraded_metrics == []
+    assert detail.guardian is None
+    critical, total = await service.list_groups(
+        ORGANIZATION_ID, ChangeGroupFilters(severity="critical"), viewer_email="viewer@example.com"
+    )
+    assert critical == []
+    assert total == 0
+    neutral, total = await service.list_groups(
+        ORGANIZATION_ID, ChangeGroupFilters(severity="none"), viewer_email="viewer@example.com"
+    )
+    assert total == 1
+    assert neutral[0].impact_validation == "excluded"
+
+
+async def test_old_zero_percentage_is_not_reported_as_a_degraded_device():
+    store = _MemoryChangeGroupStore()
+    session = _session(mac="ap", baseline={"roaming": 100}, latest={"roaming": 0}, severity=ImpactSeverity.CRITICAL)
+    for sample in session.observations:
+        sample.sample_counts = {}
+    group = _group(
+        monitoring_session_ids=[session.id],
+        impact_severity=ImpactSeverity.CRITICAL,
+        deterministic_assessment="Roaming fell 100 points",
+        degraded_metrics=["roaming"],
+    )
+    store.groups = [group]
+    store.sessions = [session]
+    detail = await ChangeGroupService(store).get_group(ORGANIZATION_ID, group.id, viewer_email="viewer@example.com")
+    assert detail.impact_severity == ImpactSeverity.INFO
+    assert detail.degraded_metrics == []
+    assert "without sampled-traffic evidence" in detail.deterministic_assessment
+    assert detail.site_impacts[0].devices[0].severity == "unknown"
+    assert group.impact_severity == ImpactSeverity.CRITICAL
+
+
+def _record_wlan_change(store):
+    logical = _logical(name="Test WLAN", object_type="wlans")
+    store.logicals.append(logical)
+    store.versions.extend(
+        [_version(logical, version=1, audit_id=None), _version(logical, version=2, changed_fields=["enabled"])]
+    )

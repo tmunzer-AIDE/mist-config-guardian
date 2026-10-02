@@ -14,7 +14,11 @@ from mist_config_guardian_backend.models.monitoring import (
     MonitoringTimelineEvent,
 )
 from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateFinding
-from mist_config_guardian_backend.services.impact_evidence import legacy_assessment
+from mist_config_guardian_backend.services.impact_evidence import (
+    legacy_assessment,
+    normalized_observation,
+    validate_zero_evidence,
+)
 
 
 class SleObservationResponse(BaseModel):
@@ -26,6 +30,7 @@ class SleObservationResponse(BaseModel):
     window_start: datetime | None = None
     window_end: datetime | None = None
     values: dict[str, float]
+    sample_counts: dict[str, float] = Field(default_factory=dict)
     no_data: list[str] = Field(default_factory=list)
     errors: list[str]
     requested_metrics: list[str] = Field(default_factory=list)
@@ -104,6 +109,11 @@ class MonitoringSessionResponse(BaseModel):
             session.observations[-1] if session.observations else None,
             session.impact_severity,
             session.deterministic_summary,
+            incident_types=tuple(incident.event_type for incident in session.incidents if not incident.resolved),
+            device_findings=tuple(finding.detail for finding in session.device_findings),
+        )
+        assessment = validate_zero_evidence(
+            assessment, session.baseline, session.observations[-1] if session.observations else None
         )
         return cls(
             id=str(session.id),
@@ -120,12 +130,13 @@ class MonitoringSessionResponse(BaseModel):
             device_comparisons=session.device_comparisons,
             device_findings=session.device_findings,
             baseline=(
-                SleObservationResponse.model_validate(session.baseline, from_attributes=True)
+                SleObservationResponse.model_validate(normalized_observation(session.baseline), from_attributes=True)
                 if session.baseline
                 else None
             ),
             observations=[
-                SleObservationResponse.model_validate(item, from_attributes=True) for item in session.observations
+                SleObservationResponse.model_validate(normalized_observation(item), from_attributes=True)
+                for item in session.observations
             ],
             incidents=[
                 MonitoringIncidentResponse.model_validate(item, from_attributes=True) for item in session.incidents

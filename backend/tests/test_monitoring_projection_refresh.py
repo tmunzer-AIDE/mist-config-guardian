@@ -82,7 +82,9 @@ class _NoAiConfiguration:
 async def test_poll_keeps_known_scope_identity_against_unidentified_legacy_baseline(monkeypatch, scope):
     session = _session(MonitoringStatus.MONITORING, [])
     session.baseline = SleObservation(scope=scope, values={"coverage": 99})
-    observation = SleObservation(scope=scope, scope_id="known-entity", values={"coverage": 0})
+    observation = SleObservation(
+        scope=scope, scope_id="known-entity", values={"coverage": 0}, sample_counts={"coverage": 100}
+    )
     client = AsyncMock()
     client.__aenter__.return_value = client
     client.capture.return_value = observation

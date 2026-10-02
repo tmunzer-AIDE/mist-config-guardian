@@ -83,6 +83,8 @@ class ChangeGroupSummaryResponse(BaseModel):
     # shown", not "no impact".
     impact_known: bool = True
     impact_source: Literal["legacy"] | None = "legacy"
+    impact_validation: Literal["required", "excluded"] = "required"
+    impact_validation_reason: str | None = None
     # Guardian's own projection for this audit. ``None`` means no Guardian root for this audit, which is not the
     # same as one that could not be read.
     guardian: GuardianSummary | None = None

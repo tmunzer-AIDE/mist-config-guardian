@@ -23,6 +23,7 @@ from mist_config_guardian_backend.schemas.impact import (
 from mist_config_guardian_backend.services.change_groups import as_utc, build_title, object_type_label
 from mist_config_guardian_backend.services.device_impact_projection import impact_from_session
 from mist_config_guardian_backend.services.guardian_reads import PublishedGuardianReader
+from mist_config_guardian_backend.services.network_impact_policy import confirmed_changes, exclusion_reason
 
 _MAX_SESSIONS = 5000
 
@@ -32,7 +33,14 @@ def change_page_pipeline(  # noqa: PLR0913, PLR0917 - explicit bounded query coo
 ) -> list[dict[str, Any]]:
     """Page configuration events before expanding their device windows."""
     return [
-        {"$match": {"organization_id": org, "affected_site_ids": site, "created_at": {"$lte": end}}},
+        {
+            "$match": {
+                "organization_id": org,
+                "affected_site_ids": site,
+                "created_at": {"$lte": end},
+                **confirmed_changes(),
+            }
+        },
         {"$set": {"at": {"$ifNull": ["$occurred_at", "$created_at"]}}},
         {"$match": {"at": {"$gte": start, "$lte": end}}},
         {
@@ -90,6 +98,8 @@ def session_projection(end: datetime) -> dict[str, Any]:
             "baseline": 1,
             "impact_severity": 1,
             "assessment": 1,
+            "incidents": 1,
+            "device_findings": 1,
             "deterministic_summary": 1,
             "change_triggered_at": 1,
             "config_applied_at": 1,
@@ -253,6 +263,8 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
             ]
         # A device may have more than one window for one audit; present its latest.
         relevant = list({normalized_mac(session["device_mac"]): session for session in reversed(relevant)}.values())
+        refs = [ChangedObjectRef.model_validate(obj) for obj in row.get("changed_objects", [])]
+        excluded = exclusion_reason(refs, row.get("message"))
         changes.append(
             SiteChange(
                 id=row["_id"],
@@ -269,9 +281,11 @@ async def list_changes(  # noqa: PLR0913 - explicit bounded query coordinates
                     else [ChangedObjectRef.model_validate(obj) for obj in row.get("changed_objects", [])],
                     row.get("message"),
                 ),
-                summary="" if historical else row.get("summary") or "",
-                guardian=guardian.get(row.get("audit_id", "")),
-                impacts=[impact_from_session(session, end, historical=historical) for session in relevant],
+                summary="" if historical else excluded or row.get("summary") or "",
+                guardian=None if excluded else guardian.get(row.get("audit_id", "")),
+                impacts=[]
+                if excluded
+                else [impact_from_session(session, end, historical=historical) for session in relevant],
             )
         )
     return SiteChangeList(

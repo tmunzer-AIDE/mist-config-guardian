@@ -152,6 +152,7 @@ class AuditChangeGroup(TimestampedModel, Document):
     # and writes only if it is unchanged, so two workers rebuilding the same
     # group cannot have the slower one's older picture land last.
     projection_revision: int = 0
+    impact_policy_version: int = 0
 
     class Settings:
         name = "audit_change_groups"

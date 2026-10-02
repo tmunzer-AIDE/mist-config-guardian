@@ -126,3 +126,37 @@ remain separate from request failures. Existing baseline errors are historical
 and are not erased when collection code changes. Tests cover the published API
 contract; the remaining 0.6.4 production 404s still require an exact current error
 line or a read-only live capture to establish their cause.
+
+
+## Confirmed changes and network-impact eligibility
+
+Overview, Changes, search and site change history filter out audit groups with
+no captured object differences before counting or pagination. Raw receipts and
+configuration versions remain available for diagnosis. A direct link to an
+unlinked audit can still explain the missing capture; it offers no empty
+rollback workflow.
+
+The [network-impact policy](network-impact-policy.md) classifies all currently
+backed-up object types. Administrative/location changes remain in configuration
+history, with `impact_validation: excluded`, a reason and a `NOT APPLICABLE`
+badge. Their unrelated device windows and old Guardian results are not presented
+as impact evidence. New excluded audits do not start Guardian investigations;
+excluded audit-linked events do not open or merge a monitoring window.
+
+SLE observations now retain `sample_counts` for the same anchored window as their
+numeric values. A zero total is no data; a legacy zero percentage without a
+positive sample total is unavailable. It supplies no numeric delta, degraded
+metric, chart point or network-health claim. A measured zero with positive
+traffic samples remains eligible for a degradation alarm. Independent incidents
+and device findings remain valid evidence. Existing unsupported zero verdicts
+are corrected by read projections without changing their source observations.
+
+The existing scheduled projection backfill upgrades groups to
+`impact_policy_version: 1` in batches of 200 every 15 minutes, repairing old severity/count
+projections. Raw receipts, immutable versions and monitoring records are not
+removed. Tests use mocked Mist responses; live source validation was not run.
+
+The assessment describes the metric, before/after percentages, percentage-point
+change and exact scope identity. Device colors report observed degradation in
+the window, with an explicit statement that this does not establish causation.
+See the [excluded asset-filter preview](excluded-network-validation-preview.png).

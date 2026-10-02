@@ -6,6 +6,8 @@
     Impact at this past instant was not retained. Return to Live to see the latest recorded
     assessment.
   </p>
+} @else if (detail().impact_validation === 'excluded') {
+  <p class="notice">Network impact validation skipped. {{ detail().impact_validation_reason }}</p>
 } @else {
   <div class="reach" aria-label="Known impact across sites">
     <div>
@@ -18,7 +20,7 @@
     </div>
     <div class="disruption">
       <strong>{{ disrupted() }}</strong
-      ><span>with disruption</span>
+      ><span>with measured degradation</span>
     </div>
     <div>
       <strong>{{ uncertain() }}</strong
@@ -26,8 +28,8 @@
     </div>
   </div>
   <p class="scope-note">
-    Observed reach of this change. Linked devices are not necessarily disrupted; devices without
-    evidence remain unknown.
+    Device health observed during this change’s window. These measurements do not establish that the
+    change caused degradation. SLEs without sampled traffic are unavailable, not 0% quality.
   </p>
   @if (detail().missing_monitoring_sessions) {
     <p class="notice">
@@ -101,7 +103,7 @@
       </div>
       <div class="map-legend">
         <span><i class="critical"></i>Service loss</span
-        ><span><i class="warning"></i>Disruption</span
+        ><span><i class="warning"></i>Measured degradation</span
         ><span><i class="ok"></i>No impact observed</span
         ><span><i></i>Unknown / outside change</span>
       </div>

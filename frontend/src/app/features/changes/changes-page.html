@@ -158,7 +158,11 @@
         @if (rawDetail(); as change) {
           <div class="change-verdict">
             <div>
-              <strong>Recorded impact</strong>
+              <strong>{{
+                change.impact_validation === 'excluded'
+                  ? 'Network impact validation'
+                  : 'Recorded impact'
+              }}</strong>
               <p>{{ detail.assessment }}</p>
               @if (change.recovery_state === 'recovered') {
                 <span class="recovered">Recovered after the change</span>
@@ -199,7 +203,7 @@
                   [objects]="change.changed_objects"
                   (compare)="compare($event)"
                 />
-                @if (canRestore()) {
+                @if (canRestore() && restorable().length) {
                   <section class="rollback-card">
                     <h3>Roll back this change</h3>
                     <p>

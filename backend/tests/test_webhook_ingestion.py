@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +12,7 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
-from mist_config_guardian_backend.models.webhook import WebhookProcessingStatus, WebhookReceipt
+from mist_config_guardian_backend.models.webhook import ChangedObjectRef, WebhookProcessingStatus, WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services import webhook_processing
 from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
@@ -168,7 +169,9 @@ async def test_device_event_is_stored_whatever_its_message_says(monkeypatch: pyt
     assert result.ignored_count == 0
 
 
-async def _process(monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: bool) -> list[tuple[str, object]]:
+async def _process(
+    monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: bool, kind: str = "wlans", has_changes: bool = True
+) -> list[tuple[str, object]]:
     """Process one stored audit receipt and report which investigation surfaces it started."""
     vault = CredentialVault(Settings(environment="test", database_enabled=False))
     organization = Organization.model_construct(id=PydanticObjectId(), mist_org_id="org-1")
@@ -193,7 +196,21 @@ async def _process(monkeypatch: pytest.MonkeyPatch, *, guardian_enabled: bool) -
     monkeypatch.setattr(Organization, "get", AsyncMock(return_value=organization))
     monkeypatch.setattr(webhook_processing, "get_settings", lambda: Settings(guardian_enabled=guardian_enabled))
     monkeypatch.setattr(WebhookProcessingService, "_add_to_change_group", AsyncMock())
-    monkeypatch.setattr(WebhookProcessingService, "project", AsyncMock())
+    projected = SimpleNamespace(
+        changed_objects=[
+            ChangedObjectRef(
+                logical_object_id=PydanticObjectId(),
+                object_type=kind,
+                object_name="Example",
+                scope="org",
+                event="updated",
+            )
+        ]
+        if has_changes
+        else [],
+        message=None,
+    )
+    monkeypatch.setattr(WebhookProcessingService, "project", AsyncMock(return_value=projected))
     monkeypatch.setattr(AuditVersioningService, "apply", AsyncMock())
     monkeypatch.setattr(MonitoringEventService, "handle", AsyncMock(return_value=None))
 
@@ -349,3 +366,11 @@ def test_each_allowlisted_event_carries_its_own_outcome_and_device_family(
 )
 def test_nothing_outside_the_topic_and_event_allowlist_is_normalized(topic: str, event_type: str) -> None:
     assert normalize_deployment(topic, _device_event(event_type)) is None
+
+
+async def test_asset_filter_audit_does_not_start_a_guardian_investigation(monkeypatch):
+    assert await _process(monkeypatch, guardian_enabled=True, kind="assetfilters") == []
+
+
+async def test_backup_audit_without_changed_versions_does_not_start_an_investigation(monkeypatch):
+    assert await _process(monkeypatch, guardian_enabled=True, has_changes=False) == []

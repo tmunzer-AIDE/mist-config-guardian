@@ -23,6 +23,7 @@ from mist_config_guardian_backend.schemas.search import (
 )
 from mist_config_guardian_backend.services.change_groups import build_title, object_type_label
 from mist_config_guardian_backend.services.deep_links import deep_link
+from mist_config_guardian_backend.services.network_impact_policy import confirmed_changes
 
 MINIMUM_QUERY_LENGTH = 2
 DEFAULT_LIMIT = 25
@@ -86,6 +87,7 @@ class BeanieSearchReader:
             await LogicalObject.find(
                 {
                     "organization_id": organization_id,
+                    **confirmed_changes(),
                     "$or": [
                         {"name": {"$regex": pattern, "$options": "i"}},
                         {"object_type": {"$regex": pattern, "$options": "i"}},

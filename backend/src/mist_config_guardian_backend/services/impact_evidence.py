@@ -11,6 +11,7 @@ from mist_config_guardian_backend.models.monitoring import (
 )
 
 WARNING_THRESHOLD = 10.0
+CRITICAL_THRESHOLD = 25.0
 
 
 def metric_errors(observation: SleObservation | None) -> dict[str, str]:
@@ -38,18 +39,20 @@ def _names(observation: SleObservation | None) -> set[str]:
     )
 
 
-def _state(observation: SleObservation | None, name: str) -> EvidenceState:
+def _state(observation: SleObservation | None, name: str) -> EvidenceState:  # noqa: PLR0911 - explicit evidence states
     if observation is None:
         return "pending"
     if name in metric_errors(observation):
         return "error"
+    if name in observation.no_data or observation.sample_counts.get(name) == 0:
+        return "no_data"
+    if observation.values.get(name) == 0 and observation.sample_counts.get(name, 0) <= 0:
+        return "missing"
     if name in observation.metric_states:
         state = observation.metric_states[name]
         return "missing" if state == "measured" and name not in observation.values else state
     if name in observation.values:
         return "measured"
-    if name in observation.no_data:
-        return "no_data"
     # Discovery errors explain why planned metrics could not be collected,
     # but remain collection-level errors rather than fabricated metric errors.
     return "missing"
@@ -119,16 +122,19 @@ def evidence_coverage(
     return "partial" if failures else "complete"
 
 
-def legacy_assessment(
+def legacy_assessment(  # noqa: PLR0913 - numeric and nonnumeric legacy evidence
     baseline: SleObservation | None,
     latest: SleObservation | None,
     severity: ImpactSeverity,
     summary: str | None,
+    *,
+    incident_types: tuple[str, ...] = (),
+    device_findings: tuple[str, ...] = (),
 ) -> ImpactAssessment:
     """Single compatibility projection for documents predating stored results.
 
-    Preserve historical alarms; only downgrade an unsubstantiated legacy clean
-    result. This is deliberately not a fresh incident-free impact assessment.
+    Preserve supported alarms. An unverified zero cannot support a numeric
+    alarm, and an incomplete comparison cannot establish a healthy result.
     """
     plan = RelevancePlan.legacy_all()
     rows = evidence_rows(baseline, latest, plan)
@@ -138,7 +144,7 @@ def legacy_assessment(
     ):
         severity = ImpactSeverity.INFO
         summary = "Legacy assessment has insufficient comparable evidence for a healthy verdict."
-    return ImpactAssessment(
+    result = ImpactAssessment(
         severity=severity,
         summary=summary or "Waiting for comparable evidence",
         coverage=coverage,
@@ -146,5 +152,69 @@ def legacy_assessment(
         collection_errors=collection_errors(baseline, latest),
         degraded_metrics=(),
         metric_deltas={row.name: row.delta for row in rows if row.delta is not None},
-        incident_types=(),
+        incident_types=incident_types,
+        device_findings=device_findings,
+    )
+    return validate_zero_evidence(result, baseline, latest, cached=False)
+
+
+def has_unverified_zero(observation: SleObservation | None) -> bool:
+    return bool(
+        observation
+        and any(
+            value == 0 and observation.sample_counts.get(name, 0) <= 0 for name, value in observation.values.items()
+        )
+    )
+
+
+def validate_zero_evidence(
+    assessment: ImpactAssessment, baseline: SleObservation | None, latest: SleObservation | None, *, cached: bool = True
+) -> ImpactAssessment:
+    """Repair cached numeric verdicts without removing incident or device evidence."""
+    if not (has_unverified_zero(baseline) or has_unverified_zero(latest)):
+        return assessment
+    if cached and not any(row.baseline == 0 or row.latest == 0 for row in assessment.metrics):
+        return assessment
+    rows = evidence_rows(baseline, latest, assessment.plan)
+    deltas = {row.name: row.delta for row in rows if row.selected and row.delta is not None}
+    coverage = evidence_coverage(rows, baseline, latest, assessment.plan)
+    if assessment.incident_types or assessment.device_findings:
+        severity = assessment.severity
+    elif any(delta <= -CRITICAL_THRESHOLD for delta in deltas.values()):
+        severity = ImpactSeverity.CRITICAL
+    elif any(delta <= -WARNING_THRESHOLD for delta in deltas.values()):
+        severity = ImpactSeverity.WARNING
+    else:
+        severity = ImpactSeverity.NONE if coverage == "complete" else ImpactSeverity.INFO
+    return assessment.model_copy(
+        update={
+            "metrics": rows,
+            "metric_deltas": deltas,
+            "coverage": coverage,
+            "severity": severity,
+            "degraded_metrics": tuple(sorted(name for name, delta in deltas.items() if delta <= -WARNING_THRESHOLD)),
+            "summary": "Zero SLE percentages without sampled-traffic evidence are unavailable. "
+            + (
+                "Other recorded evidence still shows degradation."
+                if severity in {ImpactSeverity.CRITICAL, ImpactSeverity.WARNING}
+                else "Network degradation is not established by those values."
+            ),
+        }
+    )
+
+
+def normalized_observation(observation: SleObservation) -> SleObservation:
+    """Keep unverified zeroes out of numeric charts as well as delta calculations."""
+    unavailable = {
+        name: _state(observation, name) for name in observation.values if _state(observation, name) != "measured"
+    }
+    return observation.model_copy(
+        update={
+            "values": {name: value for name, value in observation.values.items() if name not in unavailable},
+            "metric_states": observation.metric_states | unavailable,
+            "trend": {
+                name: series if name not in unavailable else [None for _ in series]
+                for name, series in observation.trend.items()
+            },
+        }
     )

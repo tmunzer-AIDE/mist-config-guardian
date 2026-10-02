@@ -6,7 +6,7 @@ from typing import Any, cast
 from mist_config_guardian_backend.integrations.mist_topology import normalized_mac
 from mist_config_guardian_backend.models.monitoring import ImpactAssessment, ImpactSeverity, SleObservation
 from mist_config_guardian_backend.schemas.impact import DeviceImpact, Health, ImpactMetric
-from mist_config_guardian_backend.services.impact_evidence import legacy_assessment
+from mist_config_guardian_backend.services.impact_evidence import legacy_assessment, validate_zero_evidence
 
 
 def as_utc(value: datetime) -> datetime:
@@ -34,7 +34,16 @@ def impact_from_session(row: dict[str, Any], end: datetime, *, historical: bool)
             SleObservation.model_validate(latest) if latest else None,
             ImpactSeverity(row.get("impact_severity", "info")),
             row.get("deterministic_summary"),
+            incident_types=tuple(
+                incident["event_type"] for incident in row.get("incidents", []) if not incident.get("resolved")
+            ),
+            device_findings=tuple(finding["detail"] for finding in row.get("device_findings", [])),
         )
+    )
+    assessment = validate_zero_evidence(
+        assessment,
+        SleObservation.model_validate(baseline) if baseline else None,
+        SleObservation.model_validate(latest) if latest else None,
     )
     metrics = [ImpactMetric.model_validate(metric, from_attributes=True) for metric in assessment.metrics]
     errors = assessment.collection_errors

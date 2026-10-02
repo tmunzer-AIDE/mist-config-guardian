@@ -18,6 +18,7 @@ from mist_config_guardian_backend.models.monitoring import (
 from mist_config_guardian_backend.models.telemetry import DeviceStateFinding
 from mist_config_guardian_backend.schemas.monitoring import MonitoringSessionResponse
 from mist_config_guardian_backend.services import monitoring
+from mist_config_guardian_backend.services.change_groups import measure_movements
 from mist_config_guardian_backend.services.impact_analysis import assess_impact, store_assessment
 from mist_config_guardian_backend.services.monitoring import MonitoringEventService
 from mist_config_guardian_backend.services.site_impact import impact_from_session
@@ -105,13 +106,54 @@ def test_error_only_metric_and_discovery_error_are_not_confused():
 
 def test_measured_zero_is_an_outage_and_different_scope_ids_are_not_comparable():
     before = SleObservation(scope="device", scope_id="ap1", values={"coverage": 99})
-    after = SleObservation(scope="device", scope_id="ap1", values={"coverage": 0})
+    after = SleObservation(scope="device", scope_id="ap1", values={"coverage": 0}, sample_counts={"coverage": 50})
     result = assess_impact(before, after, [])
     assert result.metrics[0].latest == 0
     assert result.metrics[0].latest_state == "measured"
     assert result.severity == ImpactSeverity.CRITICAL
     after.scope_id = "ap2"
     assert assess_impact(before, after, []).metrics[0].delta is None
+
+
+@pytest.mark.parametrize(("counts", "state"), [({}, "missing"), ({"coverage": 0}, "no_data")])
+def test_zero_without_sampled_traffic_cannot_produce_a_degradation(counts, state):
+    before = SleObservation(values={"coverage": 100})
+    after = SleObservation(values={"coverage": 0}, sample_counts=counts)
+    result = assess_impact(before, after, [])
+    assert result.severity == ImpactSeverity.INFO
+    assert result.degraded_metrics == ()
+    assert result.metrics[0].latest_state == state
+    assert result.metrics[0].latest is result.metrics[0].delta is None
+
+
+def test_no_data_overrides_a_legacy_numeric_zero():
+    result = assess_impact(
+        SleObservation(values={"roaming": 100}),
+        SleObservation(values={"roaming": 0}, no_data=["roaming"]),
+        [],
+    )
+    assert result.metrics[0].latest_state == "no_data"
+    assert result.severity == ImpactSeverity.INFO
+
+
+def test_cached_unsupported_zero_alarm_is_corrected_in_both_read_views():
+    session = _session()
+    session.baseline.captured_at = NOW
+    session.observations[-1].captured_at = NOW
+    session.observations[-1].values = {"coverage": 0}
+    session.observations[-1].sample_counts = {"coverage": 100}
+    store_assessment(session, assess_impact(session.baseline, session.observations[-1], []))
+    session.assessment.evaluated_at = NOW
+    session.observations[-1].sample_counts = {}
+    response = MonitoringSessionResponse.from_document(session)
+    assert response.impact_severity == ImpactSeverity.INFO
+    assert response.assessment.metrics[0].latest is None
+    row = session.model_dump()
+    row["_id"] = session.id
+    impact = impact_from_session(row, NOW, historical=False)
+    assert impact.severity == "unknown"
+    assert impact.metrics[0].delta is None
+    assert session.assessment.severity == ImpactSeverity.CRITICAL  # Read leaves the recorded document intact.
 
 
 def _session():
@@ -138,6 +180,7 @@ def test_both_api_views_use_stored_result_even_when_legacy_mirrors_disagree():
     assert response.impact_severity == ImpactSeverity.NONE
     assert response.assessment_source == "stored"
     assert response.deterministic_summary == result.summary
+    assert measure_movements([session])[0].latest == 99
     row = session.model_dump()
     row["_id"] = session.id
     impact = impact_from_session(row, NOW, historical=False)
