@@ -2,7 +2,6 @@
 
 :host {
   background: var(--nav-background);
-  box-shadow: inset -1px 0 0 var(--nav-rule);
   display: flex;
   flex-direction: column;
   padding: 18px 0 14px;
@@ -29,7 +28,7 @@
   gap: 2px;
   padding-bottom: 5px;
   flex: none;
-  background: var(--surface-raised);
+  background: var(--nav-background);
 }
 
 .bar {
@@ -112,12 +111,16 @@ nav {
   background: var(--nav-active-fill);
 
   color: var(--nav-ink-active);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .nav-icon {
   flex: none;
   opacity: 0.92;
+}
+
+.nav-item--on .nav-icon {
+  stroke-width: 2.5;
 }
 
 .nav-badge {
@@ -136,7 +139,6 @@ nav {
 
 .build-label {
   padding-top: 14px;
-  border-top: 1px solid var(--nav-rule);
   font: 400 10.5px/1.5 var(--font-mono);
   color: var(--nav-meta);
 }

@@ -379,13 +379,14 @@ export class TopologyCanvas implements AfterViewInit, OnDestroy {
   readonly decorations = input<Record<string, string>>({});
   readonly deviceSelected = output<string>();
   readonly initialZoom = input<number | null>(null);
+  readonly compact = input(false);
   readonly zoomChanged = output<number | null>();
   private readonly element = inject(ElementRef<HTMLElement>);
   private readonly surface = viewChild.required<ElementRef<HTMLElement>>('surface');
   // Geometry is decided by the layout, which takes no viewport input; panning and
   // zooming therefore never reflow the graph.
   protected readonly layout = computed(() =>
-    layoutTopology(this.devices(), this.observedLinks() ?? []),
+    layoutTopology(this.devices(), this.observedLinks() ?? [], { compact: this.compact() }),
   );
   protected readonly canvasWidth = computed(() => Math.max(400, this.layout().width));
   protected readonly canvasHeight = computed(() => Math.max(300, this.layout().height));

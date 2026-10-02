@@ -1,0 +1,138 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+h3 {
+  font-size: 21px;
+  letter-spacing: -0.5px;
+  margin: 0;
+}
+.count {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.object-picker {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+select {
+  width: 100%;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+}
+.object-meta {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin: 10px 0 18px;
+}
+.diff-summary {
+  font-size: 12px;
+  font-weight: 600;
+}
+.diff-table {
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.diff-head,
+.diff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.diff-head {
+  background: var(--surface-sunken);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 10px 12px;
+  gap: 8px;
+  color: var(--ink-muted);
+}
+.diff-row {
+  border-top: 1px solid var(--rule);
+}
+.field,
+pre {
+  padding: 12px;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font: 11px/1.65 var(--font-mono);
+}
+.field small {
+  display: block;
+  font: 10px var(--font-sans);
+  color: var(--ink-soft);
+  margin-top: 5px;
+}
+.before {
+  background: #fff4f2;
+  color: #a43e35;
+  border-left: 1px solid var(--rule);
+}
+.after {
+  background: #eef8f3;
+  color: #126b4b;
+  border-left: 1px solid var(--rule);
+}
+.entry-note {
+  grid-column: 1/-1;
+  font-size: 11px;
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+}
+.state {
+  font-size: 12px;
+  color: var(--ink-muted);
+  line-height: 1.7;
+  padding: 12px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 8px;
+}
+.field-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+}
+.field-tags code {
+  background: var(--surface-sunken);
+  padding: 5px;
+}
+.cg-btn--link {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  .diff-head {
+    grid-template-columns: 1fr 1fr;
+  }
+  .diff-head span:first-child {
+    display: none;
+  }
+  .diff-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .field {
+    grid-column: 1/-1;
+  }
+}

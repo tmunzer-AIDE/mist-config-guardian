@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import get_settings
+from mist_config_guardian_backend.integrations.mist_topology import normalized_mac
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
@@ -45,7 +46,9 @@ from mist_config_guardian_backend.schemas.change_group import (
     ChangeGroupDetailResponse,
     ChangeGroupSummaryResponse,
     ChangeMetricResponse,
+    ChangeSiteImpactResponse,
 )
+from mist_config_guardian_backend.services.device_impact_projection import impact_from_session
 from mist_config_guardian_backend.services.guardian_reads import GuardianReader, PublishedGuardianReader
 from mist_config_guardian_backend.services.impact_evidence import evidence_coverage, evidence_rows
 from mist_config_guardian_backend.snapshots.registry import ORG_OBJECTS, SITE_OBJECTS
@@ -1223,7 +1226,15 @@ class ChangeGroupService:
             # instant there was nothing here to open.
             return None
         sessions = [] if historical else await self._store.sessions_by_id(organization_id, group.monitoring_session_ids)
-        names = await self._store.site_names(organization_id, group.affected_site_ids)
+        known_sites = sorted(
+            {
+                *group.affected_site_ids,
+                *(item.site_mist_id for item in group.changed_objects if item.site_mist_id),
+                *(item.site_mist_id for item in group.affected_devices if item.site_mist_id),
+                *(item.site_id for item in sessions),
+            }
+        )
+        names = await self._store.site_names(organization_id, known_sites)
         start, end = _monitoring_window(group, sessions)
         sites = list(group.affected_site_ids)
         if as_of is not None:
@@ -1287,6 +1298,10 @@ class ChangeGroupService:
                 ]
             ),
             competing_change_group_ids=sorted(str(item.id) for item in competing if item.id is not None),
+            site_impacts=[] if historical else _site_impacts(group, sessions, known_sites, names),
+            missing_monitoring_sessions=(
+                0 if historical else len(set(group.monitoring_session_ids) - {session.id for session in sessions})
+            ),
         )
 
 
@@ -1331,6 +1346,39 @@ def build_criteria(
             clauses.append({"summary": {"$regex": pattern, "$options": "i"}})
         criteria["$or"] = clauses
     return criteria
+
+
+def _site_impacts(
+    group: AuditChangeGroup,
+    sessions: Sequence[MonitoringSession],
+    sites: Sequence[str],
+    names: Mapping[str, str],
+) -> list[ChangeSiteImpactResponse]:
+    """Reuse the site view's evidence projection without extra monitoring reads."""
+    result = []
+    now = utc_now()
+    for site in sites:
+        devices = []
+        for session in sessions:
+            if session.site_id != site:
+                continue
+            row = session.model_dump(by_alias=True)
+            row["snapshot_times"] = [item.baseline.captured_at for item in session.device_comparisons if item.baseline]
+            devices.append(impact_from_session(row, now, historical=False))
+        monitored = {item.device_id for item in devices}
+        result.append(
+            ChangeSiteImpactResponse(
+                site_id=site,
+                site_name=names.get(site, site),
+                devices=devices,
+                unmonitored_devices=[
+                    AffectedDeviceResponse.model_validate(item, from_attributes=True)
+                    for item in group.affected_devices
+                    if item.site_mist_id == site and normalized_mac(item.device_mac) not in monitored
+                ],
+            )
+        )
+    return result
 
 
 def _summarize(

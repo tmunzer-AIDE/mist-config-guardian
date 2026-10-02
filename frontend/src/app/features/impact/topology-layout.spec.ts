@@ -373,4 +373,13 @@ describe('topology layout', () => {
         expect(point.y).toBeLessThanOrEqual(layout.height);
       }
   });
+  it('compacts the embedded map without overlapping nodes or crossing tree routes', () => {
+    const { devices, links } = reportedSite();
+    const regular = layoutTopology(devices, links);
+    const compact = layoutTopology(devices, links, { compact: true });
+    expect(compact.height).toBeLessThan(regular.height);
+    expect(compact.nodes.size).toBe(regular.nodes.size);
+    expect(compact.edges.map(edge => edge.id)).toEqual(regular.edges.map(edge => edge.id));
+    assertRoutingInvariants(compact);
+  });
 });

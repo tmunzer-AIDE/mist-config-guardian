@@ -9,11 +9,64 @@ causation. Uncorrelated device changes stay explicitly uncorrelated.
 
 ## Workspace
 
-Objects default to latest capture first, with server-side sorting before
-pagination. Objects and Changes have independently scrolling tables bounded by
-the available viewport. Selecting a change opens a second scrolling pane within
-the same viewport. Impact has collapsible audit groups, device selection, the
-latest verdict, and a timeline of observed lifecycle events.
+Overview shows period-wide change/disruption/recovery counts and a recent feed.
+Feed filters are explicitly limited to that feed; the Changes workspace provides
+server-side search, severity filters and pagination across the full period.
+Selecting a change turns the list into a narrow navigation rail. Its main pane
+combines redacted before/after configuration values, known cross-site reach,
+site selection, topology, and per-device evidence. On small screens the list
+gives way to the detail, with a focused return action and section shortcuts.
+
+The embedded topology uses the same routing algorithm as Site topology, with
+empty tier rows removed and tighter spacing. It still shows only observed
+connections. Its colors describe evidence for the selected change; devices
+outside that change have unknown impact, even when currently connected.
+The device list is an alternative to selecting a node. Shared monitoring
+windows, missing measurements and completed historical windows stay explicit.
+Refresh evidence reloads the selected change; full device timelines remain a
+deliberate drill-down.
+
+The time bar keeps Live, exact-date and period controls visible. Expand
+“Explore time” for the activity slider and event navigation.
+
+The shared navigation and top bars sit directly on one neutral background,
+without enclosing borders or colored bands. Main content cards and tables use
+soft shadows; detail panes and floating menus sit a level higher. This shared
+styling also applies to Configuration, Site topology and Settings. Historical
+mode remains explicit through its warning text, marker and return-to-live action.
+Use direct, descriptive headings and reserve color for states and controls.
+Avoid decorative status rails, duplicate severity dots, slogan overlines,
+numbered section labels and illustrative network diagrams. The interactive
+topology remains an evidence view; its dashboard shortcut is a plain navigation
+card. Recent changes communicate severity through their labeled badges.
+
+Desktop previews use synthetic browser-test fixtures:
+[overview](change-overview-preview.png),
+[change workspace](change-workspace-preview.png), and
+[rollback review](change-rollback-preview.png). The shared flat styling can also
+be seen in [Site topology](flat-shell-topology-preview.png) and
+[Configuration](flat-shell-configuration-preview.png).
+
+## Change detail API and rollback
+
+`GET /organizations/{organization_id}/change-groups/{id}` adds `site_impacts`
+and `missing_monitoring_sessions`. Each site has its ID, display name, lean
+device-window summaries and separately listed `unmonitored_devices`. These
+fields reuse the existing organization-scoped session read and the same evidence
+projection as the site workspace; no raw configuration or telemetry is exposed.
+Reach is the union of linked sites, changed objects and linked devices, not a
+prediction that every site receiving an organization template was affected.
+Historical reads withhold these mutable impact fields. Older servers without the
+fields degrade to linked identities with unknown impact in the browser.
+
+“Review rollback” explicitly creates a non-destructive plan using captured
+before-version IDs and dependencies. Objects without previous versions are
+counted as exclusions before planning and during review. Planning writes no
+configuration. The existing restore review, fresh-backup preparation, final
+confirmation, approvals, MFA, worker execution and verification run in the same
+change pane. Operation IDs remain in the URL for reload/recovery. Advanced
+target selection remains available on request. Closing the pane does not cancel
+an already queued operation.
 
 Monitoring windows currently have one active slot per device. Overlapping audits
 can therefore share a window; its evidence appears under each linked event and
@@ -45,8 +98,10 @@ an operational outage does not turn absent numeric SLE evidence into health.
 Completed sessions describe their monitoring window, not perpetual live device
 health. Recovery after a window has closed requires a subsequent observation;
 old historical sessions are not rewritten to claim a recovery they never saw.
-The selected device refreshes in the UI every 30 seconds. Backend collection
-continues on the existing five-minute cadence for at least one hour.
+The Site topology workspace refreshes its selected device every 30 seconds.
+The change workspace displays evidence from its latest read, refreshed through
+“Refresh evidence”. Backend collection continues on the existing five-minute
+cadence for at least one hour.
 
 ## Timeline
 

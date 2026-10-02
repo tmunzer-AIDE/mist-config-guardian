@@ -38,8 +38,8 @@
 
 .past-banner {
   flex: none;
-  background: var(--tone-warning-solid);
-  color: var(--ink-invert);
+  background: transparent;
+  color: var(--tone-warning-ink);
   padding: 8px 20px;
   display: flex;
   align-items: center;
@@ -50,7 +50,7 @@
 .past-marker {
   width: 8px;
   height: 8px;
-  background: var(--ink-invert);
+  background: var(--tone-warning-ink);
   transform: rotate(45deg);
   flex: none;
 }
@@ -68,6 +68,7 @@
   padding: 5px 11px;
   border: 0;
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-hairline);
   cursor: pointer;
 }
 

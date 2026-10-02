@@ -1,4 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import {
+  afterNextRender,
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  ElementRef,
+  inject,
+  Injector,
+  input,
+  signal,
+  untracked,
+} from '@angular/core';
 import { Router } from '@angular/router';
 
 import { AuthService } from '../../core/auth.service';
@@ -7,12 +19,16 @@ import { ChangeGroupService, SeverityFilter } from '../../core/change-group.serv
 import { formatCount, formatDate, formatDay, formatTime } from '../../core/format';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { TimeContextService } from '../../core/time-context.service';
-import { Tone, toneInk, toneOf } from '../../core/tone';
+import { Tone, toneOf } from '../../core/tone';
 import { UiStateService } from '../../core/ui-state.service';
 import { GuardianPanel } from './guardian-panel';
 import { GuardianBadge } from '../../shared/guardian-badge';
+import { ChangeConfiguration } from './change-configuration';
+import { ChangeImpact } from './change-impact';
+import { RestorePage } from '../restore/restore-page';
+import { RestoreService } from '../restore/restore.service';
 
-/** The table asks for one large page; the design has no paging control. */
+/** Server-side paging keeps search and counts consistent across the full period. */
 const PAGE_SIZE = 100;
 
 /** The recovery word the design prints under the impact badge. */
@@ -30,7 +46,6 @@ interface GroupRow {
   group: ChangeGroupSummary;
   time: string;
   title: string;
-  meta: string;
   actor: string;
   objects: string;
   devices: string;
@@ -48,7 +63,7 @@ interface ChangeDay {
 
 @Component({
   selector: 'app-changes-page',
-  imports: [GuardianPanel, GuardianBadge],
+  imports: [GuardianPanel, GuardianBadge, ChangeConfiguration, ChangeImpact, RestorePage],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './changes-page.html',
   styleUrl: './changes-page.scss',
@@ -60,10 +75,37 @@ export class ChangesPage {
   private readonly auth = inject(AuthService);
   protected readonly changeGroups = inject(ChangeGroupService);
   protected readonly time = inject(TimeContextService);
+  private readonly restores = inject(RestoreService);
+  private readonly element = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+  private focusDetail = false;
+  private selectionRevision = 0;
+  private pagingScope = '';
+  protected readonly restoreOperation = signal('');
+  protected readonly restoreBusy = signal(false);
+  protected readonly restoreError = signal('');
+  protected readonly detailError = signal(false);
+  protected readonly listError = signal(false);
+  protected readonly reload = signal(0);
+  protected readonly increment = (n: number) => n + 1;
+  protected readonly query = signal('');
+  protected readonly skip = signal(0);
+  protected readonly pageSize = PAGE_SIZE;
+  protected readonly rawDetail = computed(() => {
+    const value = this.changeGroups.detail();
+    return value?.id === this.selectedId() ? value : null;
+  });
+  protected readonly restorable = computed(
+    () => this.rawDetail()?.changed_objects.filter((o) => o.before_version_id) ?? [],
+  );
+  protected readonly skippedRestore = computed(
+    () => (this.rawDetail()?.changed_objects.length ?? 0) - this.restorable().length,
+  );
 
   /** `?group=<id>`, bound by the router. Overview and the notification drawer
    *  deep-link into this page that way. */
   readonly group = input<string>();
+  readonly operation = input<string>();
 
   /** `?actor=<name>`, bound by the router. Global search links an actor here so
    *  the page opens narrowed to that person's change groups. */
@@ -76,8 +118,8 @@ export class ChangesPage {
    * all of them would be noise; where some row does carry one, a row without
    * one is worth saying.
    */
-  protected readonly hasGuardian = computed(() =>
-    !this.time.isHistorical() && this.changeGroups.items().some((group) => !!group.guardian),
+  protected readonly hasGuardian = computed(
+    () => !this.time.isHistorical() && this.changeGroups.items().some((group) => !!group.guardian),
   );
 
   /** Derived rather than mirrored: the URL is the only thing that sets an
@@ -85,10 +127,10 @@ export class ChangesPage {
    *  itself on the first pass. */
   protected readonly actorFilter = computed(() => this.actor() ?? null);
   private readonly allSeverities: { value: SeverityFilter; label: string }[] = [
-    { value: 'any', label: 'Impact: any' },
+    { value: 'any', label: 'All changes' },
     { value: 'critical', label: 'Critical' },
     { value: 'warning', label: 'Warning' },
-    { value: 'none', label: 'No impact' },
+    { value: 'none', label: 'No impact observed' },
   ];
 
   /**
@@ -138,15 +180,17 @@ export class ChangesPage {
   protected readonly footer = computed(() => {
     const shown = this.changeGroups.items().length;
     if (shown === 0) {
-      return this.filtered() ? 'Clear the filters to see all groups' : 'No change groups in this window';
+      return this.filtered()
+        ? 'Clear the filters to see all groups'
+        : 'No change groups in this window';
     }
-    return `Showing ${formatCount(shown)} of ${formatCount(this.changeGroups.total())} · click a row for evidence`;
+    return `${this.skip() + 1}–${this.skip() + shown} of ${formatCount(this.changeGroups.total())} changes`;
   });
 
   /** True while the list is narrowed, so an empty table means nothing matched
    *  rather than nothing happened. */
   protected readonly filtered = computed(
-    () => this.severity() !== 'any' || this.actorFilter() !== null,
+    () => this.severity() !== 'any' || this.actorFilter() !== null || !!this.query(),
   );
 
   /** The organization has nothing in the window, rather than nothing matching. */
@@ -179,20 +223,10 @@ export class ChangesPage {
       id: detail.id,
       guardian: detail.guardian ?? null,
       tone: toneOf(detail.impact_severity),
-      level: detail.impact_label,
+      level: detail.impact_known === false ? 'Impact not shown' : detail.impact_label,
       title: detail.title,
       audit: `AUDIT ${shortAudit(detail.audit_id)}`,
       byline: `${detail.actor ?? 'Unattributed'} · ${formatDate(occurred)} ${formatTime(occurred)} · delivered by ${detail.source}`,
-      objectCount: formatCount(detail.object_count),
-      objects: detail.changed_objects.map((object, index) => ({
-        key: `${object.logical_object_id}-${index}`,
-        object,
-        event: object.event.toUpperCase(),
-        name: object.object_name,
-        kind: `${object.object_type.toUpperCase()} · ${object.scope.toUpperCase()}`,
-        versions: versionRange(object),
-        fields: fieldSummary(object),
-      })),
       // A past view withholds the assessment, which is not the same as the
       // change never having had one: saying so would describe a group that
       // does have a live assessment falsely.
@@ -204,46 +238,64 @@ export class ChangesPage {
       evidence: detail.evidence.map((item, index) => ({
         key: index,
         label: item.label,
-        ink: toneInk(toneOf(item.severity)),
       })),
-      impactSites: [...new Set([
-        ...detail.affected_site_ids,
-        ...detail.affected_devices.map((device) => device.site_mist_id),
-        ...detail.changed_objects.map((object) => object.site_mist_id),
-      ].filter((site): site is string => !!site))],
     };
   });
 
   constructor() {
     // The index is filtered server-side, so the severity chips and the shell's
     // range and as-of are all inputs to the same fetch.
-    effect(() => {
+    effect((cleanup) => {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
       // A historical window carries no severity filter; the API refuses one.
       const severity = this.time.isHistorical() ? 'any' : this.severity();
       const actor = this.actorFilter();
       const asOf = this.time.asOf();
+      const q = this.query();
+      const scope = JSON.stringify([organizationId, range, actor, asOf]);
+      if (scope !== this.pagingScope) {
+        this.pagingScope = scope;
+        this.skip.set(0);
+      }
+      const skip = this.skip();
+      this.reload();
+      const controller = new AbortController();
+      cleanup(() => controller.abort());
       if (!organizationId) {
         return;
       }
+      this.listError.set(false);
       void untracked(() =>
-        this.ui.track('Loading changes', () =>
-          this.changeGroups.list(organizationId, {
-            range,
-            severity,
-            actor: actor ?? undefined,
-            asOf,
-            limit: PAGE_SIZE,
+        this.ui
+          .track(
+            'Loading changes',
+            () =>
+              this.changeGroups.list(organizationId, {
+                range,
+                severity,
+                actor: actor ?? undefined,
+                asOf,
+                limit: PAGE_SIZE,
+                q,
+                skip,
+              }),
+            controller.signal,
+          )
+          .then((result) => {
+            if (!controller.signal.aborted) this.listError.set(!result);
           }),
-        ),
       );
     });
 
     // A deep link arrives as a query parameter; selecting a row writes one back.
     effect(() => {
       const fromUrl = this.group() ?? null;
-      untracked(() => this.selectGroup(fromUrl));
+      const operation = this.operation() ?? '';
+      untracked(() => {
+        this.selectGroup(fromUrl);
+        this.restoreOperation.set(operation);
+      });
     });
 
     effect(() => {
@@ -269,9 +321,10 @@ export class ChangesPage {
         // can fail or the detail cached for it can show.
         untracked(() => {
           this.selectedId.set(null);
+          this.restoreOperation.set('');
           this.changeGroups.clearDetail();
           void this.router.navigate([], {
-            queryParams: { group: null },
+            queryParams: { group: null, operation: null },
             queryParamsHandling: 'merge',
             replaceUrl: true,
           });
@@ -284,18 +337,34 @@ export class ChangesPage {
 
   /** Record which organization a selection was made under, so a switch can tell it is foreign. */
   private selectGroup(id: string | null): void {
+    if (id !== this.selectedId()) {
+      this.selectionRevision++;
+      this.restoreOperation.set('');
+      this.restoreError.set('');
+      this.restoreBusy.set(false);
+    }
     this.selectedFor = this.organizations.selected()?.id ?? null;
     this.selectedId.set(id);
   }
 
   protected async select(id: string): Promise<void> {
     const next = this.selectedId() === id ? null : id;
+    this.focusDetail = next !== null;
     this.selectGroup(next);
     await this.router.navigate([], {
-      queryParams: { group: next },
+      queryParams: { group: next, operation: null },
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
+    if (!next)
+      afterNextRender(
+        () => {
+          this.element.nativeElement
+            .querySelector<HTMLElement>(`.row--group[data-group-id="${CSS.escape(id)}"]`)
+            ?.focus();
+        },
+        { injector: this.injector },
+      );
   }
 
   protected async clearActor(): Promise<void> {
@@ -329,12 +398,75 @@ export class ChangesPage {
     });
   }
 
-  protected async openImpact(siteId: string, changeId: string): Promise<void> {
-    await this.router.navigate(['/impact'], { queryParams: { site: siteId, change: changeId } });
+  protected async planRestore(id: string): Promise<void> {
+    const org = this.organizations.selected()?.id;
+    const versions = this.restorable().map((o) => o.before_version_id!);
+    if (!org || !versions.length || !this.canRestore() || this.restoreBusy()) return;
+    this.restoreBusy.set(true);
+    const revision = this.selectionRevision;
+    this.restoreError.set('');
+    try {
+      const plan = await this.restores.createPlan(
+        org,
+        [...new Set(versions)],
+        'non_destructive',
+        true,
+      );
+      if (
+        revision === this.selectionRevision &&
+        this.selectedId() === id &&
+        this.organizations.selected()?.id === org
+      )
+        this.updateOperation(plan.id);
+    } catch {
+      if (
+        revision === this.selectionRevision &&
+        this.selectedId() === id &&
+        this.organizations.selected()?.id === org
+      )
+        this.restoreError.set('The rollback plan could not be built. Try again.');
+    } finally {
+      if (
+        revision === this.selectionRevision &&
+        this.selectedId() === id &&
+        this.organizations.selected()?.id === org
+      )
+        this.restoreBusy.set(false);
+    }
   }
 
-  protected async planRestore(id: string): Promise<void> {
-    await this.router.navigate(['/history/restore'], { queryParams: { changeGroup: id } });
+  protected updateOperation(id: string | null): void {
+    this.restoreOperation.set(id ?? '');
+    void this.router.navigate([], {
+      queryParams: { operation: id },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+  protected closeRollback(): void {
+    this.updateOperation(null);
+  }
+
+  protected search(value: string): void {
+    this.skip.set(0);
+    this.query.set(value.trim());
+  }
+  protected filterSeverity(value: SeverityFilter): void {
+    this.skip.set(0);
+    this.severity.set(value);
+  }
+  protected retryDetail(): void {
+    const org = this.organizations.selected()?.id,
+      id = this.selectedId();
+    if (org && id) void this.loadDetail(org, id);
+  }
+
+  protected jump(selector: string): void {
+    const section = this.element.nativeElement.querySelector<HTMLElement>(selector);
+    section?.scrollIntoView({ block: 'start' });
+    const heading = section?.querySelector<HTMLElement>('h3');
+    heading?.setAttribute('tabindex', '-1');
+    heading?.focus({ preventScroll: true });
   }
 
   /** A restore is a write, so it is hidden for viewers and in historical mode. */
@@ -345,7 +477,7 @@ export class ChangesPage {
   /**
    * The detail fetch deliberately avoids `ui.track`: the shell hides the page
    * while it is loading, which would take away the row the user just clicked.
-   * Failures still surface in the shell's error banner.
+   * Failures stay in the panel with an explicit retry.
    */
   private async loadDetail(organizationId: string, id: string): Promise<void> {
     const request = ++this.detailRequest;
@@ -354,14 +486,22 @@ export class ChangesPage {
     // is in flight — and for good, if it comes back 404 because the change had
     // not happened at the instant being viewed.
     this.changeGroups.clearDetail();
+    this.detailError.set(false);
     this.detailPending.set(true);
     try {
       await this.changeGroups.load(organizationId, id, this.time.asOf());
-    } catch (cause) {
+      if (request === this.detailRequest && this.focusDetail) {
+        this.focusDetail = false;
+        afterNextRender(
+          () => this.element.nativeElement.querySelector<HTMLElement>('.panel-title')?.focus(),
+          { injector: this.injector },
+        );
+      }
+    } catch {
       // A read for a row the user has already moved off must not clear the
       // spinner belonging to the current one, nor raise a banner about it.
       if (request === this.detailRequest) {
-        this.ui.fail(cause, 'Loading change group');
+        this.detailError.set(true);
       }
     } finally {
       if (request === this.detailRequest) {
@@ -389,7 +529,6 @@ function toRow(group: ChangeGroupSummary, occurred: Date): GroupRow {
     group,
     time: formatTime(occurred),
     title: group.title,
-    meta: `AUDIT ${shortAudit(group.audit_id)} · ${group.source.toUpperCase()}`,
     actor: group.actor ?? 'Unattributed',
     objects: formatCount(group.object_count),
     devices: group.devices_label,
@@ -397,30 +536,6 @@ function toRow(group: ChangeGroupSummary, occurred: Date): GroupRow {
     recovery: RECOVERY_LABEL[group.recovery_state],
     tone: toneOf(group.impact_severity),
   };
-}
-
-function versionRange(object: ChangedObject): string {
-  if (object.before_version === null) {
-    return object.after_version === null ? '' : `v${object.after_version}`;
-  }
-  return object.after_version === null
-    ? `v${object.before_version} → deleted`
-    : `v${object.before_version} → v${object.after_version}`;
-}
-
-/**
- * The design prints the changed fields inline. A template rewrite can touch
- * dozens, so long lists collapse to a count plus the first few names.
- */
-function fieldSummary(object: ChangedObject): string {
-  const fields = object.changed_fields;
-  if (fields.length === 0) {
-    return 'No field-level differences recorded';
-  }
-  if (fields.length <= 6) {
-    return fields.join(', ');
-  }
-  return `${fields.length} fields · ${fields.slice(0, 3).join(', ')}…`;
 }
 
 function shortAudit(auditId: string): string {

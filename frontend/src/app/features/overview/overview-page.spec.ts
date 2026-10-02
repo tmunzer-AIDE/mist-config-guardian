@@ -82,7 +82,7 @@ describe('OverviewPage under time travel', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(text('.safety-row')).toEqual(['Backup 4m behind 14:18Z']);
+    expect(text('.safety-row')).toEqual(['Backup 4m behind14:18Z']);
     expect(text('.panel-note')).toEqual([]);
   });
 
@@ -101,7 +101,7 @@ describe('OverviewPage under time travel', () => {
     fixture.detectChanges();
 
     expect(text('.safety-row')).toEqual([]);
-    expect(text('.panel-note')[0]).toContain('live and has no past');
+    expect(text('.panel-note')[0]).toContain('Return to Live');
   });
 
   it('re-reads when the instant moves', async () => {
@@ -129,16 +129,16 @@ describe('OverviewPage under time travel', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(text('.guardian-counts')[0]).toContain('7 changes in the loaded feed');
-    expect(text('.guardian-counts')[0]).toContain('1 impact not established');
-    expect(text('.guardian-counts')[0]).toContain('1 with no impact observed');
+    expect(text('.guardian-counts')[0]).toContain('1 not established');
+    expect(text('.guardian-counts')[0]).toContain('1 no impact observed');
     // The bucket holds every projected row with no result, including a root that
     // finished without publishing one, so it does not claim they are all running.
-    expect(text('.guardian-counts')[0]).toContain('1 awaiting a result');
+    expect(text('.guardian-counts')[0]).toContain('1 awaiting results');
     expect(text('.guardian-counts')[0]).not.toContain('still investigating');
-    expect(text('.guardian-counts')[0]).toContain('1 could not be read');
-    expect(text('.guardian-counts')[0]).toContain('1 with no investigation recorded');
-    expect(text('.guardian-counts')[0]).toContain('not the whole window');
-    expect(text('.guardian-counts')[0]).toContain('alerts still use the legacy assessment');
+    expect(text('.guardian-counts')[0]).toContain('1 unavailable');
+    expect(text('.guardian-counts')[0]).toContain('1 unrecorded');
+    expect(text('.guardian-counts')[0]).toContain('additional assessment');
+    expect(text('.guardian-counts')[0]).toContain('totals and filters use the recorded monitoring assessment');
   });
 
 });

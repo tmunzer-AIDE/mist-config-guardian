@@ -1,45 +1,46 @@
-<div class="page">
+<div class="page" [class.page--detail]="selectedId() !== null">
   <header class="head">
-    <h1 class="cg-page-title">Changes</h1>
-    <p class="head-sub">{{ subtitle() }}</p>
-    @if (hasGuardian()) {
-      <p class="head-sub">Guardian investigates each audit and publishes an early and a final result; an early one is labelled as early. Impact badges, filters and alerts still use the legacy assessment.</p>
-    }
-    <div class="head-filters" role="group" aria-label="Filters">
-      @for (option of severities(); track option.value) {
-        <button
-          class="cg-chip"
-          type="button"
-          [class.cg-chip--on]="severity() === option.value"
-          [attr.aria-pressed]="severity() === option.value"
-          (click)="severity.set(option.value)"
-        >
-          {{ option.label }}
-        </button>
-      }
-      @if (actorFilter(); as name) {
-        <button
-          class="cg-chip cg-chip--on"
-          type="button"
-          [attr.aria-label]="'Clear the filter on ' + name"
-          (click)="clearActor()"
-        >
-          Actor: {{ name }}
-          <span class="chip-dismiss" aria-hidden="true">✕</span>
-        </button>
-      }
+    <div>
+      <h1 class="cg-page-title">Changes</h1>
+      <p class="head-sub">
+        Compare configuration changes, inspect impact, and review rollback options.
+      </p>
     </div>
+    <form class="search" (submit)="$event.preventDefault(); search(searchInput.value)">
+      <input
+        #searchInput
+        type="search"
+        aria-label="Search changes"
+        placeholder="Search changes, objects, or audit IDs"
+        [value]="query()"
+      /><button class="cg-btn" type="submit">Search</button>
+    </form>
   </header>
-
-  @if (isEmpty()) {
-    <div class="empty">
-      <div class="empty-title">{{ emptyTitle() }}</div>
-      <p class="empty-body">{{ emptyBody() }}</p>
-    </div>
-  }
-
+  <div class="head-filters" role="group" aria-label="Filters">
+    @for (option of severities(); track option.value) {
+      <button
+        class="cg-chip"
+        type="button"
+        [class.cg-chip--on]="severity() === option.value"
+        [attr.aria-pressed]="severity() === option.value"
+        (click)="filterSeverity(option.value)"
+      >
+        {{ option.label }}
+      </button>
+    }
+    @if (actorFilter(); as name) {
+      <button
+        class="cg-chip cg-chip--on"
+        [attr.aria-label]="'Clear the filter on ' + name"
+        (click)="clearActor()"
+      >
+        Actor: {{ name }} ×
+      </button>
+    }
+    <span class="filter-note">{{ subtitle() }} · times UTC</span>
+  </div>
   <div class="stack" [class.stack--selected]="selectedId() !== null">
-    <div class="cg-card table-card">
+    <div class="cg-card table-card" [class.mobile-hidden]="selectedId() !== null">
       <table class="table" role="table" aria-label="Change groups">
         <thead role="rowgroup">
           <tr class="row row--head" role="row">
@@ -48,21 +49,18 @@
             }
           </tr>
         </thead>
-
         @for (day of days(); track day.key) {
           <tbody role="rowgroup">
             <tr class="row row--day" role="row">
-              <th class="day" role="rowheader" scope="rowgroup" colspan="6" aria-colspan="6">
-                {{ day.label }}
-              </th>
+              <th class="day" role="rowheader" scope="rowgroup" colspan="6">{{ day.label }}</th>
             </tr>
-
             @for (row of day.rows; track row.id) {
               <tr
                 class="row row--group"
                 role="row"
                 tabindex="0"
                 [attr.data-tone]="row.tone"
+                [attr.data-group-id]="row.id"
                 [class.row--on]="selectedId() === row.id"
                 [attr.aria-expanded]="selectedId() === row.id"
                 [attr.aria-controls]="selectedId() === row.id ? panelId : null"
@@ -73,13 +71,13 @@
                 <td class="cell cell-time" role="cell">{{ row.time }}</td>
                 <td class="cell cell-group" role="cell">
                   <div class="row-title">{{ row.title }}</div>
-                  <div class="row-meta">{{ row.meta }}</div>
+                  <div class="row-meta">{{ row.group.summary }}</div>
                 </td>
                 <td class="cell cell-actor" role="cell">{{ row.actor }}</td>
                 <td class="cell cell-objects" role="cell">{{ row.objects }}</td>
                 <td class="cell cell-devices" role="cell">{{ row.devices }}</td>
                 <td class="cell cell-impact" role="cell">
-                  <span class="cg-badge" [class]="'cg-badge cg-badge--' + row.tone">{{ row.impact }}</span>
+                  <span [class]="'cg-badge cg-badge--' + row.tone">{{ row.impact }}</span>
                   @if (row.recovery) {
                     <div class="row-recovery">{{ row.recovery }}</div>
                   }
@@ -92,79 +90,175 @@
           </tbody>
         }
       </table>
-
-      <div class="table-foot">{{ footer() }}</div>
+      @if (listError()) {
+        <div class="empty" role="alert">
+          <h2>Changes could not be loaded</h2>
+          <p>Retry to retrieve this organization’s change history.</p>
+          <button class="cg-btn" (click)="reload.update(increment)">Retry changes</button>
+        </div>
+      } @else if (!days().length) {
+        <div class="empty">
+          <h2>{{ isEmpty() ? emptyTitle() : 'No matching changes' }}</h2>
+          <p>{{ isEmpty() ? emptyBody() : 'Try a different search or clear the filters.' }}</p>
+        </div>
+      }
+      <div class="table-foot">
+        <span>{{ footer() }}</span>
+        <div class="paging">
+          <button
+            class="cg-btn cg-btn--sm"
+            [disabled]="skip() === 0"
+            (click)="skip.set(skip() - pageSize)"
+          >
+            Previous</button
+          ><button
+            class="cg-btn cg-btn--sm"
+            [disabled]="skip() + pageSize >= changeGroups.total()"
+            (click)="skip.set(skip() + pageSize)"
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </div>
-
     @if (panel(); as detail) {
       <section
         class="cg-card panel"
         [id]="panelId"
         role="region"
-        aria-live="polite"
         [attr.aria-labelledby]="panelId + '-title'"
       >
         <header class="panel-head">
-          <div class="panel-head-line">
-            <span class="cg-badge" [class]="'cg-badge cg-badge--' + detail.tone">{{ detail.level }}</span>
-            <h2 class="panel-title" [id]="panelId + '-title'">{{ detail.title }}</h2>
-            <span class="panel-audit">{{ detail.audit }}</span>
-            <button class="panel-close" type="button" (click)="close()">Close</button>
+          <div class="panel-toolbar">
+            <button class="cg-btn cg-btn--link panel-close" (click)="close()">← All changes</button>
+            @if (!restoreOperation()) {
+              <button class="cg-btn cg-btn--link" (click)="retryDetail()">Refresh evidence</button>
+            }
+            <span class="panel-audit">{{ detail.audit }}</span
+            ><span [class]="'cg-badge cg-badge--' + detail.tone">{{ detail.level }}</span>
           </div>
+          <h2 class="panel-title" tabindex="-1" [id]="panelId + '-title'">{{ detail.title }}</h2>
           <p class="panel-byline">{{ detail.byline }}</p>
-          @if (hasGuardian()) {
-            <app-guardian-badge [summary]="detail.guardian" />
+          @if (!restoreOperation()) {
+            <nav class="detail-jumps" aria-label="Change sections">
+              <button class="cg-btn cg-btn--link" (click)="jump('.configuration-column')">
+                Configuration
+              </button>
+              <button class="cg-btn cg-btn--link" (click)="jump('.impact-column')">
+                Site & device impact
+              </button>
+              @if (canRestore()) {
+                <button class="cg-btn cg-btn--link" (click)="jump('.rollback-card')">
+                  Rollback
+                </button>
+              }
+            </nav>
           }
         </header>
-
-        <div class="panel-body">
-          <section class="panel-col panel-col--objects">
-            <h3 class="cg-label panel-col-title">CHANGED OBJECTS · {{ detail.objectCount }}</h3>
-            @for (object of detail.objects; track object.key) {
-              <article class="object">
-                <div class="object-head">
-                  <span class="cg-badge cg-badge--warn object-event">{{ object.event }}</span>
-                  <span class="object-name">{{ object.name }}</span>
-                  <span class="object-kind">{{ object.kind }}</span>
-                  <span class="object-versions">{{ object.versions }}</span>
-                </div>
-                <p class="object-fields">{{ object.fields }}</p>
-                <button class="cg-btn cg-btn--link object-compare" type="button" (click)="compare(object.object)">
-                  Compare in History →
-                </button>
-              </article>
-            }
-          </section>
-
-          <section class="panel-col">
-            <h3 class="cg-label panel-col-title">EVIDENCE</h3>
-            <p class="assessment">{{ detail.assessment }}</p>
-            <ul class="evidence">
-              @for (item of detail.evidence; track item.key) {
-                <li class="evidence-row">
-                  <span class="evidence-dot" [style.background]="item.ink" aria-hidden="true"></span>
-                  {{ item.label }}
-                </li>
-              }
-            </ul>
-            @if (hasGuardian()) {
-              <app-guardian-panel [groupId]="detail.id" />
-            }
-            <div class="panel-actions">
-              @for (siteId of detail.impactSites; track siteId) {
-                <button class="cg-btn cg-btn--primary" type="button" (click)="openImpact(siteId, detail.id)">
-                  Open site impact@if (detail.impactSites.length > 1) { · {{ siteId }} }
-                </button>
-              }
-              @if (canRestore()) {
-                <button class="cg-btn" type="button" (click)="planRestore(detail.id)">Plan a restore</button>
+        @if (rawDetail(); as change) {
+          <div class="change-verdict">
+            <div>
+              <strong>Recorded impact</strong>
+              <p>{{ detail.assessment }}</p>
+              @if (change.recovery_state === 'recovered') {
+                <span class="recovered">Recovered after the change</span>
               }
             </div>
-          </section>
-        </div>
+          </div>
+          @if (restoreOperation()) {
+            <section class="rollback-workspace" aria-label="Rollback review">
+              <div class="rollback-heading">
+                <div>
+                  <h3>Restore the previous configuration</h3>
+                  <p>
+                    The previous versions are selected. Review the actions, capture a fresh backup,
+                    then confirm here.
+                  </p>
+                </div>
+                <button class="cg-btn" (click)="closeRollback()">Back to change</button>
+              </div>
+              @if (skippedRestore()) {
+                <p class="rollback-note">
+                  {{ skippedRestore() }}
+                  {{ skippedRestore() === 1 ? 'object has' : 'objects have' }} no captured previous
+                  version and {{ skippedRestore() === 1 ? 'is' : 'are' }} excluded. This is a
+                  partial rollback.
+                </p>
+              }
+              <app-restore-page
+                [embedded]="true"
+                [contextual]="true"
+                [operation]="restoreOperation()"
+                (operationChanged)="updateOperation($event)"
+              />
+            </section>
+          } @else {
+            <div class="panel-body">
+              <section class="configuration-column">
+                <app-change-configuration
+                  [objects]="change.changed_objects"
+                  (compare)="compare($event)"
+                />
+                @if (canRestore()) {
+                  <section class="rollback-card">
+                    <h3>Roll back this change</h3>
+                    <p>
+                      Restore {{ restorable().length }}
+                      {{ restorable().length === 1 ? 'object' : 'objects' }} to the captured
+                      previous configuration. You’ll review the exact actions before anything is
+                      changed.
+                    </p>
+                    @if (skippedRestore()) {
+                      <p class="rollback-note">
+                        {{ skippedRestore() }}
+                        {{ skippedRestore() === 1 ? 'object' : 'objects' }} without a previous
+                        version will be excluded.
+                      </p>
+                    }
+                    <button
+                      class="cg-btn cg-btn--primary"
+                      [disabled]="!restorable().length || restoreBusy()"
+                      (click)="planRestore(detail.id)"
+                    >
+                      {{ restoreBusy() ? 'Building rollback plan…' : 'Review rollback' }}
+                      <span aria-hidden="true">↶</span>
+                    </button>
+                    @if (restoreError()) {
+                      <p role="alert">{{ restoreError() }}</p>
+                    }
+                  </section>
+                }
+                <details class="supporting-evidence">
+                  <summary>Assessment evidence · {{ detail.evidence.length }}</summary>
+                  <ul class="evidence">
+                    @for (item of detail.evidence; track item.key) {
+                      <li>{{ item.label }}</li>
+                    }
+                  </ul>
+                </details>
+                @if (hasGuardian()) {
+                  <div class="guardian-section">
+                    <app-guardian-badge [summary]="detail.guardian" /><app-guardian-panel
+                      [groupId]="detail.id"
+                    />
+                  </div>
+                }
+              </section>
+              <section class="impact-column"><app-change-impact [detail]="change" /></section>
+            </div>
+          }
+        }
       </section>
-    } @else if (detailPending()) {
-      <div class="cg-skeleton panel-pending" role="status" aria-live="polite" aria-label="Loading change group"></div>
+    } @else if (selectedId()) {
+      <section class="cg-card panel panel-pending">
+        <button class="cg-btn cg-btn--link" (click)="close()">← All changes</button>
+        @if (detailError()) {
+          <p role="alert">This change could not be loaded.</p>
+          <button class="cg-btn" (click)="retryDetail()">Retry</button>
+        } @else {
+          <p role="status">Loading configuration and impact…</p>
+        }
+      </section>
     }
   </div>
 </div>

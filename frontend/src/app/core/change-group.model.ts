@@ -6,6 +6,7 @@
  */
 
 import { GuardianSummary } from './guardian.model';
+import type { DeviceImpact } from '../features/impact/site-impact.model';
 
 export type ImpactSeverity = 'none' | 'info' | 'warning' | 'critical';
 export type RecoveryState = 'not_applicable' | 'monitoring' | 'recovered' | 'unrecovered' | 'completed';
@@ -89,6 +90,16 @@ export interface ChangeGroupDetail extends ChangeGroupSummary {
   changed_objects: ChangedObject[];
   affected_devices: AffectedDevice[];
   competing_change_group_ids: string[];
+  /** Known reach only. Missing on older servers; empty in historical mode. */
+  site_impacts?: ChangeSiteImpact[];
+  missing_monitoring_sessions?: number;
+}
+
+export interface ChangeSiteImpact {
+  site_id: string;
+  site_name: string;
+  devices: DeviceImpact[];
+  unmonitored_devices: AffectedDevice[];
 }
 
 export interface ChangeGroupPage {

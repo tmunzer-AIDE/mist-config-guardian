@@ -45,7 +45,9 @@ export class OverviewPage {
 
   /** Impacting selects on an outcome a past view does not have, so it is not offered there. */
   protected readonly filters = computed<FeedFilter[]>(() =>
-    this.historical() ? this.allFilters.filter((option) => option !== 'impacting') : this.allFilters,
+    this.historical()
+      ? this.allFilters.filter((option) => option !== 'impacting')
+      : this.allFilters,
   );
 
   protected readonly organization = this.organizations.selected;
@@ -89,9 +91,9 @@ export class OverviewPage {
       .map((group) => this.toCard(group));
   });
 
-  protected readonly hasChanges = computed(() => (this.overview.overview()?.change_groups.length ?? 0) > 0);
-  protected readonly atNow = computed(() => !this.time.isHistorical() && this.hasChanges());
-  protected readonly nowLabel = computed(() => formatTime(new Date()));
+  protected readonly hasChanges = computed(
+    () => (this.overview.overview()?.change_groups.length ?? 0) > 0,
+  );
 
   /** Built as of the past: approvals, failed restores and the safety net have no past to show. */
   protected readonly historical = computed(() => this.overview.overview()?.historical ?? false);
@@ -148,22 +150,23 @@ export class OverviewPage {
     await this.router.navigate(['/changes'], { queryParams: { group: id } });
   }
 
-  protected async planRestore(group: ChangeGroupSummary): Promise<void> {
-    // The restore page resolves the change group into pre-selected targets so
-    // the operator lands on step 1 with the right objects already chosen.
-    await this.router.navigate(['/history/restore'], { queryParams: { changeGroup: group.id } });
+  protected async openChanges(): Promise<void> {
+    await this.router.navigate(['/changes']);
   }
-
-  protected async openImpact(group: ChangeGroupSummary): Promise<void> {
-    await this.router.navigate(['/impact'], { queryParams: { session: group.monitoring_session_ids[0] } });
+  protected async openTopology(): Promise<void> {
+    await this.router.navigate(['/impact']);
   }
 
   protected async openApproval(restoreOperationId: string): Promise<void> {
-    await this.router.navigate(['/history/restore'], { queryParams: { operation: restoreOperationId, step: 'authorize' } });
+    await this.router.navigate(['/history/restore'], {
+      queryParams: { operation: restoreOperationId, step: 'authorize' },
+    });
   }
 
   protected async openCompensation(operationId: string): Promise<void> {
-    await this.router.navigate(['/history/restore'], { queryParams: { operation: operationId, compensate: 1 } });
+    await this.router.navigate(['/history/restore'], {
+      queryParams: { operation: operationId, compensate: 1 },
+    });
   }
 
   protected async openSettings(): Promise<void> {
@@ -179,25 +182,15 @@ export class OverviewPage {
     // wearing the neutral tone that would read as "no impact".
     const known = group.impact_known !== false;
     const tone = toneOf(group.impact_severity);
-    const prominent = known && group.impact_severity === 'critical';
     return {
       group,
       id: group.id,
       time: formatTime(new Date(group.occurred_at)),
       tone,
-      prominent,
       level: known ? group.impact_label : 'IMPACT NOT SHOWN',
       title: group.title,
       summary: group.summary,
-      audit: `AUDIT ${shortAudit(group.audit_id)}`,
       metrics: group.metrics.map((metric) => ({ ...metric, tone: toneOf(metric.severity) })),
-      restorable: group.impact_severity === 'critical' || group.impact_severity === 'warning',
-      inspectable: group.monitoring_session_ids.length > 0,
     };
   }
-}
-
-function shortAudit(auditId: string): string {
-  const compact = auditId.replace(/-/g, '').toUpperCase();
-  return compact.length > 7 ? `${compact.slice(0, 4)}…${compact.slice(-3)}` : compact;
 }

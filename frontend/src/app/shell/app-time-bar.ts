@@ -17,6 +17,7 @@ export class AppTimeBar {
   protected readonly preview = signal<Date | null>(null);
   private readonly pinnedWindow = signal<{ start: Date; end: Date } | null>(null);
   protected readonly dateError = signal('');
+  protected readonly expanded = signal(false);
   protected readonly window = computed(
     () =>
       (this.time.isHistorical() || this.preview() ? this.pinnedWindow() : null) ??

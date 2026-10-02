@@ -60,6 +60,8 @@ export interface TopologyLayout {
 }
 export interface LayoutOptions {
   maxStackDepth?: number;
+  /** Remove empty tier rows while keeping node and routing clearance. */
+  compact?: boolean;
 }
 
 export function rowY(tier: number): number {
@@ -194,12 +196,16 @@ export function layoutTopology(
   links: readonly LayoutLink[] = [],
   options: LayoutOptions = {},
 ): TopologyLayout {
+  const rowAt = (tier: number) =>
+    options.compact ? ROW_TOP + Math.max(0, tiers.indexOf(Math.min(3, tier))) * 96 : rowY(tier);
+  const margin = options.compact ? 24 : MARGIN;
   const maxDepth = Math.max(1, Math.trunc(options.maxStackDepth ?? DEFAULT_STACK_DEPTH));
   const device = new Map(devices.map((item) => [item.id, item]));
   const tierOf = (id: string) => {
     const value = device.get(id)?.tier;
     return typeof value === 'number' && Number.isFinite(value) ? clamp(Math.round(value), 0, 3) : 2;
   };
+  const tiers = [...new Set([...device.keys()].map(tierOf))].sort((a, b) => a - b);
   // Canonical order drives every tie-break, so the result never depends on the
   // order devices or links arrive in.
   const order = [...device.values()]
@@ -262,7 +268,7 @@ export function layoutTopology(
   const placeStack = (ids: readonly string[], left: number) => {
     const x = left + gutterWidth(ids.length) + NODE_PAD_LEFT;
     ids.forEach((id, index) => {
-      const node = { id, x, y: rowY(3) + index * STACK_PITCH };
+      const node = { id, x, y: rowAt(3) + index * STACK_PITCH };
       laneIndex.set(id, index);
       nodes.set(id, node);
       occupy(node);
@@ -287,7 +293,7 @@ export function layoutTopology(
     const node = {
       id,
       x: clamp(centre, left + NODE_PAD_LEFT, left + width - (NODE_WIDTH - NODE_PAD_LEFT)),
-      y: rowY(tierOf(id)),
+      y: rowAt(tierOf(id)),
     };
     nodes.set(id, node);
     occupy(node);
@@ -368,7 +374,7 @@ export function layoutTopology(
     return spans;
   };
   const placeLoose = (id: string, desired: number) => {
-    const y = rowY(tierOf(id)),
+    const y = rowAt(tierOf(id)),
       top = y - NODE_PAD_TOP;
     const blocked: [number, number][] = [
       ...(rows.get(top) ?? []).map(
@@ -425,7 +431,7 @@ export function layoutTopology(
   // No link evidence at all: append to the right of the device's own row.
   for (const id of order)
     if (!nodes.has(id)) {
-      const top = rowY(tierOf(id)) - NODE_PAD_TOP,
+      const top = rowAt(tierOf(id)) - NODE_PAD_TOP,
         right = (rows.get(top) ?? []).reduce((edge, rect) => Math.max(edge, rect.right), 0);
       placeLoose(id, right + COL_GAP + NODE_PAD_LEFT);
     }
@@ -462,7 +468,7 @@ export function layoutTopology(
     });
   }
 
-  if (!nodes.size) return { nodes, edges, width: 2 * MARGIN, height: 2 * MARGIN };
+  if (!nodes.size) return { nodes, edges, width: 2 * margin, height: 2 * margin };
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -479,11 +485,11 @@ export function layoutTopology(
     extend(rect.right, rect.bottom);
   }
   for (const edge of edges) for (const point of edge.points) extend(point.x, point.y);
-  const dx = MARGIN - minX,
-    dy = MARGIN - minY;
+  const dx = margin - minX,
+    dy = margin - minY;
   for (const node of [...nodes.values()])
     nodes.set(node.id, { ...node, x: node.x + dx, y: node.y + dy });
   for (const edge of edges)
     edge.points = edge.points.map((point) => ({ x: point.x + dx, y: point.y + dy }));
-  return { nodes, edges, width: maxX - minX + 2 * MARGIN, height: maxY - minY + 2 * MARGIN };
+  return { nodes, edges, width: maxX - minX + 2 * margin, height: maxY - minY + 2 * margin };
 }

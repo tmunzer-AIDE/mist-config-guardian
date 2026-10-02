@@ -17,7 +17,7 @@
   --ink-invert: #ffffff;
 
   // ---- Surfaces ----
-  --surface: #f3f5f8;
+  --surface: #f5f6f8;
   --surface-raised: #ffffff;
   --surface-sunken: #f8f9fb;
   --surface-warm: #eef1f5;
@@ -25,7 +25,7 @@
   --surface-selected-soft: #f7f8fc;
   --surface-brand-soft: #eef0f6;
 
-  --app-background: #f6f7f9;
+  --app-background: var(--surface);
 
   // ---- Rules and borders ----
   --rule: #e1e4e9;
@@ -40,27 +40,27 @@
   --border-strong: rgba(20, 22, 26, 0.16);
 
   // ---- Brand ----
-  --brand: #2743a3;
-  --brand-hover: #1b2f78;
-  --brand-light: #3757bd;
-  --brand-soft: #e8ecf8;
-  --brand-line: #c3cdec;
-  --brand-tint: #eef1fb;
-  --brand-tint-deep: #dfe5f6;
+  --brand: #17666b;
+  --brand-hover: #104b50;
+  --brand-light: #24828a;
+  --brand-soft: #e7f1f0;
+  --brand-line: #b9d6d5;
+  --brand-tint: #eef6f5;
+  --brand-tint-deep: #d9eae8;
   --brand-gradient: var(--brand);
   --brand-gradient-hover: var(--brand-hover);
 
   // ---- Sidebar ----
-  --nav-background: #f8f9fc;
-  --nav-rule: #e3e8f0;
-  --nav-ink: #5b687b;
-  --nav-ink-hover: #192333;
+  --nav-background: transparent;
+  --nav-rule: transparent;
+  --nav-ink: var(--ink-muted);
+  --nav-ink-hover: var(--ink);
   --nav-ink-active: var(--brand);
   --nav-brand-ink: var(--ink);
-  --nav-meta: #6b788b;
+  --nav-meta: var(--ink-soft);
   --nav-accent: var(--brand);
-  --nav-accent-dim: #9aaad8;
-  --nav-active-fill: color-mix(in oklab, var(--brand) 9%, white);
+  --nav-accent-dim: #7ba6a7;
+  --nav-active-fill: transparent;
 
   // ---- Semantic tones ----
   --tone-critical-ink: #b91c1c;
@@ -92,22 +92,22 @@
 
   // ---- Glass panels ----
   --glass-fill: #ffffff;
-  --glass-border: var(--rule);
+  --glass-border: rgba(25, 35, 51, 0.045);
   --glass-blur: none;
 
-  --header-fill: #ffffff;
-  --header-fill-past: #fdf9ef;
-  --header-rule: rgba(20, 22, 26, 0.08);
-  --header-rule-past: rgba(161, 98, 7, 0.2);
+  --header-fill: transparent;
+  --header-fill-past: transparent;
+  --header-rule: transparent;
+  --header-rule-past: transparent;
   --track-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(251, 250, 247, 0.4));
   --track-fill-past: linear-gradient(180deg, rgba(253, 249, 239, 0.72), rgba(253, 249, 239, 0.52));
 
   // ---- Elevation ----
   --shadow-hairline: 0 1px 2px rgba(20, 22, 26, 0.04);
-  --shadow-raised: 0 1px 2px rgba(20, 22, 26, 0.05);
-  --shadow-card: 0 2px 3px -2px #1923330a, 0 8px 24px -16px #19233318;
+  --shadow-raised: 0 3px 8px -4px rgba(25, 35, 51, 0.08), 0 20px 44px -18px rgba(25, 35, 51, 0.18);
+  --shadow-card: 0 2px 4px rgba(25, 35, 51, 0.035), 0 10px 26px -12px rgba(25, 35, 51, 0.14);
   --shadow-menu: 0 1px 2px rgba(20, 22, 26, 0.06), 0 18px 44px -20px rgba(20, 22, 26, 0.35);
-  --shadow-brand: 0 1px 2px rgba(39, 67, 163, 0.1);
+  --shadow-brand: 0 2px 4px rgba(23, 102, 107, 0.12);
 
   // ---- Geometry ----
   --sidebar-width: 216px;
