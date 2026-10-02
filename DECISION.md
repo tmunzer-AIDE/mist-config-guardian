@@ -162,3 +162,21 @@ build, Ruff format/lint, source type checks and OpenAPI export verification.
 The browser scenarios include an excluded asset filter with its diff/rollback
 and a direct link to an unlinked audit without an empty rollback card. CodeRabbit
 is unavailable; changes received a local review. Mist validation used fixtures.
+
+Guardian's previously stashed digital-twin guidance is now integrated against
+upstream commit 6840ace (2026-10-02). Its 34-check catalog includes RADIUS backend,
+static-route, control-plane and storm-control candidates. The refresh also fixes
+missing WLAN VLAN, profile, network and topology-dependency mappings. Candidates
+remain investigator hints; existing service-health citations, exclusions,
+coverage gaps and execution limits still determine published impact.
+
+The new behavioral engine is not imported: upstream has no production Mist
+compiler, and its Python 3.14/Mist SDK 0.62.x requirements differ from Guardian's
+runtime. Source provenance, compatibility and refresh instructions are recorded
+in `docs/design/digital-twin-guidance.md`. No API or database change is required.
+
+Validation: 2,672 backend tests passed (110 environment-dependent skips), plus
+Ruff format/lint, source types and unchanged OpenAPI verification. Upstream's
+2,173 offline tests, lint, types, wheel build and installed-wheel imports passed.
+No live Mist/model calls were made. CodeRabbit remains unavailable; the diff
+received a local review.

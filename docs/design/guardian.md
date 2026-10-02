@@ -4,6 +4,10 @@ Guardian is the audit-level impact investigation described in
 [the simplification design](../superpowers/specs/2026-09-16-guardian-simplification-design.md).
 This document records the external facts that design depends on, and how the implemented engine is run.
 
+Guardian also uses [digital-twin candidate guidance](digital-twin-guidance.md)
+to direct scoped evidence retrieval when deterministic coverage is incomplete.
+It does not run the twin's simulation engine or treat a candidate as a finding.
+
 ## Running Guardian
 
 Guardian is off by default: `GUARDIAN_ENABLED` (Helm `config.guardianEnabled`, `false`) on the API and the
