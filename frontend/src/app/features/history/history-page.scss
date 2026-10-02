@@ -15,8 +15,7 @@
   flex-wrap: wrap;
   gap: 16px;
   padding: 18px 22px;
-  border-bottom: 1px solid var(--hairline-strong);
-  background: var(--surface-raised);
+  background: transparent;
   flex: none;
 }
 .library-head > div {
@@ -51,8 +50,9 @@
   min-height: 0;
   overflow: auto;
   background: var(--surface-raised);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 }
 .library-table thead {
   position: sticky;

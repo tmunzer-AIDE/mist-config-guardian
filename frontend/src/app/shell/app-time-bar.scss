@@ -2,8 +2,7 @@
   display: block;
   flex: none;
   padding: 16px 24px 12px;
-  background: var(--surface-raised, #fff);
-  border-bottom: 1px solid var(--rule);
+  background: transparent;
   position: relative;
   z-index: 15;
 }
@@ -37,10 +36,10 @@
 .exact-time > summary,
 .range-control button {
   min-height: 36px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid transparent;
   border-radius: 7px;
   padding: 8px 12px;
-  background: var(--surface-raised, #fff);
+  background: transparent;
   color: var(--ink-muted);
   font: 500 12px var(--font-sans);
   cursor: pointer;
@@ -59,8 +58,7 @@
 }
 .live-button.active {
   color: var(--tone-ok-ink);
-  background: var(--tone-ok-soft);
-  border-color: var(--tone-ok-line);
+  font-weight: 600;
 }
 .live-button.active span {
   background: var(--tone-ok-ink);
@@ -79,7 +77,7 @@
 }
 .exact-time > summary.historical {
   color: var(--tone-warning-ink);
-  background: var(--tone-warning-soft);
+  font-weight: 600;
 }
 .exact-time form {
   position: absolute;
@@ -127,11 +125,11 @@
   font-size: 12px;
 }
 .range-control {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid transparent;
   border-radius: 9px;
   padding: 3px;
   gap: 2px;
-  background: var(--surface-sunken);
+  background: transparent;
 }
 .range-control button {
   border: 0;
@@ -142,7 +140,8 @@
 .range-control button.active {
   background: var(--surface-raised);
   color: var(--brand);
-  box-shadow: 0 1px 3px #19233320;
+  font-weight: 600;
+  box-shadow: var(--shadow-hairline);
 }
 .activity {
   padding: 0 10px;
@@ -240,7 +239,6 @@
 .timeline-footer {
   margin-top: 10px;
   padding-top: 8px;
-  border-top: 1px solid var(--rule);
   font: 11px var(--font-sans);
 }
 button:hover,
@@ -319,4 +317,34 @@ input:focus-visible {
 select:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 3px;
+}
+
+/* Time travel is available on demand; the current range remains visible. */
+.time-toolbar {
+  margin-bottom: 0;
+}
+#time-explorer-track {
+  margin-top: 12px;
+}
+.explore-toggle {
+  border: 0;
+  background: none;
+  color: var(--brand);
+  font: 500 11px var(--font-sans);
+  padding: 8px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+@media (max-width: 600px) {
+  .time-heading {
+    display: none;
+  }
+  .time-toolbar {
+    gap: 8px;
+  }
+  .explore-toggle {
+    margin-left: auto;
+  }
 }

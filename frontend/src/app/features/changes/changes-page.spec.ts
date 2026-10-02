@@ -8,6 +8,9 @@ import { ChangeGroupDetail, ChangeGroupSummary, ImpactSeverity } from '../../cor
 import { GuardianSummary } from '../../core/guardian.model';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { ChangesPage } from './changes-page';
+import { DiffService } from '../history/diff.service';
+import { SiteImpactService } from '../impact/site-impact.service';
+import { of } from 'rxjs';
 
 const ORGANIZATION_ID = 'org-1';
 const INDEX_URL = `/api/v1/organizations/${ORGANIZATION_ID}/change-groups`;
@@ -111,6 +114,8 @@ describe('ChangesPage', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),
+        { provide: DiffService, useValue: { compare: vi.fn().mockResolvedValue({ mode: 'chips', entries: [], sections: [], summary: '2 fields changed', counts: { changed: 2 }, truncated: false }) } },
+        { provide: SiteImpactService, useValue: { topology: vi.fn().mockReturnValue(of({ devices: [], links: [], warnings: [], source: 'stored', collected_at: null })) } },
         {
           provide: OrganizationContextService,
           useValue: organizationStub as unknown as OrganizationContextService,
@@ -162,10 +167,10 @@ describe('ChangesPage', () => {
     const element = fixture.nativeElement as HTMLElement;
     const chips = Array.from(element.querySelectorAll<HTMLButtonElement>('.head-filters .cg-chip'));
     expect(chips.map((chip) => chip.textContent?.trim())).toEqual([
-      'Impact: any',
+      'All changes',
       'Critical',
       'Warning',
-      'No impact',
+      'No impact observed',
     ]);
 
     chips[1].click();
@@ -180,7 +185,7 @@ describe('ChangesPage', () => {
     expect(chips[1].getAttribute('aria-pressed')).toBe('true');
     expect(chips[0].getAttribute('aria-pressed')).toBe('false');
     expect(text('.row--group').length).toBe(1);
-    expect(text('.table-foot')).toEqual(['Showing 1 of 3 · click a row for evidence']);
+    expect(text('.table-foot')[0]).toContain('1–1 of 3 changes');
   });
 
   it('pre-selects the row named by ?group= and opens its detail panel', async () => {
@@ -197,15 +202,15 @@ describe('ChangesPage', () => {
     expect(selected.length).toBe(1);
     expect(selected[0].getAttribute('aria-expanded')).toBe('true');
     expect(text('.panel-title')).toEqual([MONDAY_WARNING.title]);
-    expect(text('.object-name')).toEqual(['NW-Corp']);
-    expect(text('.object-versions')).toEqual(['v14 → v15']);
+    expect(text('.object-picker option')[0]).toContain('NW-Corp');
+    expect(text('.object-meta')[0]).toContain('v14 → v15');
   });
 
   it('shows the organization empty state when nothing matches an unfiltered window', async () => {
     await load([]);
 
-    expect(text('.empty-title')).toEqual(['No changes in this window']);
-    expect(text('.table-foot')).toEqual(['No change groups in this window']);
+    expect(text('.empty h2')).toEqual(['No changes in this window']);
+    expect(text('.table-foot')[0]).toContain('No change groups in this window');
   });
 
   it('keeps a group linked before any organization was established', async () => {
@@ -251,13 +256,13 @@ describe('ChangesPage', () => {
     httpMock.expectNone(`/api/v1/organizations/org-2/change-groups/${MONDAY_WARNING.id}`);
     expect(text('.panel-title')).toEqual([]);
     expect(navigate).toHaveBeenCalledWith([], {
-      queryParams: { group: null },
+      queryParams: { group: null, operation: null },
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
   });
 
-  it('opens the selected change in site Impact without the legacy session parameter', async () => {
+  it('inspects site impact inline without navigating away', async () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     fixture.componentRef.setInput('group', MONDAY_WARNING.id);
     await load([MONDAY_WARNING]);
@@ -265,12 +270,11 @@ describe('ChangesPage', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const button = fixture.nativeElement.querySelector('.panel-actions .cg-btn--primary') as HTMLButtonElement;
-    expect(button.textContent).toContain('Open site impact');
+    const button = fixture.nativeElement.querySelector('.site-card') as HTMLButtonElement;
+    expect(button.textContent).toContain('site-1');
     button.click();
-    expect(navigate).toHaveBeenCalledWith(['/impact'], {
-      queryParams: { site: 'site-1', change: MONDAY_WARNING.id },
-    });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(text('.topology-head')[0]).toContain('site-1');
   });
 
   it('offers each affected site once, including changes without a monitoring session', async () => {
@@ -282,13 +286,14 @@ describe('ChangesPage', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const buttons = fixture.nativeElement.querySelectorAll('.panel-actions .cg-btn--primary') as NodeListOf<HTMLButtonElement>;
+    const buttons = fixture.nativeElement.querySelectorAll('.site-card') as NodeListOf<HTMLButtonElement>;
     expect(buttons.length).toBe(2);
     expect(buttons[1].textContent).toContain('site-2');
     buttons[1].click();
-    expect(navigate).toHaveBeenCalledWith(['/impact'], {
-      queryParams: { site: 'site-2', change: MONDAY_WARNING.id },
-    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(text('.topology-head')[0]).toContain('site-2');
   });
 
   it('compares a changed object under the slot names History reads', async () => {
@@ -301,7 +306,7 @@ describe('ChangesPage', () => {
     fixture.detectChanges();
 
     const element = fixture.nativeElement as HTMLElement;
-    element.querySelector<HTMLButtonElement>('.object-compare')?.click();
+    element.querySelector<HTMLButtonElement>('app-change-configuration .cg-btn--link')?.click();
 
     // History names its two slots `a` and `b`, with A the earlier side; sending
     // `before` and `after` would open an unselected comparison.
@@ -319,7 +324,7 @@ describe('ChangesPage', () => {
 
     expect(request.request.params.get('actor')).toBe('j.mercer');
     const chip = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
-      '.head-filters .cg-chip:last-child',
+      '.head-filters .cg-chip[aria-label]',
     );
     expect(chip?.textContent?.trim().startsWith('Actor: j.mercer')).toBe(true);
 
@@ -336,10 +341,10 @@ describe('ChangesPage', () => {
     await load([MONDAY_CRITICAL]);
 
     expect(text('.head-filters .cg-chip')).toEqual([
-      'Impact: any',
+      'All changes',
       'Critical',
       'Warning',
-      'No impact',
+      'No impact observed',
     ]);
   });
   it('shows the Guardian result beside the production badge without changing its filter', async () => {
@@ -350,7 +355,7 @@ describe('ChangesPage', () => {
     expect(request.request.params.get('severity')).toBe('any');
     expect(text('app-guardian-badge')[0]).toContain('Guardian · Possible disruption');
     expect(text('app-guardian-badge')[0]).toContain('Recovered');
-    expect(text('.head-sub').join(' ')).toContain('alerts still use the legacy assessment');
+    expect(text('.cell-impact')[0]).toContain('CRITICAL');
   });
 
   it('says which row has no investigation rather than leaving it to look clean', async () => {

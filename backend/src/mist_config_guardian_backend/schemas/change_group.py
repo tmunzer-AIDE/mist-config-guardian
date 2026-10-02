@@ -12,6 +12,7 @@ from mist_config_guardian_backend.models.webhook import (
     RecoveryState,
 )
 from mist_config_guardian_backend.schemas.guardian import GuardianSummary
+from mist_config_guardian_backend.schemas.impact import DeviceImpact
 
 
 class ChangedObjectResponse(BaseModel):
@@ -88,6 +89,15 @@ class ChangeGroupSummaryResponse(BaseModel):
     is_mine: bool = False
 
 
+class ChangeSiteImpactResponse(BaseModel):
+    """Known reach, not an exhaustive prediction of template deployment."""
+
+    site_id: str
+    site_name: str
+    devices: list[DeviceImpact] = Field(default_factory=list)
+    unmonitored_devices: list[AffectedDeviceResponse] = Field(default_factory=list)
+
+
 class ChangeGroupDetailResponse(ChangeGroupSummaryResponse):
     """One change group with its evidence, objects, and competing changes."""
 
@@ -99,6 +109,8 @@ class ChangeGroupDetailResponse(ChangeGroupSummaryResponse):
     changed_objects: list[ChangedObjectResponse] = Field(default_factory=list)
     affected_devices: list[AffectedDeviceResponse] = Field(default_factory=list)
     competing_change_group_ids: list[str] = Field(default_factory=list)
+    site_impacts: list[ChangeSiteImpactResponse] = Field(default_factory=list)
+    missing_monitoring_sessions: int = 0
 
 
 class ChangeGroupListResponse(BaseModel):

@@ -100,7 +100,7 @@
     </div>
   }
 
-  <p class="cg-label section-label">CREDENTIAL METHOD</p>
+  @if (!prepared()) { <p class="cg-label section-label">CREDENTIAL METHOD</p> }
   <form id="mist-restore-login" autocomplete="on" (submit)="$event.preventDefault(); submit()">
   @if (!prepared()) {
   <div class="methods" role="radiogroup" aria-label="Credential method">

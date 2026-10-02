@@ -1,0 +1,277 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+.section-heading {
+  margin-bottom: 20px;
+}
+.eyebrow {
+  font: 600 10px var(--font-mono);
+  color: var(--brand);
+  letter-spacing: 0.08em;
+}
+h3 {
+  font-size: 21px;
+  letter-spacing: -0.5px;
+  margin: 5px 0 0;
+}
+.reach {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 16px 0;
+}
+.reach div {
+  display: grid;
+  gap: 4px;
+  padding: 0 14px;
+  border-right: 1px solid var(--rule);
+}
+.reach div:last-child {
+  border: 0;
+}
+.reach strong {
+  font-size: 27px;
+  letter-spacing: -1px;
+}
+.reach span {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.reach .disruption strong {
+  color: var(--tone-warning-ink);
+}
+.scope-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  margin: 10px 0 16px;
+}
+.notice {
+  font-size: 12px;
+  line-height: 1.6;
+  border-left: 3px solid var(--rule-strong);
+  background: var(--surface-sunken);
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+}
+.site-list {
+  display: flex;
+  gap: 8px;
+  overflow: auto;
+  padding: 2px 2px 8px;
+}
+.site-card {
+  display: flex;
+  flex: 1 0 190px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  padding: 12px;
+  text-align: left;
+  background: white;
+  cursor: pointer;
+  color: var(--ink);
+  flex-wrap: wrap;
+}
+.site-card.active {
+  border-color: var(--brand);
+  background: var(--surface-selected);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+.site-card strong {
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.site-card small {
+  display: block;
+  font-size: 10px;
+  color: var(--ink-soft);
+  margin-top: 3px;
+}
+.site-icon {
+  font-size: 22px;
+  color: var(--brand);
+}
+.site-verdict {
+  font-size: 10px;
+  flex-basis: 100%;
+  color: var(--ink-muted);
+}
+.site-verdict.warning {
+  color: var(--tone-warning-ink);
+}
+.topology-head {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin: 14px 0 10px;
+  font-size: 12px;
+}
+.topology-head span {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+.topology-stage {
+  height: 290px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background-color: #f7fafc;
+  background-image: radial-gradient(#d8e2e9 1px, transparent 1px);
+  background-size: 18px 18px;
+  overflow: hidden;
+}
+.no-devices {
+  padding: 22px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.map-legend span {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+i.critical {
+  background: var(--tone-critical-ink);
+}
+i.warning {
+  background: var(--tone-warning-ink);
+}
+i.ok {
+  background: var(--tone-ok-ink);
+}
+.device-list {
+  display: grid;
+  gap: 4px;
+  max-height: 225px;
+  overflow: auto;
+}
+.device-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--surface-sunken);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+}
+.device-list button.active {
+  border-color: var(--brand);
+}
+.device-list small {
+  font-size: 10px;
+}
+.device-list span {
+  overflow-wrap: anywhere;
+}
+[data-health='critical'] {
+  color: var(--tone-critical-ink);
+}
+[data-health='warning'] {
+  color: var(--tone-warning-ink);
+}
+[data-health='ok'] {
+  color: var(--tone-ok-ink);
+}
+.device-detail {
+  margin-top: 16px;
+  border: 1px solid var(--brand-line);
+  border-radius: 12px;
+  padding: 18px;
+  background: var(--surface-raised);
+}
+.device-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.device-heading h4 {
+  font-size: 17px;
+  margin: 5px 0;
+}
+.device-heading code {
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+.device-headline {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.device-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.metric-table {
+  margin: 12px 0;
+  font-size: 11px;
+}
+.metric-table > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .reach {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 15px 0;
+  }
+  .reach div:nth-child(2) {
+    border: 0;
+  }
+  .topology-stage {
+    height: 350px;
+  }
+  .device-detail {
+    padding: 12px;
+  }
+  .device-list button {
+    flex-wrap: wrap;
+  }
+}
+
+.section-heading {
+  margin-bottom: 14px;
+}
+.reach {
+  padding: 12px 0;
+}
+.reach strong {
+  font-size: 25px;
+}
+.reach + .scope-note {
+  margin: 8px 0;
+}
+.topology-stage {
+  height: 350px;
+}

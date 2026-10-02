@@ -46,6 +46,7 @@ export class ChangeGroupService {
   // describes what is on screen, whichever organization it was for.
   private listRequest = 0;
   private detailRequest = 0;
+  private listScope = '';
 
   async list(organizationId: string, query: ChangeGroupQuery): Promise<ChangeGroupPage> {
     let params = new HttpParams().set('range', query.range).set('severity', query.severity ?? 'any');
@@ -65,6 +66,12 @@ export class ChangeGroupService {
       params = params.set('as_of', query.asOf.toISOString());
     }
     const request = ++this.listRequest;
+    const scope = `${organizationId}|${params.toString()}`;
+    if (scope !== this.listScope) {
+      this.items.set([]);
+      this.total.set(0);
+      this.listScope = scope;
+    }
     const response = await firstValueFrom(
       this.http.get<ChangeGroupPage>(orgPath(organizationId, '/change-groups'), { params }),
     );
@@ -91,6 +98,7 @@ export class ChangeGroupService {
   }
 
   clearDetail(): void {
+    this.detailRequest += 1;
     this.detail.set(null);
   }
 

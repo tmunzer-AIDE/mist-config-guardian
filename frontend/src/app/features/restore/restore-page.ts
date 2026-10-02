@@ -7,6 +7,7 @@ import {
   effect,
   inject,
   input,
+  output,
   signal,
   untracked,
 } from '@angular/core';
@@ -107,6 +108,9 @@ export class RestorePage {
   // ---- deep links, bound by the router's component input binding ----------
   /** `?versions=a,b,c` — pre-select these object versions. */
   readonly embedded = input(false);
+  /** Keep the review inside its originating change workspace. */
+  readonly contextual = input(false);
+  readonly operationChanged = output<string | null>();
   /**
    * The object and version a single-object restore is about.
    *
@@ -301,20 +305,22 @@ export class RestorePage {
 
   protected readonly steps = computed(() => {
     const currentIndex = STEP_ORDER.indexOf(this.currentStep());
+    const contextualReview = this.contextual() && this.currentStep() !== 'targets';
     return STEP_ORDER.map((name, index) => ({
       name,
-      label: STEP_LABELS[name],
+      label: contextualReview ? (name === 'plan' ? '1 · Review & authorize' : '2 · Progress & verification') : STEP_LABELS[name],
       current: index === currentIndex,
       done: index < currentIndex,
       // Completed steps stay reachable; later steps are only reached by acting.
       reachable: this.stepAvailable(name),
-    }));
+    })).filter(item => !contextualReview || item.name !== 'targets');
   });
 
   constructor() {
     // Targets reload whenever the organization or any filter changes; the facet
     // counts belong to the filter set that produced them.
     effect(() => {
+      if (this.contextual() && !this.picking()) return;
       const organizationId = this.organizations.selected()?.id;
       this.organizations.revision();
       if (organizationId && this.filtersFor !== null && this.filtersFor !== organizationId) {
@@ -408,7 +414,7 @@ export class RestorePage {
    * token arranges once the key is recorded here and not after an await.
    */
   private bootstrap(organizationId: string, revision: number, link: DeepLink): void {
-    void this.loadRail(organizationId, revision);
+    if (!this.contextual()) void this.loadRail(organizationId, revision);
 
     const key = linkKey(organizationId, link);
     if (key === this.appliedLink) {
@@ -423,7 +429,8 @@ export class RestorePage {
       // The identifiers in the link belong to the organization it was written
       // for; under another one they name nothing. The URL is cleared rather
       // than left to fail, and the effect re-runs with the empty link.
-      void this.router.navigate(['/history/restore'], { queryParams: {} });
+      if (this.contextual()) this.operationChanged.emit(null);
+      else void this.router.navigate(['/history/restore'], { queryParams: {} });
       return;
     }
     void this.applyLink(organizationId, link, token);
@@ -538,6 +545,10 @@ export class RestorePage {
   private canonicalize(organizationId: string, operationId: string | null, replaceUrl = false): void {
     this.appliedLink = linkKey(organizationId, { ...EMPTY_LINK, operation: operationId ?? '' });
     this.appliedOrganization = organizationId;
+    if (this.contextual()) {
+      this.operationChanged.emit(operationId);
+      return;
+    }
     void this.router.navigate(['/history'], {
       queryParamsHandling: 'merge',
       queryParams: { restore: '1', versions: null, changeGroup: null, step: null, compensate: null, operation: operationId },
@@ -784,6 +795,7 @@ export class RestorePage {
   }
 
   protected backToTargets(): void {
+    if (this.contextual()) this.picking.set(true);
     this.currentStep.set('targets');
   }
 

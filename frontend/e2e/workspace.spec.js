@@ -343,12 +343,12 @@ test('four selection states, safe panning, zoom, clearing and site isolation', a
   await page.screenshot({ path: info.outputPath('ap-change.png') });
   await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect(page.locator('.zoom output')).toHaveText('125%');
-  const savedZoom = await page.locator('.zoom output').textContent();
+  // Each site starts with its own fitted view, not the previous site's zoom.
   await page.locator('#impact-site').selectOption('site2');
   await expect(page.locator('.node')).toHaveCount(0);
   await expect(panel).toHaveAttribute('data-panel', 'site');
   await page.locator('#impact-site').selectOption('site1');
-  await expect(page.locator('.zoom output')).toHaveText(savedZoom);
+  await expect(page.locator('.zoom output')).toHaveText('100%');
   expect(errors).toEqual([]);
 });
 test('overlay breakpoints, mobile navigation, exact UTC time and keyboard controls', async ({
@@ -382,6 +382,8 @@ test('overlay breakpoints, mobile navigation, exact UTC time and keyboard contro
   await page.getByRole('button', { name: 'Live', exact: true }).click();
   await expect(page.locator('.context-note')).toHaveCount(0);
   await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole('button', { name: 'Explore time' }).click();
+  await expect(page.locator('.track-seek')).toBeVisible();
   await page.locator('.track-seek').focus();
   await page.keyboard.press('Home');
   await expect(page.locator('.exact-time summary')).toContainText('08 SEP');
@@ -461,6 +463,7 @@ test('failed discovery stays unknown and can be retried without reloading the pa
 test('existing monitoring links keep the detailed evidence accessible', async ({ page }) => {
   await page.goto('/impact?session=s1');
   await expect(page).toHaveURL(/\/impact\/sessions\?session=s1/);
+  await page.getByText('Monitoring details & timeline', { exact: true }).click();
   await expect(page.locator('app-configuration-timeline')).toBeVisible();
 });
 
@@ -525,6 +528,7 @@ test('device evidence shows one session and one finding with capture history on 
 
 test('time explorer previews dragging, commits on release, and stays usable on mobile', async ({ page }, info) => {
   await page.goto('/overview');
+  await page.getByRole('button', { name: 'Explore time' }).click();
   const slider = page.locator('.track-seek');
   await expect(slider).toBeVisible();
   const box = await slider.boundingBox();
@@ -674,7 +678,7 @@ test('Guardian result stays distinct from production in Changes and Overview', a
   await expect(rowView).toContainText('Early result');
   await page.screenshot({ path: info.outputPath('guardian-changes.png'), fullPage: true });
   await page.goto('/overview');
-  await expect(page.getByRole('region', { name: 'Guardian result counts' })).toContainText('1 change in the loaded feed');
+  await expect(page.locator('.guardian-counts')).toContainText('1 change in the loaded feed');
   await expect(page.locator('.card').first()).toContainText('Guardian · Possible disruption');
   await expect(page.locator('.card').first()).toContainText(row.impact_label);
   await page.screenshot({ path: info.outputPath('guardian-overview.png'), fullPage: true });
@@ -711,4 +715,166 @@ test('Guardian panel labels the AI summary, an early result and withheld evidenc
   await expect(panel).toContainText('Withheld from the AI agent, which could not cite it: E5');
   await expect(panel).toContainText('rejected: citation_invalid');
   await page.screenshot({ path: info.outputPath('guardian-attempt.png'), fullPage: true });
+});
+
+const workspaceChange = {
+  ...groups[0], title: 'Meeting room power policy updated',
+  summary: 'PoE disabled on two access ports in the campus switch template.',
+  impact_label: 'SERVICE LOSS', impact_severity: 'critical', recovery_state: 'unrecovered',
+  object_count: 2, device_count: 4, affected_site_ids: ['site1', 'site2'],
+  devices_label: '4 devices · 2 sites',
+  message: null, method: 'PUT', baseline_confidence: 'high',
+  deterministic_assessment: 'One switch lost PoE power after the template update. Two devices show no disruption; one device has no measurements.',
+  evidence: [{ label: 'PoE power was lost on ge-0/0/1.', severity: 'critical' }],
+  changed_objects: [{
+    logical_object_id: 'template1', object_type: 'networktemplates', object_name: 'Campus access switches',
+    scope: 'org', site_mist_id: null, event: 'updated', before_version_id: 'before-v7', after_version_id: 'after-v8',
+    before_version: 7, after_version: 8, changed_fields: ['port_config.ge-0/0/1.poe_disabled', 'port_config.ge-0/0/2.poe_disabled'],
+  }, {
+    logical_object_id: 'new-wlan', object_type: 'wlans', object_name: 'Visitor Wi-Fi', scope: 'org', site_mist_id: null,
+    event: 'created', before_version_id: null, after_version_id: 'created-v1', before_version: null, after_version: 1, changed_fields: ['ssid'],
+  }],
+  affected_devices: [], competing_change_group_ids: ['overlap1'], missing_monitoring_sessions: 0,
+  site_impacts: [
+    { site_id: 'site1', site_name: 'Paris · Headquarters', devices: [
+      deviceImpact(1, { severity: 'critical', evidence_coverage: 'partial', shared_window: true,
+        headline: 'Power lost on ge-0/0/1 after PoE was disabled.', metrics: [{ name: 'switch-throughput', baseline: 99.5, latest: 68.2, delta: -31.3, baseline_state: 'measured', latest_state: 'measured' }] }),
+      deviceImpact(2), deviceImpact(4),
+    ], unmonitored_devices: [] },
+    { site_id: 'site2', site_name: 'Lyon · Branch office', devices: [], unmonitored_devices: [{ device_mac: '112233445566', device_name: 'Lyon access switch', device_type: 'switch', site_mist_id: 'site2' }] },
+  ],
+};
+const workspaceDiff = {
+  mode: 'chips', summary: '2 fields changed · 0 added · 2 modified · 0 removed',
+  counts: { changed: 2, added: 0, modified: 2, removed: 0 },
+  entries: ['ge-0/0/1', 'ge-0/0/2'].map(port => ({ field: `port_config.${port}.poe_disabled`, kind: 'MODIFIED', before: 'false', after: 'true', note: 'Power over Ethernet disabled on this port.', section: 'ports', notable: true, secret: false, secret_unknown: false, reordered: false })),
+  notable: [], sections: [], entries_included: true, truncated: false, secret_fields: 0,
+  from_version: null, to_version: null,
+};
+async function installChangeWorkspace(page) {
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/overview')) await route.fulfill({ json: {
+      generated_at: now, range_start: '2026-09-08T12:00:00Z', range_end: now,
+      counts: { change_groups: 2, impacting: 1, mine: 1, unrecovered: 1, pending_approvals: 0, failed_restores: 0 },
+      change_groups: [workspaceChange, { ...groups[1], title: 'Guest Wi-Fi schedule updated' }],
+      safety_net: [
+        { key: 'backup', label: 'Configuration backup', status: 'ok', detail: '100 objects captured' },
+        { key: 'webhook', label: 'Webhook collection', status: 'ok', detail: 'Last received 12:00 UTC' },
+        { key: 'credential', label: 'Service token', status: 'ok', detail: 'Read-only access verified' },
+      ], pending_approvals: [], failed_restores: [], latest_snapshot_at: now, latest_snapshot_objects: 100,
+    } });
+    else if (path.endsWith('/change-groups')) await route.fulfill({ json: { items: [workspaceChange, groups[1]], total: 2 } });
+    else if (path.endsWith('/change-groups/g0')) await route.fulfill({ json: workspaceChange });
+    else if (path.endsWith('/diff')) await route.fulfill({ json: workspaceDiff });
+    else if (path.endsWith('/impact/sites/site2/topology')) await route.fulfill({ json: { site_id: 'site2', devices: [], links: [], warnings: ['Live topology unavailable. Stored inventory shown.'], source: 'stored', collected_at: now, complete: false } });
+    else await route.fallback();
+  });
+}
+
+test('change workspace brings configuration, cross-site reach and device evidence together', async ({ page }, info) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await installChangeWorkspace(page);
+  await page.goto('/overview');
+  await expect(page.getByRole('heading', { name: 'Change overview' })).toBeVisible();
+  await expect(page.locator('.card')).toHaveCount(2);
+  await page.screenshot({ path: info.outputPath('change-overview-desktop.png') });
+  await page.getByRole('button', { name: 'Inspect Meeting room power policy updated', exact: true }).click();
+  await expect(page).toHaveURL(/\/changes\?group=g0/);
+  await page.goto('/changes');
+  await expect(page.locator('.track-seek')).toBeHidden();
+  await expect(page.locator('.row--group').first()).toBeVisible();
+  await page.locator('.row--group').first().focus();
+  await expect(page.locator('.row--group').first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.panel-title')).toBeFocused();
+  await expect(page.getByRole('table', { name: 'Configuration changes' })).toContainText('false');
+  await expect(page.getByRole('table', { name: 'Configuration changes' })).toContainText('true');
+  await expect(page.getByLabel('Known impact across sites')).toContainText('2linked sites');
+  await expect(page.getByLabel('Known impact across sites')).toContainText('4linked devices');
+  await expect(page.getByLabel('Known impact across sites')).toContainText('1with disruption');
+  await expect(page.locator('app-change-impact .node')).toHaveCount(6);
+  await page.screenshot({ path: info.outputPath('change-workspace-desktop.png') });
+  await page.locator('.device-list').getByRole('button', { name: /Access switch 1/ }).click();
+  await expect(page.locator('.device-detail h4')).toBeFocused();
+  await expect(page.getByLabel('Selected device impact')).toContainText('Power lost on ge-0/0/1');
+  await expect(page.getByLabel('Selected device impact')).toContainText('Shared monitoring window');
+  await expect(page.getByRole('table', { name: 'Device metrics before and after' })).toContainText('68.2%');
+  await page.locator('.device-detail').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('change-device-evidence.png') });
+  await page.getByRole('button', { name: 'Close device', exact: true }).click();
+  await expect(page.locator('.device-list').getByRole('button', { name: /Access switch 1/ })).toBeFocused();
+  await page.getByRole('button', { name: /Lyon · Branch office/ }).click();
+  await expect(page.locator('.device-detail')).toHaveCount(0);
+  await expect(page.locator('.site-card.active')).toContainText('No measurements');
+  await page.locator('.device-list').getByRole('button', { name: /Lyon access switch/ }).click();
+  await expect(page.locator('.device-detail')).toContainText('Its impact is unknown');
+  await page.getByLabel('Configuration object').selectOption('new-wlan');
+  await expect(page.locator('app-change-configuration')).toContainText('No before version was captured');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.panel').evaluate(el => el.scrollTop = 0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('change-workspace-mobile.png') });
+  await page.getByRole('button', { name: 'All changes', exact: false }).last().click();
+  await expect(page.locator('.row--group').first()).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('rollback stays in the change workspace through fresh backup, confirmation and progress', async ({ page }, info) => {
+  await installChangeWorkspace(page);
+  const writes = [], targetReads = [];
+  const draft = { ...restoreOperation, id: 'rollback1', requested_version_ids: ['before-v7'], actions: [{ ...restoreOperation.actions[0], source_version_id: 'before-v7', object_name: 'Campus access switches' }] };
+  const prepared = { ...draft, id: 'rollback2', baseline_snapshot_id: 'fresh-backup', prepared_until: new Date(Date.now() + 600_000).toISOString() };
+  let executed = false;
+  page.on('request', request => { if (request.url().includes('/restores/targets')) targetReads.push(request.url()); });
+  await page.route('**/restores/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'POST') writes.push({ path, body: route.request().postDataJSON() });
+    if (path.endsWith('/plans')) await route.fulfill({ json: draft });
+    else if (path.endsWith('/prepare')) await route.fulfill({ json: prepared });
+    else if (path.endsWith('/execute')) { executed = true; await route.fulfill({ json: { ...prepared, status: 'queued' } }); }
+    else if (path.endsWith('/rollback1')) await route.fulfill({ json: draft });
+    else if (path.endsWith('/rollback2')) await route.fulfill({ json: { ...prepared, status: executed ? 'completed' : 'planned', actions: prepared.actions.map(a => ({ ...a, status: executed ? 'completed' : 'pending' })) } });
+    else if (path.endsWith('/verification')) await route.fulfill({ status: 404, json: { detail: 'Not recorded' } });
+    else await route.fallback();
+  });
+  await page.goto('/changes?group=g0');
+  await page.getByRole('button', { name: 'Review rollback' }).click();
+  await expect(page).toHaveURL(/\/changes\?group=g0&operation=rollback1/);
+  await expect(page.getByLabel('Rollback review')).toContainText('This is a partial rollback');
+  await expect(page.locator('.step-button')).toHaveCount(2);
+  expect(writes).toEqual([{ path: '/api/v1/organizations/org1/restores/plans', body: { version_ids: ['before-v7'], mode: 'non_destructive', include_dependencies: true } }]);
+  expect(targetReads).toEqual([]);
+  await page.getByRole('button', { name: 'Back to targets', exact: true }).click();
+  await expect(page.locator('.step-button')).toHaveCount(3);
+  await expect.poll(() => targetReads.length).toBe(1);
+  await page.getByRole('button', { name: '2 · Review & authorize', exact: true }).click();
+  await expect(page.locator('.step-button')).toHaveCount(2);
+  await page.getByLabel('ADMINISTRATOR API TOKEN', { exact: true }).fill('test-token-for-mocked-api-only');
+  await page.getByRole('button', { name: 'Capture backup and review new plan' }).click();
+  await expect(page).toHaveURL(/operation=rollback2/);
+  await expect(page.getByText('The fresh backup is saved.', { exact: false })).toBeVisible();
+  expect(writes.filter(w => w.path.endsWith('/execute'))).toHaveLength(0);
+  await page.screenshot({ path: info.outputPath('rollback-review.png') });
+  await page.getByRole('button', { name: 'Execute reviewed plan' }).click();
+  await expect(page.locator('app-restore-step-execute')).toContainText('COMPLETED');
+  await expect(page).toHaveURL(/\/changes\?group=g0&operation=rollback2/);
+  await page.reload();
+  await expect(page.locator('app-restore-step-execute')).toContainText('COMPLETED');
+  expect(writes.filter(w => w.path.endsWith('/plans'))).toHaveLength(1);
+  expect(writes.filter(w => w.path.endsWith('/execute'))).toHaveLength(1);
+});
+
+test('failed comparisons and topology remain recoverable without claiming health', async ({ page }) => {
+  await installChangeWorkspace(page);
+  await page.route('**/diff?**', route => route.fulfill({ status: 503, json: { detail: 'Unavailable' } }), { times: 1 });
+  await page.route('**/impact/sites/site1/topology', route => route.fulfill({ status: 503, json: { detail: 'Unavailable' } }), { times: 1 });
+  await page.goto('/changes?group=g0');
+  await expect(page.locator('app-change-configuration [role=alert]')).toContainText('could not be loaded');
+  await expect(page.locator('app-change-impact [role=alert]')).toContainText('Device evidence is still available');
+  await page.locator('app-change-configuration').getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Configuration changes' })).toBeVisible();
+  await page.getByRole('button', { name: 'Retry topology' }).click();
+  await expect(page.locator('app-change-impact .node')).toHaveCount(6);
 });

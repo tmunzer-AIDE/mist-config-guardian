@@ -4,7 +4,6 @@
   height: var(--header-height);
   flex: none;
   background: var(--header-fill);
-  border-bottom: 1px solid var(--header-rule);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -15,7 +14,6 @@
 
 :host(.past) {
   background: var(--header-fill-past);
-  border-bottom-color: var(--header-rule-past);
 }
 
 .dot {
@@ -39,13 +37,17 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  border: 1px solid rgba(20, 22, 26, 0.13);
-  background: var(--surface-raised);
+  border: 1px solid transparent;
+  background: transparent;
   border-radius: var(--radius-lg);
   padding: 7px 10px;
-  box-shadow: var(--shadow-hairline);
   cursor: pointer;
   color: var(--ink);
+
+  &:hover,
+  &[aria-expanded='true'] {
+    background: var(--surface-raised);
+  }
 }
 
 .org-name {
@@ -64,15 +66,20 @@
   gap: 8px;
   flex: 1;
   max-width: 360px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid transparent;
   border-radius: var(--radius-lg);
   padding: 8px 12px;
 
   &:focus-within {
     border-color: var(--brand-line);
+    background: var(--surface-raised);
     box-shadow: 0 0 0 3px var(--surface-selected);
   }
-  background: var(--surface-sunken);
+  background: transparent;
+
+  &:hover {
+    background: var(--surface-raised);
+  }
 
   input {
     border: 0;
@@ -140,9 +147,7 @@
 }
 
 .divider {
-  width: 1px;
-  height: 22px;
-  background: var(--rule);
+  display: none;
 }
 
 .user {
@@ -161,8 +166,7 @@
   height: 28px;
   border-radius: var(--radius-lg);
   background: var(--brand-soft);
-  border: 1px solid rgba(39, 67, 163, 0.22);
-  box-shadow: var(--shadow-brand);
+  border: 1px solid transparent;
   font: 600 11px/26px var(--font-mono);
   color: var(--brand);
   text-align: center;

@@ -241,8 +241,9 @@
 
 .cg-panel {
   background: var(--surface-raised);
-  border: 1px solid var(--rule);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
 }
 
 // -------------------------------------------------------------------- inputs

@@ -1143,6 +1143,11 @@
             "title": "Metrics",
             "type": "array"
           },
+          "missing_monitoring_sessions": {
+            "default": 0,
+            "title": "Missing Monitoring Sessions",
+            "type": "integer"
+          },
           "monitoring_session_ids": {
             "items": {
               "type": "string"
@@ -1162,6 +1167,13 @@
           "recovery_state": {
             "$ref": "#/components/schemas/RecoveryState",
             "default": "not_applicable"
+          },
+          "site_impacts": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeSiteImpactResponse"
+            },
+            "title": "Site Impacts",
+            "type": "array"
           },
           "source": {
             "$ref": "#/components/schemas/ChangeSource",
@@ -1377,6 +1389,39 @@
           "value"
         ],
         "title": "ChangeMetricResponse",
+        "type": "object"
+      },
+      "ChangeSiteImpactResponse": {
+        "description": "Known reach, not an exhaustive prediction of template deployment.",
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/mist_config_guardian_backend__schemas__impact__DeviceImpact"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "site_id": {
+            "title": "Site Id",
+            "type": "string"
+          },
+          "site_name": {
+            "title": "Site Name",
+            "type": "string"
+          },
+          "unmonitored_devices": {
+            "items": {
+              "$ref": "#/components/schemas/AffectedDeviceResponse"
+            },
+            "title": "Unmonitored Devices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "site_id",
+          "site_name"
+        ],
+        "title": "ChangeSiteImpactResponse",
         "type": "object"
       },
       "ChangeSource": {

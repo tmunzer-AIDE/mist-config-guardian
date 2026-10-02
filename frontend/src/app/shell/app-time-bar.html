@@ -1,6 +1,6 @@
 <div class="time-toolbar">
   <div class="time-heading">
-    <strong>Time explorer</strong
+    <strong>{{ time.isHistorical() ? 'Historical configuration' : 'Change window' }}</strong
     ><span>{{
       preview()
         ? 'Preview · release to view'
@@ -64,64 +64,76 @@
       </button>
     }
   </div>
-</div>
-<div class="activity">
-  <div class="track">
-    <div
-      class="track-seek"
-      role="slider"
-      tabindex="0"
-      aria-label="View time in displayed activity range"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      [attr.aria-valuenow]="cursor()"
-      [attr.aria-valuetext]="asOfLabel()"
-      (pointerdown)="startDrag($event)"
-      (pointermove)="moveDrag($event)"
-      (pointerup)="endDrag($event)"
-      (pointercancel)="cancelDrag()"
-      (lostpointercapture)="cancelDrag()"
-      (keydown)="onTrackKey($event)"
-    >
-      <span class="track-line"></span>
-      <span class="track-fill" [style.width.%]="cursor()"></span>
-    </div>
-    @for (tick of ticks(); track $index) {
-      <button
-        type="button"
-        class="tick"
-        [attr.data-tone]="tick.tone"
-        [style.left.%]="tick.left"
-        [title]="tick.at + ' · ' + tick.label"
-        [attr.aria-label]="tick.at + ' · ' + tick.label"
-        (click)="marker($event, tick.at)"
-      ></button>
-    }
-    <span class="end-mark" [style.left.%]="cursor()" aria-hidden="true"></span>
-  </div>
-  <div class="track-labels">
-    <span>{{ startLabel() }}</span
-    ><span
-      >{{
-        preview() || time.isHistorical() ? asOfLabel() : 'Drag to explore · select a change below'
-      }}
-      · UTC</span
-    ><span>{{ endLabel() }}</span>
-  </div>
-</div>
-<div class="timeline-footer">
-  <select
-    aria-label="Jump to a change"
-    (change)="jumpToChange($event)"
-    [disabled]="!ticks().length"
+  <button
+    class="explore-toggle"
+    type="button"
+    [attr.aria-expanded]="expanded()"
+    aria-controls="time-explorer-track"
+    (click)="expanded.set(!expanded())"
   >
-    <option value="">
-      {{
-        ticks().length ? 'Jump to a change (' + ticks().length + ')' : 'No changes in this window'
-      }}
-    </option>
-    @for (tick of ticks(); track $index) {
-      <option [value]="tick.at">{{ tick.at }} · {{ tick.label }}</option>
-    }</select
-  ><span>Arrow keys to adjust · Esc to return live</span>
+    {{ expanded() ? 'Hide timeline' : 'Explore time' }}
+    <span aria-hidden="true">{{ expanded() ? '⌃' : '⌄' }}</span>
+  </button>
+</div>
+<div id="time-explorer-track" [hidden]="!expanded()">
+  <div class="activity">
+    <div class="track">
+      <div
+        class="track-seek"
+        role="slider"
+        tabindex="0"
+        aria-label="View time in displayed activity range"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        [attr.aria-valuenow]="cursor()"
+        [attr.aria-valuetext]="asOfLabel()"
+        (pointerdown)="startDrag($event)"
+        (pointermove)="moveDrag($event)"
+        (pointerup)="endDrag($event)"
+        (pointercancel)="cancelDrag()"
+        (lostpointercapture)="cancelDrag()"
+        (keydown)="onTrackKey($event)"
+      >
+        <span class="track-line"></span>
+        <span class="track-fill" [style.width.%]="cursor()"></span>
+      </div>
+      @for (tick of ticks(); track $index) {
+        <button
+          type="button"
+          class="tick"
+          [attr.data-tone]="tick.tone"
+          [style.left.%]="tick.left"
+          [title]="tick.at + ' · ' + tick.label"
+          [attr.aria-label]="tick.at + ' · ' + tick.label"
+          (click)="marker($event, tick.at)"
+        ></button>
+      }
+      <span class="end-mark" [style.left.%]="cursor()" aria-hidden="true"></span>
+    </div>
+    <div class="track-labels">
+      <span>{{ startLabel() }}</span
+      ><span
+        >{{
+          preview() || time.isHistorical() ? asOfLabel() : 'Drag to explore · select a change below'
+        }}
+        · UTC</span
+      ><span>{{ endLabel() }}</span>
+    </div>
+  </div>
+  <div class="timeline-footer">
+    <select
+      aria-label="Jump to a change"
+      (change)="jumpToChange($event)"
+      [disabled]="!ticks().length"
+    >
+      <option value="">
+        {{
+          ticks().length ? 'Jump to a change (' + ticks().length + ')' : 'No changes in this window'
+        }}
+      </option>
+      @for (tick of ticks(); track $index) {
+        <option [value]="tick.at">{{ tick.at }} · {{ tick.label }}</option>
+      }</select
+    ><span>Arrow keys to adjust · Esc to return live</span>
+  </div>
 </div>

@@ -1102,6 +1102,26 @@ async def test_detail_carries_objects_devices_evidence_and_competitors() -> None
     assert detail.evidence[0].label == "Degraded metrics: capacity"
     assert detail.competing_change_group_ids == [str(competitor.id)]
     assert detail.impact_label == f"CRITICAL {MINUS_SIGN}29"
+    assert detail.site_impacts[0].site_name == "Seattle-DC"
+    assert len(detail.site_impacts[0].devices) == 6
+    assert detail.site_impacts[0].unmonitored_devices == []
+    assert detail.missing_monitoring_sessions == 0
+    assert detail.site_impacts[0].devices[0].severity == "critical"
+    assert detail.site_impacts[0].devices[0].metrics
+
+
+async def test_change_workspace_preserves_missing_windows_and_unmonitored_devices() -> None:
+    store = _critical_fixture()
+    group = await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
+    assert group is not None
+    assert group.id is not None
+    # A retained audit outlives some telemetry: absence must not become health.
+    removed = store.sessions.pop()
+    detail = await ChangeGroupService(store).get_group(ORGANIZATION_ID, group.id, viewer_email="x@example.com")
+    assert detail is not None
+    assert detail.missing_monitoring_sessions == 1
+    assert len(detail.site_impacts[0].devices) == 5
+    assert [item.device_mac for item in detail.site_impacts[0].unmonitored_devices] == [removed.device_mac]
 
 
 async def test_detail_is_scoped_to_its_organization() -> None:
@@ -1536,6 +1556,9 @@ async def test_a_historical_detail_withholds_the_evidence_and_the_assessment() -
     assert past.deterministic_assessment is None
     assert past.affected_devices == []
     assert past.baseline_confidence is BaselineConfidence.NONE
+    assert live.site_impacts
+    assert past.site_impacts == []
+    assert past.missing_monitoring_sessions == 0
 
 
 def test_a_past_window_is_not_filtered_by_todays_severity() -> None:

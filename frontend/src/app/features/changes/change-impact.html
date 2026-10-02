@@ -1,0 +1,209 @@
+<div class="section-heading">
+  <div>
+    <span class="eyebrow">02 / NETWORK IMPACT</span>
+    <h3>Where it matters</h3>
+  </div>
+</div>
+@if (historical()) {
+  <p class="notice">
+    Impact at this past instant was not retained. Return to Live to see the latest recorded
+    assessment.
+  </p>
+} @else {
+  <div class="reach" aria-label="Known impact across sites">
+    <div>
+      <strong>{{ sites().length }}</strong
+      ><span>linked sites</span>
+    </div>
+    <div>
+      <strong>{{ allDevices() }}</strong
+      ><span>linked devices</span>
+    </div>
+    <div class="disruption">
+      <strong>{{ disrupted() }}</strong
+      ><span>with disruption</span>
+    </div>
+    <div>
+      <strong>{{ uncertain() }}</strong
+      ><span>not established</span>
+    </div>
+  </div>
+  <p class="scope-note">
+    Observed reach of this change. Linked devices are not necessarily disrupted; devices without
+    evidence remain unknown.
+  </p>
+  @if (detail().missing_monitoring_sessions) {
+    <p class="notice">
+      {{ detail().missing_monitoring_sessions }} linked monitoring windows are unavailable. This
+      view is incomplete.
+    </p>
+  }
+  @if (detail().competing_change_group_ids.length) {
+    <p class="notice">
+      {{ detail().competing_change_group_ids.length }} other
+      {{
+        detail().competing_change_group_ids.length === 1
+          ? 'change overlapped'
+          : 'changes overlapped'
+      }}
+      this monitoring window. Attribution is uncertain.
+    </p>
+  }
+  @if (sites().length) {
+    <div class="site-list" role="group" aria-label="Impact by site">
+      @for (item of sites(); track item.site_id) {
+        <button
+          type="button"
+          class="site-card"
+          [class.active]="site()?.site_id === item.site_id"
+          [attr.aria-pressed]="site()?.site_id === item.site_id"
+          (click)="chooseSite(item.site_id)"
+        >
+          <span class="site-icon" aria-hidden="true">⌘</span
+          ><span
+            ><strong>{{ item.site_name }}</strong
+            ><small
+              >{{ count(item) }} linked {{ count(item) === 1 ? 'device' : 'devices' }}</small
+            ></span
+          >
+          <span class="site-verdict" [class.warning]="affected(item) > 0">{{ verdict(item) }}</span>
+        </button>
+      }
+    </div>
+    @if (site(); as current) {
+      <div class="topology-head">
+        <strong>{{ current.site_name }}</strong
+        ><span>Select a device to inspect its impact</span>
+      </div>
+      @if (busy()) {
+        <p class="notice" role="status">Loading topology…</p>
+      }
+      @if (error()) {
+        <p class="notice" role="alert">
+          {{ error() }}
+          <button class="cg-btn cg-btn--sm" (click)="refresh.update(increment)">
+            Retry topology
+          </button>
+        </p>
+      }
+      <div class="topology-stage">
+        @if (devices().length) {
+          <app-topology-canvas
+            [compact]="true"
+            [devices]="devices()"
+            [observedLinks]="topology()?.links ?? null"
+            [site]="current.site_id"
+            [scoped]="true"
+            [impacted]="impacted()"
+            [healthOverrides]="health()"
+            [selectedDevice]="deviceId()"
+            (deviceSelected)="inspect($event)"
+          />
+        } @else {
+          <p class="no-devices">No devices have been linked to this change yet.</p>
+        }
+      </div>
+      <div class="map-legend">
+        <span><i class="critical"></i>Service loss</span
+        ><span><i class="warning"></i>Disruption</span
+        ><span><i class="ok"></i>No impact observed</span
+        ><span><i></i>Unknown / outside change</span>
+      </div>
+      @if (topology(); as map) {
+        <p class="scope-note">
+          {{ map.source === 'mist' ? 'Current topology' : 'Stored topology' }} ·
+          {{ date(map.collected_at) }}. Colors show this change’s recorded impact. Connections do
+          not prove causation.
+        </p>
+        @for (warning of map.warnings; track warning) {
+          <p class="notice">{{ warning }}</p>
+        }
+      }
+      <div class="device-list" aria-label="Devices linked to this change">
+        @for (id of impacted(); track id) {
+          <button
+            type="button"
+            [class.active]="deviceId() === id"
+            [attr.aria-pressed]="deviceId() === id"
+            (click)="inspect(id)"
+          >
+            <span>{{ deviceName(id) }}</span
+            ><small [attr.data-health]="health()[id] || 'unknown'"
+              >{{ label(health()[id] || 'unknown') }} →</small
+            >
+          </button>
+        }
+      </div>
+      @if (selected(); as device) {
+        <section class="device-detail" aria-label="Selected device impact">
+          <div class="device-heading">
+            <div>
+              <span class="eyebrow">LOCAL IMPACT</span>
+              <h4 tabindex="-1">{{ device.name }}</h4>
+              <code>{{ device.mac }}</code>
+            </div>
+            <button class="cg-btn cg-btn--sm" (click)="closeDevice()">Close device</button>
+          </div>
+          @for (window of evidence(); track window.session_id) {
+            <p class="device-headline" [attr.data-health]="window.severity">
+              {{ window.headline }}
+            </p>
+            <div class="device-facts">
+              <span
+                >Configuration: <b>{{ window.config_state }}</b></span
+              ><span
+                >Evidence: <b>{{ window.evidence_coverage || 'unknown' }}</b></span
+              ><span
+                >Monitoring: <b>{{ window.monitoring_state.replaceAll('_', ' ') }}</b></span
+              >
+            </div>
+            @if (window.completed_at) {
+              <p class="scope-note">
+                Window ended {{ date(window.completed_at) }}. This is a recorded outcome, not live
+                device health.
+              </p>
+            }
+            @if (window.shared_window) {
+              <p class="notice">
+                Shared monitoring window: more than one change may explain this outcome.
+              </p>
+            }
+            @if (window.metrics.length) {
+              <div class="metric-table" role="table" aria-label="Device metrics before and after">
+                <div role="row">
+                  <strong role="columnheader">Metric</strong
+                  ><strong role="columnheader">Before</strong
+                  ><strong role="columnheader">After</strong>
+                </div>
+                @for (m of window.metrics; track m.name) {
+                  <div role="row">
+                    <span role="cell">{{ metric(m.name) }}</span
+                    ><span role="cell">{{ value(m.baseline, m.baseline_state) }}</span
+                    ><span role="cell">{{ value(m.latest, m.latest_state) }}</span>
+                  </div>
+                }
+              </div>
+            } @else {
+              <p class="scope-note">No comparable network metrics recorded.</p>
+            }
+            @for (error of window.collection_errors; track error) {
+              <p class="notice">{{ error }}</p>
+            }
+            <button class="cg-btn cg-btn--link" (click)="openEvidence(window)">
+              Open device timeline & evidence →
+            </button>
+          } @empty {
+            <p class="notice">
+              No monitoring evidence links this device to this change. Its impact is unknown.
+            </p>
+          }
+        </section>
+      }
+    }
+  } @else {
+    <p class="notice">
+      Site and device reach has not been established. An organization-level configuration change
+      does not prove that every site received it.
+    </p>
+  }
+}

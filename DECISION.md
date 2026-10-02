@@ -88,3 +88,44 @@ Final validation: `make check` passed with `MONGO_TEST_URL` set: **706 backend t
 - Bound port collection independently to five requests / 5000 records and 15 seconds. Copy only validated pagination cursors into requests with fixed filters; no provider-directed credential forwarding. Port failures preserve device inventory and available AP evidence with an incomplete-collection warning. Historical mode remains inventory-only.
 - Regenerate OpenAPI for the additive link schema; test membership, provider org IDs, virtual-chassis/port aliases, pagination, partial failures, bounds, redundant edges, and peer navigation. See `docs/design/site-impact-workspace.md` for the published Mist sources and API contract.
 - Validation: 709 backend tests passed (20 MongoDB integration tests skipped because the disposable database was not started); 306 frontend tests and all six Chrome scenarios passed. Production build, formatting, lint, type checks, and OpenAPI consistency passed. The final adjacency lookup cleanup also passed all 44 focused neighbor/site regressions. `docs/design/neighbor-topology-preview.png` captures the inspected view with synthetic data. No live Mist validation was performed.
+
+## Change-centered redesign · 2 October 2026
+
+The latest request supersedes the earlier visual refinements: prioritize a fast
+change dashboard, explicit configuration differences, global and local impact,
+and fewer rollback screens. After the user's visual follow-up, the direction uses
+a continuous neutral background, borderless shared navigation and top bars,
+teal accents, stronger headings, and a compact time bar. Soft shadows lift main
+cards and tables; selected detail panes and floating menus have more elevation.
+The active navigation item uses stronger text and icon weight. The
+existing Angular components and semantic status colors remain the foundation.
+
+Overview supplies period-wide counters plus a recent change feed. Changes is the
+main investigation workspace: selection narrows the list to a rail and displays
+before/after values alongside cross-site impact. The existing topology is reused
+with compact geometry; site cards and a device list provide accessible paths to
+local measurements. Unknown impact is distinct from disruption and from a
+measured absence of impact. Shared windows do not imply exclusive causation.
+
+Rollback starts with an explicit plan action and preselected previous versions,
+then stays inside the change through backup, final review and progress. The
+server's existing authorization, approvals and execution gates are unchanged.
+Missing previous versions are visible exclusions, not a promised complete undo.
+See `docs/design/change-event-impact.md` for API and interaction conventions.
+
+Validation: 2,604 backend tests passed, with 109 environment-dependent tests
+skipped; 436 frontend tests and all 16 Chrome scenarios passed. Backend format,
+lint, source type checks, the exported OpenAPI contract, and the frontend
+production build passed. After the final advanced-target navigation adjustment,
+all 53 restore component tests and the two change/rollback browser scenarios
+passed again. Browser checks cover desktop/mobile layout, keyboard focus,
+redacted comparisons, unknown evidence, retry, and the complete contextual
+rollback journey including refresh/resume. They use mocked APIs and do not
+validate a live Mist rollback. Saved previews are linked from the design note.
+
+The follow-up flat styling pass passed the production build without budget
+warnings and all 16 browser scenarios. Desktop/mobile screenshots were inspected
+across Overview, Changes, Site topology, Configuration and Settings. The keyboard
+test waits for the change list to become visible before focusing it, avoiding a
+race with the shell's loading overlay. No API or application behavior changes
+were needed for this visual pass.
