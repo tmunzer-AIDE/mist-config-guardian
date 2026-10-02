@@ -113,7 +113,7 @@ server's existing authorization, approvals and execution gates are unchanged.
 Missing previous versions are visible exclusions, not a promised complete undo.
 See `docs/design/change-event-impact.md` for API and interaction conventions.
 
-Validation: 2,604 backend tests passed, with 109 environment-dependent tests
+Validation on the isolated PR checkout: 2,596 backend tests passed, with 109 environment-dependent tests
 skipped; 436 frontend tests and all 16 Chrome scenarios passed. Backend format,
 lint, source type checks, the exported OpenAPI contract, and the frontend
 production build passed. After the final advanced-target navigation adjustment,

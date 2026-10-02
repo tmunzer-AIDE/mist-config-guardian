@@ -779,10 +779,16 @@ test('change workspace brings configuration, cross-site reach and device evidenc
   await page.goto('/overview');
   await expect(page.getByRole('heading', { name: 'Change overview' })).toBeVisible();
   await expect(page.locator('.card')).toHaveCount(2);
-  await page.screenshot({ path: info.outputPath('change-overview-desktop.png') });
+  await expect(page.locator('.card').first()).toBeVisible();
+  await expect(page.locator('.page-host--hidden')).toHaveCount(0);
+  await page.getByRole('heading', { name: 'Change overview' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('heading', { name: 'Change overview' })).toBeInViewport();
+  await page.screenshot({ path: info.outputPath('change-overview-desktop.png'), animations: 'disabled' });
   await page.getByRole('button', { name: 'Inspect Meeting room power policy updated', exact: true }).click();
   await expect(page).toHaveURL(/\/changes\?group=g0/);
-  await page.goto('/changes');
+  await expect(page.locator('.panel-title')).toBeVisible();
+  await page.locator('.panel-close').click();
+  await expect(page.locator('.panel-title')).toHaveCount(0);
   await expect(page.locator('.track-seek')).toBeHidden();
   await expect(page.locator('.row--group').first()).toBeVisible();
   await page.locator('.row--group').first().focus();
