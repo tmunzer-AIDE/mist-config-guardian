@@ -2,9 +2,12 @@
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 
 from beanie import PydanticObjectId
+from celery.exceptions import CeleryError
+from kombu.exceptions import OperationalError
 from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.models.base import utc_now
@@ -20,6 +23,9 @@ from mist_config_guardian_backend.webhooks.signatures import (
     SignatureVersion,
     verify_signature,
 )
+from mist_config_guardian_backend.worker import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 class WebhookOrganizationNotFoundError(ValueError):
@@ -180,3 +186,24 @@ class WebhookIngestionService:
     @staticmethod
     def _string_value(value: object) -> str | None:
         return value if isinstance(value, str) and value else None
+
+
+async def queue_receipt(receipt_id: PydanticObjectId) -> bool:
+    """Hand one queued receipt to the worker, or leave it for the retry sweep."""
+    try:
+        celery_app.send_task("webhooks.process", args=[str(receipt_id)])
+    except (CeleryError, OperationalError):
+        logger.exception("Unable to queue webhook receipt %s", receipt_id)
+        await WebhookReceipt.find_one(
+            WebhookReceipt.id == receipt_id,
+            WebhookReceipt.status == WebhookProcessingStatus.QUEUED,
+        ).update(
+            {
+                "$set": {
+                    "status": WebhookProcessingStatus.RECEIVED,
+                    "processing_error": "Worker queue is unavailable",
+                }
+            }
+        )
+        return False
+    return True

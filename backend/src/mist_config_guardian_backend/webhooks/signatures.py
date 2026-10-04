@@ -24,4 +24,5 @@ def verify_signature(
         return False
     digest = hashlib.sha256 if version is SignatureVersion.V2 else hashlib.sha1
     expected = hmac.new(secret.encode(), body, digest).hexdigest()
-    return hmac.compare_digest(signature.strip().lower(), expected)
+    # Compared as bytes: a string comparison raises on non-ASCII header text.
+    return hmac.compare_digest(signature.strip().lower().encode(), expected.encode())
