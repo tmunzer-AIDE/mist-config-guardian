@@ -1,13 +1,19 @@
-"""Organization response safety tests."""
+"""Organization request validation and response safety tests."""
 
+import pytest
 from beanie import PydanticObjectId
+from pydantic import SecretStr, ValidationError
 
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
     OrganizationStatus,
 )
-from mist_config_guardian_backend.schemas.organization import OrganizationResponse
+from mist_config_guardian_backend.schemas.organization import (
+    OrganizationCreateRequest,
+    OrganizationResponse,
+    ServiceTokenUpdateRequest,
+)
 
 
 def test_organization_response_never_exposes_encrypted_token() -> None:
@@ -40,3 +46,15 @@ def test_organization_loads_legacy_cloud_region() -> None:
     normalized = Organization.migrate_legacy_cloud_region("global")
 
     assert normalized == MistCloudRegion.GLOBAL_01
+
+
+@pytest.mark.parametrize("token", ["abcd\u200befgh1234", "tökén", "two\nlines"])
+def test_a_service_token_that_cannot_travel_in_a_request_header_is_refused(token: str) -> None:
+    with pytest.raises(ValidationError, match="printable ASCII"):
+        OrganizationCreateRequest(service_token=SecretStr(token))
+    with pytest.raises(ValidationError, match="printable ASCII"):
+        ServiceTokenUpdateRequest(service_token=SecretStr(token))
+
+
+def test_an_ordinary_service_token_is_accepted() -> None:
+    assert OrganizationCreateRequest(service_token=SecretStr("Abc123-_.~xyz")).service_token.get_secret_value()

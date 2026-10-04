@@ -13,6 +13,7 @@ import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Literal, Protocol
 
 # An administrator reads this next to the invitation link; it is a summary, not
@@ -184,10 +185,9 @@ class SmtpMailSender:
 
     def _build(self, *, to: str, subject: str, text: str, html: str) -> EmailMessage:
         message = EmailMessage()
-        sender = self._credentials.from_address
-        if self._credentials.from_name:
-            sender = f"{self._credentials.from_name} <{sender}>"
-        message["From"] = sender
+        # formataddr quotes a display name holding a comma, "@" or ":", which
+        # pasted in raw would read as further mailboxes or a group.
+        message["From"] = formataddr((self._credentials.from_name, self._credentials.from_address))
         message["To"] = to
         message["Subject"] = subject
         message.set_content(text)
@@ -204,7 +204,9 @@ class SmtpMailSender:
         except SmtpNegotiationError as exc:
             return SendOutcome("failed", exc.detail)
         try:
-            client.send_message(message)
+            # The envelope sender is the configured address, never one parsed
+            # back out of the From header.
+            client.send_message(message, from_addr=self._credentials.from_address)
         except _REFUSALS as exc:
             _close(client)
             return SendOutcome("failed", _truncate(f"The server refused the message: {exc}"))

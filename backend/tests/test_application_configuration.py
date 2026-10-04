@@ -27,6 +27,7 @@ from mist_config_guardian_backend.models.application_configuration import (
 )
 from mist_config_guardian_backend.schemas.application_configuration import (
     AiProviderDraft,
+    AiSettingsUpdate,
     ImpactAiSettingsUpdate,
 )
 from mist_config_guardian_backend.security.credentials import CredentialVault
@@ -89,7 +90,7 @@ async def test_ai_api_key_is_encrypted_and_not_returned(
     service = ApplicationConfigurationService(vault)
     configuration = _configuration()
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
 
     response = await service.update_impact_ai(
         ImpactAiSettingsUpdate(
@@ -209,7 +210,8 @@ def _service(
         provider_factory=lambda **_kwargs: provider,
     )
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    # Results are written with a targeted $set, never save(); these tests read the in-memory result.
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
     return service
 
 
@@ -298,17 +300,47 @@ async def test_a_failed_connection_never_probes(monkeypatch: pytest.MonkeyPatch)
     assert configuration.impact_ai_structured_output is None
 
 
-async def test_a_draft_probe_stores_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "draft",
+    [
+        AiProviderDraft(base_url=BASE_URL, model="other-model"),
+        AiProviderDraft(base_url="https://other.test/v1", model="test-model"),
+        AiProviderDraft(base_url=BASE_URL, model="test-model", api_key=SecretStr("unsaved-key")),
+    ],
+    ids=["another-model", "another-endpoint", "an-unsaved-key"],
+)
+async def test_a_draft_that_differs_from_the_saved_provider_stores_nothing(
+    draft: AiProviderDraft, monkeypatch: pytest.MonkeyPatch
+) -> None:
     provider = _FakeProvider(replies={"json_schema": REPORT})
     configuration = _provider_configuration()
 
-    await _service(provider, configuration, monkeypatch).test_ai_connection(
-        draft=AiProviderDraft(base_url=BASE_URL, model="test-model")
-    )
+    await _service(provider, configuration, monkeypatch).test_ai_connection(draft=draft)
 
     assert configuration.impact_ai_structured_output is None
     assert configuration.impact_ai_last_test_at is None
     assert provider.requests == []
+
+
+async def test_a_draft_naming_the_saved_provider_is_a_test_of_the_saved_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The settings page always sends its form, so an unedited form is how an administrator tests what is saved."""
+    provider = _FakeProvider(replies={"json_schema": REPORT})
+    configuration = _provider_configuration()
+
+    response = await _service(provider, configuration, monkeypatch).test_ai_connection(
+        draft=AiProviderDraft(base_url=f"{BASE_URL}/", model="test-model")
+    )
+
+    assert [kind for kind, _ in provider.requests] == ["json_schema"]
+    record = configuration.impact_ai_structured_output
+    assert record is not None
+    assert record.mode == "json_schema"
+    assert structured_output_mode(configuration) == "json_schema"
+    assert configuration.impact_ai_last_test_at == response.checked_at
+    assert configuration.impact_ai_last_test_ok is True
+    assert configuration.impact_ai_last_test_detail == response.detail
 
 
 def test_the_fingerprint_covers_the_provider_model_and_schema_but_no_key_material() -> None:
@@ -413,3 +445,13 @@ async def test_a_rejected_probe_request_is_audited_as_its_own_failure(monkeypatc
 
     assert [audit.succeeded for audit in recorder.audits] == [True, False, True]
     assert "HTTP 400" in (recorder.audits[1].error or "")
+
+
+@pytest.mark.parametrize("api_key", ["key\u200bwith-a-zero-width-space", "clé", "line\nbreak"])
+def test_every_ai_key_field_refuses_what_cannot_travel_in_a_request_header(api_key: str) -> None:
+    with pytest.raises(ValidationError, match="printable ASCII"):
+        ImpactAiSettingsUpdate(base_url=BASE_URL, model="test-model", api_key=SecretStr(api_key))
+    with pytest.raises(ValidationError, match="printable ASCII"):
+        AiSettingsUpdate(base_url=BASE_URL, model="test-model", api_key=SecretStr(api_key))
+    with pytest.raises(ValidationError, match="printable ASCII"):
+        AiProviderDraft(base_url=BASE_URL, model="test-model", api_key=SecretStr(api_key))

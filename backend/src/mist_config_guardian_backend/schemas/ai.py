@@ -11,6 +11,17 @@ AI_DISCLAIMER = "Field names and values only — secrets are never sent."
 QUESTION_MAX_LENGTH = 500
 
 
+class AiStatusResponse(BaseModel):
+    """Whether AI assistance is on, for every signed-in role.
+
+    Deliberately nothing about the provider: its endpoint, model and key stay
+    behind the administrator-only settings.
+    """
+
+    enabled: bool
+    automatic_summaries: bool
+
+
 class DiffSummaryRequest(BaseModel):
     """Ask for a summary of one deterministic version comparison."""
 

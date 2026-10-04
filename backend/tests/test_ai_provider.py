@@ -248,3 +248,19 @@ async def test_complete_reports_bounded_finish_reason(httpx_mock: HTTPXMock, rea
     async with _provider() as provider:
         completion = await provider.complete([AiMessage(role="user", content="evidence")])
     assert completion.finish_reason == expected
+
+
+async def test_a_key_that_cannot_travel_in_a_request_header_is_a_provider_error() -> None:
+    """Request schemas refuse such a key; one stored before they did must still fail as a provider error."""
+    provider = OpenAiCompatibleProvider(base_url=BASE_URL, model="test-model", api_key="provider\u200b-key")
+
+    async with provider:
+        ok, detail = await provider.test_connection()
+        with pytest.raises(AiProviderError, match="cannot be sent"):
+            await provider.complete([AiMessage(role="user", content="e")])
+        with pytest.raises(AiProviderError, match="cannot be sent"):
+            await provider.list_models()
+
+    assert ok is False
+    assert "cannot be sent" in detail
+    assert "provider\u200b-key" not in detail

@@ -124,3 +124,14 @@ async def test_verify_write_token_rejects_read_only_role(httpx_mock: HTTPXMock) 
             org_id="org-1",
             region=MistCloudRegion.GLOBAL_01,
         )
+
+
+@pytest.mark.parametrize("token", ["abcd\u200befgh1234", "tökén"])
+async def test_a_token_that_cannot_travel_in_a_request_header_is_a_verification_failure(token: str) -> None:
+    """Request schemas refuse these; a token reaching here another way must still fail as a verification."""
+    with pytest.raises(MistVerificationError, match="cannot be sent"):
+        await MistVerificationService().verify_read_only_token(token=token, region=MistCloudRegion.GLOBAL_01)
+    with pytest.raises(MistVerificationError, match="cannot be sent"):
+        await MistVerificationService().verify_write_token(
+            token=token, org_id="org-1", region=MistCloudRegion.GLOBAL_01
+        )

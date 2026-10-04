@@ -6,6 +6,20 @@ from typing import Literal
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
+def _check_header_safe(api_key: SecretStr | None) -> None:
+    """Refuse a key that cannot be sent in an HTTP header as typed.
+
+    A key pasted with an invisible character, such as a zero-width space, would otherwise be stored or probed and
+    fail only once a request to the provider is encoded.
+    """
+    if api_key is None:
+        return
+    plaintext = api_key.get_secret_value()
+    if not (plaintext.isascii() and plaintext.isprintable()):
+        msg = "The API key must contain only printable ASCII characters"
+        raise ValueError(msg)
+
+
 class ImpactAiSettingsUpdate(BaseModel):
     """Update the optional AI impact provider."""
 
@@ -29,6 +43,7 @@ class ImpactAiSettingsUpdate(BaseModel):
         if self.api_key is not None and self.clear_api_key:
             msg = "An API key cannot be replaced and cleared in the same request"
             raise ValueError(msg)
+        _check_header_safe(self.api_key)
         return self
 
 
@@ -69,6 +84,7 @@ class AiSettingsUpdate(BaseModel):
         if self.api_key is not None and self.clear_api_key:
             msg = "An API key cannot be replaced and cleared in the same request"
             raise ValueError(msg)
+        _check_header_safe(self.api_key)
         return self
 
 
@@ -89,6 +105,7 @@ class AiProviderDraft(BaseModel):
             raise ValueError(msg)
         if self.api_key is not None and not self.api_key.get_secret_value().strip():
             self.api_key = None
+        _check_header_safe(self.api_key)
         return self
 
 

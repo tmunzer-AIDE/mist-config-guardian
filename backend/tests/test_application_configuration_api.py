@@ -13,8 +13,10 @@ from mist_config_guardian_backend.api.dependencies import (
     get_application_configuration_service,
     require_administrator,
 )
+from mist_config_guardian_backend.api.routes.ai import get_ai_audit_recorder
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.guardian.agent_schema import ACTION_SCHEMA_VERSION, capability_fingerprint
+from mist_config_guardian_backend.integrations.ai_provider import TEXT, AiCompletion, JsonSchemaFormat
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.application_configuration import (
     ApplicationConfiguration,
@@ -172,3 +174,69 @@ async def test_settings_without_a_probe_expose_no_capability(monkeypatch: pytest
     response = await _ai_settings(_stored_configuration(impact_ai_structured_output=None), monkeypatch)
 
     assert response.json()["structured_output"] is None
+
+
+# --- the settings page's "Test connection" ----------------------------------
+
+
+class _ProbeAnsweringProvider:
+    """Answers the connection check and the structured-output probe, without a network."""
+
+    def __init__(self) -> None:
+        self.formats: list[object] = []
+
+    async def complete(self, messages, *, max_tokens=None, response_format=TEXT) -> AiCompletion:  # noqa: ARG002 - mirrors the provider protocol
+        self.formats.append(response_format)
+        return AiCompletion(content=_PROBE_REPORT, model="test-model")
+
+    async def list_models(self):
+        return []
+
+    async def test_connection(self) -> tuple[bool, str]:
+        return True, "Connected to test-model."
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _NoAudit:
+    async def record(self, record: object) -> None:  # noqa: ARG002 - mirrors the audit sink protocol
+        return None
+
+
+_PROBE_REPORT = json.dumps(
+    {
+        "action": "report",
+        "peak_impact": "none",
+        "current_impact": "none",
+        "confidence": "low",
+        "summary": "capability probe",
+        "evidence": [],
+    }
+)
+
+
+async def test_the_settings_page_test_body_probes_and_records_the_saved_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ai-tab.ts always sends ``{base_url, model}``; for the saved, unedited provider that must still probe it."""
+    configuration = _stored_configuration(encrypted_impact_ai_api_key=None, impact_ai_structured_output=None)
+    provider = _ProbeAnsweringProvider()
+    settings = Settings(environment="test", database_enabled=False)
+    service = ApplicationConfigurationService(
+        CredentialVault(settings), settings, provider_factory=lambda **_kwargs: provider
+    )
+    monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
+    app = create_app(settings)
+    app.dependency_overrides[get_application_configuration_service] = lambda: service
+    app.dependency_overrides[require_administrator] = _administrator
+    app.dependency_overrides[get_ai_audit_recorder] = _NoAudit
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/ai/settings/test", json={"base_url": BASE_URL, "model": "test-model"})
+
+    assert response.status_code == 200
+    assert any(isinstance(requested, JsonSchemaFormat) for requested in provider.formats)
+    assert configuration.impact_ai_structured_output is not None
+    assert configuration.impact_ai_last_test_ok is True

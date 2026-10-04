@@ -10,6 +10,7 @@ from ipaddress import IPv6Address, ip_address
 from typing import Literal, Protocol
 
 from beanie import PydanticObjectId
+from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.config import Settings, get_settings
@@ -44,6 +45,7 @@ from mist_config_guardian_backend.models.application_configuration import (
     StructuredOutputMode,
 )
 from mist_config_guardian_backend.models.base import utc_now
+from mist_config_guardian_backend.schemas.ai import AiStatusResponse
 from mist_config_guardian_backend.schemas.application_configuration import (
     AiConnectionTestResponse,
     AiModelResponse,
@@ -148,6 +150,36 @@ def _capability_detail(capability: StructuredOutputCapability | None) -> str:
     if capability is None:
         return "Structured output is unavailable; the Guardian agent will be skipped."
     return f"Structured output: {capability.mode}."
+
+
+def _names_saved_provider(configuration: ApplicationConfiguration, draft: AiProviderDraft) -> bool:
+    """Whether a draft is the saved provider unchanged: its endpoint and model, and no key of its own."""
+    return (
+        draft.api_key is None
+        and bool(draft.model)
+        and draft.model == configuration.impact_ai_model
+        and draft.base_url == configuration.impact_ai_base_url.rstrip("/")
+    )
+
+
+async def _write_fields(configuration: ApplicationConfiguration, **fields: object) -> None:
+    """Write the named fields and ``updated_at`` with a targeted ``$set``, then mirror them onto ``configuration``.
+
+    Never ``configuration.save()``: Beanie writes the whole document, so an
+    instance read before an awaited step - a provider or SMTP probe can take
+    tens of seconds - would carry its stale copy of every other setting back
+    over whatever an administrator changed in the meantime, a credential
+    rotation included. See webhooks.py for the same hazard against the
+    encrypted webhook secret.
+    """
+    now = utc_now()
+    document: dict[str, object] = {"updated_at": now}
+    for name, value in fields.items():
+        document[name] = value.model_dump(mode="python") if isinstance(value, BaseModel) else value
+    await ApplicationConfiguration.get_pymongo_collection().update_one({"_id": configuration.id}, {"$set": document})
+    for name, value in fields.items():
+        setattr(configuration, name, value)
+    configuration.updated_at = now
 
 
 class ApplicationConfigurationError(ValueError):
@@ -270,25 +302,19 @@ class ApplicationConfigurationService:
         """Persist AI provider settings and optionally replace its API key."""
         configuration = await self._get_or_create()
         api_key = request.api_key.get_secret_value() if request.api_key is not None else None
-        if api_key is not None:
-            configuration.encrypted_impact_ai_api_key = self._vault.encrypt_for_context(
-                api_key,
-                context=_IMPACT_AI_KEY_CONTEXT,
-            )
-            configuration.impact_ai_api_key_last_four = api_key[-4:].rjust(4, "*")
-        elif request.clear_api_key:
-            configuration.encrypted_impact_ai_api_key = None
-            configuration.impact_ai_api_key_last_four = None
-
-        if request.enabled and configuration.encrypted_impact_ai_api_key is None:
+        key_fields = self._api_key_fields(api_key, clear=request.clear_api_key, context=_IMPACT_AI_KEY_CONTEXT)
+        encrypted_api_key = key_fields.get("encrypted_impact_ai_api_key", configuration.encrypted_impact_ai_api_key)
+        if request.enabled and encrypted_api_key is None:
             msg = "An AI provider API key is required before AI assessment can be enabled"
             raise ApplicationConfigurationError(msg)
 
-        configuration.impact_ai_enabled = request.enabled
-        configuration.impact_ai_base_url = request.base_url
-        configuration.impact_ai_model = request.model
-        configuration.touch()
-        await configuration.save()
+        await _write_fields(
+            configuration,
+            **key_fields,
+            impact_ai_enabled=request.enabled,
+            impact_ai_base_url=request.base_url,
+            impact_ai_model=request.model,
+        )
         return self._response(configuration)
 
     async def impact_ai_runtime(self) -> ImpactAiRuntimeConfiguration | None:
@@ -308,28 +334,39 @@ class ApplicationConfigurationService:
         configuration = await self._get_or_create()
         return self._ai_response(configuration)
 
+    async def get_ai_status(self) -> AiStatusResponse:
+        """Return whether AI assistance and automatic summaries are on, and nothing about the provider."""
+        configuration = await self._get_or_create()
+        return AiStatusResponse(
+            enabled=configuration.impact_ai_enabled,
+            automatic_summaries=configuration.impact_ai_automatic_summaries,
+        )
+
     async def update_ai_settings(self, request: AiSettingsUpdate) -> AiSettingsResponse:
         """Persist AI provider settings, leaving a blank API key untouched."""
         configuration = await self._get_or_create()
         api_key = request.api_key.get_secret_value() if request.api_key is not None else None
-        if api_key:
-            configuration.encrypted_impact_ai_api_key = self._vault.encrypt_for_context(
-                api_key,
-                context=_AI_PROVIDER_KEY_CONTEXT,
-            )
-            configuration.impact_ai_api_key_last_four = api_key[-4:].rjust(4, "*")
-        elif request.clear_api_key:
-            configuration.encrypted_impact_ai_api_key = None
-            configuration.impact_ai_api_key_last_four = None
-
-        configuration.impact_ai_enabled = request.enabled
-        configuration.impact_ai_base_url = request.base_url
-        configuration.impact_ai_model = request.model
-        configuration.impact_ai_max_response_tokens = request.max_response_tokens
-        configuration.impact_ai_automatic_summaries = request.automatic_summaries
-        configuration.touch()
-        await configuration.save()
+        await _write_fields(
+            configuration,
+            **self._api_key_fields(api_key, clear=request.clear_api_key, context=_AI_PROVIDER_KEY_CONTEXT),
+            impact_ai_enabled=request.enabled,
+            impact_ai_base_url=request.base_url,
+            impact_ai_model=request.model,
+            impact_ai_max_response_tokens=request.max_response_tokens,
+            impact_ai_automatic_summaries=request.automatic_summaries,
+        )
         return self._ai_response(configuration)
+
+    def _api_key_fields(self, api_key: str | None, *, clear: bool, context: str) -> dict[str, object]:
+        """The key fields a request changes. One that neither sends nor clears a key names none, leaving it alone."""
+        if api_key:
+            return {
+                "encrypted_impact_ai_api_key": self._vault.encrypt_for_context(api_key, context=context),
+                "impact_ai_api_key_last_four": api_key[-4:].rjust(4, "*"),
+            }
+        if clear:
+            return {"encrypted_impact_ai_api_key": None, "impact_ai_api_key_last_four": None}
+        return {}
 
     async def ai_runtime(self) -> AiRuntimeConfiguration | None:
         """Return decrypted provider settings when AI assistance is enabled."""
@@ -346,6 +383,10 @@ class ApplicationConfigurationService:
         Every outbound request is audited on its own: the connection check, and each structured-output probe.
         """
         configuration = await self._get_or_create()
+        if draft is not None and _names_saved_provider(configuration, draft):
+            # The settings page always sends its form, so an unedited one is how an administrator tests the saved
+            # provider, and that test must probe and record exactly as a request without a body does.
+            draft = None
         runtime = self._draft_runtime(configuration, draft) if draft else self._runtime(configuration)
         provider = self._build_provider(runtime)
         audits: list[AiRequestRecord] = []
@@ -363,14 +404,15 @@ class ApplicationConfigurationService:
             detail = f"{detail} {_capability_detail(capability)}"
         checked_at = utc_now()
         if draft is None:
-            configuration.impact_ai_last_test_at = checked_at
-            configuration.impact_ai_last_test_ok = ok
-            configuration.impact_ai_last_test_detail = detail
+            fields: dict[str, object] = {
+                "impact_ai_last_test_at": checked_at,
+                "impact_ai_last_test_ok": ok,
+                "impact_ai_last_test_detail": detail,
+            }
             if probed:
                 # This probe is the authoritative record: when neither format validates, nothing is kept.
-                configuration.impact_ai_structured_output = capability
-            configuration.touch()
-            await configuration.save()
+                fields["impact_ai_structured_output"] = capability
+            await _write_fields(configuration, **fields)
         if recorder is not None:
             for audit in audits:
                 await recorder.record(audit)
@@ -499,30 +541,21 @@ class ApplicationConfigurationService:
             encrypted_smtp_password = None
             smtp_password_last_four = None
 
-        # Only the fields this method owns are written, with a targeted $set
-        # rather than configuration.save(). A whole-document save() would
-        # carry this instance's AI settings - read before this call, never
-        # refreshed - back over whatever an administrator changed there while
-        # this request was in flight, silently reverting it. See webhooks.py
-        # for the same hazard against the encrypted webhook secret.
-        fields: dict[str, object] = {
-            "smtp_enabled": request.enabled,
-            "smtp_host": request.host.strip(),
-            "smtp_port": request.port,
-            "smtp_security": request.security,
-            "smtp_username": request.username.strip(),
-            "encrypted_smtp_password": encrypted_smtp_password,
-            "smtp_password_last_four": smtp_password_last_four,
-            "smtp_from_address": request.from_address.strip(),
-            "smtp_from_name": request.from_name.strip(),
-            "updated_at": utc_now(),
-        }
-        await ApplicationConfiguration.get_pymongo_collection().update_one(
-            {"_id": configuration.id},
-            {"$set": fields},
+        # Only the fields this method owns are written: this instance's AI
+        # settings, read before this call and never refreshed, must not be
+        # carried back over a change made there while this request was in flight.
+        await _write_fields(
+            configuration,
+            smtp_enabled=request.enabled,
+            smtp_host=request.host.strip(),
+            smtp_port=request.port,
+            smtp_security=request.security,
+            smtp_username=request.username.strip(),
+            encrypted_smtp_password=encrypted_smtp_password,
+            smtp_password_last_four=smtp_password_last_four,
+            smtp_from_address=request.from_address.strip(),
+            smtp_from_name=request.from_name.strip(),
         )
-        for name, value in fields.items():
-            setattr(configuration, name, value)
         return self._smtp_response(configuration)
 
     async def test_smtp_connection(self) -> SmtpConnectionTestResponse:
@@ -533,30 +566,27 @@ class ApplicationConfigurationService:
         send it to.
         """
         configuration = await self._get_or_create()
-        credentials = await self.smtp_credentials()
-        if credentials is None:
-            ok, detail = False, "Email is not enabled."
+        try:
+            credentials = await self.smtp_credentials()
+        except CredentialDecryptionError:
+            # Corrupted, or encrypted under a key that has since rotated: a
+            # broken configuration, which is what this check is for reporting.
+            ok, detail = False, "The stored password could not be decrypted. Enter it again and save."
         else:
-            ok, detail = await asyncio.to_thread(_probe_smtp, credentials)
+            if credentials is None:
+                ok, detail = False, "Email is not enabled."
+            else:
+                ok, detail = await asyncio.to_thread(_probe_smtp, credentials)
         checked_at = utc_now()
         # Only the test-result fields are this method's business. The probe
-        # above can take up to ten seconds; a configuration.save() afterward
-        # would carry this now-stale instance's SMTP and AI settings - read
-        # before the probe started - back over whatever an administrator
-        # changed there in the meantime, including a credential rotation this
-        # read-only diagnostic has no business reverting.
-        fields: dict[str, object] = {
-            "smtp_last_test_at": checked_at,
-            "smtp_last_test_ok": ok,
-            "smtp_last_test_detail": detail,
-            "updated_at": checked_at,
-        }
-        await ApplicationConfiguration.get_pymongo_collection().update_one(
-            {"_id": configuration.id},
-            {"$set": fields},
+        # above can take up to ten seconds, and a credential rotation made
+        # meanwhile is not this read-only diagnostic's to revert.
+        await _write_fields(
+            configuration,
+            smtp_last_test_at=checked_at,
+            smtp_last_test_ok=ok,
+            smtp_last_test_detail=detail,
         )
-        for name, value in fields.items():
-            setattr(configuration, name, value)
         return SmtpConnectionTestResponse(ok=ok, detail=detail, checked_at=checked_at)
 
     def _validate_smtp(self, request: SmtpSettingsUpdate) -> None:
