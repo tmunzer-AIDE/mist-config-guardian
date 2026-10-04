@@ -163,13 +163,14 @@
 
           <label class="pager-size">
             <span class="cg-label">PER PAGE</span>
+            <!-- Selected per option: a value bound to the select is set before
+                 its options exist when the picker is shown again, and is lost. -->
             <select
               class="cg-select pager-select"
-              [value]="pageSize()"
               (change)="pageSizePicked.emit(numericValue($event))"
             >
               @for (size of pageSizes(); track size) {
-                <option [value]="size">{{ size }}</option>
+                <option [value]="size" [selected]="size === pageSize()">{{ size }}</option>
               }
             </select>
           </label>
@@ -262,6 +263,14 @@
           list.
         </p>
       </div>
+
+      @if (excess() > 0) {
+        <p class="limit-note" role="note">
+          A plan restores at most {{ maxPlanVersions }} objects, so these {{ selectedIds().length }}
+          are restored in parts: remove {{ excess() }} to build this plan, then plan the rest
+          separately.
+        </p>
+      }
 
       @if (readOnly()) {
         <p class="read-only-note" role="note">{{ readOnlyNote() }}</p>

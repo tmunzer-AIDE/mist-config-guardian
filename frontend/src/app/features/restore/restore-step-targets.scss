@@ -399,7 +399,8 @@
   min-width: 220px;
 }
 
-.read-only-note {
+.read-only-note,
+.limit-note {
   font-size: 11.5px;
   color: var(--tone-warning-ink);
   margin: 12px 0 0;

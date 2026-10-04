@@ -26,6 +26,7 @@ import { GuardianBadge } from '../../shared/guardian-badge';
 import { ChangeConfiguration } from './change-configuration';
 import { ChangeImpact } from './change-impact';
 import { RestorePage } from '../restore/restore-page';
+import { MAX_PLAN_VERSIONS } from '../restore/restore.model';
 import { RestoreService } from '../restore/restore.service';
 
 /** Server-side paging keeps search and counts consistent across the full period. */
@@ -143,6 +144,11 @@ export class ChangesPage {
     this.time.isHistorical() ? this.allSeverities.slice(0, 1) : this.allSeverities,
   );
 
+  /** The impact filter in force: a chip picked at "now" is kept, but narrows no past window. */
+  protected readonly appliedSeverity = computed<SeverityFilter>(() =>
+    this.time.isHistorical() ? 'any' : this.severity(),
+  );
+
   protected readonly selectedId = signal<string | null>(null);
   private selectedFor: string | null = null;
   private detailRequest = 0;
@@ -190,7 +196,7 @@ export class ChangesPage {
   /** True while the list is narrowed, so an empty table means nothing matched
    *  rather than nothing happened. */
   protected readonly filtered = computed(
-    () => this.severity() !== 'any' || this.actorFilter() !== null || !!this.query(),
+    () => this.appliedSeverity() !== 'any' || this.actorFilter() !== null || !!this.query(),
   );
 
   /** The organization has nothing in the window, rather than nothing matching. */
@@ -249,7 +255,7 @@ export class ChangesPage {
       const organizationId = this.organizations.selected()?.id;
       const range = this.time.range();
       // A historical window carries no severity filter; the API refuses one.
-      const severity = this.time.isHistorical() ? 'any' : this.severity();
+      const severity = this.appliedSeverity();
       const actor = this.actorFilter();
       const asOf = this.time.asOf();
       const q = this.query();
@@ -400,18 +406,23 @@ export class ChangesPage {
 
   protected async planRestore(id: string): Promise<void> {
     const org = this.organizations.selected()?.id;
-    const versions = this.restorable().map((o) => o.before_version_id!);
+    const versions = [...new Set(this.restorable().map((o) => o.before_version_id!))];
     if (!org || !versions.length || !this.canRestore() || this.restoreBusy()) return;
+    if (versions.length > MAX_PLAN_VERSIONS) {
+      // The plan request refuses a longer list, so trying again cannot help,
+      // and a rollback that quietly restored only part of the change would
+      // read as the whole of it.
+      this.restoreError.set(
+        `One rollback plan restores at most ${MAX_PLAN_VERSIONS} objects, and this change has ` +
+          `${versions.length} to restore. Restore them in parts from the Restore center.`,
+      );
+      return;
+    }
     this.restoreBusy.set(true);
     const revision = this.selectionRevision;
     this.restoreError.set('');
     try {
-      const plan = await this.restores.createPlan(
-        org,
-        [...new Set(versions)],
-        'non_destructive',
-        true,
-      );
+      const plan = await this.restores.createPlan(org, versions, 'non_destructive', true);
       if (
         revision === this.selectionRevision &&
         this.selectedId() === id &&

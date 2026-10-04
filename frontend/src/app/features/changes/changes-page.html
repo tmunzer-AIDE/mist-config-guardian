@@ -21,8 +21,8 @@
       <button
         class="cg-chip"
         type="button"
-        [class.cg-chip--on]="severity() === option.value"
-        [attr.aria-pressed]="severity() === option.value"
+        [class.cg-chip--on]="appliedSeverity() === option.value"
+        [attr.aria-pressed]="appliedSeverity() === option.value"
         (click)="filterSeverity(option.value)"
       >
         {{ option.label }}

@@ -88,6 +88,8 @@ export class ImpactPage {
   private readonly retryCount = signal(0);
   private linkFor: string | null = null;
   private foreignLink: string | null = null;
+  /** The organization and link the reading on screen was taken for. */
+  private readingFor: string | null = null;
 
   protected readonly detail = computed(() => {
     const session = this.selected();
@@ -238,7 +240,12 @@ export class ImpactPage {
       this.retryCount();
       const linked = this.session();
       const historical = this.historical();
-      this.selected.set(null);
+      // A retry or an organization refresh reads the same session again, and
+      // the last good reading stays until a new one replaces it. Another
+      // session, organization or instant is other evidence, or none.
+      const reading = JSON.stringify([org ?? null, linked]);
+      if (reading !== this.readingFor || historical) this.selected.set(null);
+      this.readingFor = reading;
       this.failure.set('');
       this.loading.set(false);
       if (!org) return;

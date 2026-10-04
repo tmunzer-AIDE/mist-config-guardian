@@ -50,8 +50,17 @@ export class TelemetryCapture {
   readonly value = input.required<Record<string, unknown> | Record<string, unknown>[] | null>();
   readonly error = input<string>();
   readonly emptyLabel = input('Unavailable');
+  /**
+   * Names the capture shown, where a re-read delivers the same capture as a
+   * new value: the page then survives it. Without one, every value is a new
+   * capture, shown from its first page.
+   */
+  readonly capture = input<string>();
   protected readonly pageSize = PAGE_SIZE;
-  protected readonly page = linkedSignal({ source: this.value, computation: () => 0 });
+  protected readonly page = linkedSignal({
+    source: () => this.capture() ?? this.value(),
+    computation: () => 0,
+  });
   private readonly records = computed(() => {
     const value = this.value();
     return value === null ? [] : Array.isArray(value) ? value : [value];

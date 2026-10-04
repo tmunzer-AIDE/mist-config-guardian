@@ -30,6 +30,7 @@ import {
   hasValidPreparedCredential,
   isRestoreInFlight,
   isRestoreTerminal,
+  MAX_PLAN_VERSIONS,
   RestoreMode,
   RestoreOperation,
   RestoreTarget,
@@ -158,8 +159,8 @@ export class RestorePage {
   protected readonly targets = signal<RestoreTarget[]>([]);
   /** Objects matching the current filters, which can exceed one page. */
   protected readonly matched = signal(0);
-  /** Every restorable object, captured from the first unfiltered read. */
-  protected readonly catalogTotal = signal(0);
+  /** Every restorable object, counted without filters; null until it has been. */
+  protected readonly catalogTotal = signal<number | null>(null);
   protected readonly typeFacets = signal<TargetTypeOption[]>([]);
   protected readonly siteFacets = signal<TargetSiteOption[]>([]);
   protected readonly selectedIds = signal<string[]>([]);
@@ -251,10 +252,22 @@ export class RestorePage {
     return [{ value: '', label: 'All types', count: all }, ...facets];
   });
 
-  protected readonly siteOptions = computed<TargetSiteOption[]>(() => [
-    { value: '', label: 'All sites' },
-    ...this.siteFacets(),
-  ]);
+  /**
+   * The site facets, and the applied site when no facet names it.
+   *
+   * A site chosen on another page may hold nothing restorable, so no facet
+   * names it, yet it filters every read. It is offered under the only name
+   * known for it, its id: without an option the select would show "All sites"
+   * over a filtered list, and picking that would not clear the filter.
+   */
+  protected readonly siteOptions = computed<TargetSiteOption[]>(() => {
+    const facets = this.siteFacets();
+    const applied = this.siteId();
+    const unnamed = applied && !facets.some((site) => site.value === applied)
+      ? [{ value: applied, label: applied }]
+      : [];
+    return [{ value: '', label: 'All sites' }, ...unnamed, ...facets];
+  });
 
   protected readonly selectedPills = computed<SelectedPill[]>(() => {
     const known = this.labels();
@@ -301,6 +314,17 @@ export class RestorePage {
    */
   protected readonly blockedByApproval = computed(() =>
     blocksExecution(this.approval(), this.activeOperation()?.approval_required === true),
+  );
+
+  /** Compensation clears the same gate a restore does, with an approval of its own plan. */
+  protected readonly compensationApproval = computed<ApprovalRequest | null>(
+    () => this.compensationPlan()?.approval ?? null,
+  );
+  protected readonly compensationBlockedByApproval = computed(() =>
+    blocksExecution(
+      this.compensationApproval(),
+      this.compensationPlan()?.approval_required === true,
+    ),
   );
 
   protected readonly steps = computed(() => {
@@ -381,7 +405,15 @@ export class RestorePage {
 
   private async loadTargets(organizationId: string, query: RestoreTargetQuery): Promise<void> {
     const request = ++this.targetsRequest;
-    const response = await this.restores.targets(organizationId, query);
+    // The catalogue is counted by an unfiltered read, and a filter can be in
+    // place before there has been one: a site chosen on another page applies
+    // from the first. The facets are narrowed by the other filters, so they
+    // cannot stand in; the whole catalogue is counted alongside instead.
+    const counting = this.catalogTotal() === null && !isUnfiltered(query);
+    const [response, catalogue] = await Promise.all([
+      this.restores.targets(organizationId, query),
+      counting ? this.restores.targets(organizationId, { limit: 1 }) : null,
+    ]);
     // Answers arrive in any order; only the latest request describes the
     // filters and organization on screen.
     if (request !== this.targetsRequest) {
@@ -402,6 +434,8 @@ export class RestorePage {
     );
     if (isUnfiltered(query)) {
       this.catalogTotal.set(response.total ?? items.length);
+    } else if (catalogue) {
+      this.catalogTotal.set(catalogue.total);
     }
     this.rememberLabels(items.map((item) => [item.version_id, `${item.name} · v${item.version}`]));
   }
@@ -514,7 +548,7 @@ export class RestorePage {
     this.skip.set(0);
     this.targets.set([]);
     this.matched.set(0);
-    this.catalogTotal.set(0);
+    this.catalogTotal.set(null);
     this.typeFacets.set([]);
     this.siteFacets.set([]);
     this.labels.set({});
@@ -754,10 +788,20 @@ export class RestorePage {
     this.forgetLink();
   }
 
-  /** The link described a selection the user has now changed; a refresh must not restore it. */
+  /**
+   * The link described a selection the user has now changed; a refresh must not restore it.
+   *
+   * Embedded in a change, the link is not this page's: the operation it names
+   * is the rollback workspace, which closes when none is named. It stays until
+   * the edited selection is planned and names its own operation.
+   */
   private forgetLink(): void {
     const organizationId = this.organizations.selected()?.id;
-    if (!organizationId || this.appliedLink === linkKey(organizationId, EMPTY_LINK)) {
+    if (
+      !organizationId ||
+      this.contextual() ||
+      this.appliedLink === linkKey(organizationId, EMPTY_LINK)
+    ) {
       return;
     }
     this.canonicalize(organizationId, null, true);
@@ -768,7 +812,10 @@ export class RestorePage {
   protected async buildPlan(mode: RestoreMode = this.mode()): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
     const versionIds = this.selectedIds();
-    if (!organizationId || versionIds.length === 0 || this.readOnly() || this.busy()) {
+    // A selection longer than one plan request accepts is refused outright;
+    // the picker explains it rather than offering the build.
+    const plannable = versionIds.length > 0 && versionIds.length <= MAX_PLAN_VERSIONS;
+    if (!organizationId || !plannable || this.readOnly() || this.busy()) {
       return;
     }
     const token = this.selection.signal;
@@ -843,17 +890,17 @@ export class RestorePage {
     }
   }
 
-  protected async requestApproval(): Promise<void> {
+  /** Ask for a review of the plan being authorized: the restore, or its compensation. */
+  protected async requestApproval(plan: RestoreOperation): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
-    const operation = this.activeOperation();
-    if (!organizationId || !operation || this.readOnly() || this.busy()) {
+    if (!organizationId || this.readOnly() || this.busy()) {
       return;
     }
     const token = this.selection.signal;
     this.busy.set(true);
     const approval = await this.ui.track(
       'Requesting approval',
-      () => this.restores.requestApproval(organizationId, operation.id),
+      () => this.restores.requestApproval(organizationId, plan.id),
       token,
     );
     if (this.stale(token)) {
@@ -861,15 +908,14 @@ export class RestorePage {
     }
     this.busy.set(false);
     if (approval) {
-      this.activeOperation.set({ ...operation, approval });
+      this.attachApproval(plan.id, approval);
     }
   }
 
-  protected async refreshApproval(): Promise<void> {
+  protected async refreshApproval(plan: RestoreOperation): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
-    const operation = this.activeOperation();
-    const approval = this.approval();
-    if (!organizationId || !operation || !approval || this.busy()) {
+    const approval = plan.approval;
+    if (!organizationId || !approval || this.busy()) {
       return;
     }
     const token = this.selection.signal;
@@ -884,8 +930,21 @@ export class RestorePage {
     }
     this.busy.set(false);
     if (fresh) {
-      this.activeOperation.set({ ...operation, approval: fresh });
+      this.attachApproval(plan.id, fresh);
     }
+  }
+
+  /**
+   * Show an approval on the plan it was asked for.
+   *
+   * Cancelling a compensation does not end the selection, so the plan may be
+   * gone by the time the answer lands; then there is nothing to show it on.
+   */
+  private attachApproval(planId: string, approval: ApprovalRequest): void {
+    const attach = (plan: RestoreOperation | null) =>
+      plan?.id === planId ? { ...plan, approval } : plan;
+    this.activeOperation.update(attach);
+    this.compensationPlan.update(attach);
   }
 
   // ---- step 3 -------------------------------------------------------------
@@ -1051,7 +1110,11 @@ export class RestorePage {
   protected async runCompensation(token: RestoreCredential): Promise<void> {
     const organizationId = this.organizations.selected()?.id;
     const operation = this.activeOperation();
-    if (!organizationId || !operation || !this.canAuthorize() || this.busy()) {
+    const plan = this.compensationPlan();
+    if (!organizationId || !operation || !plan || !this.canAuthorize() || this.busy()) {
+      return;
+    }
+    if (plan.preflight_errors.length > 0 || this.compensationBlockedByApproval()) {
       return;
     }
     const generation = this.selection.signal;

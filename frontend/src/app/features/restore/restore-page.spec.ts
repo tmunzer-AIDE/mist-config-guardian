@@ -1365,6 +1365,119 @@ describe('RestorePage', () => {
     expect(navigations).toEqual([{ commands: ['/history'], extras: { queryParams: { restore: '1', operation: null, versions: null, changeGroup: null, step: null, compensate: null }, queryParamsHandling: 'merge', replaceUrl: true } }]);
   });
 
+  it('keeps a change\'s rollback workspace open while its targets are edited', async () => {
+    // Embedded in a change, the operation named is the workspace itself: the
+    // Changes page closes it when none is. Editing the selection is not a new
+    // plan, so nothing is named until the edited one is built.
+    const emitted: (string | null)[] = [];
+    fixture.componentInstance.operationChanged.subscribe((id) => emitted.push(id));
+    fixture.componentRef.setInput('embedded', true);
+    fixture.componentRef.setInput('contextual', true);
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(operation());
+    await settle();
+
+    button('Change targets')!.click();
+    await nextTargets(targetList([NW_CORP, RF_DENSE]));
+    all<HTMLInputElement>('.target-box')[1].click();
+    await settle();
+
+    expect(emitted).toEqual([]);
+    expect(pillText()).toEqual(['NW-Corp · v14 ✕', 'Indoor-Dense-6G · v3 ✕']);
+
+    button('Build restore plan')!.click();
+    await tick();
+    const request = httpMock.expectOne(PLANS_URL);
+    expect(request.request.body.version_ids).toEqual(['v-corp', 'v-rf']);
+    request.flush(operation({ id: 'op-2', requested_version_ids: ['v-corp', 'v-rf'] }));
+    await settle();
+
+    expect(emitted).toEqual(['op-2']);
+    expect(navigations).toEqual([]);
+  });
+
+  it('explains that a plan restores at most 100 objects rather than asking for one', async () => {
+    // The plan request accepts 100 versions; more is refused outright, so the
+    // selection is split by whoever makes it rather than truncated here.
+    fixture.componentRef.setInput('changeGroup', 'cg-large');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectOne(`${BASE}/change-groups/cg-large`).flush({
+      id: 'cg-large',
+      title: 'Bulk template push',
+      changed_objects: Array.from({ length: 101 }, (_, index) => ({
+        logical_object_id: `lo-${index}`,
+        object_type: 'wlan',
+        object_name: `WLAN-${index}`,
+        scope: 'org',
+        site_mist_id: null,
+        event: 'updated',
+        before_version_id: `v-${index}`,
+        after_version_id: `v-${index}-next`,
+        before_version: 1,
+        after_version: 2,
+        changed_fields: ['ssid'],
+      })),
+    });
+    await settle();
+
+    expect(text()).toContain('101 selected');
+    expect(text()).toContain('A plan restores at most 100 objects');
+    expect(button('Build restore plan')!.disabled).toBe(true);
+
+    all<HTMLButtonElement>('.pill-remove')[0].click();
+    await settle();
+    expect(text()).not.toContain('A plan restores at most 100 objects');
+    expect(button('Build restore plan')!.disabled).toBe(false);
+  });
+
+  it('counts the whole catalogue and shows the applied site when it was chosen on another page', async () => {
+    // A site picked on Site topology may hold nothing restorable, so no facet
+    // names it; the filter still applies and must show, and be clearable.
+    TestBed.inject(SiteContextService).select(ORGANIZATION_ID, 'site-9');
+    fixture.detectChanges();
+    await tick();
+    const reads = httpMock.match((request) => request.url === TARGETS_URL);
+    expect(reads.map((read) => read.request.params.get('site_id'))).toEqual(['site-9', null]);
+    reads[0].flush(targetList([NW_CORP], 1));
+    reads[1].flush(targetList([NW_CORP], 40));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await settle();
+
+    expect(text()).toContain('1 of 40 restorable objects match');
+    const select = element().querySelector<HTMLSelectElement>('.site-select')!;
+    expect(select.value).toBe('site-9');
+
+    select.value = '';
+    select.dispatchEvent(new Event('change'));
+    const cleared = await nextTargets(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 40));
+    expect(cleared.request.params.has('site_id')).toBe(false);
+  });
+
+  it('shows the page size in effect when the picker is shown again', async () => {
+    await boot(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+    const size = element().querySelector<HTMLSelectElement>('.pager-select')!;
+    size.value = '50';
+    size.dispatchEvent(new Event('change'));
+    await nextTargets(targetList([NW_CORP, RF_DENSE, SEA_VOICE], 70));
+
+    all<HTMLInputElement>('.target-box')[0].click();
+    await settle();
+    button('Build restore plan')!.click();
+    await tick();
+    httpMock.expectOne(PLANS_URL).flush(operation());
+    await settle();
+    button('Change targets')!.click();
+    await settle();
+
+    expect(element().querySelector<HTMLSelectElement>('.pager-select')!.value).toBe('50');
+  });
+
   it('offers compensation for a failed run and names what it will reverse', async () => {
     fixture.componentRef.setInput('operation', 'op-1');
     fixture.detectChanges();
@@ -1431,6 +1544,68 @@ describe('RestorePage', () => {
     await settle();
 
     expect(text()).toContain('COMPENSATED');
+  });
+
+  /** Open a failed run and plan its compensation, answered with `plan`. */
+  async function compensate(plan: Partial<RestoreOperation>): Promise<void> {
+    fixture.componentRef.setInput('operation', 'op-1');
+    fixture.detectChanges();
+    await tick();
+    httpMock.expectOne((request) => request.url === TARGETS_URL).flush(targetList([NW_CORP]));
+    httpMock.expectOne((request) => request.url === OPERATIONS_URL).flush({ items: [], total: 0 });
+    await tick();
+    httpMock.expectOne(`${OPERATIONS_URL}/op-1`).flush(
+      operation({
+        status: 'failed',
+        compensation_available: true,
+        actions: [action({ status: 'completed' }), action({ order: 1, status: 'failed', error: 'boom' })],
+      }),
+    );
+    await settle();
+    button('Plan compensation')!.click();
+    await tick();
+    httpMock
+      .expectOne(`${OPERATIONS_URL}/op-1/compensation`)
+      .flush(operation({ id: 'op-2', status: 'planned', actions: [action()], ...plan }));
+    await settle();
+    const token = element().querySelector<HTMLInputElement>('.token-input')!;
+    token.value = 'a-fresh-administrator-token';
+    token.dispatchEvent(new Event('input'));
+    await settle();
+  }
+
+  it('shows what blocks a compensation plan and does not let it be authorized', async () => {
+    await compensate({ preflight_errors: ['NW-Corp: the PSK cannot be restored from a masked value'] });
+
+    expect(text()).toContain('PREFLIGHT ERRORS');
+    expect(text()).toContain('the PSK cannot be restored from a masked value');
+    expect(button('Authorize and run compensation')!.disabled).toBe(true);
+  });
+
+  it('asks a second administrator to review a compensation plan that policy says needs one', async () => {
+    // Compensation clears the same approval policy a restore does, on the
+    // compensation plan's own id.
+    await compensate({ approval_required: true });
+    expect(button('Authorize and run compensation')!.disabled).toBe(true);
+
+    button('Ask a second administrator to review')!.click();
+    await tick();
+    const request = httpMock.expectOne(`${BASE}/approvals`);
+    expect(request.request.body).toEqual({ restore_operation_id: 'op-2' });
+    request.flush(approvalRequest({ id: 'ap-2', restore_operation_id: 'op-2' }));
+    await settle();
+    expect(text()).toContain('PENDING');
+    expect(button('Authorize and run compensation')!.disabled).toBe(true);
+
+    button('Check for a decision')!.click();
+    await tick();
+    httpMock.expectOne(`${BASE}/approvals/ap-2`).flush(
+      approvalRequest({ id: 'ap-2', restore_operation_id: 'op-2', status: 'approved', decided_by_email: 'a.osei@northwind.example' }),
+    );
+    await settle();
+
+    expect(text()).toContain('APPROVED');
+    expect(button('Authorize and run compensation')!.disabled).toBe(false);
   });
 
   // ---- roles and historical mode -----------------------------------------

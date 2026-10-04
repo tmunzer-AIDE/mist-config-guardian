@@ -61,7 +61,7 @@
           [siteId]="siteId()"
           [objectType]="objectType()"
           [query]="query()"
-          [total]="catalogTotal()"
+          [total]="catalogTotal() ?? 0"
           [matched]="matched()"
           [pageLabel]="pageLabel()"
           [pageSize]="pageSize()"
@@ -119,8 +119,8 @@
             (authorized)="execute($event)"
             (cancelled)="backToTargets()"
             (modePicked)="setMode($event)"
-            (approvalRequested)="requestApproval()"
-            (approvalRefreshed)="refreshApproval()"
+            (approvalRequested)="requestApproval(operation)"
+            (approvalRefreshed)="refreshApproval(operation)"
           />
         }
       }
@@ -137,8 +137,13 @@
             [readOnly]="readOnly()"
             [busy]="busy()"
             [compensation]="true"
+            [approval]="compensationApproval()"
+            [approvalRequired]="plan.approval_required === true"
+            [blockedByApproval]="compensationBlockedByApproval()"
             (authorized)="runCompensation($event)"
             (cancelled)="cancelCompensation()"
+            (approvalRequested)="requestApproval(plan)"
+            (approvalRefreshed)="refreshApproval(plan)"
           />
         }
       } @else if (activeOperation(); as operation) {

@@ -287,6 +287,28 @@ describe('ImpactPage', () => {
     http.expectOne('/api/v1/organizations/org-1/monitoring/missing').flush(session({ id: 'missing' }));
     fixture.detectChanges(); expect(text()).toContain('SEA-AP-101');
   });
+  it('keeps the last good reading on screen while a failed refresh is retried', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await render(CRITICAL);
+      vi.advanceTimersByTime(30_000);
+      http.expectOne('/api/v1/organizations/org-1/monitoring/s1').flush({}, { status: 503, statusText: 'Unavailable' });
+      fixture.detectChanges();
+      expect(text()).toContain('The last successful reading is shown');
+      expect(text()).toContain('SEA-AP-101');
+
+      (all('button').find((b) => b.textContent?.trim() === 'Retry') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(text()).toContain('SEA-AP-101');
+      expect(text()).not.toContain('Loading device evidence');
+      http.expectOne('/api/v1/organizations/org-1/monitoring/s1').flush({}, { status: 503, statusText: 'Unavailable' });
+      fixture.detectChanges();
+      expect(text()).toContain('The last successful reading is shown');
+      expect(text()).toContain('SEA-AP-101');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('cancels an old read when another session link arrives', async () => {
     fixture.componentRef.setInput('session', 'old'); fixture.detectChanges();
     const old = http.expectOne('/api/v1/organizations/org-1/monitoring/old');
