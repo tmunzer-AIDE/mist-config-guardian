@@ -332,6 +332,41 @@ async def test_a_result_too_large_to_store_is_still_judged_in_full(clients):
     assert all(mac not in conclusion.model_dump_json() for mac in macs)
 
 
+# The provider lists newest first, so the rows a digest keeps are not the access points that sort first.
+SERVING = [f"0200000001{index:02x}" for index in reversed(range(40))]
+
+
+async def test_a_departure_spread_over_more_access_points_than_the_digest_shows_keeps_its_warning():
+    """The digest keeps a few rows, so it names a few serving APs; the rest are counted, never a broken conclusion."""
+    macs = [f"0011223344{index:02x}" for index in range(len(SERVING))]
+    before = sessions(
+        *(
+            session(client=mac, connect=CHANGED_AT.timestamp() - 300, disconnect=None, access_point=ap)
+            for mac, ap in zip(macs, SERVING, strict=True)
+        )
+    )
+    after = sessions(
+        *(
+            session(
+                client=mac,
+                connect=CHANGED_AT.timestamp() - 300,
+                disconnect=CHANGED_AT.timestamp() + 60,
+                access_point=ap,
+            )
+            for mac, ap in zip(macs, SERVING, strict=True)
+        )
+    )
+    registry = EvidenceRegistry()
+    transport = FakeRuleTransport(lambda _path, params: before if params["start"] == BEFORE_START else after)
+    _plan, conclusion, _ = await run(WlanRemovalPlugin(), wlan_change(), charged=reader(transport, registry=registry))
+
+    assert (conclusion.peak, conclusion.current) == ("warning", "warning")
+    assert f"{len(macs)} client(s)" in conclusion.findings[0].text
+    assert not any(base.EVALUATION_FAILED in gap for gap in conclusion.gaps)
+    assert conclusion.impacted_devices
+    assert {device.mac for device in conclusion.impacted_devices} < set(SERVING)
+
+
 async def test_no_raw_row_text_reaches_a_conclusion_a_finding_or_a_gap():
     prose = "secret-provider-message"
     row = session(connect=CHANGED_AT.timestamp() - 300, disconnect=CHANGED_AT.timestamp() + 60) | {
@@ -798,6 +833,33 @@ async def test_an_authentication_history_too_large_to_store_is_still_judged_in_f
     assert all(item.payload["digest"]["rows"]["results"] == len(macs) for item in stored)
     assert all(json_size(item) <= RULE_EVIDENCE_ITEM_BUDGET for item in stored)
     assert all(mac not in conclusion.model_dump_json() for mac in macs)
+
+
+async def test_an_authentication_outage_over_more_access_points_than_the_digest_shows_keeps_its_warning():
+    macs = [f"0011223355{index:02x}" for index in range(len(SERVING))]
+    before = {
+        "results": [
+            auth_event(kind="CLIENT_AUTHENTICATED", at=CHANGED_AT - timedelta(minutes=1), client=mac) | {"ap": ap}
+            for mac, ap in zip(macs, SERVING, strict=True)
+        ],
+        "total": len(macs),
+    }
+    after = {
+        "results": [
+            auth_event(kind="MARVIS_EVENT_CLIENT_AUTH_FAILURE", at=CHANGED_AT + timedelta(seconds=1), client=mac)
+            | {"ap": ap}
+            for mac, ap in zip(macs, SERVING, strict=True)
+        ],
+        "total": len(macs),
+    }
+    transport = FakeRuleTransport(lambda _path, params: before if params["start"] == BEFORE_START else after)
+    _plan, conclusion, _ = await run(WlanAuthPlugin(), auth_change(), transport=transport)
+
+    assert (conclusion.peak, conclusion.current) == ("warning", "warning")
+    assert f"{len(macs)} client(s)" in conclusion.findings[0].text
+    assert not any(base.EVALUATION_FAILED in gap for gap in conclusion.gaps)
+    assert conclusion.impacted_devices
+    assert {device.mac for device in conclusion.impacted_devices} < set(SERVING)
 
 
 @pytest.mark.parametrize("reported", ["00:11:22:33:44:55", "001122334455".upper()])

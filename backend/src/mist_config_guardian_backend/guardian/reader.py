@@ -87,6 +87,8 @@ _PATH_SCOPE = re.compile(r"/(orgs|sites)/([^/]+)")
 _ORG_NEUTRAL_PREFIX = "/api/v1/const/"
 _SAFE_LOCATION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 _INTEGER_TYPES = frozenset({"integer", "number"})
+# A plain decimal short enough for ``int`` to convert; epoch seconds need eleven digits for millennia yet.
+_EPOCH_SECONDS = re.compile(r"-?[0-9]{1,18}")
 
 
 class TransportError(RuntimeError):
@@ -883,12 +885,16 @@ def _epochs(window: EvidenceWindow) -> tuple[int, int]:
 
 
 def _seconds(value: Any) -> int | None:
-    """Epoch seconds as an integer, from an integer or a plain numeric string; anything else is not a time."""
+    """Epoch seconds as an integer, from an integer or a plain numeric string; anything else is not a time.
+
+    The string is matched rather than tested with ``isdigit``, which also passes a superscript or a repeated sign
+    that ``int`` then refuses: the model's malformed argument must be a rejection, never an error that ends the agent.
+    """
     if type(value) is int:
         return value
     if type(value) is float and value.is_integer():
         return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+    if isinstance(value, str) and _EPOCH_SECONDS.fullmatch(value.strip()):
         return int(value)
     return None
 

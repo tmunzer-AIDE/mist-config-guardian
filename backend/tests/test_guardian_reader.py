@@ -619,6 +619,10 @@ async def test_exactly_before_after_or_the_combined_window_is_accepted(window, n
         {"start_time": BEFORE[0], "end_time": AFTER[1] + 1},
         {"start_time": COMBINED[0] - 3600, "end_time": COMBINED[1]},
         {"start_time": "yesterday", "end_time": "today"},
+        # Text that passes a digit test without being a number, and a number too long to convert.
+        {"start_time": "--5", "end_time": str(BEFORE[1])},
+        {"start_time": "²", "end_time": str(BEFORE[1])},
+        {"start_time": "9" * 5_000, "end_time": str(BEFORE[1])},
         {"start_time": BEFORE[0], "end_time": None},
         {"start_time": None, "end_time": None},
     ],
@@ -1240,6 +1244,26 @@ def test_redaction_bounds_depth_width_and_length() -> None:
 )
 def test_redaction_keeps_only_safe_json_values(value: dict, expected: dict) -> None:
     assert payloads.redact(value, secrets=("s3cr3t",)) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "kept"),
+    [
+        # A WEP WLAN's keys sit under its authentication, beside the index that is no secret.
+        ({"auth": {"type": "wep", "keys": ["s3cr3t-wep-1", "s3cr3t-wep-2"], "key_idx": 1}}, "key_idx"),
+        ({"bgp_config": {"wan": {"auth_key": "s3cr3t-bgp", "local_as": 65000}}}, "local_as"),
+        ({"ospf_areas": {"0": {"networks": {"corp": {"auth_type": "md5", "auth_keys": {"1": "s3cr3t-ospf"}}}}}}, "md5"),
+        ({"snmp_config": {"v2c_config": [{"community_name": "s3cr3t-snmp", "view": "all"}]}}, "view"),
+        ({"snmp_config": {"communities": [{"name": "s3cr3t-snmp"}], "enabled": True}}, "enabled"),
+        ({"tunnel_configs": {"zscaler": {"primary": {"pre_shared_key": "s3cr3t-ike", "probe": {}}}}}, "probe"),
+    ],
+)
+def test_mist_credential_fields_are_redacted_and_their_neighbours_kept(value: dict, kept: str) -> None:
+    redacted = json.dumps(payloads.redact(value))
+
+    assert "s3cr3t" not in redacted
+    assert "[redacted]" in redacted
+    assert kept in redacted
 
 
 def test_the_last_digest_always_fits_whatever_the_result_was() -> None:

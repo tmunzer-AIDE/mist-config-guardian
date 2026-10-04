@@ -19,6 +19,7 @@ Guardian stays dormant unless ``guardian_enabled`` is set: the webhook gates roo
 polling. Nothing here runs otherwise.
 """
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -79,6 +80,7 @@ from mist_config_guardian_backend.guardian.contracts import (
 )
 from mist_config_guardian_backend.guardian.deployment import (
     DeploymentReplay,
+    DeviceDeployment,
     DeviceEventReceipt,
     ReplayFrame,
     expected_devices,
@@ -112,6 +114,7 @@ from mist_config_guardian_backend.guardian.payloads import redact_text
 from mist_config_guardian_backend.guardian.plugins import PLUGINS
 from mist_config_guardian_backend.guardian.plugins.base import rule_allowances, run_rules
 from mist_config_guardian_backend.guardian.reader import (
+    CALL_TIMEOUT_CEILING,
     MAX_TRANSPORT_BYTES,
     McpTransport,
     Reader,
@@ -185,6 +188,10 @@ DEPLOYMENT_EVIDENCE = "Deployment evidence"
 MONITORING_REPLAY = "Monitoring replay"
 MONITORING_EVIDENCE = "Monitoring evidence"
 AGENT_FAILED = "The agent failed: {detail}"
+# A collaborator the attempt could not build. Each one skips the agent with its reason, and none fails the attempt.
+TOKEN_UNAVAILABLE = "The organization's service token could not be read: {detail}"  # noqa: S105 - a message
+SETTINGS_UNAVAILABLE = "The AI provider settings could not be read: {detail}"
+AGENT_UNAVAILABLE = "The Mist MCP endpoint or the AI provider could not be opened: {detail}"
 
 # An input the attempt could not see in full. Each of these becomes both a core gap on the verdict and an
 # unsatisfied core obligation on the ledger, so a run can never publish complete coverage over what it never read.
@@ -299,11 +306,13 @@ class LoadedChanges:
 class AttemptInputs:
     """Everything one attempt reads from the database, loaded once before execution begins.
 
-    ``gaps`` and ``superseded`` are what loading itself could not see in full. Both end as core gaps and as
-    unsatisfied core obligations, never as silence.
+    ``organization_id`` is this database's identity of the organization and ``mist_org_id`` is Mist's, which every
+    Mist read is scoped by and every Mist row names. ``gaps`` and ``superseded`` are what loading itself could not
+    see in full. Both end as core gaps and as unsatisfied core obligations, never as silence.
     """
 
     organization_id: PydanticObjectId
+    mist_org_id: str
     audit_id: str
     received_at: datetime
     audit_time: datetime | None
@@ -523,9 +532,10 @@ async def _device_receipts(
 ) -> tuple[tuple[DeviceEventReceipt, ...], tuple[str, ...]]:
     """Audit-linked and session-candidate device events, normalized for pairing and never carrying a payload.
 
-    Oldest first, because pairing needs each outcome's earlier trigger. A receipt the legacy normalizer could not
-    classify carries no ``deployment`` and is invisible here, which is why :data:`UNOBSERVABLE_EVENT_TYPES` is
-    stated rather than assumed away.
+    Oldest first, because pairing needs each outcome's earlier trigger. A candidate is loaded whatever audit it
+    names: an unlinked outcome belongs to the latest trigger before it, and that trigger may be another audit's. A
+    receipt the legacy normalizer could not classify carries no ``deployment`` and is invisible here, which is why
+    :data:`UNOBSERVABLE_EVENT_TYPES` is stated rather than assumed away.
     """
     rows = (
         await WebhookReceipt.get_pymongo_collection()
@@ -536,7 +546,7 @@ async def _device_receipts(
                 "signature_valid": True,
                 "created_at": {"$lte": as_of},
                 "deployment": {"$ne": None},
-                "$or": [{"audit_id": audit_id}, {"audit_id": None, "_id": {"$in": list(candidates)}}],
+                "$or": [{"audit_id": audit_id}, {"_id": {"$in": list(candidates)}}],
             },
             {"audit_id": 1, "created_at": 1, "deployment": 1},
         )
@@ -568,11 +578,14 @@ async def linked_sessions(
     return rows[:MAX_LINKED_SESSIONS], gaps
 
 
-async def load_attempt_inputs(root: GuardianInvestigation, *, as_of: datetime) -> AttemptInputs:
+async def load_attempt_inputs(
+    root: GuardianInvestigation, organization: Organization | None, *, as_of: datetime
+) -> AttemptInputs:
     """Load every database input of one attempt once, at the attempt's fixed evidence instant.
 
     Every read cap that fires is carried out as a gap rather than swallowed, so the attempt can report what it
-    never saw instead of judging as if it had seen everything.
+    never saw instead of judging as if it had seen everything. An organization that is gone leaves no Mist
+    identity, and its attempt has no transport either, so every read it would make fails as a gap.
     """
     sessions, session_gaps = await linked_sessions(root.organization_id, root.audit_id)
     receipt_ids = sorted({receipt_id for session in sessions for receipt_id in session.receipt_ids})
@@ -580,6 +593,7 @@ async def load_attempt_inputs(root: GuardianInvestigation, *, as_of: datetime) -
     receipts, receipt_gaps = await _device_receipts(root.organization_id, root.audit_id, receipt_ids, as_of=as_of)
     return AttemptInputs(
         organization_id=root.organization_id,
+        mist_org_id=organization.mist_org_id if organization is not None else "",
         audit_id=root.audit_id,
         received_at=root.changed_at,
         audit_time=root.changed_at if root.anchor_known else None,
@@ -704,7 +718,11 @@ class _NoTools(AbstractAsyncContextManager["AttemptTools"]):
 
 
 class GuardianTools(AbstractAsyncContextManager["AttemptTools"]):
-    """Builds and closes one attempt's transports. A provider or endpoint that is missing skips the agent."""
+    """Builds and closes one attempt's transports. A provider or endpoint that is missing or fails skips the agent.
+
+    Nothing that fails here fails the attempt: the spec isolates a provider or MCP failure like any agent failure,
+    and a token that cannot be read leaves no transport at all, so every rule read fails as its own gap.
+    """
 
     def __init__(self, organization: Organization, *, vault: CredentialVault) -> None:
         self._organization = organization
@@ -712,8 +730,8 @@ class GuardianTools(AbstractAsyncContextManager["AttemptTools"]):
         self._stack = AsyncExitStack()
 
     async def __aenter__(self) -> AttemptTools:
-        # ``__aexit__`` never runs when ``__aenter__`` raises, so whatever is already open is closed here instead;
-        # otherwise a failing provider or endpoint would leak one HTTP client per failed attempt.
+        # ``__aexit__`` never runs when ``__aenter__`` raises, which only a cancellation still does, so whatever is
+        # already open is closed here instead; otherwise each cancelled build would leak an HTTP client.
         try:
             return await self._build()
         except BaseException:
@@ -722,10 +740,18 @@ class GuardianTools(AbstractAsyncContextManager["AttemptTools"]):
 
     async def _build(self) -> AttemptTools:
         settings = get_settings()
-        token = await service_token(self._organization, self._vault)
+        try:
+            token = await service_token(self._organization, self._vault)
+        except Exception as exc:  # noqa: BLE001 - the rules need the token too, so every read becomes its own gap
+            return AttemptTools(skip_reason=_unavailable(TOKEN_UNAVAILABLE, exc))
         rule = MistRuleTransport(token=token, base_url=REGION_HOSTS[self._organization.cloud_region])
         self._stack.push_async_callback(rule.aclose)
-        runtime = await ApplicationConfigurationService(self._vault).ai_runtime()
+        try:
+            runtime = await ApplicationConfigurationService(self._vault).ai_runtime()
+        except Exception as exc:  # noqa: BLE001 - unreadable provider settings cost the agent, never the rule reads
+            return AttemptTools(
+                rule_transport=rule, skip_reason=_unavailable(SETTINGS_UNAVAILABLE, exc, (token,)), secrets=(token,)
+            )
         reason = availability(
             runtime=runtime is not None,
             mcp_endpoint=bool(settings.mist_mcp_url),
@@ -737,23 +763,40 @@ class GuardianTools(AbstractAsyncContextManager["AttemptTools"]):
             # a stored payload, an evidence detail or a gap.
             return AttemptTools(rule_transport=rule, skip_reason=reason, secrets=(token,))
         cloud = httpx.URL(REGION_HOSTS[self._organization.cloud_region]).host
-        client = await self._stack.enter_async_context(
-            MistMcpClient(url=settings.mist_mcp_url, token=token, cloud=cloud, max_wire_bytes=MAX_TRANSPORT_BYTES)
-        )
-        provider = await self._stack.enter_async_context(
-            OpenAiCompatibleProvider(base_url=runtime.base_url, model=runtime.model, api_key=runtime.api_key)
-        )
+        secrets = (token, runtime.api_key)
+        try:
+            # The client sends its initialize exchange with no bound of its own, and an event stream that keeps
+            # sending heartbeats is never idle, so the handshake is bounded here like any other call.
+            async with asyncio.timeout(CALL_TIMEOUT_CEILING):
+                client = await self._stack.enter_async_context(
+                    MistMcpClient(
+                        url=settings.mist_mcp_url, token=token, cloud=cloud, max_wire_bytes=MAX_TRANSPORT_BYTES
+                    )
+                )
+            provider = await self._stack.enter_async_context(
+                OpenAiCompatibleProvider(base_url=runtime.base_url, model=runtime.model, api_key=runtime.api_key)
+            )
+        except Exception as exc:  # noqa: BLE001 - an MCP or provider failure is an agent failure; the rules still run
+            return AttemptTools(
+                rule_transport=rule, skip_reason=_unavailable(AGENT_UNAVAILABLE, exc, secrets), secrets=secrets
+            )
         return AttemptTools(
             rule_transport=rule,
             mcp_transport=GuardianMcpTransport(client),
             model_client=GuardianModelClient(provider, structured_output=runtime.structured_output or ""),
-            secrets=(token, runtime.api_key),
+            secrets=secrets,
         )
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None
     ) -> None:
         await self._stack.aclose()
+
+
+def _unavailable(reason: str, error: Exception, secrets: Sequence[str] = ()) -> str:
+    """A collaborator the attempt could not build, as the agent's skip reason, never quoting a credential."""
+    detail = str(error) or type(error).__name__
+    return redact_text(reason.format(detail=detail), secrets=secrets, max_chars=MAX_REASON_CHARS)
 
 
 ToolsFactory = Callable[[Organization | None], AbstractAsyncContextManager[AttemptTools]]
@@ -894,7 +937,7 @@ async def execute_attempt(
     frame = ReplayFrame(audit_id=inputs.audit_id, anchor=anchor, as_of=instant)
     expected = expected_devices(inputs.receipts, audit_id=inputs.audit_id, as_of=instant)
     reader = Reader(
-        org_id=str(inputs.organization_id),
+        org_id=inputs.mist_org_id,
         authority=_site_authority(change, expected),
         windows=evidence_windows(anchor.changed_at, instant),
         registry=registry,
@@ -975,7 +1018,7 @@ async def execute_attempt(
             rules=rules.conclusions,
             agent=agent.conclusion,
             evidence=registry.evidence,
-            devices=_device_severities(monitoring_replay.devices),
+            devices=_device_severities(monitoring_replay.devices, deployment_replay.devices),
             # The ledger echoes the inputs it was given, the atoms it could place on no row and the phases that
             # failed; each of its gaps carries an unsatisfied core observation, so coverage and the gaps agree.
             core_gaps=ledger.gaps,
@@ -1028,15 +1071,31 @@ def _row_priority(row: LedgerRow) -> tuple[int, str]:
     return (int(row.atom_id[1:]), row.target.device_mac or row.target.site_id or "")
 
 
-def _device_severities(devices: Iterable[DeviceMonitoring]) -> tuple[DeviceSeverity, ...]:
-    """The per-device bands only an exclusive monitoring replay measured, for composition's device rows."""
-    return tuple(
+def _device_severities(
+    devices: Iterable[DeviceMonitoring], deployments: Iterable[DeviceDeployment] = ()
+) -> tuple[DeviceSeverity, ...]:
+    """The per-device bands only an exclusive monitoring replay measured, then the site of every other device.
+
+    Deployment pairing knows the site of each device it replayed, so a device that deployment, a rule or the agent
+    names is still listed without an exclusive session. Such a row carries no band of its own: composition reads a
+    row's bands as monitoring's, and deployment's own bands reach the verdict through its conclusion.
+    """
+    monitored = tuple(devices)
+    measured = tuple(
         DeviceSeverity(
             mac=device.mac, site_id=device.site_id, name=device.name, peak=device.peak, current=device.current
         )
-        for device in devices
+        for device in monitored
         if device.site_id and device.peak is not None and device.current is not None
     )
+    listed = {row.mac for row in measured}
+    names = {device.mac: device.name for device in monitored}
+    located = tuple(
+        DeviceSeverity(mac=device.mac, site_id=device.site_id, name=names.get(device.mac, ""))
+        for device in deployments
+        if device.site_id and device.mac not in listed
+    )
+    return (*measured, *located)
 
 
 async def _agent_run(  # noqa: PLR0913 - one collaborator or attempt bound per argument
@@ -1288,11 +1347,12 @@ class GuardianService:
     ) -> AttemptOutcome:
         as_of = utc_now()
         try:
-            inputs = await load_attempt_inputs(root, as_of=as_of)
+            inputs = await load_attempt_inputs(root, organization, as_of=as_of)
             async with self._tools(organization) as tools:
                 return await execute_attempt(inputs, tools=tools, started=started, as_of=as_of, clock=self._clock)
         except Exception as exc:
-            # An attempt that cannot load its inputs or reach its collaborators fails alone; the root retries.
+            # An attempt that cannot load its inputs fails alone; the root retries. A collaborator that cannot be
+            # built only skips the agent (see GuardianTools), so the attempt still composes without it.
             logger.exception("Guardian attempt %s failed", committed.token)
             return AttemptOutcome(state="failed", failure_reason=bound_reason(ATTEMPT_FAILED.format(detail=exc)))
 
