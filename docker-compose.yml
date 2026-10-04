@@ -10,6 +10,11 @@ services:
       # origin that is not the one the browser reports, so the origin is pinned
       # here rather than left to the development default of the Angular server.
       WEBAUTHN_ORIGIN: http://localhost:8080
+      # The API publishes no port, so every request reaches it through the
+      # frontend's nginx, which replaces X-Forwarded-For with the address it
+      # saw. Without this the API would take nginx's address for every client
+      # and share one sign-in throttle among all of them.
+      FORWARDED_ALLOW_IPS: "*"
       # Guardian stays off unless GUARDIAN_ENABLED is set in the shell or the project's .env file.
       GUARDIAN_ENABLED: ${GUARDIAN_ENABLED:-false}
       MONGODB_URL: mongodb://mongodb:27017
