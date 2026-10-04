@@ -9,8 +9,8 @@
       <button
         class="cg-chip"
         type="button"
-        [class.cg-chip--on]="kinds() === 'all'"
-        [attr.aria-pressed]="kinds() === 'all'"
+        [class.cg-chip--on]="kind() === 'all'"
+        [attr.aria-pressed]="kind() === 'all'"
         (click)="kinds.set('all')"
       >
         All
@@ -19,8 +19,8 @@
         <button
           class="cg-chip"
           type="button"
-          [class.cg-chip--on]="kinds() === facet.kind"
-          [attr.aria-pressed]="kinds() === facet.kind"
+          [class.cg-chip--on]="kind() === facet.kind"
+          [attr.aria-pressed]="kind() === facet.kind"
           (click)="kinds.set(facet.kind)"
         >
           {{ facet.label }} {{ facet.count }}

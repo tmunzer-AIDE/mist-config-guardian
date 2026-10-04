@@ -405,9 +405,9 @@ describe('organization-scoped loaders under reordered answers', () => {
   });
 
   it('an AI answer that outlived its session leaves availability alone', async () => {
-    // Availability is resolved once per session from an administrator-only
-    // endpoint. A refusal answering after sign-out would tell the next user
-    // that AI is unconfigured; a success would tell them it is fine.
+    // Availability is resolved once per session. A refusal answering after
+    // sign-out would tell the next user that AI is unconfigured; a success
+    // would tell them it is fine.
     const ai = TestBed.inject(AiAssistService);
     const refused = ai.summarise({ organization_id: 'org-a', from_version_id: 'v1', to_version_id: 'v2' });
     const inFlight = pending('/api/v1/ai/diff-summary')[0];

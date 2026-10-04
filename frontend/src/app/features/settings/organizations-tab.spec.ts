@@ -7,6 +7,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { AuthService, CurrentUser } from '../../core/auth.service';
 import { Organization } from '../../core/organization.model';
 import { CRON_PRESETS, OrganizationsTab, nextCronRun, presetForCron } from './organizations-tab';
+import { ConfirmRequest } from './settings-page';
 
 describe('reconciliation schedule presets', () => {
   it('offers exactly the four intervals the design names', () => {
@@ -162,5 +163,48 @@ describe('automatically expanded snapshot history', () => {
     expect(fixture.nativeElement.textContent).not.toContain('Reading snapshot history');
     http.verify();
     fixture.destroy();
+  });
+});
+
+describe('webhook secret rotation', () => {
+  it('reports a refused rotation in the panel instead of leaving the dialog waiting', async () => {
+    const org = {
+      id: 'org1',
+      name: 'Paris',
+      status: 'verified',
+      cloud_region: 'global_02',
+      reconciliation_cron: '0 2 * * *',
+      configuration_retention_days: 365,
+      monitoring_retention_days: 90,
+    } as Organization;
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: OrganizationContextService,
+          useValue: { all: signal([org]), selected: signal(null) },
+        },
+      ],
+    });
+    TestBed.inject(AuthService).applyUser(ADMINISTRATOR);
+    const fixture = TestBed.createComponent(OrganizationsTab);
+    const http = TestBed.inject(HttpTestingController);
+    const requests: ConfirmRequest[] = [];
+    fixture.componentInstance.confirmRequested.subscribe((request) => requests.push(request));
+    fixture.detectChanges();
+
+    (fixture.componentInstance as unknown as { requestRotate(organization: Organization): void }).requestRotate(org);
+    const running = requests[0].run();
+    http
+      .expectOne('/api/v1/organizations/org1/webhook-secret/rotate')
+      .flush({ detail: 'Mist did not answer' }, { status: 502, statusText: 'Bad Gateway' });
+
+    // The confirm dialog closes on a run that returns; one that throws left it
+    // open with nothing on screen to say why.
+    await expect(running).resolves.toBeUndefined();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.failure')?.textContent).toContain('Mist did not answer');
+    TestBed.resetTestingModule();
   });
 });

@@ -9,8 +9,9 @@ import { AuthService } from '../../core/auth.service';
 import { Organization } from '../../core/organization.model';
 import { OrganizationContextService } from '../../core/organization-context.service';
 import { SiteContextService } from '../../core/site-context.service';
+import { TimeContextService } from '../../core/time-context.service';
 import { UiStateService } from '../../core/ui-state.service';
-import { AiSettings } from './ai-assist.service';
+import { AiStatus } from './ai-assist.service';
 import { ConfigurationDiff, DiffEntry, DiffSection } from './diff.model';
 import { ConfigurationObject, ConfigurationVersion } from './history.model';
 import { HistoryPage } from './history-page';
@@ -21,18 +22,7 @@ class Blank {}
 const ORGANIZATION = { id: 'org-1', name: 'Northwind Retail' } as unknown as Organization;
 const OTHER_ORGANIZATION = { id: 'org-2', name: 'Contoso' } as unknown as Organization;
 
-const SETTINGS: AiSettings = {
-  enabled: true,
-  base_url: 'https://api.openai.example/v1',
-  model: 'gpt-4o-mini',
-  api_key_set: true,
-  api_key_last_four: '7Qd3',
-  max_response_tokens: 1500,
-  automatic_summaries: false,
-  last_test_at: null,
-  last_test_ok: null,
-  last_test_detail: null,
-};
+const AI_STATUS: AiStatus = { enabled: true, automatic_summaries: false };
 
 function object(id: string, name: string, isDeleted = false): ConfigurationObject {
   return {
@@ -132,7 +122,7 @@ describe('HistoryPage', () => {
     ui = TestBed.inject(UiStateService);
     const organizations = TestBed.inject(OrganizationContextService);
     const loaded = organizations.load();
-    http.expectOne('/api/v1/organizations').flush({ items: [ORGANIZATION], total: 1 });
+    http.expectOne((request) => request.url === '/api/v1/organizations').flush({ items: [ORGANIZATION], total: 1 });
     await loaded;
   });
 
@@ -157,7 +147,7 @@ describe('HistoryPage', () => {
   ): Promise<ComponentFixture<HistoryPage>> {
     const fixture = TestBed.createComponent(HistoryPage);
     fixture.detectChanges();
-    http.expectOne(`${API_ROOT}/ai/settings`).flush(SETTINGS);
+    http.expectOne(`${API_ROOT}/ai/status`).flush(AI_STATUS);
     http
       .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
       .flush({ items: [subject], total: 1 });
@@ -227,7 +217,7 @@ describe('HistoryPage', () => {
   async function openRail(items: ConfigurationObject[], total: number) {
     const fixture = TestBed.createComponent(HistoryPage);
     fixture.detectChanges();
-    http.expectOne(`${API_ROOT}/ai/settings`).flush(SETTINGS);
+    http.expectOne(`${API_ROOT}/ai/status`).flush(AI_STATUS);
     const first = http.expectOne((request) => request.url === '/api/v1/organizations/org-1/objects');
     first.flush({ items, total });
     await settle(fixture);
@@ -245,7 +235,7 @@ describe('HistoryPage', () => {
     await TestBed.inject(Router).navigate([], { queryParams: { object: objectId } });
     const fixture = TestBed.createComponent(HistoryPage);
     fixture.detectChanges();
-    http.expectOne(`${API_ROOT}/ai/settings`).flush(SETTINGS);
+    http.expectOne(`${API_ROOT}/ai/status`).flush(AI_STATUS);
     http
       .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
       .flush({ items, total });
@@ -624,7 +614,9 @@ describe('HistoryPage', () => {
 
     const organizations = TestBed.inject(OrganizationContextService);
     const reloaded = organizations.load(true);
-    http.expectOne('/api/v1/organizations').flush({ items: [ORGANIZATION, OTHER_ORGANIZATION], total: 2 });
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations')
+      .flush({ items: [ORGANIZATION, OTHER_ORGANIZATION], total: 2 });
     await reloaded;
     organizations.select('org-2');
     await settle(fixture);
@@ -769,5 +761,211 @@ describe('HistoryPage', () => {
     expect(element.querySelector('.ai-run')).toBeNull();
     expect(element.querySelector('.ai-off-text')?.textContent).toContain('not configured');
     expect(element.querySelector('.card-field')?.textContent).toContain('rf_template_id');
+  });
+
+  it('summarises automatically when the status every role can read says so', async () => {
+    // The settings endpoint is administrator-only: reading it left viewers and
+    // operators never knowing AI was on, so they never got a summary unasked.
+    const fixture = TestBed.createComponent(HistoryPage);
+    fixture.detectChanges();
+    http.expectNone(`${API_ROOT}/ai/settings`);
+    http.expectOne(`${API_ROOT}/ai/status`).flush({ enabled: true, automatic_summaries: true });
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects')
+      .flush({ items: [object('obj-1', 'NW-Corp')], total: 1 });
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/obj-1/versions')
+      .flush({ items: [version('v-2', 2), version('v-1', 1)], total: 2 });
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url.endsWith('/diff') && request.params.get('include_entries') === 'false')
+      .flush(diff());
+    await settle(fixture);
+    http.expectOne((request) => request.url === '/api/v1/organizations/org-1/diff').flush(diff());
+    await settle(fixture);
+
+    expect(http.expectOne(`${API_ROOT}/ai/diff-summary`).request.method).toBe('POST');
+  });
+
+  // ---- library controls ----------------------------------------------------
+
+  const objectsUrl = '/api/v1/organizations/org-1/objects';
+
+  function select(fixture: ComponentFixture<HistoryPage>, label: string): HTMLSelectElement {
+    return (fixture.nativeElement as HTMLElement).querySelector(`select[aria-label="${label}"]`)!;
+  }
+
+  async function choose(fixture: ComponentFixture<HistoryPage>, label: string, value: string) {
+    select(fixture, label).value = value;
+    select(fixture, label).dispatchEvent(new Event('change'));
+    await settle(fixture);
+  }
+
+  function emptyRow(fixture: ComponentFixture<HistoryPage>): string {
+    return ((fixture.nativeElement as HTMLElement).querySelector('tbody td')?.textContent ?? '').trim();
+  }
+
+  function answerFacets(organizationId: string, types: string[]): void {
+    http
+      .expectOne((request) => request.url === `/api/v1/organizations/${organizationId}/objects/facets`)
+      .flush({ types: types.map((id) => ({ id, name: id.toUpperCase(), count: 1 })), sites: [] });
+  }
+
+  it('keeps the library on screen while its own controls refine the list', async () => {
+    // The shell hides the page while it tracks a load, and a hidden search box
+    // loses focus: everything typed after the first pause went nowhere.
+    const fixture = TestBed.createComponent(HistoryPage);
+    fixture.detectChanges();
+    http.expectOne(`${API_ROOT}/ai/status`).flush(AI_STATUS);
+    // Arriving is the one read the shell covers.
+    expect(ui.label()).toBe('Loading configuration objects');
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [object('obj-1', 'NW-Corp')], total: 1 });
+    await settle(fixture);
+    expect(ui.loading()).toBe(false);
+
+    const table = () => (fixture.nativeElement as HTMLElement).querySelector('.library-table')!;
+    const filter = fixture.nativeElement.querySelector('.filter-input') as HTMLInputElement;
+    filter.value = 'NW';
+    filter.dispatchEvent(new Event('input'));
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    await settle(fixture);
+
+    const search = http.expectOne((request) => request.url === objectsUrl);
+    expect(ui.loading()).toBe(false);
+    expect(table().getAttribute('aria-busy')).toBe('true');
+    search.flush({ items: [object('obj-1', 'NW-Corp')], total: 1 });
+    await settle(fixture);
+    expect(table().getAttribute('aria-busy')).toBe('false');
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.sort-heading')!.click();
+    await settle(fixture);
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    expect(ui.loading()).toBe(false);
+  });
+
+  it('clears the type and scope filters when the organization changes', async () => {
+    // Another organization holds other types. Kept, the filter emptied the
+    // list behind a select that could no longer show it.
+    const organizations = TestBed.inject(OrganizationContextService);
+    const reloaded = organizations.load(true);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations')
+      .flush({ items: [ORGANIZATION, OTHER_ORGANIZATION], total: 2 });
+    await reloaded;
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 1);
+    answerFacets('org-1', ['wlan', 'psk']);
+    await settle(fixture);
+
+    await choose(fixture, 'Object type', 'psk');
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await choose(fixture, 'Scope', 'org');
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    organizations.select('org-2');
+    await settle(fixture);
+    answerFacets('org-2', ['wlan']);
+    const listed = http.expectOne((request) => request.url === '/api/v1/organizations/org-2/objects');
+    expect(listed.request.params.has('object_type')).toBe(false);
+    expect(listed.request.params.has('scope')).toBe(false);
+    listed.flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    expect(select(fixture, 'Object type').selectedOptions[0].textContent?.trim()).toBe('All object types');
+    expect(select(fixture, 'Scope').value).toBe('');
+  });
+
+  it('shows the chosen type again once its option comes back', async () => {
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 1);
+    answerFacets('org-1', ['wlan', 'psk']);
+    await settle(fixture);
+    await choose(fixture, 'Object type', 'psk');
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    // The options are read again with deleted objects, and that read fails...
+    const toggle = () =>
+      [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')].find((button) =>
+        /Show deleted|Including deleted/.test(button.textContent ?? ''),
+      )!;
+    toggle().click();
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === `${objectsUrl}/facets`)
+      .flush({ detail: 'boom' }, { status: 503, statusText: 'Unavailable' });
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    // ...then answers, with the chosen type among them.
+    toggle().click();
+    await settle(fixture);
+    answerFacets('org-1', ['wlan', 'psk']);
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await settle(fixture);
+
+    expect(select(fixture, 'Object type').value).toBe('psk');
+  });
+
+  it('says what an empty list was narrowed by', async () => {
+    const { fixture } = await openRail([], 0);
+    answerFacets('org-1', ['wlan']);
+    await settle(fixture);
+    // Deleted objects are left out by default, so an empty list does not mean
+    // that nothing is stored.
+    expect(emptyRow(fixture)).toBe('No live objects stored. Deleted objects are hidden.');
+
+    [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')]
+      .find((button) => (button.textContent ?? '').includes('Show deleted'))!
+      .click();
+    await settle(fixture);
+    http.match((request) => request.url === `${objectsUrl}/facets`).forEach((request) =>
+      request.flush({ types: [{ id: 'wlan', name: 'WLAN', count: 1 }], sites: [] }),
+    );
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await settle(fixture);
+    expect(emptyRow(fixture)).toBe('No stored objects yet.');
+
+    await choose(fixture, 'Object type', 'wlan');
+    http.expectOne((request) => request.url === objectsUrl).flush({ items: [], total: 0 });
+    await settle(fixture);
+    expect(emptyRow(fixture)).toBe('No objects match these filters.');
+  });
+
+  it("drops the previous organization's objects before reading the next", async () => {
+    const organizations = TestBed.inject(OrganizationContextService);
+    const reloaded = organizations.load(true);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations')
+      .flush({ items: [ORGANIZATION, OTHER_ORGANIZATION], total: 2 });
+    await reloaded;
+    const { fixture } = await openRail([object('obj-1', 'NW-Corp')], 1);
+
+    organizations.select('org-2');
+    await settle(fixture);
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-2/objects')
+      .flush({ detail: 'boom' }, { status: 503, statusText: 'Unavailable' });
+    await settle(fixture);
+
+    // The read failed and says so; what is left must not be org-1's catalogue
+    // presented under org-2.
+    expect(ui.error()?.title).toContain('Loading configuration objects');
+    expect(railText(fixture)).not.toContain('NW-Corp');
+    expect(railText(fixture)).not.toContain('Showing 1 of 1');
+  });
+
+  it('returns to now on arrival, so an instant it does not show cannot block a restore', async () => {
+    // The library reads live state and has no time bar. Left historical, the
+    // restore buttons were disabled, and the API refused their writes, by an
+    // instant chosen on another page that nothing here could undo.
+    const time = TestBed.inject(TimeContextService);
+    time.setAsOf(new Date('2026-09-01T12:00:00Z'));
+
+    const fixture = await openRestorable([version('v-3', 3), version('v-2', 2), version('v-1', 1)]);
+
+    expect(time.isHistorical()).toBe(false);
+    const restore = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.version-restore');
+    expect(restore?.disabled).toBe(false);
   });
 });

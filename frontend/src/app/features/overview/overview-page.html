@@ -121,7 +121,7 @@
           <p>
             {{ hasChanges() ? 'Choose All changes or explore the full history.' : emptyBody() }}
           </p>
-          @if (organization()?.status !== 'verified') {
+          @if (setupOffered()) {
             <button class="cg-btn cg-btn--primary" (click)="openSettings()">
               Open organization setup
             </button>

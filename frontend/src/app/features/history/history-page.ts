@@ -45,6 +45,7 @@ import { DiffService } from './diff.service';
 import { alignRawLines, RawRow } from './raw-diff';
 import {
   ConfigurationObject,
+  ConfigurationObjectList,
   ConfigurationVersion,
   eventTone,
   objectGroupLabel,
@@ -133,11 +134,27 @@ export class HistoryPage {
         this.routeParams().has('changeGroup')),
   );
   protected readonly facets = signal<ObjectFacets>({ types: [], sites: [] });
-  protected readonly typeFilter = signal('');
+  /**
+   * The type and scope filters, with the organization they were chosen under.
+   *
+   * Like the site filter, they hold only there. Another organization holds
+   * other types, and a filter carried over to it emptied the list behind a
+   * select with no option left to show it.
+   */
+  private readonly filterChoice = signal<{
+    organizationId: string;
+    type: string;
+    scope: '' | 'org' | 'site';
+  } | null>(null);
+  private readonly ownFilters = computed(() => {
+    const choice = this.filterChoice();
+    return choice?.organizationId === this.organizations.selected()?.id ? choice : null;
+  });
+  protected readonly typeFilter = computed(() => this.ownFilters()?.type ?? '');
   protected readonly siteFilter = computed(() =>
     this.siteContext.selectedFor(this.organizations.selected()?.id),
   );
-  protected readonly scopeFilter = signal<'' | 'org' | 'site'>('');
+  protected readonly scopeFilter = computed(() => this.ownFilters()?.scope ?? '');
   private facetRequest = 0;
   protected readonly catalogue = computed(() =>
     this.objects().map((object) => ({
@@ -155,9 +172,14 @@ export class HistoryPage {
 
   protected setFilter(kind: 'type' | 'site' | 'scope', event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
-    if (kind === 'type') this.typeFilter.set(value);
-    if (kind === 'site') this.siteContext.select(this.organizations.selected()?.id, value);
-    if (kind === 'scope') this.scopeFilter.set(value as '' | 'org' | 'site');
+    const organizationId = this.organizations.selected()?.id;
+    if (kind === 'site') this.siteContext.select(organizationId, value);
+    if (kind === 'site' || !organizationId) return;
+    this.filterChoice.set({
+      organizationId,
+      type: kind === 'type' ? value : this.typeFilter(),
+      scope: kind === 'scope' ? (value as '' | 'org' | 'site') : this.scopeFilter(),
+    });
   }
 
   protected async browseObjects(): Promise<void> {
@@ -225,6 +247,8 @@ export class HistoryPage {
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
   protected readonly showDeleted = signal(false);
   protected readonly objectsLoaded = signal(false);
+  /** A read that will replace the list is in flight. */
+  protected readonly objectsBusy = signal(false);
   /** Objects matching the current filters, which is more than the rail holds. */
   protected readonly objectsTotal = signal(0);
   protected readonly loadingMore = signal(false);
@@ -304,17 +328,30 @@ export class HistoryPage {
     return [...groups.entries()].map(([label, items]) => ({ label, items }));
   });
 
-  protected readonly noObjects = computed(
-    () => this.objectsLoaded() && this.objectsTotal() === 0 && this.searchTerm() === '',
-  );
-  protected readonly noMatches = computed(
-    () => this.objectsLoaded() && this.objectsTotal() === 0 && this.searchTerm() !== '',
-  );
+  /**
+   * What an empty list means. Only one that nothing narrowed — deleted objects
+   * included — says that nothing is stored.
+   */
+  protected readonly emptyLabel = computed(() => {
+    if (!this.objectsLoaded()) {
+      return 'No objects loaded.';
+    }
+    if (this.searchTerm() || this.typeFilter() || this.siteFilter() || this.scopeFilter()) {
+      return 'No objects match these filters.';
+    }
+    return this.showDeleted()
+      ? 'No stored objects yet.'
+      : 'No live objects stored. Deleted objects are hidden.';
+  });
   protected readonly hasMoreObjects = computed(() => this.objects().length < this.objectsTotal());
   /** "Showing n of N", so a partial rail never reads as the whole catalogue. */
-  protected readonly objectCountLabel = computed(
-    () => `Showing ${this.objects().length} of ${this.objectsTotal()}`,
-  );
+  protected readonly objectCountLabel = computed(() => {
+    if (!this.objectsLoaded()) {
+      return '';
+    }
+    const label = `Showing ${this.objects().length} of ${this.objectsTotal()}`;
+    return this.objectsBusy() ? `${label} · updating…` : label;
+  });
 
   protected readonly selectedObject = computed(() => {
     const id = this.selectedObjectId();
@@ -528,7 +565,13 @@ export class HistoryPage {
     this.versionAId.set(params.get('a'));
     this.versionBId.set(params.get('b'));
 
-    void this.ai.loadSettings();
+    void this.ai.loadStatus();
+
+    // The library reads live state only, so it has no time bar. An instant
+    // chosen on another page would only disable its restore actions, and have
+    // the API refuse their writes, with nothing here to undo it: arriving
+    // returns the application to now.
+    this.time.returnToNow();
 
     effect(() => {
       const organizationId = this.organizations.selected()?.id;
@@ -545,16 +588,27 @@ export class HistoryPage {
       }
       untracked(() => {
         if (this.loadedOrganization !== null && this.loadedOrganization !== organizationId) {
-          // The object and versions on screen belong to the organization they
-          // were read from; under another they are identifiers of nothing, and
-          // reads for them can only fail. They go before the new list is asked for.
+          // The objects, object and versions on screen belong to the
+          // organization they were read from; under another they are
+          // identifiers of nothing, and reads for them can only fail. They go
+          // before the new list is asked for.
           this.resetSelection();
           this.library.set(true);
+          this.objects.set([]);
+          this.objectsTotal.set(0);
+          this.objectsLoaded.set(false);
         }
         this.loadedOrganization = organizationId;
-        void this.ui.track('Loading configuration objects', () =>
-          this.loadObjects(organizationId, includeDeleted, term, 0),
-        );
+        const load = () => this.loadObjects(organizationId, includeDeleted, term, 0);
+        // The shell hides the page while it tracks a read, and a hidden search
+        // box loses its focus for good. Only a list that is not on screen yet
+        // is read that way; one the page's own controls are refining stays up,
+        // marked busy.
+        if (!this.objectsLoaded()) {
+          void this.ui.track('Loading configuration objects', load);
+        } else {
+          load().catch((cause: unknown) => this.ui.fail(cause, 'Loading configuration objects'));
+        }
       });
     });
 
@@ -926,17 +980,27 @@ export class HistoryPage {
     skip: number,
   ): Promise<void> {
     const request = ++this.objectsRequest;
-    const response = await this.history.objects(organizationId, {
-      sort: this.sortKey(),
-      direction: this.sortDirection(),
-      includeDeleted,
-      objectType: this.typeFilter() || undefined,
-      siteId: this.siteFilter() || undefined,
-      scope: this.scopeFilter() || undefined,
-      q: term || undefined,
-      skip,
-      limit: OBJECT_PAGE_SIZE,
-    });
+    if (skip === 0) {
+      this.objectsBusy.set(true);
+    }
+    let response: ConfigurationObjectList;
+    try {
+      response = await this.history.objects(organizationId, {
+        sort: this.sortKey(),
+        direction: this.sortDirection(),
+        includeDeleted,
+        objectType: this.typeFilter() || undefined,
+        siteId: this.siteFilter() || undefined,
+        scope: this.scopeFilter() || undefined,
+        q: term || undefined,
+        skip,
+        limit: OBJECT_PAGE_SIZE,
+      });
+    } finally {
+      if (request === this.objectsRequest) {
+        this.objectsBusy.set(false);
+      }
+    }
     // A slow answer for a previous organization, filter, or term must not
     // replace the list on screen.
     if (request !== this.objectsRequest) {

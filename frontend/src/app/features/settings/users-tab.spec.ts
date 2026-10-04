@@ -5,6 +5,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { AuthService, CurrentUser, UserRole } from '../../core/auth.service';
 import { ManagedUser, UserInviteResult, UsersService } from './users.service';
 import { demotionGuard, UsersTab } from './users-tab';
+import { ConfirmRequest } from './settings-page';
 
 interface TabInternals {
   rows(): {
@@ -158,6 +159,60 @@ describe('UsersTab', () => {
     const selects = element.querySelectorAll('tbody select');
     expect(selects).toHaveLength(1);
     expect(selects[0].getAttribute('aria-label')).toBe('Role for reader');
+  });
+
+  /** Let the panel's own `await` chain run, then render what it left. */
+  async function settle(fixture: ComponentFixture<UsersTab>): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  it('puts the actual role back when a role change is refused', async () => {
+    const fixture = await render('administrator', [
+      managed({ id: 'admin', role: 'administrator' }),
+      managed({ id: 'reader' }),
+    ]);
+    const select = (fixture.nativeElement as HTMLElement).querySelector<HTMLSelectElement>('tbody select')!;
+
+    select.value = 'operator';
+    select.dispatchEvent(new Event('change'));
+    http
+      .expectOne((request) => request.method === 'PATCH' && request.url === '/api/v1/users/reader')
+      .flush({ detail: 'Role changes are paused' }, { status: 409, statusText: 'Conflict' });
+    await settle(fixture);
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Role changes are paused');
+    expect(select.value).toBe('viewer');
+  });
+
+  it('lets an administrator revoke a pending invitation', async () => {
+    const invited = managed({ id: 'newcomer', status: 'invited', is_active: false });
+    const fixture = await render('administrator', [managed({ id: 'admin', role: 'administrator' }), invited]);
+    const requests: ConfirmRequest[] = [];
+    fixture.componentInstance.confirmRequested.subscribe((request) => requests.push(request));
+    fixture.detectChanges();
+
+    const row = [...(fixture.nativeElement as HTMLElement).querySelectorAll('tbody tr')][1];
+    const labels = [...row.querySelectorAll('button')].map((button) => (button.textContent ?? '').trim());
+    // Activation is for a deactivated account; an invitation is accepted, not activated.
+    expect(labels).not.toContain('Activate');
+    const revoke = [...row.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => (button.textContent ?? '').trim() === 'Revoke invitation',
+    );
+    expect(revoke?.disabled).toBe(false);
+
+    revoke!.click();
+    expect(requests[0].confirmLabel).toBe('Revoke invitation');
+    const running = requests[0].run();
+    http
+      .expectOne((request) => request.method === 'POST' && request.url === '/api/v1/users/newcomer/deactivate')
+      .flush({ ...invited, status: 'deactivated' });
+    await running;
+    await settle(fixture);
+
+    expect(row.textContent).toContain('DEACTIVATED');
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Invitation for newcomer was revoked.');
   });
 });
 

@@ -62,8 +62,19 @@ export class SearchPage {
   protected readonly kinds = signal<SearchResultKind | 'all'>('all');
   protected readonly query = this.search.query;
 
-  protected readonly results = computed(() => {
+  /**
+   * The kind actually applied: a chosen kind the results no longer hold would
+   * hide every one of them, and the chip row that could undo it with them.
+   */
+  protected readonly kind = computed(() => {
     const kind = this.kinds();
+    return kind === 'all' || this.search.results().some((item) => item.kind === kind)
+      ? kind
+      : 'all';
+  });
+
+  protected readonly results = computed(() => {
+    const kind = this.kind();
     return this.search
       .results()
       .filter((item) => kind === 'all' || item.kind === kind)
@@ -83,8 +94,12 @@ export class SearchPage {
     if (term.length < 2) {
       return 'Type at least two characters to search objects, actors, and audit IDs.';
     }
-    const total = this.search.results().length;
-    return `${total} result${total === 1 ? '' : 's'} for “${term}”`;
+    const shown = this.search.results().length;
+    const total = this.search.total();
+    // The API caps a page; a capped page must not read as every match.
+    return total > shown
+      ? `Showing ${shown} of ${total} results for “${term}”`
+      : `${shown} result${shown === 1 ? '' : 's'} for “${term}”`;
   });
 
   constructor() {
@@ -104,7 +119,11 @@ export class SearchPage {
       if (!organizationId) {
         return;
       }
-      void untracked(() => this.ui.track('Searching', () => this.search.run(organizationId, term)));
+      untracked(() => {
+        // A kind chosen for one search says nothing about the next.
+        this.kinds.set('all');
+        void this.ui.track('Searching', () => this.search.run(organizationId, term));
+      });
     });
   }
 

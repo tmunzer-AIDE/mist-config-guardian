@@ -32,6 +32,11 @@
             <div class="error-detail">{{ error.detail }}</div>
             <div class="error-code">{{ error.code }}</div>
           </div>
+          @if (organizationsFailed()) {
+            <button class="error-dismiss" type="button" (click)="retryOrganizations()">
+              Retry
+            </button>
+          }
           <button class="error-dismiss" type="button" (click)="ui.clearError()">Dismiss</button>
         </div>
       }

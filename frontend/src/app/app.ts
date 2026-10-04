@@ -26,8 +26,13 @@ import { AppTimeBar } from './shell/app-time-bar';
 import { NotificationDrawer } from './shell/notification-drawer';
 import { StepUpPrompt } from './shell/step-up-prompt';
 
-/** Pages that participate in point-in-time navigation. */
-const TIME_BAR_ROUTES = ['/', '/changes', '/history', '/impact'];
+/**
+ * Pages that participate in point-in-time navigation.
+ *
+ * Not the Configuration library: it reads live objects and versions only, so
+ * a time bar there offered a past the page never showed.
+ */
+const TIME_BAR_ROUTES = ['/', '/changes', '/impact'];
 
 @Component({
   selector: 'app-root',
@@ -48,6 +53,8 @@ export class App {
   private readonly router = inject(Router);
 
   protected readonly drawerOpen = signal(false);
+  /** The organization list could not be read, so nothing scoped can be shown. */
+  protected readonly organizationsFailed = signal(false);
   /** The organization, window and instant the shell's outcome data was read for. */
   private shownScope: string | null = null;
   private readonly currentUrl = signal(this.router.url);
@@ -96,7 +103,7 @@ export class App {
       if (!this.auth.isAuthenticated()) {
         return;
       }
-      void untracked(() => this.organizations.load());
+      void untracked(() => this.loadOrganizations());
     });
 
     effect((onCleanup) => {
@@ -157,5 +164,25 @@ export class App {
 
   protected returnToNow(): void {
     this.time.returnToNow();
+  }
+
+  protected retryOrganizations(): void {
+    this.ui.clearError();
+    void this.loadOrganizations();
+  }
+
+  private async loadOrganizations(): Promise<void> {
+    const session = this.auth.session();
+    this.organizationsFailed.set(false);
+    try {
+      await this.organizations.load();
+    } catch (cause) {
+      // A session that ended meanwhile has gone to sign-in; its failure is
+      // not the next user's to read.
+      if (this.auth.session() === session) {
+        this.organizationsFailed.set(true);
+        this.ui.fail(cause, 'Loading organizations');
+      }
+    }
   }
 }

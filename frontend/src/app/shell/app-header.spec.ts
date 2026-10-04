@@ -54,7 +54,7 @@ describe('AppHeader sign-out', () => {
     const time = TestBed.inject(TimeContextService);
     auth.applyUser(USER);
     const loaded = organizations.load();
-    httpMock.expectOne('/api/v1/organizations').flush({
+    httpMock.expectOne((request) => request.url === '/api/v1/organizations').flush({
       items: [{ id: 'org-1', name: 'Northwind Retail' }],
       total: 1,
     });
@@ -86,7 +86,7 @@ describe('AppHeader sign-out', () => {
     const organizations = TestBed.inject(OrganizationContextService);
     auth.applyUser(USER);
     const loaded = organizations.load();
-    httpMock.expectOne('/api/v1/organizations').flush({
+    httpMock.expectOne((request) => request.url === '/api/v1/organizations').flush({
       items: [{ id: 'org-1', name: 'Northwind Retail' }],
       total: 1,
     });

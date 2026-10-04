@@ -66,15 +66,14 @@
           </option>
         }
       </select>
-      <select
-        class="cg-select"
-        aria-label="Object type"
-        [value]="typeFilter()"
-        (change)="setFilter('type', $event)"
-      >
-        <option value="">All object types</option>
+      <!-- Selected per option, like the site: the options can be read again
+           after the type was chosen, and a value bound to the select is lost then. -->
+      <select class="cg-select" aria-label="Object type" (change)="setFilter('type', $event)">
+        <option value="" [selected]="!typeFilter()">All object types</option>
         @for (type of facets().types; track type.id) {
-          <option [value]="type.id">{{ type.name }} ({{ type.count }})</option>
+          <option [value]="type.id" [selected]="type.id === typeFilter()">
+            {{ type.name }} ({{ type.count }})
+          </option>
         }
       </select>
       <button class="cg-btn" [attr.aria-pressed]="showDeleted()" (click)="toggleDeleted()">
@@ -82,7 +81,7 @@
       </button>
     </div>
     <p class="cg-meta" role="status">{{ objectCountLabel() }}</p>
-    <div class="library-table cg-scroll-x">
+    <div class="library-table cg-scroll-x" [attr.aria-busy]="objectsBusy()">
       <table>
         <thead>
           <tr>
@@ -128,7 +127,7 @@
           } @empty {
             <tr>
               <td colspan="6">
-                {{ noObjects() ? 'No stored objects yet.' : 'No objects match these filters.' }}
+                {{ emptyLabel() }}
               </td>
             </tr>
           }

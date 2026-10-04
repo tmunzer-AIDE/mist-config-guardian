@@ -38,17 +38,10 @@ export interface AiDiffFollowup {
   disclaimer: string;
 }
 
-export interface AiSettings {
+/** What every role may know about AI assist: whether it is on, and whether it runs unasked. */
+export interface AiStatus {
   enabled: boolean;
-  base_url: string;
-  model: string;
-  api_key_set: boolean;
-  api_key_last_four: string | null;
-  max_response_tokens: number;
   automatic_summaries: boolean;
-  last_test_at: string | null;
-  last_test_ok: boolean | null;
-  last_test_detail: string | null;
 }
 
 export interface AiSummaryRequest {
@@ -89,19 +82,21 @@ export const AI_QUESTION_MAX_LENGTH = 500;
 /**
  * AI assist for diff explanation.
  *
- * `/ai/settings` is administrator-only, so for everyone else availability stays
- * `unknown`: the page offers the control and lets a 409 answer the question,
- * rather than hiding a feature that may well be configured.
+ * Availability comes from `/ai/status`, which every role can read; the provider
+ * settings behind it stay administrator-only. Until the status answers, or if
+ * it cannot, availability is `unknown`: the page offers the control and lets a
+ * 409 answer the question, rather than hiding a feature that may well be
+ * configured.
  */
 @Injectable({ providedIn: 'root' })
 export class AiAssistService {
   private readonly http = inject(HttpClient);
 
-  private readonly settingsState = signal<AiSettings | null>(null);
+  private readonly statusState = signal<AiStatus | null>(null);
   private readonly resolvedState = signal(false);
   private readonly refusedState = signal(false);
 
-  readonly settings = this.settingsState.asReadonly();
+  readonly status = this.statusState.asReadonly();
   readonly resolved = this.resolvedState.asReadonly();
 
   /** True once a call answered 409; the page then shows the quiet note. */
@@ -111,40 +106,52 @@ export class AiAssistService {
     if (this.refusedState()) {
       return 'disabled';
     }
-    const settings = this.settingsState();
-    if (settings === null) {
+    const status = this.statusState();
+    if (status === null) {
       return 'unknown';
     }
-    return settings.enabled ? 'enabled' : 'disabled';
+    return status.enabled ? 'enabled' : 'disabled';
   });
 
   /** Whether a summary should be produced without the operator asking. */
   readonly automatic = computed(
-    () => this.availability() === 'enabled' && (this.settingsState()?.automatic_summaries ?? false),
+    () => this.availability() === 'enabled' && (this.statusState()?.automatic_summaries ?? false),
   );
 
-  /** Resolve AI availability once per session. Never throws. */
   /** Which session resolved this; a read outliving it is discarded. */
   private generation = 0;
+  /** Only the latest status read describes the configuration. */
+  private statusRequest = 0;
 
-  async loadSettings(force = false): Promise<void> {
+  /**
+   * Resolve AI availability once per session, or again when the configuration
+   * changed. Never throws.
+   */
+  async loadStatus(force = false): Promise<void> {
     if (this.resolvedState() && !force) {
       return;
     }
     const generation = this.generation;
+    const request = ++this.statusRequest;
+    const current = () => generation === this.generation && request === this.statusRequest;
     try {
-      const settings = await firstValueFrom(this.http.get<AiSettings>(`${API_ROOT}/ai/settings`));
-      if (generation === this.generation) {
-        this.settingsState.set(settings);
+      const status = await firstValueFrom(this.http.get<AiStatus>(`${API_ROOT}/ai/status`));
+      if (current()) {
+        this.statusState.set(status);
+        // A refusal described the configuration of its moment. One that is
+        // enabled now has been fixed since, and deserves to be asked again.
+        if (status.enabled) {
+          this.refusedState.set(false);
+        }
       }
     } catch {
-      // 403 for non-administrators, or an unreachable endpoint. Availability is
-      // unknown; deterministic diffing is unaffected either way.
-      if (generation === this.generation) {
-        this.settingsState.set(null);
+      // An unreachable endpoint. Availability is unknown; deterministic
+      // diffing is unaffected either way.
+      if (current()) {
+        this.statusState.set(null);
       }
     } finally {
-      if (generation === this.generation) {
+      if (current()) {
         this.resolvedState.set(true);
       }
     }
@@ -181,7 +188,7 @@ export class AiAssistService {
 
   reset(): void {
     this.generation += 1;
-    this.settingsState.set(null);
+    this.statusState.set(null);
     this.resolvedState.set(false);
     this.refusedState.set(false);
   }

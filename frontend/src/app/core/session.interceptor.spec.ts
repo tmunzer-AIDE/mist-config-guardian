@@ -127,7 +127,7 @@ describe('sessionInterceptor', () => {
     const notifications = TestBed.inject(NotificationService);
     auth.applyUser(USER);
     const loaded = organizations.load();
-    httpMock.expectOne('/api/v1/organizations').flush({
+    httpMock.expectOne((request) => request.url === '/api/v1/organizations').flush({
       items: [{ id: 'org-1', name: 'Northwind Retail' }],
       total: 1,
     });
@@ -153,7 +153,7 @@ describe('sessionInterceptor', () => {
     const organizations = TestBed.inject(OrganizationContextService);
     auth.applyUser(USER);
     const loading = organizations.load();
-    const inFlight = httpMock.expectOne('/api/v1/organizations');
+    const inFlight = httpMock.expectOne((request) => request.url === '/api/v1/organizations');
 
     await fail('/api/v1/organizations/org-1/overview');
     expect(organizations.all()).toEqual([]);
