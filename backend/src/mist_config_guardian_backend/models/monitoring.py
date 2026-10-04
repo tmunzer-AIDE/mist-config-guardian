@@ -3,6 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar, Literal
+from uuid import uuid4
 
 from beanie import Document, PydanticObjectId
 from pydantic import BaseModel, Field
@@ -168,6 +169,31 @@ class MonitoringSession(TimestampedModel, Document):
     ai_assessment_error: str | None = None
     completed_at: datetime | None = None
     warnings: list[str] = Field(default_factory=list)
+    # Replaced by every write. A poll reads Mist for seconds between reading a
+    # session and writing it back, and device events write the same session
+    # meanwhile; the token is how the poll knows its copy is still current.
+    change_token: str | None = None
+
+    def touch(self) -> None:
+        """Update the modification timestamp and mark this copy as a new write."""
+        super().touch()
+        self.change_token = new_change_token()
+
+    async def save_unless_changed(self) -> bool:
+        """Save this copy only if nobody else has saved the session since it was read.
+
+        Returns ``False`` when someone has, in which case this copy is stale
+        and the caller re-reads the session rather than erasing their write.
+        """
+        expected = self.change_token
+        self.touch()
+        # Native BSON and the same fields Document.save writes; a JSON dump
+        # would store identifiers and instants as strings.
+        result = await self.get_pymongo_collection().update_one(
+            {"_id": self.id, "change_token": expected},
+            {"$set": self.model_dump(mode="python", exclude={"id", "revision_id"})},
+        )
+        return result.matched_count == 1
 
     class Settings:
         name = "monitoring_sessions"
@@ -184,3 +210,8 @@ class MonitoringSession(TimestampedModel, Document):
                 name="one_active_monitor_per_device",
             ),
         ]
+
+
+def new_change_token() -> str:
+    """Return a token no other write of a monitoring session has used."""
+    return uuid4().hex

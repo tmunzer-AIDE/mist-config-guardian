@@ -1410,6 +1410,29 @@ async def test_rebuild_describes_a_change_that_is_still_settling() -> None:
     assert items[0].impact_label == f"WARNING {MINUS_SIGN}9"
 
 
+async def test_rebuild_does_not_call_an_open_window_with_no_movement_completed() -> None:
+    store = _MemoryChangeGroupStore()
+    _record_wlan_change(store)
+    store.groups.append(_group(sites=[PORTLAND]))
+    store.logicals.append(_logical(name="Portland-2", object_type="sites", mist_id=PORTLAND))
+    store.sessions.append(
+        _session(
+            mac="bb",
+            site=PORTLAND,
+            status=MonitoringStatus.MONITORING,
+            baseline={"roaming": 88.0},
+            latest={"roaming": 88.0},
+        )
+    )
+
+    group = await ChangeGroupProjector(store).rebuild(ORGANIZATION_ID, "audit-1")
+
+    assert group is not None
+    assert group.recovery_state is RecoveryState.MONITORING
+    assert group.summary is not None
+    assert group.summary.endswith("Monitoring is still running with no metric moving beyond noise yet.")
+
+
 async def test_rebuild_counts_incidents_and_spans_several_sites() -> None:
     store = _MemoryChangeGroupStore()
     _record_wlan_change(store)

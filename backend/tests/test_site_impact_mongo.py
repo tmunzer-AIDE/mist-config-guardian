@@ -56,6 +56,19 @@ async def inventory():
         await client.close()
 
 
+def captured_change():
+    """A captured configuration difference; feeds hide groups without one."""
+    return [
+        ChangedObjectRef(
+            logical_object_id=PydanticObjectId(),
+            object_type="networktemplates",
+            object_name="Access policy",
+            scope="org",
+            event="updated",
+        )
+    ]
+
+
 async def seed_window(org, site, now, *, mac="aabbccddeeff", audits=None):
     return await MonitoringSession(
         organization_id=org,
@@ -142,6 +155,7 @@ async def test_history_drops_late_arrivals_and_withholds_mutable_verdicts(invent
         affected_site_ids=[SITE],
         created_at=now - timedelta(minutes=20),
         occurred_at=now - timedelta(minutes=20),
+        changed_objects=captured_change(),
     ).insert()
     await AuditChangeGroup(
         organization_id=org,
@@ -149,6 +163,7 @@ async def test_history_drops_late_arrivals_and_withholds_mutable_verdicts(invent
         affected_site_ids=[SITE],
         created_at=now + timedelta(minutes=5),
         occurred_at=now - timedelta(minutes=1),
+        changed_objects=captured_change(),
     ).insert()
     await seed_window(org, SITE, now)
     result = await site_impact.list_changes(org, SITE, range_key="24h", end=now, skip=0, limit=50)

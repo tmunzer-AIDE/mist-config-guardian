@@ -320,6 +320,36 @@ def test_cron_cadence_reads_the_expressions_the_app_writes() -> None:
     assert cron_cadence_minutes("nonsense") is None
 
 
+def test_cron_cadence_reads_the_settings_presets() -> None:
+    # The four schedules the Settings card offers, in its order.
+    assert cron_cadence_minutes("0 2,14 * * *") == 12 * 60
+    assert cron_cadence_minutes("0 2 * * *") == 24 * 60
+    assert cron_cadence_minutes("0 2 * * 0") == 7 * 24 * 60
+    assert cron_cadence_minutes("0 2 1 * *") == 30 * 24 * 60
+
+
+def test_cron_cadence_is_the_longest_gap_between_listed_hours() -> None:
+    assert cron_cadence_minutes("0 2,5 * * *") == 21 * 60
+
+
+def test_a_weekly_reconciliation_is_not_overdue_three_days_after_it_ran() -> None:
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW, cron="0 2 * * 0"),
+            latest_snapshot=_snapshot(),
+            latest_reconciliation=_snapshot(completed_at=NOW - timedelta(days=3)),
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert (reconciliation.label, reconciliation.status, reconciliation.detail) == (
+        "Reconciliation on schedule",
+        "ok",
+        "7D",
+    )
+
+
 def test_cadence_formats_the_way_the_safety_net_prints_it() -> None:
     assert format_cadence(12 * 60) == "12H"
     assert format_cadence(24 * 60) == "1D"

@@ -65,6 +65,9 @@ _RESTORE_MODE_TITLES: Mapping[str, str] = {
 _CRON_STEP = re.compile(r"^\*/(\d+)$")
 _MINUTES_PER_HOUR = 60
 _MINUTES_PER_DAY = 24 * 60
+_MINUTES_PER_WEEK = 7 * _MINUTES_PER_DAY
+# As the Settings card counts a month; the overdue margin covers the longer ones.
+_MINUTES_PER_MONTH = 30 * _MINUTES_PER_DAY
 
 
 def guardian_feed_counts(summaries: Sequence[ChangeGroupSummaryResponse]) -> GuardianFeedCounts | None:
@@ -337,13 +340,24 @@ def _counts_from_facet(row: Mapping[str, object]) -> ChangeGroupCounts:
     )
 
 
-def cron_cadence_minutes(expression: str) -> int | None:
-    """Read the cadence of the reconciliation cron expressions the app writes."""
+def cron_cadence_minutes(expression: str) -> int | None:  # noqa: PLR0911 - one return per field that sets the cadence
+    """Read the cadence of the reconciliation cron expressions the app writes.
+
+    The cadence is the longest a schedule leaves between two runs, since that
+    is what a reconciliation is judged against. A restricted day of the week
+    runs weekly (cron runs on either day field, so it wins over the day of the
+    month), a restricted day of the month monthly, and otherwise the hours
+    listed split the day.
+    """
     fields = expression.split()
     expected_fields = 5
     if len(fields) != expected_fields:
         return None
-    minute, hour = fields[0], fields[1]
+    minute, hour, day_of_month, _month, day_of_week = fields
+    if day_of_week != "*":
+        return _MINUTES_PER_WEEK
+    if day_of_month != "*":
+        return _MINUTES_PER_MONTH
     step = _CRON_STEP.match(minute)
     if step:
         return int(step.group(1))
@@ -354,7 +368,12 @@ def cron_cadence_minutes(expression: str) -> int | None:
         return 1
     if hour == "*":
         return _MINUTES_PER_HOUR
-    return _MINUTES_PER_DAY
+    entries = hour.split(",")
+    if not all(entry.isdigit() for entry in entries):
+        return _MINUTES_PER_DAY
+    hours = sorted({int(entry) for entry in entries})
+    gaps = [later - earlier for earlier, later in zip(hours, [*hours[1:], hours[0] + 24], strict=True)]
+    return max(gaps) * _MINUTES_PER_HOUR
 
 
 def format_cadence(minutes: int) -> str:
