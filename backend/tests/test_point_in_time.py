@@ -140,11 +140,12 @@ class _MemoryPointInTimeReader:
             group
             for group in self.groups
             if group.organization_id == organization_id
+            and group.changed_objects
             and group.occurred_at is not None
             and start <= group.occurred_at <= end
         ]
         matched.sort(key=lambda group: group.occurred_at or start)
-        return matched[:limit]
+        return matched[-limit:]
 
     async def logical_object(
         self,

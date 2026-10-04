@@ -87,7 +87,6 @@ class BeanieSearchReader:
             await LogicalObject.find(
                 {
                     "organization_id": organization_id,
-                    **confirmed_changes(),
                     "$or": [
                         {"name": {"$regex": pattern, "$options": "i"}},
                         {"object_type": {"$regex": pattern, "$options": "i"}},
@@ -111,6 +110,7 @@ class BeanieSearchReader:
             await AuditChangeGroup.find(
                 {
                     "organization_id": organization_id,
+                    **confirmed_changes(),
                     "$or": [
                         {"audit_id": {"$regex": pattern, "$options": "i"}},
                         {"actor": {"$regex": pattern, "$options": "i"}},
@@ -191,14 +191,33 @@ class SearchService:
         sites = await self._reader.sites(organization_id, pattern, limit=PER_KIND_LIMIT)
         restores = await self._reader.restores(organization_id, pattern, limit=PER_KIND_LIMIT)
 
-        results = [
-            *_object_results(objects),
-            *_change_group_results(groups, term),
-            *_actor_results(groups, term),
-            *_site_results(sites),
-            *_restore_results(restores),
+        sections = [
+            _object_results(objects),
+            _change_group_results(groups, term),
+            _actor_results(groups, term),
+            _site_results(sites),
+            _restore_results(restores),
         ]
-        return SearchResultListResponse(items=results[:limit], total=len(results))
+        return SearchResultListResponse(
+            items=_fair_page(sections, limit),
+            total=sum(len(section) for section in sections),
+        )
+
+
+def _fair_page(sections: Sequence[list[SearchResultResponse]], limit: int) -> list[SearchResultResponse]:
+    """Share a page out one result per kind at a time, keeping each kind's results together.
+
+    Cutting the concatenation at ``limit`` would fill a short page with
+    objects alone, however many changes, sites or restores also matched.
+    """
+    shares = [0] * len(sections)
+    while (room := limit - sum(shares)) > 0:
+        growing = [index for index, section in enumerate(sections) if shares[index] < len(section)]
+        if not growing:
+            break
+        for index in growing[:room]:
+            shares[index] += 1
+    return [result for section, share in zip(sections, shares, strict=True) for result in section[:share]]
 
 
 def _object_results(objects: Sequence[LogicalObject]) -> list[SearchResultResponse]:
