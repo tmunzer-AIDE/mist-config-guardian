@@ -157,6 +157,13 @@ describe('site Impact workspace', () => {
     expect(fixture.nativeElement.querySelector('select').value).toBe('site2');
   });
 
+  it('does not remember the site it opened by default', () => {
+    load();
+    expect(fixture.nativeElement.querySelector('select').value).toBe('site1');
+    // Nobody chose it, so the pages that share the selection are not narrowed to it.
+    expect(TestBed.inject(SiteContextService).selectedFor('org1')).toBe('');
+  });
+
   it('preserves a manual selection over the original link on time changes', () => {
     fixture.componentRef.setInput('site', 'site1');
     fixture.detectChanges();
@@ -173,7 +180,8 @@ describe('site Impact workspace', () => {
     TestBed.inject(SiteContextService).select('org1', 'removed-site');
     load();
     expect(fixture.nativeElement.querySelector('select').value).toBe('site1');
-    expect(TestBed.inject(SiteContextService).selectedFor('org1')).toBe('site1');
+    // The fallback is shown, not chosen: the remembered site stays for when it is listed again.
+    expect(TestBed.inject(SiteContextService).selectedFor('org1')).toBe('removed-site');
   });
 
   it('mounts one contextual panel and follows all four selection states', () => {

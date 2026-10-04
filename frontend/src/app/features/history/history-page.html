@@ -56,15 +56,14 @@
         <option value="org">Organization</option>
         <option value="site">Site</option>
       </select>
-      <select
-        class="cg-select"
-        aria-label="Site"
-        [value]="siteFilter()"
-        (change)="setFilter('site', $event)"
-      >
-        <option value="">All sites</option>
+      <!-- Selected per option: the site can be chosen on another page before
+           these options load, and a value bound to the select is lost then. -->
+      <select class="cg-select" aria-label="Site" (change)="setFilter('site', $event)">
+        <option value="" [selected]="!siteFilter()">All sites</option>
         @for (site of facets().sites; track site.id) {
-          <option [value]="site.id">{{ site.name }} ({{ site.count }})</option>
+          <option [value]="site.id" [selected]="site.id === siteFilter()">
+            {{ site.name }} ({{ site.count }})
+          </option>
         }
       </select>
       <select

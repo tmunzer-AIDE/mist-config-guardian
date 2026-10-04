@@ -8,6 +8,7 @@ import { API_ROOT } from '../../core/api';
 import { AuthService } from '../../core/auth.service';
 import { Organization } from '../../core/organization.model';
 import { OrganizationContextService } from '../../core/organization-context.service';
+import { SiteContextService } from '../../core/site-context.service';
 import { UiStateService } from '../../core/ui-state.service';
 import { AiSettings } from './ai-assist.service';
 import { ConfigurationDiff, DiffEntry, DiffSection } from './diff.model';
@@ -491,6 +492,28 @@ describe('HistoryPage', () => {
 
     expect(fixture.nativeElement.querySelectorAll('.object-link').length).toBe(1);
     expect(railText(fixture)).toContain('Showing 1 of 1');
+  });
+
+  it('shows a site filter chosen on another page once the site options arrive', async () => {
+    TestBed.inject(SiteContextService).select('org-1', 'site-1');
+    const { fixture, first } = await openRail([object('obj-1', 'NW-Corp')], 1);
+    expect(first.request.params.get('site_id')).toBe('site-1');
+
+    // The options answer after the page has rendered, as they do over a network.
+    http
+      .expectOne((request) => request.url === '/api/v1/organizations/org-1/objects/facets')
+      .flush({
+        types: [],
+        sites: [
+          { id: 'site-2', name: 'London', count: 3 },
+          { id: 'site-1', name: 'Paris', count: 1 },
+        ],
+      });
+    await settle(fixture);
+
+    const select: HTMLSelectElement = fixture.nativeElement.querySelector('select[aria-label="Site"]');
+    expect(select.value).toBe('site-1');
+    expect(select.selectedOptions[0].textContent).toContain('Paris');
   });
 
   it('offers no further page once the rail holds every match', async () => {

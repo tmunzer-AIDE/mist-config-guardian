@@ -247,8 +247,11 @@ export class SiteImpactPage implements OnDestroy {
               ? requested
               : (response.items[0]?.id ?? '');
             this.siteId.set(selected);
-            // An empty historical snapshot should not erase the remembered site.
-            if (selected) this.siteContext.select(org, selected);
+            // Only a site that was asked for is remembered. The first-site
+            // fallback is this page's default, not a choice, and remembering it
+            // would narrow every page that shares the selection — and it must
+            // not erase a remembered site this snapshot happens not to list.
+            if (selected && selected === requested) this.siteContext.select(org, selected);
           });
           if (!response.items.length) this.busy.set(false);
         },
