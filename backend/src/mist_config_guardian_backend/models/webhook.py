@@ -59,6 +59,8 @@ class WebhookReceipt(TimestampedModel, Document):
             IndexModel([("organization_id", 1), ("status", 1)]),
             IndexModel([("organization_id", 1), ("audit_id", 1)]),
             IndexModel([("organization_id", 1), ("audit_id", 1), ("created_at", 1)]),
+            # The retry sweep looks across organizations by state and age.
+            IndexModel([("status", 1), ("updated_at", 1)]),
         ]
 
 

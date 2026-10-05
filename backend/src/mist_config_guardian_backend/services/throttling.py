@@ -21,6 +21,12 @@ from pymongo import ReturnDocument
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.challenge import ThrottleBucket
+from mist_config_guardian_backend.security.webauthn import CHALLENGE_TTL_SECONDS
+
+# Passkey ceremonies one address may start while the challenges they store are
+# alive. Far above what the people behind one address sign in with, since what
+# it bounds is storage rather than guessing.
+CEREMONY_STARTS_PER_ADDRESS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,8 +190,23 @@ class ThrottleService:
         forwarded-header handling enabled, so the per-address limit is the wide
         backstop and the per-account limit does the real work.
         """
-        host = request.client.host if request.client is not None else "unknown"
-        return Scope(f"address:{host}", self._settings.sign_in_failures_per_address)
+        return Scope(f"address:{_client_host(request)}", self._settings.sign_in_failures_per_address)
+
+    def ceremony(self, request: Request) -> Scope:
+        """The scope for passkey ceremonies started from one client address.
+
+        Starting one checks no credential, so it is counted apart from the
+        address scope that guards credential checks: sharing that bucket let
+        anyone, without guessing anything, spend the budget everyone behind
+        the same address needs to sign in. Its window is the lifetime of the
+        challenge a start stores, so the limit bounds how many one address
+        can hold at once.
+        """
+        return Scope(
+            f"ceremony:{_client_host(request)}",
+            CEREMONY_STARTS_PER_ADDRESS,
+            timedelta(seconds=CHALLENGE_TTL_SECONDS),
+        )
 
     def invitation_target(self, user_id: PydanticObjectId) -> Scope:
         """The scope bounding how often one invitee can be mailed."""
@@ -265,6 +286,10 @@ class ThrottleService:
         """
         for scope in scopes:
             await self._store.clear(scope.key)
+
+
+def _client_host(request: Request) -> str:
+    return request.client.host if request.client is not None else "unknown"
 
 
 def throttled(error: ThrottledError) -> HTTPException:

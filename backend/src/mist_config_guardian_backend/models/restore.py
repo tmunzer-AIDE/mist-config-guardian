@@ -75,6 +75,11 @@ class RestoreAction(BaseModel):
     protected_configuration: dict[str, object]
     expected_current_hash: str | None = None
     depends_on: list[PydanticObjectId] = Field(default_factory=list)
+    # Ids the payload names that belong to an earlier incarnation of an object
+    # that lives on under another id, mapped to that id when planned. The
+    # executor writes the live id, and follows it further if this run
+    # recreates that object again (spec §9.4.3). Empty on most actions.
+    reference_remap: dict[str, str] = Field(default_factory=dict)
     reason: RestoreActionReason = RestoreActionReason.RESTORE
     status: RestoreActionStatus = RestoreActionStatus.PENDING
     resulting_mist_id: str | None = None

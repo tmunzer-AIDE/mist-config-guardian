@@ -527,20 +527,23 @@ export class OrganizationsTab {
       detail: 'The new secret is displayed once and never again.',
       confirmLabel: 'Rotate secret',
       danger: true,
-      run: async () => {
-        const rotated = await firstValueFrom(this.api.rotateWebhookSecret(organization.id));
-        this.secretRevealed.emit({
-          title: 'New webhook secret',
-          body: `Copy this into the Mist webhook configuration for ${organization.name} now.`,
-          value: rotated.secret,
-          endpoint: rotated.endpoint,
-        });
-        try {
-          this.context.replace(await firstValueFrom(this.api.get(organization.id)));
-        } catch {
-          // The secret is already on screen; a stale suffix is not worth losing it.
-        }
-      },
+      // Through `run`, like every other action here: a refusal is reported in
+      // the panel, and the confirmation closes rather than waiting on it.
+      run: () =>
+        this.run(`rotate-${organization.id}`, 'Webhook secret rotated.', async () => {
+          const rotated = await firstValueFrom(this.api.rotateWebhookSecret(organization.id));
+          this.secretRevealed.emit({
+            title: 'New webhook secret',
+            body: `Copy this into the Mist webhook configuration for ${organization.name} now.`,
+            value: rotated.secret,
+            endpoint: rotated.endpoint,
+          });
+          try {
+            this.context.replace(await firstValueFrom(this.api.get(organization.id)));
+          } catch {
+            // The secret is already on screen; a stale suffix is not worth losing it.
+          }
+        }),
     });
   }
 

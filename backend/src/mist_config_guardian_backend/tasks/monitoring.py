@@ -25,12 +25,16 @@ async def _poll_active_monitoring() -> int:
     await database.connect()
     try:
         vault = CredentialVault(settings)
-        polled = await MonitoringPollService(
-            vault,
-            ApplicationConfigurationService(vault),
-        ).poll_active()
-        if settings.guardian_enabled:
-            await GuardianService(vault).poll_due()
-        return polled
+        try:
+            return await MonitoringPollService(
+                vault,
+                ApplicationConfigurationService(vault),
+            ).poll_active()
+        finally:
+            # The two polls are independent: a monitoring failure still fails
+            # the tick, but must not cost Guardian its turn. Should Guardian
+            # fail too, its error carries the monitoring one as its context.
+            if settings.guardian_enabled:
+                await GuardianService(vault).poll_due()
     finally:
         await database.close()

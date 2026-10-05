@@ -16,6 +16,7 @@ data:
   MIST_MCP_URL: {{ default "https://mcp.ai.juniper.net/mcp/mist" .Values.config.mistMcpUrl | quote }}
   API_V1_PREFIX: {{ .Values.config.apiV1Prefix | quote }}
   CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  FORWARDED_ALLOW_IPS: {{ .Values.config.forwardedAllowIps | quote }}
   WEBAUTHN_ORIGIN: {{ include "mist-config-guardian.webauthnOrigin" . | quote }}
   WEBAUTHN_RP_ID: {{ include "mist-config-guardian.webauthnRpId" . | quote }}
   MONGODB_DB_NAME: {{ .Values.config.mongodbDatabase | quote }}

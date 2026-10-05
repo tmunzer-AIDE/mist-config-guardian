@@ -56,6 +56,7 @@ EVENTS = load_fixture("dnt_ntr_device_events.json")
 MONITORING = load_fixture("dnt_ntr_monitoring.json")
 
 ORG = PydanticObjectId("00000000000000000000a001")
+MIST_ORG = "4ac1dcf4-9d8b-7211-65c4-057819f0862b"
 AUDIT: str = CHANGE["audit"]["audit_id"]
 SITE: str = CHANGE["site_id"]
 
@@ -190,6 +191,7 @@ def scenario(*, confirmed: bool = False) -> AttemptInputs:
     rows = [*EVENTS["receipts"], *(confirmations() if confirmed else [])]
     return AttemptInputs(
         organization_id=ORG,
+        mist_org_id=MIST_ORG,
         audit_id=AUDIT,
         received_at=min(at(row["received_at"]) for row in EVENTS["receipts"]),
         audit_time=ANCHOR,

@@ -30,6 +30,7 @@ from mist_config_guardian_backend.services.organizations import (
     OrganizationNotFoundError,
     OrganizationService,
 )
+from mist_config_guardian_backend.services.snapshots import open_manifest
 from mist_config_guardian_backend.worker import celery_app
 
 router = APIRouter(prefix="/organizations/{organization_id}/snapshots")
@@ -54,7 +55,7 @@ async def trigger_snapshot(
         status=SnapshotStatus.PENDING,
     )
     try:
-        await manifest.insert()
+        await open_manifest(manifest)
     except DuplicateKeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

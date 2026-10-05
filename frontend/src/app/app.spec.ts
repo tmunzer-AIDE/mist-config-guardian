@@ -1,13 +1,18 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 
 import { AuthService, CurrentUser } from './core/auth.service';
 import { OrganizationContextService } from './core/organization-context.service';
 import { OverviewService } from './core/overview.service';
 import { TimeContextService } from './core/time-context.service';
 import { TimelineService } from './core/timeline.service';
+import { UiStateService } from './core/ui-state.service';
+
+@Component({ selector: 'app-blank', template: '' })
+class Blank {}
 
 const USER: CurrentUser = {
   id: 'user-1',
@@ -27,7 +32,11 @@ describe('App shell', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([{ path: '**', component: Blank }]),
+      ],
     }).compileComponents();
   });
 
@@ -102,7 +111,7 @@ describe('App shell', () => {
       fixture = TestBed.createComponent(App);
       fixture.detectChanges();
       await fixture.whenStable();
-      httpMock.expectOne('/api/v1/organizations').flush({
+      httpMock.expectOne((request) => request.url === '/api/v1/organizations').flush({
         items: [
           { id: 'org-1', name: 'Northwind Retail' },
           { id: 'org-2', name: 'Contoso' },
@@ -151,6 +160,59 @@ describe('App shell', () => {
         (request) => request.url === '/api/v1/organizations/org-1/overview',
       )[0];
       expect(badge.request.params.get('range')).toBe('7d');
+    });
+
+    it('shows no time bar on the Configuration library', async () => {
+      // The library reads live state only, so a time bar there offered a past
+      // the page never showed.
+      const router = TestBed.inject(Router);
+      const timeBar = () => (fixture.nativeElement as HTMLElement).querySelector('app-time-bar');
+
+      await router.navigateByUrl('/changes');
+      fixture.detectChanges();
+      expect(timeBar()).not.toBeNull();
+
+      await router.navigateByUrl('/history?object=obj-1&restore=1');
+      fixture.detectChanges();
+      expect(timeBar()).toBeNull();
+    });
+  });
+
+  describe('organization list', () => {
+    it('reports a failed read and offers to try again', async () => {
+      const httpMock = TestBed.inject(HttpTestingController);
+      TestBed.inject(AuthService).applyUser(USER);
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      httpMock
+        .expectOne((request) => request.url === '/api/v1/organizations')
+        .flush({ detail: 'Database unavailable' }, { status: 503, statusText: 'Unavailable' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      // Without the list there is no organization to show anything for, so
+      // the failure has to be visible and recoverable without a reload.
+      const ui = TestBed.inject(UiStateService);
+      expect(ui.error()?.title).toBe('Loading organizations failed');
+      const retry = [...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.error-banner button')]
+        .find((button) => (button.textContent ?? '').trim() === 'Retry');
+      expect(retry).toBeDefined();
+
+      retry!.click();
+      httpMock
+        .expectOne((request) => request.url === '/api/v1/organizations')
+        .flush({ items: [{ id: 'org-1', name: 'Northwind Retail' }], total: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await fixture.whenStable();
+
+      expect(ui.error()).toBeNull();
+      expect(TestBed.inject(OrganizationContextService).selected()?.id).toBe('org-1');
+      for (const request of httpMock.match(() => true)) {
+        request.flush({});
+      }
     });
   });
 });

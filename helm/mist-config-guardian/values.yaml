@@ -89,6 +89,16 @@ config:
   mistMcpUrl: "https://mcp.ai.juniper.net/mcp/mist"
   apiV1Prefix: /api/v1
   corsOrigins: https://guardian.example.com
+  # The proxies whose X-Forwarded-For the API believes: the ingress controller,
+  # and the frontend's nginx when traffic passes through it. The API walks the
+  # header from the right past these hops and throttles sign-in attempts on the
+  # first address that is not one of them. Trusting none of them makes every
+  # client look like the ingress controller, so a hundred failed sign-ins from
+  # anyone lock everyone out. The default trusts the private ranges a cluster
+  # network uses; narrow it to the controller's pod network once you know it, so
+  # that a client on a private network cannot name its own address. Never "*":
+  # that believes whatever the client wrote in the header.
+  forwardedAllowIps: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"
   # The browser address passkeys are verified against, and the domain they are
   # bound to. Both are derived from ingress.host, or from the first corsOrigins
   # entry when no ingress is enabled, and only need a value here when the

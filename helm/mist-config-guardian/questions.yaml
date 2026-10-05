@@ -72,6 +72,15 @@ questions:
     label: Allowed CORS origins
     description: Comma-separated application origins, including scheme.
     group: Networking
+  - variable: config.forwardedAllowIps
+    default: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"
+    type: string
+    label: Trusted proxy addresses
+    description: >-
+      Comma-separated addresses or networks of the ingress controller and other
+      proxies in front of the API, whose X-Forwarded-For is believed when sign-in
+      attempts are throttled per client. Never "*".
+    group: Networking
   - variable: config.webauthnOrigin
     default: ""
     type: string

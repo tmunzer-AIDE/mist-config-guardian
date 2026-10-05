@@ -498,3 +498,35 @@ async def test_stored_loopback_plaintext_still_yields_credentials_in_production(
     assert credentials is not None
     assert credentials.host == "127.0.0.1"
     assert credentials.security == "none"
+
+
+async def test_an_undecryptable_stored_password_is_a_failed_check_not_a_server_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A password encrypted under a key since rotated is a broken configuration the check should report."""
+    configuration_id = PydanticObjectId()
+    older_vault = CredentialVault(
+        Settings(environment="test", database_enabled=False, credential_encryption_key=SecretStr("an-older-key"))
+    )
+    configuration = ApplicationConfiguration.model_construct(
+        id=configuration_id,
+        key="global",
+        smtp_enabled=True,
+        smtp_host="mail.example.com",
+        smtp_port=587,
+        smtp_security="starttls",
+        smtp_username="postmaster",
+        encrypted_smtp_password=older_vault.encrypt_for_context("hunter2", context="smtp-password"),
+        smtp_from_address="a@example.com",
+        smtp_from_name="",
+    )
+    collection = _RecordingCollection({"_id": configuration_id})
+    service = _service_with_collection(monkeypatch, configuration, collection)
+
+    response = await service.test_smtp_connection()
+
+    assert response.ok is False
+    assert "stored password could not be decrypted" in response.detail
+    assert collection.set_fields is not None
+    assert collection.set_fields["smtp_last_test_ok"] is False
+    assert collection.set_fields["smtp_last_test_detail"] == response.detail

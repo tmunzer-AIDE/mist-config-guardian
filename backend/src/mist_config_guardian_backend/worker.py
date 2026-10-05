@@ -45,6 +45,12 @@ celery_app.conf.update(
             "task": "restores.expire_approvals",
             "schedule": 300.0,
         },
+        # Receipts whose processing failed, that the queue refused, or whose
+        # worker was lost would otherwise never be processed.
+        "retry-webhook-receipts": {
+            "task": "webhooks.retry_pending",
+            "schedule": 60.0,
+        },
         # Change groups recorded before the projection existed, and any whose
         # rebuild was lost to a worker restart, are filled in here.
         "backfill-change-group-projections": {

@@ -142,3 +142,42 @@ describe('OverviewPage under time travel', () => {
   });
 
 });
+
+describe('OverviewPage without an organization', () => {
+  async function render(isEmpty: boolean): Promise<HTMLElement> {
+    await TestBed.configureTestingModule({
+      imports: [OverviewPage],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: OrganizationContextService,
+          useValue: { selected: signal(null), isEmpty: signal(isEmpty) } as unknown as OrganizationContextService,
+        },
+        { provide: AuthService, useValue: { can: () => true } },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(OverviewPage);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    TestBed.inject(HttpTestingController).verify();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('asks for onboarding rather than describing an organization that does not exist', async () => {
+    const element = await render(true);
+
+    expect(element.querySelector('.empty h3')?.textContent).toContain('No organization onboarded yet');
+    expect(element.textContent).not.toContain('onboarded but its service token');
+    expect(element.textContent).toContain('Open organization setup');
+  });
+
+  it('says no organization is selected while the list is unavailable', async () => {
+    const element = await render(false);
+
+    expect(element.querySelector('.empty h3')?.textContent).toContain('No organization selected');
+    expect(element.textContent).not.toContain('onboarded but its service token');
+  });
+});

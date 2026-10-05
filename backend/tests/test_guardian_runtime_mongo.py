@@ -945,7 +945,7 @@ async def test_an_audit_above_the_version_cap_reports_what_it_did_not_examine(
         change.logical_object_id for change in loaded.changes
     )
 
-    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    inputs = await guardian.load_attempt_inputs(await load(root.id), organization, as_of=datetime.now(UTC))
     outcome = await guardian.execute_attempt(
         inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
     )
@@ -999,7 +999,7 @@ async def test_a_change_above_the_session_cap_reports_what_it_did_not_examine(
     assert len(sessions) == 2
     assert sessions[0].active is True
 
-    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    inputs = await guardian.load_attempt_inputs(await load(root.id), organization, as_of=datetime.now(UTC))
     outcome = await guardian.execute_attempt(
         inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
     )
@@ -1015,7 +1015,7 @@ async def test_a_net_change_that_ends_where_it_started_is_loaded_as_superseded(o
     loaded = await guardian._object_changes(organization.id, root.audit_id)
 
     assert [(item.versions, item.attributes) for item in loaded.superseded] == [(2, ("dns_servers",))]
-    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    inputs = await guardian.load_attempt_inputs(await load(root.id), organization, as_of=datetime.now(UTC))
     outcome = await guardian.execute_attempt(
         inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
     )
@@ -1042,7 +1042,7 @@ async def test_an_attribute_put_back_inside_one_audit_is_loaded_beside_the_one_t
     await versions[0].save()
 
     loaded = await guardian._object_changes(organization.id, root.audit_id)
-    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    inputs = await guardian.load_attempt_inputs(await load(root.id), organization, as_of=datetime.now(UTC))
     outcome = await guardian.execute_attempt(
         inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
     )
@@ -1064,12 +1064,86 @@ async def test_an_audit_version_with_no_stored_identity_is_reported(organization
 
     assert loaded.changes == ()
     assert loaded.gaps == (guardian.UNIDENTIFIED_GAP.format(count=1),)
-    inputs = await guardian.load_attempt_inputs(await load(root.id), as_of=datetime.now(UTC))
+    inputs = await guardian.load_attempt_inputs(await load(root.id), organization, as_of=datetime.now(UTC))
     outcome = await guardian.execute_attempt(
         inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
     )
     assert outcome.fields["verdict"].coverage != "complete"
     assert any(gap.source == "core" and "no stored identity" in gap.text for gap in outcome.fields["verdict"].gaps)
+
+
+async def test_an_attempt_reads_mist_as_the_organization_mist_knows(
+    organization: Organization, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mist rows name Mist's organization id, and the Reader drops a row naming any other as foreign."""
+    seen: list[str] = []
+    real = guardian.Reader
+
+    def spy(**kwargs: Any) -> Any:
+        seen.append(kwargs["org_id"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(guardian, "Reader", spy)
+    root = await new_root(organization)
+    await seed_change(root, secret="hunter2")
+
+    await service().tick(root)
+
+    assert seen == [organization.mist_org_id]
+    assert (await load(root.id)).final_run_id is not None
+
+
+async def test_another_audits_trigger_on_a_shared_session_is_loaded_for_pairing(organization: Organization) -> None:
+    """An unlinked outcome belongs to the latest trigger before it, whichever audit that trigger belongs to."""
+    root = await new_root(organization)
+    await seed_change(root, secret="hunter2")
+    later = (
+        ("configured", None, "SW_CONFIGURED", timedelta(seconds=20)),
+        ("other-trigger", "another-audit", "SW_CONFIG_CHANGED_BY_USER", timedelta(minutes=5)),
+        ("other-failed", None, "SW_CONFIG_FAILED", timedelta(minutes=5, seconds=30)),
+    )
+    linked = []
+    for suffix, audit, event_type, after in later:
+        receipt = await WebhookReceipt(
+            organization_id=root.organization_id,
+            topic="device-events",
+            event_id=f"{root.audit_id}-{suffix}",
+            audit_id=audit,
+            payload_hash="hash",
+            encrypted_payload="",
+            signature_version="v2",
+            deployment_normalized=True,
+            deployment={
+                "event_type": event_type,
+                "outcome": "pending",
+                "device_type": "switch",
+                "device_mac": MAC,
+                "site_id": SITE,
+                "occurred_at": root.changed_at + after,
+                "gaps": [],
+            },
+        ).insert()
+        linked.append(receipt.id)
+    # One session per device: the other audit's trigger merged into this audit's session.
+    await MonitoringSession(
+        organization_id=organization.id,
+        audit_ids=[root.audit_id, "another-audit"],
+        receipt_ids=linked,
+        site_id=SITE,
+        device_mac=MAC,
+        device_type=DeviceType.SWITCH,
+        status=MonitoringStatus.COMPLETED,
+        active=False,
+    ).insert()
+
+    inputs = await guardian.load_attempt_inputs(await load(root.id), organization, as_of=datetime.now(UTC))
+
+    assert "another-audit" in {receipt.audit_id for receipt in inputs.receipts}
+    outcome = await guardian.execute_attempt(
+        inputs, tools=AttemptTools(skip_reason=NO_RUNTIME), started=time.monotonic()
+    )
+    # This audit's own trigger was configured; the failure follows the other audit's later trigger.
+    assert outcome.fields["deployment"].peak == "none"
 
 
 async def test_the_exhaustion_read_quotes_the_last_final_attempt_that_recorded_a_reason(

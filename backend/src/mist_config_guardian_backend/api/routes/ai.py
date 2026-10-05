@@ -19,6 +19,7 @@ from mist_config_guardian_backend.models.user import User
 from mist_config_guardian_backend.schemas.ai import (
     AiDiffFollowupResponse,
     AiDiffSummaryResponse,
+    AiStatusResponse,
     DiffFollowupRequest,
     DiffSummaryRequest,
 )
@@ -71,6 +72,18 @@ async def get_ai_settings(
 ) -> AiSettingsResponse:
     """Return safe AI provider settings."""
     return await settings.get_ai_settings()
+
+
+@router.get("/status")
+async def get_ai_status(
+    settings: Annotated[
+        ApplicationConfigurationService,
+        Depends(get_application_configuration_service),
+    ],
+    _viewer: Annotated[User, Depends(require_viewer)],
+) -> AiStatusResponse:
+    """Return whether AI assistance and automatic summaries are on, for any signed-in role."""
+    return await settings.get_ai_status()
 
 
 @router.put("/settings")

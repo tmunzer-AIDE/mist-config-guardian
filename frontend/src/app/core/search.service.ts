@@ -28,6 +28,8 @@ export class SearchService {
 
   readonly query = signal('');
   readonly results = signal<SearchResult[]>([]);
+  /** Every match, which is more than `results` holds when the page was capped. */
+  readonly total = signal(0);
   readonly searching = signal(false);
 
   /** Only the latest search describes the results on screen. */
@@ -42,6 +44,7 @@ export class SearchService {
     const request = ++this.request;
     if (term.length < 2) {
       this.results.set([]);
+      this.total.set(0);
       return [];
     }
     this.searching.set(true);
@@ -52,6 +55,7 @@ export class SearchService {
       );
       if (request === this.request) {
         this.results.set(response.items);
+        this.total.set(response.total ?? response.items.length);
       }
       return response.items;
     } finally {
@@ -65,5 +69,6 @@ export class SearchService {
     this.request += 1;
     this.query.set('');
     this.results.set([]);
+    this.total.set(0);
   }
 }

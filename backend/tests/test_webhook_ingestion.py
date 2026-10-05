@@ -11,6 +11,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.config import Settings
+from mist_config_guardian_backend.integrations.mist_config import MistReadError
 from mist_config_guardian_backend.models.organization import Organization, OrganizationStatus
 from mist_config_guardian_backend.models.webhook import ChangedObjectRef, WebhookProcessingStatus, WebhookReceipt
 from mist_config_guardian_backend.security.credentials import CredentialVault
@@ -374,3 +375,41 @@ async def test_asset_filter_audit_does_not_start_a_guardian_investigation(monkey
 
 async def test_backup_audit_without_changed_versions_does_not_start_an_investigation(monkeypatch):
     assert await _process(monkeypatch, guardian_enabled=True, has_changes=False) == []
+
+
+async def test_a_receipt_whose_processing_fails_is_recorded_as_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Left in progress, nothing would ever retry it and the change it carries would be lost."""
+    vault = CredentialVault(Settings(environment="test", database_enabled=False))
+    organization = Organization.model_construct(id=PydanticObjectId(), mist_org_id="org-1")
+    receipt = WebhookReceipt.model_construct(
+        id=PydanticObjectId(),
+        organization_id=organization.id,
+        topic="audits",
+        event_id="audit-1",
+        audit_id="audit-1",
+        payload_hash="hash",
+        encrypted_payload=vault.encrypt_for_context(
+            json.dumps({"id": "audit-1", "wlan_id": "wlan-1", "message": 'Update WLAN "Corp"'}),
+            context="webhook-payload:org-1",
+        ),
+        signature_version="v2",
+        status=WebhookProcessingStatus.QUEUED,
+        processing_attempts=0,
+        created_at=datetime(2026, 9, 16, 12, 0, tzinfo=UTC),
+    )
+    saved: list[WebhookProcessingStatus] = []
+    monkeypatch.setattr(WebhookReceipt, "get", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(WebhookReceipt, "save", AsyncMock(side_effect=lambda: saved.append(receipt.status)))
+    monkeypatch.setattr(Organization, "get", AsyncMock(return_value=organization))
+    monkeypatch.setattr(WebhookProcessingService, "_add_to_change_group", AsyncMock())
+    monkeypatch.setattr(
+        AuditVersioningService, "apply", AsyncMock(side_effect=MistReadError("Unable to read wlans from Mist"))
+    )
+
+    with pytest.raises(MistReadError):
+        await WebhookProcessingService(vault, projector=AsyncMock()).process(receipt.id)
+
+    assert saved == [WebhookProcessingStatus.PROCESSING, WebhookProcessingStatus.FAILED]
+    assert receipt.processing_attempts == 1
+    assert receipt.processing_error is not None
+    assert "Unable to read wlans from Mist" in receipt.processing_error

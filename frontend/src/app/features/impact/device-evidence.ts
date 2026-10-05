@@ -106,21 +106,27 @@ const SOURCES = [
           roaming alone is not treated as an outage.
         </p>
         @for (source of sources(comparison); track source.key) {
-          <details #detail (toggle)="setExpanded(comparison, source.key, detail.open)">
+          <details
+            #detail
+            [open]="isExpanded(comparison, source.key)"
+            (toggle)="setExpanded(comparison, source.key, detail.open)"
+          >
             <summary>
               {{ source.label }} <span>{{ source.beforeSummary }} → {{ source.afterSummary }}</span>
             </summary>
-            @if (expanded.get(comparison)?.has(source.key)) {
+            @if (isExpanded(comparison, source.key)) {
               <div class="captures">
                 <app-telemetry-capture
                   label="At trigger"
                   [value]="source.before"
                   [error]="source.beforeError"
+                  [capture]="source.beforeCapture"
                 />
                 <app-telemetry-capture
                   [label]="comparison.latest ? 'Latest capture' : 'Five minutes later'"
                   [value]="source.after"
                   [error]="source.afterError"
+                  [capture]="source.afterCapture"
                   [emptyLabel]="comparison.followup ? 'Unavailable' : 'Pending capture'"
                 />
               </div>
@@ -217,6 +223,7 @@ export class DeviceEvidence {
       if (id !== this.previousSessionId) {
         this.previousSessionId = id;
         this.captureIndex.set(0);
+        this.expanded.set(new Set());
       }
     });
   }
@@ -242,12 +249,25 @@ export class DeviceEvidence {
   protected readonly pendingCount = computed(() => this.comparisons().filter((c) => !c.followup && !c.latest).length);
   protected readonly sourceErrors = computed(() => [...new Set(this.comparisons().flatMap((c) =>
     [c.baseline, c.latest ?? c.followup].flatMap((state) => Object.entries(state?.errors ?? {}).map(([source, error]) => source + ': ' + error))))]);
-  protected readonly expanded = new WeakMap<DeviceStateComparison, Set<string>>();
+  /**
+   * The sources shown expanded, by capture trigger and source.
+   *
+   * Held by value, not by comparison object: the impact page re-reads the
+   * session every 30 seconds, and each read is new objects for the same captures.
+   */
+  private readonly expanded = signal<ReadonlySet<string>>(new Set());
+  protected isExpanded(comparison: DeviceStateComparison, key: string): boolean {
+    return this.expanded().has(expansionKey(comparison, key));
+  }
   protected setExpanded(comparison: DeviceStateComparison, key: string, open: boolean): void {
-    const sources = this.expanded.get(comparison) ?? new Set<string>();
-    if (open) sources.add(key);
-    else sources.delete(key);
-    this.expanded.set(comparison, sources);
+    const expansion = expansionKey(comparison, key);
+    if (this.expanded().has(expansion) === open) return;
+    this.expanded.update((current) => {
+      const next = new Set(current);
+      if (open) next.add(expansion);
+      else next.delete(expansion);
+      return next;
+    });
   }
   protected readonly at = (value?: string | null) =>
     value ? formatInstant(new Date(value)) : 'not available';
@@ -269,6 +289,9 @@ export class DeviceEvidence {
       afterSummary: this.summary(after, key),
       beforeError: before?.errors[key],
       afterError: after?.errors[key],
+      // Names each capture across re-reads, so its table keeps its page.
+      beforeCapture: JSON.stringify([key, before?.captured_at ?? null]),
+      afterCapture: JSON.stringify([key, after?.captured_at ?? null]),
     }));
   }
   private summary(
@@ -280,4 +303,8 @@ export class DeviceEvidence {
     const value = state[key];
     return Array.isArray(value) ? value.length + ' records' : 'captured';
   }
+}
+
+function expansionKey(comparison: DeviceStateComparison, source: string): string {
+  return JSON.stringify([comparison.triggered_at, source]);
 }

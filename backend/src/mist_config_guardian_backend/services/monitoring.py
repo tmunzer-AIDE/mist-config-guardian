@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from beanie import UpdateResponse
 from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.config import get_settings
@@ -23,6 +24,7 @@ from mist_config_guardian_backend.models.monitoring import (
     MonitoringStatus,
     MonitoringTimelineEvent,
     SleObservation,
+    new_change_token,
 )
 from mist_config_guardian_backend.models.organization import Organization
 from mist_config_guardian_backend.models.telemetry import DeviceStateComparison, DeviceStateObservation
@@ -40,6 +42,7 @@ from mist_config_guardian_backend.services.impact_analysis import (
     assess_impact,
     store_assessment,
 )
+from mist_config_guardian_backend.services.notifications import NotificationService
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 _PRE_CONFIG_EVENTS = {
@@ -79,6 +82,8 @@ _MONITORING_DURATION = timedelta(hours=1)
 _POLL_INTERVAL = timedelta(minutes=5)
 _DEVICE_COMPARISON_DELAY = timedelta(minutes=5)
 _BASELINE_ANCHOR = timedelta(hours=1)
+_WRITE_ATTEMPTS = 3
+_POLL_FAILED = "A monitoring poll failed; collection will be retried."
 
 
 logger = logging.getLogger(__name__)
@@ -409,7 +414,11 @@ class MonitoringPollService:
     ) -> None:
         self._vault = vault
         self._application_configuration = application_configuration
-        self._projector = projector or ChangeGroupProjector()
+        # Most verdicts are reached by a poll rather than a device event, so
+        # this projector announces a harmful change just as the webhook one does.
+        self._projector = (
+            projector if projector is not None else ChangeGroupProjector(notifications=NotificationService())
+        )
 
     async def poll_active(self) -> int:
         """Poll every due active session once."""
@@ -443,6 +452,7 @@ class MonitoringPollService:
                         "next_poll_at": None,
                         "completed_at": now,
                         "updated_at": now,
+                        "change_token": new_change_token(),
                         "assessment": assessment.model_dump(mode="python"),
                         "impact_severity": assessment.severity,
                         "deterministic_summary": assessment.summary,
@@ -454,22 +464,44 @@ class MonitoringPollService:
                 }
             )
             await self._refresh_change_groups(session)
-        sessions = await MonitoringSession.find(
-            MonitoringSession.status == MonitoringStatus.MONITORING,
-            {"next_poll_at": {"$lte": now}},
-        ).to_list()
-        for session in sessions:
+        polled = 0
+        while (session := await self._claim_due(now)) is not None:
+            polled += 1
             try:
                 await self._poll_session(session, now)
             except Exception:
                 logger.exception("Unable to poll monitoring session %s", session.id)
-                warning = "A monitoring poll failed; collection will be retried."
-                if warning not in session.warnings:
-                    session.warnings.append(warning)
-                session.next_poll_at = now + _POLL_INTERVAL
-                session.touch()
-                await session.save()
-        return len(sessions)
+                await self._warn_poll_failed(session)
+        return polled
+
+    @staticmethod
+    async def _claim_due(now: datetime) -> MonitoringSession | None:
+        """Take the next due session, so a run that overlaps this one skips it.
+
+        Moving ``next_poll_at`` on is the claim. The poll sets it properly when
+        it writes; a poll that fails or dies leaves the session due again one
+        interval later.
+        """
+        claimed = await MonitoringSession.find_one(
+            {"status": MonitoringStatus.MONITORING, "next_poll_at": {"$lte": now}},
+        ).update(
+            {"$set": {"next_poll_at": utc_now() + _POLL_INTERVAL}},
+            response_type=UpdateResponse.NEW_DOCUMENT,
+        )
+        return claimed if isinstance(claimed, MonitoringSession) else None
+
+    @staticmethod
+    async def _warn_poll_failed(session: MonitoringSession) -> None:
+        # The claim already put the retry an interval out, so only the warning
+        # is written. This copy predates the poll and is too stale to save whole.
+        await MonitoringSession.find_one(
+            {"_id": session.id, "status": MonitoringStatus.MONITORING},
+        ).update(
+            {
+                "$addToSet": {"warnings": _POLL_FAILED},
+                "$set": {"updated_at": utc_now(), "change_token": new_change_token()},
+            }
+        )
 
     @staticmethod
     def _warn_unidentified_baseline(session: MonitoringSession, observation: SleObservation) -> None:
@@ -488,8 +520,7 @@ class MonitoringPollService:
             session.status = MonitoringStatus.FAILED
             session.active = False
             session.warnings.append("Managed organization no longer exists.")
-            session.touch()
-            await session.save()
+            await session.save_unless_changed()
             return
         token = await service_token(organization, self._vault)
         async with MistSleClient(token=token, region=organization.cloud_region) as client:
@@ -502,7 +533,48 @@ class MonitoringPollService:
                 start=session.config_applied_at or session.change_triggered_at or session.monitoring_started_at,
                 end=now,
             )
-        await self._compare_due_states(session, organization, token, now)
+        followup = await self._capture_due_state(session, organization, token, now)
+        assessment = self._record(session, observation, followup, now)
+        if session.monitoring_ends_at is not None and now >= session.monitoring_ends_at:
+            try:
+                ai_configuration = await self._application_configuration.impact_ai_runtime()
+            except ApplicationConfigurationError as exc:
+                session.ai_assessment_error = str(exc)
+            else:
+                if ai_configuration is not None:
+                    await self._assess_with_ai(
+                        session,
+                        assessment,
+                        ai_configuration,
+                    )
+        polled = session
+        for _ in range(_WRITE_ATTEMPTS):
+            self._schedule_next(session, now)
+            if await session.save_unless_changed():
+                await self._refresh_change_groups(session)
+                return
+            # A device event wrote the session while Mist was being read. Apply
+            # what this poll collected on top of that write instead of erasing it.
+            current = await MonitoringSession.get(polled.id)
+            if current is None or current.status is not MonitoringStatus.MONITORING:
+                # The event ended monitoring, and its verdict stands.
+                return
+            # Only a poll writes the narration, so this one's is still current.
+            current.ai_assessment = polled.ai_assessment
+            current.ai_assessment_error = polled.ai_assessment_error
+            self._record(current, observation, followup, now)
+            session = current
+        logger.warning("Gave up writing monitoring session %s after %d attempts", polled.id, _WRITE_ATTEMPTS)
+
+    def _record(
+        self,
+        session: MonitoringSession,
+        observation: SleObservation,
+        followup: DeviceStateObservation | None,
+        now: datetime,
+    ) -> ImpactAssessment:
+        """Apply what one poll collected to a session and return the new assessment."""
+        self._compare_due_states(session, followup, now)
         self._warn_unidentified_baseline(session, observation)
         session.observations.append(observation)
         assessment = assess_impact(
@@ -526,18 +598,10 @@ class MonitoringPollService:
             session.peak_impact_severity, max_severity(session.impact_severity, assessment.severity)
         )
         store_assessment(session, assessment)
-        if session.monitoring_ends_at is not None and now >= session.monitoring_ends_at:
-            try:
-                ai_configuration = await self._application_configuration.impact_ai_runtime()
-            except ApplicationConfigurationError as exc:
-                session.ai_assessment_error = str(exc)
-            else:
-                if ai_configuration is not None:
-                    await self._assess_with_ai(
-                        session,
-                        assessment,
-                        ai_configuration,
-                    )
+        return assessment
+
+    @staticmethod
+    def _schedule_next(session: MonitoringSession, now: datetime) -> None:
         if session.monitoring_ends_at is not None and now >= session.monitoring_ends_at:
             session.status = MonitoringStatus.COMPLETED
             session.active = False
@@ -548,22 +612,24 @@ class MonitoringPollService:
             for comparison in session.device_comparisons:
                 if comparison.followup is None:
                     session.next_poll_at = min(session.next_poll_at, comparison.due_at)
-        session.touch()
-        await session.save()
-        await self._refresh_change_groups(session)
 
     @staticmethod
-    async def _compare_due_states(
+    async def _capture_due_state(
         session: MonitoringSession, organization: Organization, token: str, now: datetime
-    ) -> None:
+    ) -> DeviceStateObservation | None:
+        if not any(now >= item.due_at for item in session.device_comparisons):
+            return None
+        async with MistTelemetryClient(token=token, region=organization.cloud_region) as telemetry:
+            return await telemetry.capture(
+                site_id=session.site_id,
+                device_type=session.device_type,
+                device_mac=session.device_mac,
+            )
+
+    @staticmethod
+    def _compare_due_states(session: MonitoringSession, followup: DeviceStateObservation | None, now: datetime) -> None:
         due = [item for item in session.device_comparisons if now >= item.due_at]
-        if due:
-            async with MistTelemetryClient(token=token, region=organization.cloud_region) as telemetry:
-                followup = await telemetry.capture(
-                    site_id=session.site_id,
-                    device_type=session.device_type,
-                    device_mac=session.device_mac,
-                )
+        if due and followup is not None:
             for comparison in due:
                 previous = (
                     comparison.current_findings if comparison.current_findings is not None else comparison.findings

@@ -135,4 +135,32 @@ describe('DeviceEvidence', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('table')).toBeNull();
   });
+
+  it('keeps an expanded source open, populated and on its page when the session is read again', () => {
+    // The impact page re-reads the session every 30 seconds, and each read
+    // delivers the same captures as new objects.
+    const clients = () => Array.from({ length: 120 }, (_, id) => ({ id }));
+    const read = () => ({
+      id: 's1',
+      device_comparisons: [{ baseline: state({ clients: clients() }), followup: state({ clients: clients() }), findings: [],
+        triggered_at: '2026-09-09T12:00:00Z', due_at: '2026-09-09T12:05:00Z' }],
+    }) as Partial<MonitoringSession>;
+    const fixture = TestBed.createComponent(DeviceEvidence);
+    fixture.componentRef.setInput('session', read());
+    fixture.detectChanges();
+    const detail = fixture.nativeElement.querySelector('.capture-history .evidence details') as HTMLDetailsElement;
+    detail.open = true;
+    detail.dispatchEvent(new Event('toggle'));
+    fixture.detectChanges();
+    click(fixture, 'Next');
+
+    fixture.componentRef.setInput('session', read());
+    fixture.detectChanges();
+
+    const captures = fixture.nativeElement.querySelectorAll('app-telemetry-capture');
+    expect(detail.open).toBe(true);
+    expect(captures.length).toBe(2);
+    expect(captures[0].textContent).toContain('Records 51–100 of 120');
+    expect(captures[1].textContent).toContain('Records 1–50 of 120');
+  });
 });

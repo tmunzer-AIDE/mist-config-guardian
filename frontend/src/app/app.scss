@@ -127,6 +127,11 @@
   background: none;
 }
 
+// A retry sits beside Dismiss; only the first of the two takes the free space.
+.error-dismiss + .error-dismiss {
+  margin-left: 0;
+}
+
 // The page area, as a box that is positioned but does not scroll.
 //
 // `main` must not be both: an absolutely positioned descendant counts towards

@@ -106,6 +106,13 @@ export class RestoreStepAuthorize {
   protected readonly compensationWarnings = computed(() =>
     this.compensation() ? (this.operation().warnings ?? []) : [],
   );
+  /**
+   * Its preflight errors likewise, which the server refuses it for. A
+   * restore's are shown in review, which withholds this step altogether.
+   */
+  protected readonly compensationErrors = computed(() =>
+    this.compensation() ? (this.operation().preflight_errors ?? []) : [],
+  );
 
   protected readonly title = computed(() =>
     this.compensation()
@@ -149,6 +156,7 @@ export class RestoreStepAuthorize {
       this.canAuthorize() &&
       !this.busy() &&
       (this.needsPreparation() || !this.blockedByApproval()) &&
+      this.compensationErrors().length === 0 &&
       this.count() > 0,
   );
 

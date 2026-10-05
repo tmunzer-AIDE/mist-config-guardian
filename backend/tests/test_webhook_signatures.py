@@ -37,3 +37,14 @@ def test_verify_signature_rejects_modified_payload() -> None:
         "webhook-secret",
         version=SignatureVersion.V2,
     )
+
+
+def test_verify_signature_rejects_a_non_ascii_signature() -> None:
+    # Header values arrive decoded as Latin-1. Comparing non-ASCII text as a
+    # string raises instead of failing, which the receiver answered with 500.
+    assert not verify_signature(
+        b'{"topic":"audits"}',
+        "é" * 64,
+        "webhook-secret",
+        version=SignatureVersion.V2,
+    )

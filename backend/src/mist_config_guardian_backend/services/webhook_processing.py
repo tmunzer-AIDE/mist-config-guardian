@@ -1,7 +1,7 @@
 """Asynchronous processing for durable webhook receipts."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
@@ -27,6 +27,20 @@ from mist_config_guardian_backend.services.notifications import NotificationServ
 # past are milliseconds, not seconds; the boundary is well before Mist existed.
 _EPOCH_MILLISECOND_BOUNDARY = 100_000_000_000
 
+# A receipt whose processing failed is tried again after a delay that doubles
+# with each attempt, a bounded number of times; the last error stays on it.
+MAX_PROCESSING_ATTEMPTS = 5
+RETRY_BASE_DELAY = timedelta(minutes=5)
+# Processing takes seconds. A receipt still queued or in progress this long
+# after it was last touched has lost its queue message or its worker.
+STALE_AFTER = timedelta(minutes=30)
+# Processing records the object as Mist holds it now. Past this age that state
+# would be attributed to an action it may not reflect, so the receipt is left
+# to the next snapshot instead.
+RETRY_WINDOW = timedelta(days=1)
+RETRY_BATCH_SIZE = 100
+_PROCESSING_ERROR_LIMIT = 500
+
 
 class WebhookReceiptNotFoundError(ValueError):
     """Raised when a queued webhook receipt no longer exists."""
@@ -40,6 +54,66 @@ def _union(field: str, values: list[object]) -> dict[str, object]:
 def _fill(field: str, value: object) -> dict[str, object]:
     """Set a field only while it is still empty."""
     return {"$ifNull": [field, value]}
+
+
+def retry_delay(attempts: int) -> timedelta:
+    """How long a receipt waits after its ``attempts``-th failed attempt."""
+    return RETRY_BASE_DELAY * 2 ** (attempts - 1)
+
+
+async def claim_retryable_receipts(
+    *,
+    now: datetime | None = None,
+    limit: int = RETRY_BATCH_SIZE,
+) -> list[PydanticObjectId]:
+    """Mark the receipts due another attempt as queued and return them.
+
+    A receipt is due when the queue refused it, when its last attempt failed
+    and its delay has passed, or when its queue message or worker was lost.
+    Each is claimed only if it is unchanged since it was read, so overlapping
+    sweeps cannot queue it twice, and claiming touches it, so the next sweep
+    leaves it to the worker.
+    """
+    now = now or utc_now()
+    collection = WebhookReceipt.get_pymongo_collection()
+    candidates = (
+        await collection.find(
+            {
+                "created_at": {"$gte": now - RETRY_WINDOW},
+                "processing_attempts": {"$lt": MAX_PROCESSING_ATTEMPTS},
+                "$or": [
+                    {"status": WebhookProcessingStatus.RECEIVED.value},
+                    *(
+                        {
+                            "status": WebhookProcessingStatus.FAILED.value,
+                            "processing_attempts": attempts,
+                            "updated_at": {"$lte": now - retry_delay(attempts)},
+                        }
+                        for attempts in range(1, MAX_PROCESSING_ATTEMPTS)
+                    ),
+                    {
+                        "status": {
+                            "$in": [WebhookProcessingStatus.QUEUED.value, WebhookProcessingStatus.PROCESSING.value]
+                        },
+                        "updated_at": {"$lte": now - STALE_AFTER},
+                    },
+                ],
+            },
+            {"status": 1, "updated_at": 1},
+        )
+        .sort("updated_at", 1)
+        .limit(limit)
+        .to_list(length=limit)
+    )
+    claimed: list[PydanticObjectId] = []
+    for candidate in candidates:
+        result = await collection.update_one(
+            {"_id": candidate["_id"], "status": candidate["status"], "updated_at": candidate["updated_at"]},
+            {"$set": {"status": WebhookProcessingStatus.QUEUED.value, "updated_at": now}},
+        )
+        if result.modified_count:
+            claimed.append(PydanticObjectId(candidate["_id"]))
+    return claimed
 
 
 class WebhookProcessingService:
@@ -75,6 +149,24 @@ class WebhookProcessingService:
         receipt.touch()
         await receipt.save()
 
+        try:
+            await self._process(receipt, organization)
+        except Exception as exc:
+            # Recorded rather than left in progress, so the retry sweep finds it
+            # and the reason is kept; processing is idempotent, so a retry
+            # repeats nothing an earlier attempt already recorded.
+            receipt.status = WebhookProcessingStatus.FAILED
+            receipt.processing_error = f"{type(exc).__name__}: {exc}"[:_PROCESSING_ERROR_LIMIT]
+            receipt.touch()
+            await receipt.save()
+            raise
+
+        receipt.status = WebhookProcessingStatus.PROCESSED
+        receipt.processed_at = utc_now()
+        receipt.touch()
+        await receipt.save()
+
+    async def _process(self, receipt: WebhookReceipt, organization: Organization) -> None:
         serialized = self._vault.decrypt_for_context(
             receipt.encrypted_payload,
             context=f"webhook-payload:{organization.mist_org_id}",
@@ -120,11 +212,6 @@ class WebhookProcessingService:
                     changed_at=event_time or receipt.created_at,
                     anchor_known=event_time is not None,
                 )
-
-        receipt.status = WebhookProcessingStatus.PROCESSED
-        receipt.processed_at = utc_now()
-        receipt.touch()
-        await receipt.save()
 
     async def project(
         self,
@@ -214,6 +301,7 @@ class WebhookProcessingService:
 
         site_id = WebhookProcessingService._first_string(payload, "site_id")
         object_id = WebhookProcessingService._first_string(payload, "object_id", "device_id", "id")
+        event_time = WebhookProcessingService._event_time(payload)
         # Merged in place rather than read-modify-saved. A whole-document save
         # would overwrite whatever a rebuild had computed between this read and
         # this write, projection and revision included. The revision is
@@ -223,6 +311,8 @@ class WebhookProcessingService:
         #
         # A later delivery of the same audit may be the one carrying the actor
         # or the message, so blanks are filled without overwriting what is known.
+        # The audit's own timestamp is the exception: a device event carrying
+        # the audit id may have opened the group first, at its own later time.
         await AuditChangeGroup.get_pymongo_collection().update_one(
             {"_id": group.id},
             [
@@ -235,7 +325,11 @@ class WebhookProcessingService:
                         ),
                         "method": _fill("$method", WebhookProcessingService._first_string(payload, "method", "src")),
                         "message": _fill("$message", WebhookProcessingService._first_string(payload, "message")),
-                        "occurred_at": _fill("$occurred_at", WebhookProcessingService._event_time(payload)),
+                        "occurred_at": (
+                            event_time
+                            if receipt.topic == "audits" and event_time is not None
+                            else _fill("$occurred_at", event_time)
+                        ),
                         "affected_site_ids": _union("$affected_site_ids", [site_id] if site_id else []),
                         "affected_object_ids": _union("$affected_object_ids", [object_id] if object_id else []),
                         "projection_revision": {"$add": [{"$ifNull": ["$projection_revision", 0]}, 1]},

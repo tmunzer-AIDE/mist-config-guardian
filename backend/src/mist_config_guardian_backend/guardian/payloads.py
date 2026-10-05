@@ -30,8 +30,12 @@ MAX_KEY = 120
 DIGEST_ROWS = (10, 5, 2)
 
 REDACTED = "[redacted]"
+# Beside the generic names, the credentials Mist stores under names of their own: WEP ``auth.keys``, a BGP
+# ``auth_key``, OSPF ``auth_keys``, SNMP community strings and IPsec pre-shared keys.
 _SECRET = re.compile(
-    r"password|passphrase|secret|token|private.?key|api.?key|credential|^psk$|^key$|certificate", re.IGNORECASE
+    r"password|passphrase|secret|token|private.?key|api.?key|credential|^psk$|^key$|^keys$|auth_?keys?|"
+    r"communit(y|ies)|pre_?shared|certificate",
+    re.IGNORECASE,
 )
 _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
 _UNSAFE_RUN = re.compile(r"[\x00-\x1f\x7f\s]+")

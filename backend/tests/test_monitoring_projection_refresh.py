@@ -91,7 +91,7 @@ async def test_poll_keeps_known_scope_identity_against_unidentified_legacy_basel
     monkeypatch.setattr(monitoring.Organization, "get", AsyncMock(return_value=SimpleNamespace(cloud_region="test")))
     monkeypatch.setattr(monitoring, "service_token", AsyncMock(return_value="test-token"))
     monkeypatch.setattr(monitoring, "MistSleClient", lambda **_kwargs: client)
-    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    monkeypatch.setattr(MonitoringSession, "save_unless_changed", AsyncMock(return_value=True))
     service = _service(_RecordingProjector())
     for _ in range(2):
         await service._poll_session(session, NOW)  # noqa: SLF001
@@ -125,13 +125,24 @@ def _install_queries(
     awaiting: list[MonitoringSession],
     monitoring: list[MonitoringSession],
 ) -> None:
-    """Answer the two find() calls poll_active makes, in order."""
-    queries = [_FakeQuery(awaiting), *[_FakeQuery([item]) for item in awaiting], _FakeQuery(monitoring)]
+    """Answer the timeout find() calls poll_active makes, in order, then its claims."""
+    queries = [_FakeQuery(awaiting), *[_FakeQuery([item]) for item in awaiting]]
 
     def find(*_args: object, **_kwargs: object) -> _FakeQuery:
         return queries.pop(0)
 
     monkeypatch.setattr(MonitoringSession, "find", find)
+    _install_claims(monkeypatch, monitoring)
+
+
+def _install_claims(monkeypatch: pytest.MonkeyPatch, monitoring: list[MonitoringSession]) -> None:
+    """Hand out each due session to one claim, then report none left."""
+    due = list(monitoring)
+
+    async def claim_due(_now: datetime) -> MonitoringSession | None:
+        return due.pop(0) if due else None
+
+    monkeypatch.setattr(MonitoringPollService, "_claim_due", staticmethod(claim_due))
 
 
 async def test_a_session_that_never_configured_still_refreshes_its_change_group(
@@ -187,7 +198,7 @@ async def test_timeout_persists_each_sessions_metric_gaps_and_guards_configured_
     abandoned = _session(MonitoringStatus.AWAITING_CONFIG, [])
     abandoned.baseline = SleObservation(values={"coverage": 99})
     target = _FakeQuery([abandoned])
-    queries = [_FakeQuery([abandoned]), target, _FakeQuery([])]
+    queries = [_FakeQuery([abandoned]), target]
     filters = []
 
     def find(*args):
@@ -195,6 +206,7 @@ async def test_timeout_persists_each_sessions_metric_gaps_and_guards_configured_
         return queries.pop(0)
 
     monkeypatch.setattr(MonitoringSession, "find", find)
+    _install_claims(monkeypatch, [])
     await _service(_RecordingProjector()).poll_active()
     assert filters[1] == ({"_id": abandoned.id, "status": MonitoringStatus.AWAITING_CONFIG},)
     stored = target.updated["$set"]
@@ -265,7 +277,7 @@ async def test_followup_runs_after_five_minutes_and_sle_monitoring_continues_for
             return_value=Organization.model_construct(id=ORGANIZATION_ID, cloud_region=MistCloudRegion.GLOBAL_01)
         ),
     )
-    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    monkeypatch.setattr(MonitoringSession, "save_unless_changed", AsyncMock(return_value=True))
     service = _service(_RecordingProjector())
     await service._poll_session(session, NOW + timedelta(minutes=4))  # noqa: SLF001
     assert not captures
@@ -320,7 +332,7 @@ async def test_legacy_baseline_keeps_site_scope_and_bucket_mean_across_deploymen
             return_value=Organization.model_construct(id=ORGANIZATION_ID, cloud_region=MistCloudRegion.GLOBAL_01)
         ),
     )
-    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    monkeypatch.setattr(MonitoringSession, "save_unless_changed", AsyncMock(return_value=True))
     await _service(_RecordingProjector())._poll_session(session, NOW + timedelta(minutes=5))  # noqa: SLF001
     assert session.observations[0].values["coverage"] == 50
     assert session.observations[0].scope == session.baseline.scope == "site"
@@ -378,7 +390,7 @@ async def test_operational_polls_preserve_first_outage_and_record_recovery(monke
             return_value=Organization.model_construct(id=ORGANIZATION_ID, cloud_region=MistCloudRegion.GLOBAL_01)
         ),
     )
-    monkeypatch.setattr(MonitoringSession, "save", AsyncMock())
+    monkeypatch.setattr(MonitoringSession, "save_unless_changed", AsyncMock(return_value=True))
     session = _session(MonitoringStatus.MONITORING, [])
     session.baseline = SleObservation(values={"coverage": 99})
     session.device_comparisons = [DeviceStateComparison(triggered_at=NOW, baseline=up, due_at=down.captured_at)]

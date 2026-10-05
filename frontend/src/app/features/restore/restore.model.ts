@@ -148,6 +148,9 @@ export interface RestoreTargetList {
 
 export type TargetScope = 'all' | 'org' | 'site';
 
+/** The most versions one plan request accepts; the API refuses a longer list outright. */
+export const MAX_PLAN_VERSIONS = 100;
+
 /** Filters accepted by the restore targets endpoint. */
 export interface RestoreTargetQuery {
   scope?: TargetScope;

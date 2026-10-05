@@ -5,6 +5,7 @@ so the executor treats this pass as part of the operation rather than as a
 follow-up job: a failed check leaves the operation in a failed state.
 """
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from uuid import uuid4
@@ -26,7 +27,14 @@ from mist_config_guardian_backend.models.restore import (
     RestoreActionType,
     RestoreOperation,
 )
-from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectVersion, SnapshotKind
+from mist_config_guardian_backend.models.snapshot import (
+    LogicalObject,
+    ObjectVersion,
+    SnapshotError,
+    SnapshotKind,
+    SnapshotManifest,
+    SnapshotStatus,
+)
 from mist_config_guardian_backend.services.restore_planner import (
     RestoreStateStore,
     RestoreVerificationResult,
@@ -35,13 +43,16 @@ from mist_config_guardian_backend.services.restore_planner import (
     latest_version,
     load_or_build_state,
 )
+from mist_config_guardian_backend.services.snapshots import SnapshotInProgressError, open_manifest
 from mist_config_guardian_backend.snapshots.fingerprint import differing_fields
 from mist_config_guardian_backend.snapshots.references import is_restore_reference
 from mist_config_guardian_backend.snapshots.registry import ObjectDefinition, get_definition
 from mist_config_guardian_backend.worker import celery_app
 
+logger = logging.getLogger(__name__)
+
 StaleReferenceFinder = Callable[[PydanticObjectId, set[str]], Awaitable[list[str]]]
-SnapshotQueue = Callable[[PydanticObjectId], str | None]
+SnapshotQueue = Callable[[PydanticObjectId], Awaitable[str | None]]
 MonitoringReopener = Callable[[PydanticObjectId, set[str]], Awaitable[list[str]]]
 
 _MAX_REOPENED_SESSIONS = 50
@@ -76,16 +87,42 @@ async def find_stale_references(
     return sorted(stale)
 
 
-def queue_post_restore_snapshot(organization_id: PydanticObjectId) -> str | None:
-    """Queue a reconciling snapshot and return its task identifier."""
+async def queue_post_restore_snapshot(organization_id: PydanticObjectId) -> str | None:
+    """Queue a reconciling snapshot and return its task identifier.
+
+    The manifest is opened before the task is sent and its id travels with it,
+    so a redelivered task resumes this snapshot instead of opening a second
+    one and finding this one in its way. ``SnapshotInProgressError`` means
+    another snapshot holds the organization and nothing was queued. A task the
+    queue refused closes its manifest, which would otherwise hold that slot.
+    """
+    manifest = SnapshotManifest(
+        organization_id=organization_id,
+        kind=SnapshotKind.RECONCILIATION,
+        status=SnapshotStatus.PENDING,
+    )
+    try:
+        await open_manifest(manifest)
+    except DuplicateKeyError as exc:
+        logger.info("restore_post_snapshot_skipped organization=%s reason=snapshot_in_progress", organization_id)
+        msg = "Another snapshot of the organization is already in progress"
+        raise SnapshotInProgressError(msg) from exc
     task_id = str(uuid4())
     try:
         celery_app.send_task(
             "snapshots.collect",
-            args=[str(organization_id), SnapshotKind.RECONCILIATION.value],
+            args=[str(organization_id), SnapshotKind.RECONCILIATION.value, str(manifest.id)],
             task_id=task_id,
         )
     except (CeleryError, OperationalError):
+        manifest.status = SnapshotStatus.FAILED
+        manifest.active = False
+        manifest.completed_at = utc_now()
+        manifest.errors = [
+            SnapshotError(object_type="task", message="Snapshot worker queue is unavailable", retryable=True)
+        ]
+        manifest.touch()
+        await manifest.save()
         return None
     return task_id
 
@@ -150,17 +187,35 @@ class RestoreVerificationService:
         id_map: Mapping[str, str],
         applied: Mapping[int, dict[str, object]],
     ) -> RestoreVerificationResult:
-        """Run every post-restore check and persist the outcome."""
+        """Run every post-restore check and persist the outcome.
+
+        The replaced ids are those this run recreated and those the plan
+        remapped for the actions that wrote: an earlier incarnation of an
+        object that lives on under another id is replaced just the same.
+        """
         checks = await self._read_after_write(client, organization, operation, applied)
-        checks.append(await self._reference_check(operation.organization_id, set(id_map)))
+        remapped = {
+            old
+            for action in operation.actions
+            if action.status is RestoreActionStatus.COMPLETED
+            for old in action.reference_remap
+        }
+        checks.append(await self._reference_check(operation.organization_id, set(id_map) | remapped))
         verified = all(check.status != "failed" for check in checks)
 
-        snapshot_id = self._queue_snapshot(operation.organization_id)
+        snapshot_id: str | None = None
+        try:
+            snapshot_id = await self._queue_snapshot(operation.organization_id)
+            detail = "Queued a reconciling snapshot" if snapshot_id else "The snapshot worker queue is unavailable"
+        except SnapshotInProgressError as exc:
+            # Not a failed check: the restore recorded every version it wrote,
+            # and the reconciling snapshot is only a second look at the rest.
+            detail = str(exc)
         checks.append(
             VerificationCheck(
                 label="Post-restore snapshot",
                 status="ok" if snapshot_id else "skipped",
-                detail=("Queued a reconciling snapshot" if snapshot_id else "The snapshot worker queue is unavailable"),
+                detail=detail,
             )
         )
         session_ids = await self._reopen_monitoring(

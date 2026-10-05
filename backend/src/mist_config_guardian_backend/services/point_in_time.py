@@ -26,6 +26,7 @@ from mist_config_guardian_backend.schemas.point_in_time import (
     TimelineMarkerResponse,
 )
 from mist_config_guardian_backend.services.change_groups import as_utc, build_title, resolve_window
+from mist_config_guardian_backend.services.network_impact_policy import confirmed_changes
 
 MARKER_LIMIT = 200
 # A reconstruction covers a whole organization's configuration, which the
@@ -55,7 +56,7 @@ class PointInTimeReader(Protocol):
         end: datetime,
         limit: int,
     ) -> list[AuditChangeGroup]:
-        """Return change groups inside the window, oldest first."""
+        """Return the newest change groups inside the window, oldest first."""
 
     async def logical_object(
         self,
@@ -101,18 +102,24 @@ class BeaniePointInTimeReader:
         end: datetime,
         limit: int,
     ) -> list[AuditChangeGroup]:
-        """Return change groups inside the window, oldest first."""
-        return (
+        """Return change groups inside the window, oldest first.
+
+        A window with more groups than ``limit`` keeps its newest: the most
+        recent changes are the ones a time bar must not lose.
+        """
+        newest = (
             await AuditChangeGroup.find(
                 {
                     "organization_id": organization_id,
+                    **confirmed_changes(),
                     "occurred_at": {"$gte": start, "$lte": end},
                 }
             )
-            .sort("occurred_at")
+            .sort("-occurred_at")
             .limit(limit)
             .to_list()
         )
+        return newest[::-1]
 
     async def logical_object(
         self,

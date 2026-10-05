@@ -581,6 +581,25 @@
         "title": "AiSettingsUpdate",
         "type": "object"
       },
+      "AiStatusResponse": {
+        "description": "Whether AI assistance is on, for every signed-in role.\n\nDeliberately nothing about the provider: its endpoint, model and key stay\nbehind the administrator-only settings.",
+        "properties": {
+          "automatic_summaries": {
+            "title": "Automatic Summaries",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "automatic_summaries"
+        ],
+        "title": "AiStatusResponse",
+        "type": "object"
+      },
       "ApprovalCreateRequest": {
         "description": "The restore plan a second administrator is asked to review.",
         "properties": {
@@ -4347,36 +4366,20 @@
         "type": "object"
       },
       "LoginSuccessResponse": {
-        "description": "A completed sign-in, carrying both the session and a bearer token.",
+        "description": "A completed sign-in; the session cookies set alongside it are the credential.",
         "properties": {
-          "access_token": {
-            "title": "Access Token",
-            "type": "string"
-          },
-          "expires_in": {
-            "title": "Expires In",
-            "type": "integer"
-          },
           "mfa_required": {
             "const": false,
             "default": false,
             "title": "Mfa Required",
             "type": "boolean"
           },
-          "token_type": {
-            "const": "bearer",
-            "default": "bearer",
-            "title": "Token Type",
-            "type": "string"
-          },
           "user": {
             "$ref": "#/components/schemas/UserResponse"
           }
         },
         "required": [
-          "user",
-          "access_token",
-          "expires_in"
+          "user"
         ],
         "title": "LoginSuccessResponse",
         "type": "object"
@@ -9567,6 +9570,18 @@
             ],
             "title": "Invitation Expires At"
           },
+          "invitation_revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitation Revoked At"
+          },
           "is_active": {
             "title": "Is Active",
             "type": "boolean"
@@ -9603,6 +9618,7 @@
           "is_active",
           "mfa_enabled",
           "invitation_expires_at",
+          "invitation_revoked_at",
           "last_login_at",
           "created_at"
         ],
@@ -10122,7 +10138,7 @@
     }
   },
   "info": {
-    "description": "\nConfiguration history, point-in-time recovery, and post-change impact\nmonitoring for Juniper Mist.\n\n## Authentication\n\nTwo mechanisms reach the same endpoints.\n\n* **Browser sessions.** `POST /auth/login` sets an httpOnly session cookie and a\n  readable CSRF cookie. Every unsafe request must echo the CSRF cookie in the\n  `X-CSRF-Token` header. Sessions are revocable and appear under `/account/sessions`.\n* **Bearer tokens.** The same login returns a short-lived access token for\n  command-line and integration clients, sent as `Authorization: Bearer <token>`.\n\nAccounts with an enrolled second factor receive an MFA challenge instead of a\nsession and must complete `POST /auth/login/mfa` before one is issued.\n\n## Authorization\n\nThree application roles nest: **viewer** reads history, changes, monitoring, and\nhealth; **operator** additionally builds restore plans and runs snapshots;\n**administrator** manages organizations, credentials, users, AI configuration,\nand executes restores.\n\n## Two kinds of Mist credential\n\nThe stored per-organization **service token is read-only** and is used only for\nunattended backup, reconciliation, and monitoring. Every Mist **write** —\nincluding a restore and its compensation — requires a freshly authenticated\nadministrator's delegated credential supplied with the request, so the change is\nattributable to that administrator in Mist's own audit trail. The application\nnever escalates the service token and never falls back to it for a write.\n\n## Point-in-time browsing\n\nA client viewing a reconstructed past state sends `X-Config-Guardian-As-Of`.\nEndpoints that write refuse such requests with `409`, so historical browsing\ncannot produce a write derived from reconstructed state.\n\n## Secrets\n\nValues Mist returns as secrets are encrypted at rest and replaced with a mask in\nevery response, diff, export, log, notification, and AI prompt. A protected\nvalue carries a keyed fingerprint so a comparison can tell an unchanged secret\nfrom a changed one without revealing either.\n",
+    "description": "\nConfiguration history, point-in-time recovery, and post-change impact\nmonitoring for Juniper Mist.\n\n## Authentication\n\n`POST /auth/login` sets an httpOnly session cookie and a readable CSRF cookie.\nEvery unsafe request must echo the CSRF cookie in the `X-CSRF-Token` header.\nSessions are revocable and appear under `/account/sessions`. Sign-in returns no\nbearer token: one that signing out could not revoke would outlive the session.\n\nAccounts with an enrolled second factor receive an MFA challenge instead of a\nsession and must complete `POST /auth/login/mfa` before one is issued.\n\n## Authorization\n\nThree application roles nest: **viewer** reads history, changes, monitoring, and\nhealth; **operator** additionally builds restore plans and runs snapshots;\n**administrator** manages organizations, credentials, users, AI configuration,\nand executes restores.\n\n## Two kinds of Mist credential\n\nThe stored per-organization **service token is read-only** and is used only for\nunattended backup, reconciliation, and monitoring. Every Mist **write** —\nincluding a restore and its compensation — requires a freshly authenticated\nadministrator's delegated credential supplied with the request, so the change is\nattributable to that administrator in Mist's own audit trail. The application\nnever escalates the service token and never falls back to it for a write.\n\n## Point-in-time browsing\n\nA client viewing a reconstructed past state sends `X-Config-Guardian-As-Of`.\nEndpoints that write refuse such requests with `409`, so historical browsing\ncannot produce a write derived from reconstructed state.\n\n## Secrets\n\nValues Mist returns as secrets are encrypted at rest and replaced with a mask in\nevery response, diff, export, log, notification, and AI prompt. A protected\nvalue carries a keyed fingerprint so a comparison can tell an unchanged secret\nfrom a changed one without revealing either.\n",
     "summary": "Configuration history, point-in-time recovery, and impact monitoring for Juniper Mist.",
     "title": "Mist Config Guardian",
     "version": "0.9.1"
@@ -10393,7 +10409,7 @@
     },
     "/api/v1/account/passkeys/options": {
       "post": {
-        "description": "Return WebAuthn options for registering a new passkey.\n\nA passkey is a durable credential, so adding one is gated on the password\nthe way disabling the authenticator is: a stolen session cannot install a\ncredential that would outlive it. The password guards the ceremony as a\nwhole, since the challenge issued here is single-use, bound to this user\nand short-lived. The challenge stays on the server; the returned token\nonly names it.",
+        "description": "Return WebAuthn options for registering a new passkey.\n\nA passkey is a durable credential, so adding one is gated the way\ndisabling the authenticator is, on the password and, for an account with\nan authenticator, a fresh step-up: a stolen session cannot install a\ncredential that would outlive it. Both guard the ceremony as a whole,\nsince the challenge issued here is single-use, bound to this user and\nshort-lived. The challenge stays on the server; the returned token only\nnames it.",
         "operationId": "passkey_registration_options_api_v1_account_passkeys_options_post",
         "requestBody": {
           "content": {
@@ -10557,7 +10573,7 @@
     },
     "/api/v1/account/password": {
       "post": {
-        "description": "Replace the account password and sign every other session out.",
+        "description": "Replace the account password and sign every other session out.\n\nAn account with an authenticator must also have stepped up recently: the\ncurrent password is the one factor a stolen session may already hold.",
         "operationId": "change_password_api_v1_account_password_post",
         "requestBody": {
           "content": {
@@ -10801,7 +10817,7 @@
     },
     "/api/v1/account/totp": {
       "delete": {
-        "description": "Remove the account's authenticator enrollment after re-entering the password.",
+        "description": "Remove the account's authenticator enrollment after a fresh step-up and the password.\n\nThe step-up is what proves the factor being removed is still in the\ncaller's hands; the password alone would let a session that cannot pass\nit strip the factor that guards everything else.",
         "operationId": "disable_totp_api_v1_account_totp_delete",
         "requestBody": {
           "content": {
@@ -10954,7 +10970,7 @@
     },
     "/api/v1/account/totp/recovery-codes": {
       "post": {
-        "description": "Replace the account's recovery codes and return them exactly once.",
+        "description": "Replace the account's recovery codes after a fresh step-up, and return them exactly once.",
         "operationId": "regenerate_recovery_codes_api_v1_account_totp_recovery_codes_post",
         "requestBody": {
           "content": {
@@ -11323,6 +11339,37 @@
         ]
       }
     },
+    "/api/v1/ai/status": {
+      "get": {
+        "description": "Return whether AI assistance and automatic summaries are on, for any signed-in role.",
+        "operationId": "get_ai_status_api_v1_ai_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          },
+          {
+            "CsrfToken": [],
+            "SessionCookie": []
+          }
+        ],
+        "summary": "Get Ai Status",
+        "tags": [
+          "AI Assist"
+        ]
+      }
+    },
     "/api/v1/auth/bootstrap": {
       "get": {
         "description": "Report whether the first administrator can still be created.\n\nUnauthenticated, because the sign-in page reads it before anyone has a\nsession. It discloses nothing the bootstrap route does not already: posting\nto it answers the same question through its status code.",
@@ -11387,7 +11434,7 @@
     },
     "/api/v1/auth/login": {
       "post": {
-        "description": "Authenticate a local account with an email address and password.\n\nA successful sign-in always sets the browser session and CSRF cookies and\nadditionally returns a bearer access token, so command-line callers can use\nthe same endpoint. Accounts with an authenticator enrolled receive an\n``mfa_required`` challenge instead and get no session until they complete\n``POST /auth/login/mfa``. Failures are indistinguishable whether or not the\nemail address exists.",
+        "description": "Authenticate a local account with an email address and password.\n\nA successful sign-in sets the browser session and CSRF cookies, and the\nsession is the credential: the response carries no bearer token, which\nsigning out could not have revoked. Accounts with an authenticator\nenrolled receive an ``mfa_required`` challenge instead and get no session\nuntil they complete ``POST /auth/login/mfa``. Failures are\nindistinguishable whether or not the email address exists.",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -11581,7 +11628,7 @@
     },
     "/api/v1/auth/passkey/options": {
       "post": {
-        "description": "Start a passwordless sign-in and return its WebAuthn options.\n\nThe challenge itself stays on the server; the returned token only names it.\nStarting a ceremony therefore allocates a record per call, which an\nanonymous caller could repeat without limit, so beginning one is counted\nagainst the address the way completing one already is.",
+        "description": "Start a passwordless sign-in and return its WebAuthn options.\n\nThe challenge itself stays on the server; the returned token only names it.\nStarting a ceremony therefore allocates a record per call, which an\nanonymous caller could repeat without limit, so beginning one is counted\nagainst the address. It is counted in a scope of its own: a start checks\nno credential, and must not spend the budget that the sign-in attempts of\neveryone behind the same address share.",
         "operationId": "passkey_authentication_options_api_v1_auth_passkey_options_post",
         "responses": {
           "200": {

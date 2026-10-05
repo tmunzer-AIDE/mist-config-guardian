@@ -1,14 +1,16 @@
 """Proving, again, that the person at the keyboard is the account holder.
 
-A session or bearer token proves who signed in; it does not prove who is
-using it now. Changes that outlive the session — enrolling a second factor,
-replacing a credential the deployment authenticates with — ask for the
-password again, so a stolen session cannot convert temporary access into
-something durable.
+A session proves who signed in; it does not prove who is using it now.
+Changes that outlive the session — enrolling a second factor, replacing a
+credential the deployment authenticates with — ask for the password again, so
+a stolen session cannot convert temporary access into something durable.
 
-Enrolled accounts additionally pass through ``require_fresh_mfa``, which is
-declared on the routes themselves. It admits accounts with no authenticator,
-so it strengthens this check rather than replacing it.
+The password is also the one factor a stolen session may already hold. The
+changes that would hand an enrolled account to whoever holds it — adding a
+passkey, replacing the recovery codes, removing the authenticator, changing
+the password — therefore also declare ``require_fresh_mfa`` on their routes.
+It admits accounts with no authenticator, so it strengthens the password
+check rather than replacing it.
 """
 
 from fastapi import HTTPException, status

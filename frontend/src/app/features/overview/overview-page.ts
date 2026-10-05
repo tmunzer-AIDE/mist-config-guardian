@@ -104,16 +104,33 @@ export class OverviewPage {
 
   protected readonly emptyTitle = computed(() => {
     const organization = this.organization();
-    return organization && organization.status !== 'verified'
+    if (!organization) {
+      return this.organizations.isEmpty()
+        ? 'No organization onboarded yet'
+        : 'No organization selected';
+    }
+    return organization.status !== 'verified'
       ? `No snapshot yet for ${organization.name}`
       : 'No changes in this window';
   });
 
-  protected readonly emptyBody = computed(() =>
-    this.organization()?.status !== 'verified'
+  protected readonly emptyBody = computed(() => {
+    const organization = this.organization();
+    if (!organization) {
+      return this.organizations.isEmpty()
+        ? 'Configuration history and change monitoring begin once a Mist organization is onboarded in Settings.'
+        : 'Choose an organization from the scope menu to see its changes.';
+    }
+    return organization.status !== 'verified'
       ? 'This organization is onboarded but its service token has not been verified and no initial snapshot has run. Configuration history and change monitoring begin after the first snapshot completes.'
-      : 'Nothing was changed in the selected range. Widen the window or clear the impact filter.',
-  );
+      : 'Nothing was changed in the selected range. Widen the window or clear the impact filter.';
+  });
+
+  /** Setup is where an unverified organization, or a first one, comes from. */
+  protected readonly setupOffered = computed(() => {
+    const organization = this.organization();
+    return organization ? organization.status !== 'verified' : this.organizations.isEmpty();
+  });
 
   constructor() {
     // The as-of instant is an input to the read, not only to the banner: the

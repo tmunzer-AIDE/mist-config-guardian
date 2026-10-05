@@ -12,7 +12,7 @@ from mist_config_guardian_backend.schemas.organization import (
     OrganizationCreateRequest,
     OrganizationUpdateRequest,
 )
-from mist_config_guardian_backend.security.credentials import CredentialVault
+from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.service_credentials import service_token
 
 
@@ -22,6 +22,28 @@ class OrganizationNotFoundError(ValueError):
 
 class OrganizationAlreadyExistsError(ValueError):
     """Raised when a Mist organization is already managed."""
+
+
+async def _write_fields(
+    organization: Organization, criteria: dict[str, object] | None = None, **fields: object
+) -> None:
+    """Write the named fields and ``updated_at`` with a targeted ``$set``, then mirror them onto ``organization``.
+
+    Never ``organization.save()``: Beanie writes the whole document, so an
+    instance read before a call to Mist - up to thirty seconds - would carry
+    its stale copy of every other field back over a change completed in the
+    meantime, such as a webhook-secret rotation or a token replacement. See
+    webhooks.py for the same hazard. ``criteria`` narrows the write to a
+    document that still says what this request read.
+    """
+    now = utc_now()
+    document: dict[str, object] = {**fields, "updated_at": now}
+    await Organization.get_pymongo_collection().update_one(
+        {"_id": organization.id, **(criteria or {})},
+        {"$set": document},
+    )
+    for name, value in document.items():
+        setattr(organization, name, value)
 
 
 class OrganizationService:
@@ -82,10 +104,10 @@ class OrganizationService:
         """Update organization settings."""
         organization = await self.get(organization_id)
         updates = request.model_dump(exclude_none=True)
-        for field_name, value in updates.items():
-            setattr(organization, field_name, value.strip() if isinstance(value, str) else value)
-        organization.touch()
-        await organization.save()
+        await _write_fields(
+            organization,
+            **{field_name: value.strip() if isinstance(value, str) else value for field_name, value in updates.items()},
+        )
         return organization
 
     async def replace_service_token(
@@ -104,23 +126,23 @@ class OrganizationService:
             organization.mist_org_id,
             "The replacement token belongs to a different organization",
         )
-        organization.encrypted_service_token = self._vault.encrypt(token)
-        organization.service_token_last_four = token[-4:].rjust(4, "*")
-        organization.credential_verified_at = utc_now()
-        organization.credential_error = None
-        organization.discovered_privileges = list(access.privileges)
-        organization.status = OrganizationStatus.VERIFIED
-        organization.touch()
-        await organization.save()
+        await _write_fields(
+            organization,
+            encrypted_service_token=self._vault.encrypt(token),
+            service_token_last_four=token[-4:].rjust(4, "*"),
+            credential_verified_at=utc_now(),
+            credential_error=None,
+            discovered_privileges=list(access.privileges),
+            status=OrganizationStatus.VERIFIED,
+        )
         return organization
 
     async def verify_stored_token(self, organization_id: PydanticObjectId) -> Organization:
         """Verify the stored token and persist current health."""
         organization = await self.get(organization_id)
-        token = await service_token(organization, self._vault)
         try:
             access = await self._mist.verify_read_only_token(
-                token=token,
+                token=await self._stored_token(organization),
                 region=organization.cloud_region,
             )
             self._ensure_same_org(
@@ -129,19 +151,33 @@ class OrganizationService:
                 "The stored token belongs to a different organization",
             )
         except MistVerificationError as exc:
-            organization.status = OrganizationStatus.ERROR
-            organization.credential_error = str(exc)
-            organization.touch()
-            await organization.save()
+            await self._record_health(organization, status=OrganizationStatus.ERROR, credential_error=str(exc))
             raise
 
-        organization.status = OrganizationStatus.VERIFIED
-        organization.credential_verified_at = utc_now()
-        organization.credential_error = None
-        organization.discovered_privileges = list(access.privileges)
-        organization.touch()
-        await organization.save()
+        await self._record_health(
+            organization,
+            status=OrganizationStatus.VERIFIED,
+            credential_verified_at=utc_now(),
+            credential_error=None,
+            discovered_privileges=list(access.privileges),
+        )
         return organization
+
+    async def _stored_token(self, organization: Organization) -> str:
+        """Decrypt the stored token, failing as a verification when it cannot be."""
+        try:
+            return await service_token(organization, self._vault)
+        except CredentialDecryptionError as exc:
+            # Corrupted, or encrypted under a key that has since rotated: the
+            # organization cannot reach Mist until the token is replaced.
+            msg = "The stored service token could not be decrypted; replace it"
+            raise MistVerificationError(msg) from exc
+
+    @staticmethod
+    async def _record_health(organization: Organization, **fields: object) -> None:
+        # Only while the stored token is still the one verified: a replacement
+        # saved during the call to Mist has its own, newer verdict.
+        await _write_fields(organization, {"encrypted_service_token": organization.encrypted_service_token}, **fields)
 
     @staticmethod
     def _ensure_same_org(actual_org_id: str, expected_org_id: str, message: str) -> None:
@@ -155,12 +191,13 @@ class OrganizationService:
         """Generate and persist a new webhook signature secret."""
         organization = await self.get(organization_id)
         webhook_secret = secrets.token_urlsafe(32)
-        organization.encrypted_webhook_secret = self._vault.encrypt_for_context(
-            webhook_secret,
-            context=f"webhook-signature:{organization.mist_org_id}",
+        await _write_fields(
+            organization,
+            encrypted_webhook_secret=self._vault.encrypt_for_context(
+                webhook_secret,
+                context=f"webhook-signature:{organization.mist_org_id}",
+            ),
+            webhook_secret_last_four=webhook_secret[-4:],
+            webhook_secret_rotated_at=utc_now(),
         )
-        organization.webhook_secret_last_four = webhook_secret[-4:]
-        organization.webhook_secret_rotated_at = utc_now()
-        organization.touch()
-        await organization.save()
         return organization, webhook_secret

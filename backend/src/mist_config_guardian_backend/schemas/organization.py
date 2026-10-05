@@ -2,13 +2,27 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from mist_config_guardian_backend.models.organization import (
     MistCloudRegion,
     Organization,
     OrganizationStatus,
 )
+
+
+def _header_safe(token: SecretStr) -> SecretStr:
+    """Refuse a token that cannot be sent in an HTTP header as typed.
+
+    A token pasted with an invisible character, such as a zero-width space,
+    would otherwise be accepted here and fail only once the request to Mist
+    is encoded.
+    """
+    plaintext = token.get_secret_value()
+    if not (plaintext.isascii() and plaintext.isprintable()):
+        msg = "The service token must contain only printable ASCII characters"
+        raise ValueError(msg)
+    return token
 
 
 class OrganizationCreateRequest(BaseModel):
@@ -19,6 +33,12 @@ class OrganizationCreateRequest(BaseModel):
     reconciliation_cron: str = Field(default="0 2 * * *", min_length=1, max_length=120)
     configuration_retention_days: int = Field(default=365, ge=1, le=3650)
     monitoring_retention_days: int = Field(default=90, ge=1, le=3650)
+
+    @field_validator("service_token")
+    @classmethod
+    def check_service_token(cls, value: SecretStr) -> SecretStr:
+        """Refuse a token that cannot reach Mist."""
+        return _header_safe(value)
 
 
 class OrganizationUpdateRequest(BaseModel):
@@ -34,6 +54,12 @@ class ServiceTokenUpdateRequest(BaseModel):
     """Replace the organization's read-only service token."""
 
     service_token: SecretStr = Field(min_length=1, max_length=2048)
+
+    @field_validator("service_token")
+    @classmethod
+    def check_service_token(cls, value: SecretStr) -> SecretStr:
+        """Refuse a token that cannot reach Mist."""
+        return _header_safe(value)
 
 
 class OrganizationResponse(BaseModel):

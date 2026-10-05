@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import { formatInstant } from '../../core/format';
 import {
   appliedCount,
+  MAX_PLAN_VERSIONS,
   RestoreMode,
   restoreModeLabel,
   RestoreOperation,
@@ -98,8 +99,13 @@ export class RestoreStepTargets {
 
   private readonly selection = computed(() => new Set(this.selectedIds()));
   protected readonly showing = computed(() => this.targets().length);
+  /** Selected versions beyond what one plan can restore, which have to go in another. */
+  protected readonly excess = computed(() =>
+    Math.max(0, this.selectedIds().length - MAX_PLAN_VERSIONS),
+  );
+  protected readonly maxPlanVersions = MAX_PLAN_VERSIONS;
   protected readonly canPlan = computed(
-    () => this.selectedIds().length > 0 && !this.readOnly() && !this.busy(),
+    () => this.selectedIds().length > 0 && this.excess() === 0 && !this.readOnly() && !this.busy(),
   );
   protected readonly filtered = computed(
     () =>

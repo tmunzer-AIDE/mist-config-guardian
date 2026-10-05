@@ -1,6 +1,8 @@
 """User administration API and last-administrator rule tests."""
 
+import asyncio
 import re
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,6 +14,7 @@ from mist_config_guardian_backend.api.dependencies import get_current_user, get_
 from mist_config_guardian_backend.api.routes.users import get_mail_sender
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.main import create_app
+from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.user import User, UserRole, UserStatus
 from mist_config_guardian_backend.security.auth import hash_password, verify_password
 from mist_config_guardian_backend.services.passkeys import get_passkey_service
@@ -373,6 +376,70 @@ async def test_role_change_is_allowed_while_another_administrator_remains(users:
     assert updated.role is UserRole.OPERATOR
 
 
+def _remove_by_demotion(service: UserService, target: User, actor: User) -> Any:
+    assert target.id is not None
+    return service.update_user(target.id, actor=actor, role=UserRole.VIEWER)
+
+
+def _remove_by_deactivation(service: UserService, target: User, actor: User) -> Any:
+    assert target.id is not None
+    return service.deactivate(target.id, actor=actor)
+
+
+@pytest.mark.parametrize("remove", [_remove_by_demotion, _remove_by_deactivation])
+async def test_two_administrators_removing_each_other_at_once_leave_one(
+    monkeypatch: pytest.MonkeyPatch,
+    remove: Any,
+) -> None:
+    """Each request checked that another administrator remained, then wrote.
+
+    Both checks ran before either write, each found the other administrator
+    still there, and the deployment was left with none.
+    """
+    alice = _user(email="alice@example.com", role=UserRole.ADMINISTRATOR)
+    bob = _user(email="bob@example.com", role=UserRole.ADMINISTRATOR)
+    stored = {alice.id: alice, bob.id: bob}
+
+    # Every call yields, as a database round trip would, so the two requests
+    # interleave between their reads and their writes.
+    async def _get(user_id: PydanticObjectId) -> User | None:
+        await asyncio.sleep(0)
+        record = stored.get(user_id)
+        return None if record is None else record.model_copy()
+
+    class _Query:
+        def __init__(self, criteria: dict[str, Any]) -> None:
+            self._criteria = criteria
+
+        async def count(self) -> int:
+            await asyncio.sleep(0)
+            return sum(_matches(record, self._criteria) for record in stored.values())
+
+    class _Collection:
+        async def update_one(self, criteria: dict[str, Any], update: dict[str, Any]) -> Any:
+            await asyncio.sleep(0)
+            record = stored[criteria["_id"]]
+            if not _matches(record, criteria):
+                return SimpleNamespace(modified_count=0, matched_count=0)
+            for name, value in update["$set"].items():
+                setattr(record, name, value)
+            return SimpleNamespace(modified_count=1, matched_count=1)
+
+    monkeypatch.setattr(User, "get", _get)
+    monkeypatch.setattr(User, "find", lambda criteria, **_kwargs: _Query(criteria))
+    monkeypatch.setattr(User, "get_pymongo_collection", _Collection)
+
+    service = UserService(_settings())
+    results = await asyncio.gather(
+        remove(service, bob, alice),
+        remove(service, alice, bob),
+        return_exceptions=True,
+    )
+
+    assert any(record.role == UserRole.ADMINISTRATOR and record.is_active for record in stored.values())
+    assert any(isinstance(result, LastAdministratorError) for result in results)
+
+
 async def test_demoting_the_last_administrator_returns_conflict(users: _FakeUsers) -> None:
     app = create_app(_settings())
     administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
@@ -470,6 +537,174 @@ async def test_resending_an_invitation_replaces_the_token(users: _FakeUsers) -> 
 
     with pytest.raises(InvitationError):
         await service.accept_invitation(token=first_token, password="a-long-enough-password")
+
+
+async def test_deactivating_an_invited_account_revokes_its_invitation(users: _FakeUsers) -> None:
+    """An invited account is already inactive, and deactivating it changed nothing.
+
+    The administrator was told it worked while the link already sent, perhaps
+    to the wrong person and perhaps for an administrator role, stayed good for
+    the rest of its seven days.
+    """
+    app = create_app(_settings())
+    service = UserService(_settings())
+    administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
+    users.records.append(administrator)
+    invited, token = await service.invite(
+        email="wrong-person@example.net",
+        display_name="Wrong",
+        role=UserRole.ADMINISTRATOR,
+        invited_by=administrator.id,
+    )
+    app.dependency_overrides[get_current_user] = lambda: administrator
+    app.dependency_overrides[get_session_service] = _FakeSessions
+    app.dependency_overrides[get_passkey_service] = _FakePasskeys
+
+    async with _client(app) as client:
+        response = await client.post(f"/api/v1/users/{invited.id}/deactivate")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "deactivated"
+    assert response.json()["is_active"] is False
+    assert invited.invitation_token_hash is None
+    assert invited.invitation_expires_at is None
+    with pytest.raises(InvitationError):
+        await service.accept_invitation(token=token, password="a-long-enough-password")
+    assert invited.is_active is False
+
+
+def _administration_app(administrator: User) -> object:
+    app = create_app(_settings())
+    app.dependency_overrides[get_current_user] = lambda: administrator
+    app.dependency_overrides[get_session_service] = _FakeSessions
+    app.dependency_overrides[get_passkey_service] = _FakePasskeys
+    app.dependency_overrides[get_mail_sender] = lambda: None
+    return app
+
+
+async def test_a_revoked_invitation_cannot_be_activated(users: _FakeUsers) -> None:
+    """A revoked invitation looks like any deactivated account, but nobody ever set its password.
+
+    Activating it produced an active account whose password was the random
+    placeholder the invitation was created with, open only to whoever could
+    sign in to Mist with that address.
+    """
+    administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
+    users.records.append(administrator)
+    invited, _token = await UserService(_settings()).invite(
+        email="new@example.com",
+        display_name="New",
+        role=UserRole.OPERATOR,
+        invited_by=administrator.id,
+    )
+
+    async with _client(_administration_app(administrator)) as client:
+        revoked = await client.post(f"/api/v1/users/{invited.id}/deactivate")
+        activated = await client.post(f"/api/v1/users/{invited.id}/activate")
+
+    assert revoked.json()["status"] == "deactivated"
+    # What tells the row apart from an account that was deactivated after use.
+    assert revoked.json()["invitation_revoked_at"] is not None
+    assert activated.status_code == 409
+    assert "new invitation" in activated.json()["detail"]
+    assert invited.is_active is False
+    assert invited.status is UserStatus.DEACTIVATED
+
+
+async def test_a_revoked_invitation_can_be_sent_again(users: _FakeUsers) -> None:
+    """Revoking an invitation left the address with no way back.
+
+    Resending refused it as already accepted, and inviting again refused the
+    address as taken.
+    """
+    service = UserService(_settings())
+    administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
+    users.records.append(administrator)
+    invited, first_token = await service.invite(
+        email="new@example.com",
+        display_name="New",
+        role=UserRole.OPERATOR,
+        invited_by=administrator.id,
+    )
+
+    async with _client(_administration_app(administrator)) as client:
+        await client.post(f"/api/v1/users/{invited.id}/deactivate")
+        resent = await client.post(f"/api/v1/users/{invited.id}/resend-invitation")
+
+    assert resent.status_code == 200
+    assert resent.json()["user"]["status"] == "invited"
+    assert resent.json()["user"]["invitation_revoked_at"] is None
+    assert resent.json()["invitation_expires_at"] is not None
+    with pytest.raises(InvitationError):
+        await service.accept_invitation(token=first_token, password="a-long-enough-password")
+    accepted = await service.accept_invitation(
+        token=resent.json()["invitation_token"],
+        password="a-long-enough-password",
+    )
+    assert accepted.status is UserStatus.ACTIVE
+    assert accepted.is_active is True
+
+
+async def test_an_account_deactivated_after_accepting_is_activated_not_invited_again(users: _FakeUsers) -> None:
+    service = UserService(_settings())
+    administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
+    users.records.append(administrator)
+    invited, token = await service.invite(
+        email="new@example.com",
+        display_name="New",
+        role=UserRole.OPERATOR,
+        invited_by=administrator.id,
+    )
+    await service.accept_invitation(token=token, password="a-long-enough-password")
+
+    async with _client(_administration_app(administrator)) as client:
+        deactivated = await client.post(f"/api/v1/users/{invited.id}/deactivate")
+        resent = await client.post(f"/api/v1/users/{invited.id}/resend-invitation")
+        activated = await client.post(f"/api/v1/users/{invited.id}/activate")
+
+    assert deactivated.json()["status"] == "deactivated"
+    assert deactivated.json()["invitation_revoked_at"] is None
+    assert resent.status_code == 409
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "active"
+    assert verify_password("a-long-enough-password", invited.password_hash)
+
+
+async def test_an_invitation_revoked_while_it_is_being_accepted_does_not_activate(
+    monkeypatch: pytest.MonkeyPatch,
+    user_writes: Any,
+) -> None:
+    """Acceptance reads the invitation, then writes the activation.
+
+    Revoking it in between cleared the token, and the activation, written over
+    the top, brought back the account the administrator had just been told was
+    deactivated.
+    """
+    service = UserService(_settings())
+    administrator = _user(email="admin@example.com", role=UserRole.ADMINISTRATOR)
+    token = "an-invitation-token"
+    stored = _user(email="new@example.com", is_active=False, status=UserStatus.INVITED)
+    stored.invitation_token_hash = hash_opaque_token(token)
+    stored.invitation_expires_at = utc_now() + timedelta(days=1)
+    user_writes.track(stored)
+
+    async def _get(_user_id: PydanticObjectId) -> User:
+        return stored.model_copy(deep=True)
+
+    async def _find_one(_criteria: dict[str, Any]) -> User:
+        loaded = stored.model_copy(deep=True)
+        # The administrator revokes the invitation after acceptance has read it.
+        await service.deactivate(stored.id, actor=administrator)
+        return loaded
+
+    monkeypatch.setattr(User, "get", _get)
+    monkeypatch.setattr(User, "find_one", _find_one)
+
+    with pytest.raises(InvitationError):
+        await service.accept_invitation(token=token, password="a-long-enough-password")
+
+    assert stored.is_active is False
+    assert stored.status is UserStatus.DEACTIVATED
 
 
 async def test_inviting_an_existing_email_raises(users: _FakeUsers) -> None:

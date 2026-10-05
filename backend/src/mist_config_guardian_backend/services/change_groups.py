@@ -688,7 +688,11 @@ def _impact_sentence(evidence: GroupEvidenceInput, recovery: RecoveryState) -> s
     if recovery is RecoveryState.NOT_APPLICABLE:
         return "No device monitoring was correlated with this change."
     if worst is None:
-        return "Monitoring completed with no metric moving beyond noise."
+        return (
+            "Monitoring is still running with no metric moving beyond noise yet."
+            if recovery is RecoveryState.MONITORING
+            else "Monitoring completed with no metric moving beyond noise."
+        )
     metric = _metric_phrase(worst.metric).capitalize()
     if recovery is RecoveryState.UNRECOVERED:
         elapsed = format_duration(evidence.monitored_for) if evidence.monitored_for else "the monitoring window"

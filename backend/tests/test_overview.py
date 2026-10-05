@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 from beanie import PydanticObjectId
+from beanie.odm.fields import ExpressionField
 
 from mist_config_guardian_backend.api.dependencies import get_current_user, require_organization
 from mist_config_guardian_backend.api.routes.overview import get_overview_service
@@ -320,6 +321,36 @@ def test_cron_cadence_reads_the_expressions_the_app_writes() -> None:
     assert cron_cadence_minutes("nonsense") is None
 
 
+def test_cron_cadence_reads_the_settings_presets() -> None:
+    # The four schedules the Settings card offers, in its order.
+    assert cron_cadence_minutes("0 2,14 * * *") == 12 * 60
+    assert cron_cadence_minutes("0 2 * * *") == 24 * 60
+    assert cron_cadence_minutes("0 2 * * 0") == 7 * 24 * 60
+    assert cron_cadence_minutes("0 2 1 * *") == 30 * 24 * 60
+
+
+def test_cron_cadence_is_the_longest_gap_between_listed_hours() -> None:
+    assert cron_cadence_minutes("0 2,5 * * *") == 21 * 60
+
+
+def test_a_weekly_reconciliation_is_not_overdue_three_days_after_it_ran() -> None:
+    rows = build_safety_net(
+        SafetyNetInput(
+            organization=_organization(webhook_received=NOW, cron="0 2 * * 0"),
+            latest_snapshot=_snapshot(),
+            latest_reconciliation=_snapshot(completed_at=NOW - timedelta(days=3)),
+            now=NOW,
+        )
+    )
+
+    reconciliation = next(row for row in rows if row.key == "reconciliation")
+    assert (reconciliation.label, reconciliation.status, reconciliation.detail) == (
+        "Reconciliation on schedule",
+        "ok",
+        "7D",
+    )
+
+
 def test_cadence_formats_the_way_the_safety_net_prints_it() -> None:
     assert format_cadence(12 * 60) == "12H"
     assert format_cadence(24 * 60) == "1D"
@@ -561,6 +592,24 @@ def test_pending_approvals_survive_a_record_written_by_another_workstream() -> N
     assert rows[0].title == "Restore approval"
     assert rows[0].detail == "0 objects"
     assert rows[0].requested_by_email == ""
+
+
+def test_partial_records_are_skipped_once_beanie_has_initialized_the_models(monkeypatch) -> None:
+    # Initializing Beanie puts a query expression on each document class under
+    # every field name, and an expression is a string, so a field a partial
+    # record lacks must not be read through the class.
+    for field in ("restore_operation_id", "requested_by_email", "summary"):
+        monkeypatch.setattr(RestoreApproval, field, ExpressionField(field), raising=False)
+    for field in ("mode", "actions", "failure_action_order"):
+        monkeypatch.setattr(RestoreOperation, field, ExpressionField(field), raising=False)
+    sparse = RestoreApproval.model_construct(id=PydanticObjectId(), restore_operation_id=PydanticObjectId())
+    headless = RestoreApproval.model_construct(id=PydanticObjectId())
+
+    rows = build_pending_approvals([sparse, headless])
+    failed = build_failed_restores([RestoreOperation.model_construct(id=PydanticObjectId())])
+
+    assert [(row.title, row.requested_by_email) for row in rows] == [("Restore approval", "")]
+    assert [(row.title, row.detail) for row in failed] == [("Restore", "0 planned actions")]
 
 
 def test_failed_restores_name_the_action_they_stopped_on() -> None:

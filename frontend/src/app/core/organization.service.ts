@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
 import { orgPath } from './api';
@@ -16,8 +16,10 @@ import {
 export class OrganizationService {
   private readonly http = inject(HttpClient);
 
-  list() {
-    return this.http.get<OrganizationList>('/api/v1/organizations');
+  /** One page of the organization list, sorted by name. */
+  list(skip: number, limit: number) {
+    const params = new HttpParams().set('skip', skip).set('limit', limit);
+    return this.http.get<OrganizationList>('/api/v1/organizations', { params });
   }
 
   create(request: OrganizationCreate) {

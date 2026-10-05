@@ -436,7 +436,7 @@ async def test_update_ai_settings_encrypts_the_key_and_never_returns_it(
     service = ApplicationConfigurationService(vault, Settings(environment="test", database_enabled=False))
     configuration = _stored_configuration()
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
     app = _settings_app(service)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -473,7 +473,7 @@ async def test_update_ai_settings_keeps_the_stored_key_when_blank(monkeypatch: p
     configuration.encrypted_impact_ai_api_key = vault.encrypt_for_context("kept-key", context="ai-provider-key")
     configuration.impact_ai_api_key_last_four = "-key"
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
 
     result = await service.update_ai_settings(
         AiSettingsUpdate(
@@ -506,7 +506,7 @@ async def test_ai_settings_test_persists_the_outcome_and_audits(
     configuration.impact_ai_model = "test-model"
     configuration.encrypted_impact_ai_api_key = vault.encrypt_for_context("bad-key", context="ai-provider-key")
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
     recorder = _FakeRecorder()
     app = _settings_app(service)
     app.dependency_overrides[get_ai_audit_recorder] = lambda: recorder
@@ -599,8 +599,8 @@ async def test_draft_provider_can_be_probed_before_saving_or_selecting_a_model(
     configuration = _stored_configuration()
     service = ApplicationConfigurationService(_vault(), Settings(environment="test", database_enabled=False))
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    save = AsyncMock()
-    monkeypatch.setattr(ApplicationConfiguration, "save", save)
+    collection = AsyncMock()
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", lambda: collection)
     httpx_mock.add_response(method="GET", url=MODELS_URL, json={"data": [{"id": "local-model"}]})
     app = _settings_app(service)
     app.dependency_overrides[get_ai_audit_recorder] = _FakeRecorder
@@ -609,7 +609,7 @@ async def test_draft_provider_can_be_probed_before_saving_or_selecting_a_model(
     assert response.status_code == 200
     assert configuration.impact_ai_base_url == ""
     assert configuration.impact_ai_last_test_at is None
-    save.assert_not_awaited()
+    collection.update_one.assert_not_awaited()
     request = httpx_mock.get_request()
     assert request is not None
     assert "authorization" not in request.headers
@@ -678,7 +678,7 @@ async def test_ai_settings_allow_a_keyless_self_hosted_provider(monkeypatch: pyt
     configuration = _stored_configuration()
     service = ApplicationConfigurationService(_vault(), Settings(environment="test", database_enabled=False))
     monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
-    monkeypatch.setattr(ApplicationConfiguration, "save", AsyncMock())
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
     result = await service.update_ai_settings(
         AiSettingsUpdate(
             enabled=True,
@@ -688,3 +688,122 @@ async def test_ai_settings_allow_a_keyless_self_hosted_provider(monkeypatch: pyt
     )
     assert result.enabled is True
     assert result.api_key_set is False
+
+
+@pytest.mark.parametrize("role", [UserRole.VIEWER, UserRole.OPERATOR, UserRole.ADMINISTRATOR])
+async def test_every_signed_in_role_can_read_whether_ai_assistance_is_on(
+    role: UserRole, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The history page decides on automatic summaries from this, so it must not be administrator-only."""
+    from mist_config_guardian_backend.api.dependencies import get_current_user  # noqa: PLC0415
+
+    configuration = _stored_configuration()
+    configuration.impact_ai_enabled = True
+    configuration.impact_ai_base_url = BASE_URL
+    configuration.impact_ai_model = "test-model"
+    configuration.encrypted_impact_ai_api_key = _vault().encrypt_for_context("provider-key", context="ai-provider-key")
+    configuration.impact_ai_api_key_last_four = "-key"
+    configuration.impact_ai_automatic_summaries = True
+    service = ApplicationConfigurationService(_vault(), Settings(environment="test", database_enabled=False))
+    monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
+    user = _viewer()
+    user.role = role
+    app = create_app(Settings(environment="test", database_enabled=False))
+    app.dependency_overrides[get_application_configuration_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/ai/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"enabled": True, "automatic_summaries": True}
+
+
+async def test_ai_status_requires_authentication() -> None:
+    app = create_app(Settings(environment="test", database_enabled=False))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/ai/status")
+
+    assert response.status_code == 401
+
+
+# --- a stored key that cannot travel in a request header -----------------
+
+# A zero-width space, as a copy from a web page can carry: invisible, and not encodable in an HTTP header.
+_UNSENDABLE_KEY = "provider-secret\u200b-key"
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/v1/ai/diff-summary", _summary_body()),
+        ("/api/v1/ai/diff-followup", {**_summary_body(), "question": "What changed on the radio?"}),
+    ],
+)
+async def test_an_unsendable_stored_key_is_a_provider_failure_not_a_server_error(
+    path: str, body: dict[str, object]
+) -> None:
+    runtime = AiRuntimeConfiguration(
+        base_url=BASE_URL,
+        model="test-model",
+        api_key=_UNSENDABLE_KEY,
+        max_response_tokens=800,
+        automatic_summaries=False,
+    )
+    app, recorder = _assist_app(runtime)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post(path, json=body)
+
+    assert response.status_code == 502
+    assert _UNSENDABLE_KEY not in response.text
+    assert [audit.succeeded for audit in recorder.audits] == [False]
+
+
+async def test_testing_an_unsendable_stored_key_reports_a_failed_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = _vault()
+    configuration = _stored_configuration()
+    configuration.impact_ai_base_url = BASE_URL
+    configuration.impact_ai_model = "test-model"
+    configuration.encrypted_impact_ai_api_key = vault.encrypt_for_context(_UNSENDABLE_KEY, context="ai-provider-key")
+    service = ApplicationConfigurationService(vault, Settings(environment="test", database_enabled=False))
+    monkeypatch.setattr(service, "_get_or_create", AsyncMock(return_value=configuration))
+    monkeypatch.setattr(ApplicationConfiguration, "get_pymongo_collection", AsyncMock)
+    app = _settings_app(service)
+    app.dependency_overrides[get_ai_audit_recorder] = _FakeRecorder
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/v1/ai/settings/test")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert configuration.impact_ai_last_test_ok is False
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        (
+            "PUT",
+            "/api/v1/ai/settings",
+            {"enabled": True, "base_url": BASE_URL, "model": "m", "api_key": _UNSENDABLE_KEY},
+        ),
+        ("POST", "/api/v1/ai/settings/test", {"base_url": BASE_URL, "model": "m", "api_key": _UNSENDABLE_KEY}),
+        ("POST", "/api/v1/ai/models", {"base_url": BASE_URL, "api_key": _UNSENDABLE_KEY}),
+    ],
+)
+async def test_an_unsendable_api_key_is_refused_before_it_is_stored_or_sent(
+    method: str, path: str, body: dict[str, object]
+) -> None:
+    app = _settings_app(object())
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request(method, path, json=body)
+
+    assert response.status_code == 422
+    assert "printable ASCII" in response.text

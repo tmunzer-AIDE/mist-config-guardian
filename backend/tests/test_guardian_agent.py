@@ -335,6 +335,7 @@ async def test_ten_turns_without_a_report_leave_no_conclusion() -> None:
         ),
         (call(site_id="11111111-2222-3333-4444-555555555555"), "out_of_scope"),
         (call(start_time=1, end_time=2), "out_of_scope"),
+        (call(start_time="--5"), "out_of_scope"),
         (report(peak_impact="none", current_impact="none"), "coverage_required"),
         (report(current_impact="critical"), "severity_order"),
         (report(evidence=["E9"]), "citation_invalid"),

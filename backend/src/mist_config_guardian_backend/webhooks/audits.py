@@ -96,6 +96,18 @@ class AuditTarget:
     deleted: bool
     object_name: str | None
 
+    @property
+    def definitions(self) -> tuple[ObjectDefinition, ...]:
+        """Every definition the target may be stored under.
+
+        Mist audits every device profile as ``deviceprofile``, whatever its
+        type, while the registry reads AP, switch and gateway profiles as
+        separate definitions of one endpoint. The target is whichever of them
+        holds it.
+        """
+        registry = SITE_OBJECTS if self.definition.scope == "site" else ORG_OBJECTS
+        return tuple(item for item in registry if item.endpoint == self.definition.endpoint)
+
 
 def resolve_audit_target(payload: dict[str, object]) -> AuditTarget | None:
     """Resolve common Mist audit fields without trusting message text alone."""

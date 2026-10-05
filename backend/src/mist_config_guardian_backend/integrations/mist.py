@@ -163,6 +163,11 @@ class MistVerificationService:
         except httpx.HTTPError as exc:
             msg = "Mist identity verification is unavailable; try again"
             raise MistVerificationError(msg) from exc
+        except UnicodeEncodeError as exc:
+            # A token pasted with an invisible character, such as a zero-width
+            # space, cannot be encoded into the Authorization header.
+            msg = "The credential contains characters that cannot be sent to Mist"
+            raise MistVerificationError(msg) from exc
         try:
             identity = response.json()
         except ValueError as exc:

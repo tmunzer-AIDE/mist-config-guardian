@@ -5,13 +5,14 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from beanie import PydanticObjectId
-from fastapi import Response
+from fastapi import Request, Response
 
 from mist_config_guardian_backend.api.dependencies import get_session_service, get_user_service
 from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.user import User, UserRole
-from mist_config_guardian_backend.services.passkeys import get_passkey_service
+from mist_config_guardian_backend.security.webauthn import WebAuthnChallengeStore
+from mist_config_guardian_backend.services.passkeys import PasskeyService, get_passkey_service
 from mist_config_guardian_backend.services.throttling import (
     MemoryThrottleStore,
     Scope,
@@ -268,3 +269,53 @@ async def test_an_unknown_account_is_throttled_indistinguishably() -> None:
         blocked = await client.post("/api/v1/auth/login", data={"username": "nobody@example.com", "password": "no"})
 
     assert blocked.status_code == 429
+
+
+class _CeremonyPasskeys(PasskeyService):
+    """Real ceremony starts on an in-memory challenge store; no stored passkeys."""
+
+    async def count_for_user(self, _user_id: PydanticObjectId | None) -> int:
+        return 0
+
+
+async def test_anonymous_passkey_ceremony_starts_cannot_lock_everyone_out_of_signing_in() -> None:
+    """Starting a passkey sign-in checks no credential, yet it spent the shared address budget.
+
+    Every client behind a proxy shares one address, so a stranger who asked
+    for passkey options often enough refused the next password, code, and
+    passkey attempt of everyone there for the rest of the window.
+    """
+    settings = _settings(sign_in_failures_per_address=3)
+    app = create_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_user_service] = lambda: _FakeUserService(_user(), "correct horse battery")
+    app.dependency_overrides[get_session_service] = _FakeSessionService
+    app.dependency_overrides[get_passkey_service] = lambda: _CeremonyPasskeys(settings, WebAuthnChallengeStore())
+
+    async with _client(app) as client:
+        for _ in range(10):
+            started = await client.post("/api/v1/auth/passkey/options")
+            assert started.status_code == 200
+        signed_in = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "operator@example.com", "password": "correct horse battery"},
+        )
+
+    assert signed_in.status_code == 200
+
+
+async def test_passkey_ceremony_starts_are_limited_in_a_scope_of_their_own() -> None:
+    settings = _settings()
+    service = ThrottleService(settings, MemoryThrottleStore())
+    request = Request({"type": "http", "client": ("203.0.113.7", 443), "headers": []})
+    ceremony = service.ceremony(request)
+
+    assert ceremony.key != service.address(request).key
+    assert ceremony.limit > settings.sign_in_failures_per_address
+    assert ceremony.window is not None
+    for _ in range(ceremony.limit):
+        await service.reserve(ceremony)
+    with pytest.raises(ThrottledError):
+        await service.reserve(ceremony)
+    # The credential checks from that address are untouched.
+    await service.reserve(service.address(request))

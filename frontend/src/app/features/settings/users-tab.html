@@ -134,6 +134,15 @@
                   >
                     Activate
                   </button>
+                } @else if (row.canRevoke) {
+                  <button
+                    class="cg-btn cg-btn--link danger"
+                    type="button"
+                    [disabled]="isBusy(row.id)"
+                    (click)="requestRevoke(row.user)"
+                  >
+                    Revoke invitation
+                  </button>
                 } @else {
                   <button
                     class="cg-btn cg-btn--link danger"

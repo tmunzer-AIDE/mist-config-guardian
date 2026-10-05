@@ -50,8 +50,8 @@ export class SessionResetService {
     this.timeline.reset();
     this.monitoring.reset();
     this.account.reset();
-    // Resolved once per session, and administrator-only: a viewer must not
-    // inherit the previous administrator's answer about what AI can do.
+    // Resolved once per session: the next user must not inherit the previous
+    // one's answer about what AI can do, nor a refusal they ran into.
     this.ai.reset();
     this.search.reset();
     // An unanswered code prompt belongs to the session that is ending, as do

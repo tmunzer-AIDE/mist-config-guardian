@@ -234,6 +234,17 @@ def read_rows(reading: RuleReading | None, *, key: str = "results") -> ReadResul
     return ReadResult(rows=tuple(row for row in rows if isinstance(row, Mapping)))
 
 
+def named_devices(macs: Iterable[str], readings: Sequence[RuleReading]) -> tuple[str, ...]:
+    """The devices the citable evidence of these readings names, in the order given.
+
+    A plug-in judges from a read's whole result while the stored item may be a digest that shows a few rows, and a
+    conclusion may report only a device the evidence it cites names (:func:`validate_conclusion`). A device only the
+    whole result names still counts in the finding; it is just not listed.
+    """
+    items = [reading.evidence for reading in readings if reading.evidence.citable]
+    return tuple(mac for mac in macs if any(mentions_device(item, mac) for item in items))
+
+
 async def read(reader: Reader, request: RuleRead) -> RuleReading:
     """One read, as a plug-in makes it: the bounded evidence to cite and the whole result to judge from."""
     evidence = await reader.read(request)

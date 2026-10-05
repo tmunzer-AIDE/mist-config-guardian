@@ -25,6 +25,7 @@ from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services.restore_planner import (
     PlanningContext,
     RestorePlanner,
+    TargetInstant,
     order_restore_actions,
 )
 
@@ -246,7 +247,7 @@ async def test_inferred_containers_do_not_expand_their_contents(
         requested_logical_ids=frozenset({root.id}),
         logical_objects={root.id: root},
         force_delete=set(),
-        target_at=root_version.observed_at,
+        instants={root.id: TargetInstant(at=root_version.observed_at)},
         mode=RestoreMode.NON_DESTRUCTIVE,
     )
     containment_flags: list[tuple[str, bool]] = []
@@ -303,7 +304,7 @@ async def test_explicitly_selected_container_expands_its_contents(
         requested_logical_ids=frozenset({container.id}),
         logical_objects={container.id: container},
         force_delete=set(),
-        target_at=container_version.observed_at,
+        instants={container.id: TargetInstant(at=container_version.observed_at)},
         mode=RestoreMode.NON_DESTRUCTIVE,
     )
 
@@ -421,7 +422,7 @@ async def test_a_reverse_dependent_of_a_recreated_object_gets_a_reference_rewrit
         requested_logical_ids=frozenset({wlan.id}),
         logical_objects={wlan.id: wlan},
         force_delete=set(),
-        target_at=datetime(2026, 1, 1, tzinfo=UTC),
+        instants={wlan.id: TargetInstant(at=wlan_target.observed_at)},
         mode=RestoreMode.NON_DESTRUCTIVE,
     )
 
@@ -437,6 +438,8 @@ async def test_a_reverse_dependent_of_a_recreated_object_gets_a_reference_rewrit
         "_action_dependencies",
         AsyncMock(side_effect=lambda _org, target, *_args: [wlan.id] if target.logical_object_id == device.id else []),
     )
+    # The device names the WLAN's current id, so nothing is remapped to another incarnation.
+    monkeypatch.setattr(planner, "_live_replacements", AsyncMock(return_value={}))
 
     actions = order_restore_actions(
         await planner._build_actions(  # noqa: SLF001
@@ -491,13 +494,18 @@ def _chosen_dependent_plan(
         "_action_dependencies",
         AsyncMock(side_effect=lambda _org, target, *_args: [wlan.id] if target.logical_object_id == device.id else []),
     )
+    # The device names the WLAN's current id, so nothing is remapped to another incarnation.
+    monkeypatch.setattr(planner, "_live_replacements", AsyncMock(return_value={}))
     context = PlanningContext(
         organization_id=organization_id,
         selected={wlan.id: wlan_target, device.id: versions[f"device_{chosen}"]},
         requested_logical_ids=frozenset({wlan.id, device.id}),
         logical_objects={wlan.id: wlan, device.id: device},
         force_delete=set(),
-        target_at=datetime(2026, 1, 1, tzinfo=UTC),
+        instants={
+            wlan.id: TargetInstant(at=wlan_target.observed_at),
+            device.id: TargetInstant(at=versions[f"device_{chosen}"].observed_at),
+        },
         mode=RestoreMode.NON_DESTRUCTIVE,
     )
     return planner, context, versions, wlan.id, device.id

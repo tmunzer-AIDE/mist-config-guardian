@@ -49,6 +49,7 @@ from mist_config_guardian_backend.services.mfa import (
     TotpAlreadyEnrolledError,
     TotpNotEnrolledError,
     get_mfa_service,
+    require_fresh_mfa,
 )
 from mist_config_guardian_backend.services.passkeys import (
     PasskeyError,
@@ -183,11 +184,16 @@ async def change_password(  # noqa: PLR0913, PLR0917 - one dependency per collab
     payload: PasswordChangeRequest,
     request: Request,
     user: Annotated[User, Depends(require_viewer)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
     accounts: Annotated[AccountService, Depends(get_account_service)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> PasswordChangeResponse:
-    """Replace the account password and sign every other session out."""
+    """Replace the account password and sign every other session out.
+
+    An account with an authenticator must also have stepped up recently: the
+    current password is the one factor a stolen session may already hold.
+    """
     scope = throttle.user(_require_persisted(user))
     await reserve_or_raise(throttle, scope)
     try:
@@ -364,10 +370,16 @@ async def step_up_mfa(  # noqa: PLR0913, PLR0917 - one dependency per collaborat
 async def disable_totp(
     payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> ProfileResponse:
-    """Remove the account's authenticator enrollment after re-entering the password."""
+    """Remove the account's authenticator enrollment after a fresh step-up and the password.
+
+    The step-up is what proves the factor being removed is still in the
+    caller's hands; the password alone would let a session that cannot pass
+    it strip the factor that guards everything else.
+    """
     scope = throttle.user(_require_persisted(user))
     await reserve_or_raise(throttle, scope)
     try:
@@ -384,10 +396,11 @@ async def disable_totp(
 async def regenerate_recovery_codes(
     payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> RecoveryCodesResponse:
-    """Replace the account's recovery codes and return them exactly once."""
+    """Replace the account's recovery codes after a fresh step-up, and return them exactly once."""
     scope = throttle.user(_require_persisted(user))
     await reserve_or_raise(throttle, scope)
     try:
@@ -418,17 +431,19 @@ async def list_passkeys(
 async def passkey_registration_options(
     payload: PasswordConfirmationRequest,
     user: Annotated[User, Depends(require_viewer)],
+    _stepped_up: Annotated[User, Depends(require_fresh_mfa)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> PasskeyRegistrationOptionsResponse:
     """Return WebAuthn options for registering a new passkey.
 
-    A passkey is a durable credential, so adding one is gated on the password
-    the way disabling the authenticator is: a stolen session cannot install a
-    credential that would outlive it. The password guards the ceremony as a
-    whole, since the challenge issued here is single-use, bound to this user
-    and short-lived. The challenge stays on the server; the returned token
-    only names it.
+    A passkey is a durable credential, so adding one is gated the way
+    disabling the authenticator is, on the password and, for an account with
+    an authenticator, a fresh step-up: a stolen session cannot install a
+    credential that would outlive it. Both guard the ceremony as a whole,
+    since the challenge issued here is single-use, bound to this user and
+    short-lived. The challenge stays on the server; the returned token only
+    names it.
     """
     await confirm_password(user, payload.password.get_secret_value(), throttle)
     try:

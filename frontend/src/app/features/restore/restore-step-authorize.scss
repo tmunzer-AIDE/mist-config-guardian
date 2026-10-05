@@ -41,7 +41,7 @@
   margin: 18px 0 8px;
 }
 
-// A compensation plan's warnings, drawn as the plan step draws a restore's.
+// A compensation plan's errors and warnings, drawn as the plan step draws a restore's.
 .notice {
   margin: 14px 0 0;
   border-radius: var(--radius-xl);
@@ -58,9 +58,20 @@
   box-shadow: 0 10px 26px -16px rgba(138, 83, 6, 0.3);
 }
 
+.notice--crit {
+  border-color: rgba(185, 28, 28, 0.22);
+  border-left-color: var(--tone-critical-ink);
+  background: linear-gradient(180deg, rgba(253, 244, 244, 0.94), rgba(255, 255, 255, 0.78));
+  box-shadow: 0 10px 26px -16px rgba(185, 28, 28, 0.32);
+}
+
 .notice-label {
   margin: 0 0 9px;
   color: var(--tone-warning-ink);
+}
+
+.notice--crit .notice-label {
+  color: var(--tone-critical-ink);
 }
 
 .notice-list {

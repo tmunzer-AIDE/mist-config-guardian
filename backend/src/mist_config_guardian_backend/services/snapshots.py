@@ -1,8 +1,12 @@
 """Immutable Mist configuration snapshot collection."""
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
 
-from beanie import PydanticObjectId
+from beanie import Document, PydanticObjectId
+from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.integrations.mist_config import (
     MistConfigurationClient,
@@ -36,9 +40,21 @@ from mist_config_guardian_backend.snapshots.secrets import (
     reveal_configuration,
 )
 
+# Attempts at appending an object's next version when concurrent captures of
+# the same object keep taking the number first.
+_RECORD_ATTEMPTS = 3
+# A snapshot still unfinished this long after it started was lost with its
+# worker, or with the write that would have finished it. Its manifest would
+# otherwise hold the organization's one active slot for good.
+STALE_MANIFEST_AFTER = timedelta(hours=6)
+
 
 class SnapshotOrganizationNotFoundError(ValueError):
     """Raised when snapshot collection targets an unknown organization."""
+
+
+class SnapshotInProgressError(RuntimeError):
+    """Raised when another snapshot of the organization is still running."""
 
 
 @dataclass
@@ -96,14 +112,14 @@ class SnapshotService:
                 organization_id=organization_id,
                 kind=kind,
             )
-            await manifest.insert()
+            try:
+                await open_manifest(manifest)
+            except DuplicateKeyError as exc:
+                msg = "A snapshot is already in progress"
+                raise SnapshotInProgressError(msg) from exc
         elif manifest.organization_id != organization_id:
             msg = "Snapshot manifest does not belong to the requested organization"
             raise ValueError(msg)
-        manifest.status = SnapshotStatus.RUNNING
-        manifest.started_at = utc_now()
-        manifest.touch()
-        await manifest.save()
         if manifest.id is None:
             msg = "Persisted snapshot manifest is missing an identifier"
             raise RuntimeError(msg)
@@ -111,9 +127,15 @@ class SnapshotService:
         counts = SnapshotCounts()
         errors: list[SnapshotError] = []
         context = CollectionContext(organization, manifest.id, counts, errors)
-        token = await service_token(organization, self._vault)
 
+        # Everything from here on finishes the manifest when it fails: one left
+        # active would refuse every later snapshot of the organization.
         try:
+            manifest.status = SnapshotStatus.RUNNING
+            manifest.started_at = utc_now()
+            manifest.touch()
+            await manifest.save()
+            token = await service_token(organization, self._vault)
             async with MistConfigurationClient(
                 token=token,
                 region=organization.cloud_region,
@@ -150,10 +172,8 @@ class SnapshotService:
 
         status = SnapshotStatus.PARTIAL if errors else SnapshotStatus.COMPLETED
         await self._finish_manifest(manifest, counts, errors, status=status)
-        if kind is SnapshotKind.INITIAL and status is SnapshotStatus.COMPLETED:
-            organization.initial_snapshot_completed_at = manifest.completed_at
-            organization.touch()
-            await organization.save()
+        if status is SnapshotStatus.COMPLETED and manifest.completed_at is not None:
+            await _mark_initial_snapshot(organization_id, manifest.completed_at)
         return manifest
 
     async def _collect_scope(
@@ -216,17 +236,23 @@ class SnapshotService:
         configuration: dict[str, object],
         context: CaptureContext,
     ) -> bool:
-        """Append a version when authoritative configuration changed."""
+        """Append a version when authoritative configuration changed.
+
+        A webhook and a snapshot can capture the same object at once. Whichever
+        loses a race on a unique index reads what the other recorded and goes
+        on from there, rather than failing.
+        """
         mist_object_id = self.object_id(configuration, definition, context.site_id)
         source_key = self.source_key(definition, context.site_id, mist_object_id)
-        logical = await LogicalObject.find_one(
-            LogicalObject.organization_id == organization_id,
-            LogicalObject.scope == definition.scope,
-            LogicalObject.object_type == definition.key,
-            LogicalObject.source_key == source_key,
-        )
-        if logical is None:
-            logical = LogicalObject(
+        logical = await _find_or_insert(
+            LogicalObject,
+            (
+                LogicalObject.organization_id == organization_id,
+                LogicalObject.scope == definition.scope,
+                LogicalObject.object_type == definition.key,
+                LogicalObject.source_key == source_key,
+            ),
+            lambda: LogicalObject(
                 organization_id=organization_id,
                 scope=definition.scope,
                 object_type=definition.key,
@@ -234,87 +260,95 @@ class SnapshotService:
                 current_mist_id=mist_object_id,
                 site_mist_id=context.site_id,
                 name=object_name(configuration, definition),
-            )
-            await logical.insert()
+            ),
+        )
         if logical.id is None:
             msg = "Persisted logical object is missing an identifier"
             raise RuntimeError(msg)
+        logical_id = logical.id
 
-        incarnation = await ObjectIncarnation.find_one(
-            ObjectIncarnation.logical_object_id == logical.id,
-            ObjectIncarnation.mist_object_id == mist_object_id,
-        )
-        if incarnation is None:
-            incarnation = ObjectIncarnation(
+        incarnation = await _find_or_insert(
+            ObjectIncarnation,
+            (
+                ObjectIncarnation.logical_object_id == logical_id,
+                ObjectIncarnation.mist_object_id == mist_object_id,
+            ),
+            lambda: ObjectIncarnation(
                 organization_id=organization_id,
-                logical_object_id=logical.id,
+                logical_object_id=logical_id,
                 mist_object_id=mist_object_id,
                 site_mist_id=context.site_id,
                 ordinal=1,
-            )
-            await incarnation.insert()
+            ),
+        )
         if incarnation.id is None:
             msg = "Persisted object incarnation is missing an identifier"
             raise RuntimeError(msg)
+        incarnation_id = incarnation.id
 
         canonical_hash = fingerprint(definition, configuration)
-        latest = (
-            await ObjectVersion.find(
-                ObjectVersion.organization_id == organization_id,
-                ObjectVersion.logical_object_id == logical.id,
+
+        async def next_version(latest: "ObjectVersion | None") -> "ObjectVersion | None":
+            # A tombstone carries the configuration the object was deleted
+            # with, so it is never "unchanged": an object seen again after a
+            # deletion is live again, even when it came back exactly as it was.
+            live = None if latest is None or latest.is_deleted else latest
+            if live is not None and fingerprint_matches(definition, live.configuration_hash, configuration):
+                # Unchanged, and the only moment the plaintext behind an older
+                # digest is in hand: rewrite it in the keyed generation now rather
+                # than leave the object waiting on the periodic backfill.
+                await _upgrade_stored_hash(live, canonical_hash)
+                return None
+
+            previous_configuration = None if live is None else reveal_configuration(live.configuration, self._vault)
+            if (
+                live is not None
+                and previous_configuration is not None
+                and normalize(definition, previous_configuration) == normalize(definition, configuration)
+            ):
+                # The configuration is unchanged under the current registry
+                # policy, but its digest was written under an older policy.
+                await _upgrade_stored_hash(live, canonical_hash)
+                return None
+
+            if latest is None:
+                event = context.new_event
+            elif live is None:
+                event = VersionEvent.CREATED
+            else:
+                event = VersionEvent.UPDATED
+            return ObjectVersion(
+                organization_id=organization_id,
+                logical_object_id=logical_id,
+                incarnation_id=incarnation_id,
+                snapshot_id=context.snapshot_id,
+                version=1 if latest is None else latest.version + 1,
+                event=event,
+                configuration=protect_configuration(
+                    configuration,
+                    self._vault,
+                    sensitive_fields=definition.sensitive_fields,
+                ),
+                configuration_hash=canonical_hash,
+                changed_fields=(
+                    []
+                    if previous_configuration is None
+                    else changed_top_level_fields(
+                        previous_configuration, configuration, ignored_fields=definition.ignored_fields
+                    )
+                ),
+                references=extract_uuid_references(configuration),
+                actor=context.actor,
+                audit_id=context.audit_id,
             )
-            .sort(-ObjectVersion.version)
-            .first_or_none()
-        )
-        if latest is not None and fingerprint_matches(definition, latest.configuration_hash, configuration):
-            # Unchanged, and the only moment the plaintext behind an older
-            # digest is in hand: rewrite it in the keyed generation now rather
-            # than leave the object waiting on the periodic backfill.
-            await _upgrade_stored_hash(latest, canonical_hash)
-            return False
 
-        previous_configuration = None if latest is None else reveal_configuration(latest.configuration, self._vault)
-        if (
-            latest is not None
-            and previous_configuration is not None
-            and normalize(definition, previous_configuration) == normalize(definition, configuration)
-        ):
-            # The configuration is unchanged under the current registry
-            # policy, but its digest was written under an older policy.
-            await _upgrade_stored_hash(latest, canonical_hash)
+        version = await _insert_next_version(organization_id, logical_id, next_version)
+        if version is None:
             return False
-
-        version_number = 1 if latest is None else latest.version + 1
-        persisted_configuration = protect_configuration(
-            configuration,
-            self._vault,
-            sensitive_fields=definition.sensitive_fields,
-        )
-        version = ObjectVersion(
-            organization_id=organization_id,
-            logical_object_id=logical.id,
-            incarnation_id=incarnation.id,
-            snapshot_id=context.snapshot_id,
-            version=version_number,
-            event=context.new_event if latest is None else VersionEvent.UPDATED,
-            configuration=persisted_configuration,
-            configuration_hash=canonical_hash,
-            changed_fields=(
-                []
-                if previous_configuration is None
-                else changed_top_level_fields(
-                    previous_configuration, configuration, ignored_fields=definition.ignored_fields
-                )
-            ),
-            references=extract_uuid_references(configuration),
-            actor=context.actor,
-            audit_id=context.audit_id,
-        )
-        await version.insert()
 
         logical.current_mist_id = mist_object_id
         logical.name = object_name(configuration, definition)
-        logical.current_version = version_number
+        logical.current_version = version.version
         logical.is_deleted = False
         logical.touch()
         await logical.save()
@@ -365,3 +399,123 @@ async def _upgrade_stored_hash(version: ObjectVersion, canonical_hash: str) -> N
         ObjectVersion.configuration_hash == previous,
     ).update({"$set": {"configuration_hash": canonical_hash}})
     version.configuration_hash = canonical_hash
+
+
+async def _find_or_insert[T: Document](
+    model: type[T],
+    identity: tuple[Mapping[str, Any] | bool, ...],
+    new: Callable[[], T],
+) -> T:
+    """Find a document by its unique identity, or insert ``new()``.
+
+    A concurrent capture of the same new object can insert it first; the one
+    that loses the race on the unique index reads the winner's document.
+    """
+    existing = await model.find_one(*identity)
+    if existing is not None:
+        return existing
+    document = new()
+    try:
+        await document.insert()
+    except DuplicateKeyError:
+        existing = await model.find_one(*identity)
+        if existing is None:
+            raise
+        return existing
+    return document
+
+
+async def _insert_next_version(
+    organization_id: PydanticObjectId,
+    logical_id: PydanticObjectId,
+    build: Callable[[ObjectVersion | None], Awaitable[ObjectVersion | None]],
+) -> ObjectVersion | None:
+    """Append the version ``build`` makes from the newest one, or none when it makes none.
+
+    A concurrent capture of the same object can take the next number first.
+    What it recorded is then the newest version, so ``build`` compares against
+    that instead, and finds the object unchanged when both read the same thing.
+    """
+    for attempt in range(1, _RECORD_ATTEMPTS + 1):
+        latest = (
+            await ObjectVersion.find(
+                ObjectVersion.organization_id == organization_id,
+                ObjectVersion.logical_object_id == logical_id,
+            )
+            .sort(-ObjectVersion.version)
+            .first_or_none()
+        )
+        version = await build(latest)
+        if version is None:
+            return None
+        try:
+            await version.insert()
+        except DuplicateKeyError:
+            if attempt == _RECORD_ATTEMPTS:
+                raise
+            continue
+        return version
+    msg = "Object history could not be extended"
+    raise RuntimeError(msg)
+
+
+async def open_manifest(manifest: SnapshotManifest) -> None:
+    """Insert an active manifest, first releasing one whose snapshot was lost.
+
+    Raises ``DuplicateKeyError`` while another snapshot is still in progress.
+    """
+    try:
+        await manifest.insert()
+    except DuplicateKeyError:
+        if not await _release_stale_manifest(manifest.organization_id):
+            raise
+        await manifest.insert()
+
+
+async def _release_stale_manifest(organization_id: PydanticObjectId) -> bool:
+    """Fail the organization's active manifest when its snapshot started too long ago.
+
+    A manifest that never started is judged by when it was queued.
+    """
+    now = utc_now()
+    cutoff = now - STALE_MANIFEST_AFTER
+    result = await SnapshotManifest.find_one(
+        {
+            "organization_id": organization_id,
+            "active": True,
+            "$or": [
+                {"started_at": {"$lt": cutoff}},
+                {"started_at": None, "created_at": {"$lt": cutoff}},
+            ],
+        }
+    ).update(
+        {
+            "$set": {
+                "status": SnapshotStatus.FAILED,
+                "active": False,
+                "completed_at": now,
+                "updated_at": now,
+                "errors": [
+                    SnapshotError(
+                        object_type="task",
+                        message="Snapshot stopped before it finished",
+                        retryable=True,
+                    ).model_dump()
+                ],
+            }
+        }
+    )
+    return result is not None and result.modified_count == 1
+
+
+async def _mark_initial_snapshot(organization_id: PydanticObjectId, completed_at: datetime) -> None:
+    """Record the organization's first complete snapshot, whatever kind it was.
+
+    Only that field is written, and only while it is unset: the organization
+    read when a long crawl started is stale by its end, and saving it whole
+    would revert a credential rotated in the meantime.
+    """
+    await Organization.find_one(
+        Organization.id == organization_id,
+        {"initial_snapshot_completed_at": None},
+    ).update({"$set": {"initial_snapshot_completed_at": completed_at, "updated_at": utc_now()}})

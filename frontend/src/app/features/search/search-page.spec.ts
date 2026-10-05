@@ -71,6 +71,78 @@ describe('SearchPage', () => {
     expect(text('.row-title')).toEqual(['NW-Corp']);
   });
 
+  /** Run the page's effects, answer nothing, and render what has landed. */
+  async function settle(): Promise<void> {
+    for (let pass = 0; pass < 3; pass += 1) {
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+  }
+
+  function result(kind: SearchResult['kind'], id: string, title: string): SearchResult {
+    return { ...WLAN, kind, id, title, target_params: {} };
+  }
+
+  async function searchFor(term: string, items: SearchResult[], total = items.length): Promise<void> {
+    TestBed.inject(SearchService).setQuery(term);
+    await settle();
+    httpMock.expectOne((candidate) => candidate.url === SEARCH_URL).flush({ items, total });
+    await settle();
+  }
+
+  function chip(label: string): HTMLButtonElement {
+    return [...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.cg-chip')].find(
+      (button) => (button.textContent ?? '').includes(label),
+    )!;
+  }
+
+  it('drops a kind filter when the search changes', async () => {
+    // Kept, a kind the next term has no results of hid every result, and the
+    // chip row that could undo it disappeared with them.
+    fixture.detectChanges();
+    await searchFor('corp', [result('object', 'o1', 'NW-Corp'), result('actor', 'a1', 'corp-admin@x')]);
+    chip('ACTOR').click();
+    await settle();
+    expect(text('.row-title')).toEqual(['corp-admin@x']);
+
+    await searchFor('guest', [result('object', 'o2', 'Guest-WLAN'), result('object', 'o3', 'Guest-PSK')]);
+
+    expect(text('.row-title')).toEqual(['Guest-WLAN', 'Guest-PSK']);
+  });
+
+  it('shows every result when the chosen kind is no longer among them', async () => {
+    fixture.detectChanges();
+    await searchFor('corp', [result('object', 'o1', 'NW-Corp'), result('actor', 'a1', 'corp-admin@x')]);
+    chip('ACTOR').click();
+    await settle();
+
+    // The same term read again, after the actor's changes aged out.
+    const search = TestBed.inject(SearchService);
+    const again = search.run(ORGANIZATION_ID, 'corp');
+    httpMock
+      .expectOne((candidate) => candidate.url === SEARCH_URL)
+      .flush({ items: [result('object', 'o1', 'NW-Corp')], total: 1 });
+    await again;
+    await settle();
+
+    expect(text('.row-title')).toEqual(['NW-Corp']);
+  });
+
+  it('says when the results are one capped page of a larger match', async () => {
+    fixture.detectChanges();
+    const items = Array.from({ length: 25 }, (_, index) => result('object', `o${index}`, `AP-${index}`));
+    await searchFor('ap', items, 61);
+
+    expect(text('.head-sub')).toEqual(['Showing 25 of 61 results for “ap”']);
+  });
+
+  it('counts the results plainly when every match is shown', async () => {
+    fixture.detectChanges();
+    await searchFor('guest', [result('object', 'o2', 'Guest-WLAN'), result('object', 'o3', 'Guest-PSK')]);
+
+    expect(text('.head-sub')).toEqual(['2 results for “guest”']);
+  });
+
   it('asks for nothing and says so when the URL carries no term', async () => {
     fixture.detectChanges();
     await fixture.whenStable();

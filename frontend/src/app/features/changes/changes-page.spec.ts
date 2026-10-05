@@ -6,7 +6,9 @@ import { provideRouter, Router } from '@angular/router';
 
 import { ChangeGroupDetail, ChangeGroupSummary, ImpactSeverity } from '../../core/change-group.model';
 import { GuardianSummary } from '../../core/guardian.model';
+import { AuthService } from '../../core/auth.service';
 import { OrganizationContextService } from '../../core/organization-context.service';
+import { TimeContextService } from '../../core/time-context.service';
 import { ChangesPage } from './changes-page';
 import { DiffService } from '../history/diff.service';
 import { SiteImpactService } from '../impact/site-impact.service';
@@ -375,6 +377,61 @@ describe('ChangesPage', () => {
 
     expect(text('app-guardian-badge')).toEqual([]);
     expect(text('.head-sub').join(' ')).not.toContain('Guardian');
+  });
+
+  it('does not call a past window filtered by an impact chip picked at now', async () => {
+    // A past window is read without the impact filter, so the chip still
+    // remembered from "now" narrows nothing there.
+    await load([MONDAY_CRITICAL, MONDAY_WARNING]);
+    (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.head-filters .cg-chip')[1].click();
+    await fixture.whenStable();
+    httpMock.expectOne((candidate) => candidate.url === INDEX_URL).flush({ items: [MONDAY_CRITICAL], total: 1 });
+    await fixture.whenStable();
+
+    TestBed.inject(TimeContextService).setAsOf(new Date('2026-09-05T00:00:00Z'));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const past = httpMock.expectOne((candidate) => candidate.url === INDEX_URL);
+    expect(past.request.params.get('severity')).toBe('any');
+    past.flush({ items: [], total: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(text('.empty h2')).toEqual(['No changes in this window']);
+    expect(text('.table-foot')[0]).toContain('No change groups in this window');
+    expect(text('.head-filters .cg-chip--on')).toEqual(['All changes']);
+  });
+
+  it('explains that a change of more than 100 objects is rolled back in parts', async () => {
+    // A plan request accepts 100 versions; a longer list is refused, which
+    // trying again cannot change.
+    vi.spyOn(TestBed.inject(AuthService), 'can').mockReturnValue(true);
+    fixture.componentRef.setInput('group', MONDAY_WARNING.id);
+    await load([MONDAY_WARNING]);
+    const group = detail(MONDAY_WARNING);
+    httpMock.expectOne(`${INDEX_URL}/${MONDAY_WARNING.id}`).flush({
+      ...group,
+      changed_objects: Array.from({ length: 101 }, (_, index) => ({
+        ...group.changed_objects[0],
+        logical_object_id: `obj-${index}`,
+        before_version_id: `v-${index}`,
+        after_version_id: `v-${index}-next`,
+      })),
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const review = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.rollback-card button'),
+    ).find((button) => button.textContent?.includes('Review rollback'))!;
+    review.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    httpMock.expectNone('/api/v1/organizations/org-1/restores/plans');
+    const alert = text('.rollback-card [role="alert"]')[0];
+    expect(alert).toContain('at most 100 objects');
+    expect(alert).not.toContain('Try again');
   });
 
 });

@@ -19,6 +19,9 @@ class UserSummaryResponse(BaseModel):
     is_active: bool
     mfa_enabled: bool
     invitation_expires_at: datetime | None
+    # Set on a deactivated account whose invitation was revoked before it was
+    # accepted: it can be invited again but not activated.
+    invitation_revoked_at: datetime | None
     last_login_at: datetime | None
     created_at: datetime
 
@@ -37,6 +40,7 @@ class UserSummaryResponse(BaseModel):
             is_active=user.is_active,
             mfa_enabled=user.mfa_enabled,
             invitation_expires_at=user.invitation_expires_at,
+            invitation_revoked_at=user.invitation_revoked_at,
             last_login_at=user.last_login_at,
             created_at=user.created_at,
         )

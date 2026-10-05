@@ -8,6 +8,7 @@ either needs no collection at all or stands one in, so the phases, budgets and f
 # the orchestrator's own publication text is asserted through its private helper.
 # ruff: noqa: ARG002, ASYNC109, SLF001
 
+import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -46,6 +47,7 @@ from mist_config_guardian_backend.guardian.evidence import (
 )
 from mist_config_guardian_backend.guardian.reader import TransportError
 from mist_config_guardian_backend.guardian.repository import RUN_OUTCOME_FIELDS
+from mist_config_guardian_backend.integrations.mist_mcp import MistMcpError
 from mist_config_guardian_backend.models.guardian import GuardianInvestigation, GuardianRun
 from mist_config_guardian_backend.models.monitoring import (
     DeviceType,
@@ -87,6 +89,7 @@ from mist_config_guardian_backend.tasks import monitoring as task
 from mist_config_guardian_backend.webhooks.deployment import normalize_deployment
 
 ORG = PydanticObjectId()
+MIST_ORG = "4ac1dcf4-9d8b-7211-65c4-057819f0862b"
 AUDIT = "audit-1"
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
 MAC = "5c5b350a0b01"
@@ -384,6 +387,7 @@ class FakeModel:
 def inputs(**overrides: Any) -> AttemptInputs:
     values: dict[str, Any] = {
         "organization_id": ORG,
+        "mist_org_id": MIST_ORG,
         "audit_id": AUDIT,
         "received_at": NOW,
         "audit_time": NOW,
@@ -596,6 +600,28 @@ async def test_every_stored_run_field_is_one_the_finalization_builder_accepts() 
     outcome = await run_attempt()
 
     assert set(outcome.fields) <= RUN_OUTCOME_FIELDS
+
+
+async def test_a_failed_deployment_with_no_monitoring_session_is_listed_at_its_site() -> None:
+    """Deployment pairing knows the device's site, so the verdict lists the device without a session to name it."""
+    trigger, _configured = inputs().receipts
+    failed = DeviceEventReceipt(
+        receipt_id="r2",
+        received_at=NOW + timedelta(seconds=5),
+        event_type="SW_CONFIG_FAILED",
+        device_mac=MAC,
+        site_id=SITE,
+        occurred_at=NOW + timedelta(seconds=5),
+        audit_id=AUDIT,
+    )
+    outcome = await run_attempt(receipts=(trigger, failed), sessions=())
+
+    verdict = outcome.fields["verdict"]
+    assert outcome.fields["deployment"].peak == "warning"
+    assert [(row.mac, row.site_id, row.peak) for row in verdict.impacted_devices] == [(MAC, SITE, "warning")]
+    assert not any("could not be listed" in gap.text for gap in verdict.gaps)
+    # The device's site identifies it; its band is still deployment's, never credited to monitoring.
+    assert verdict.sources == ("deployment",)
 
 
 def wide_change(attributes: int) -> ObjectChange:
@@ -1037,27 +1063,139 @@ async def test_a_single_version_change_with_no_atom_is_not_reported_as_elided() 
 # -- transports ---------------------------------------------------------------------------------------------------
 
 
-async def test_building_the_attempts_tools_closes_whatever_it_already_opened(monkeypatch: pytest.MonkeyPatch) -> None:
-    closed: list[str] = []
+RUNTIME = SimpleNamespace(
+    base_url="https://ai.example.invalid/v1", model="model", api_key="api-key", structured_output="json_schema"
+)
+
+
+class UnreachableMcp:
+    """A Mist MCP endpoint whose initialize exchange fails, quoting the credential it was sent."""
+
+    def __init__(self, **_kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> Self:
+        code = "transport"
+        raise MistMcpError(code, detail="the endpoint refused s3cret-token")
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class SilentMcp(UnreachableMcp):
+    """A Mist MCP endpoint that accepts the connection and never answers initialize."""
+
+    async def __aenter__(self) -> Self:
+        await asyncio.Event().wait()
+        return self
+
+
+def ready_for_the_agent(monkeypatch: pytest.MonkeyPatch, *, mcp: type, closed: list[str] | None = None) -> Any:
+    """Every collaborator the agent needs, configured, with ``mcp`` standing in for the Mist MCP client."""
+    sink = closed if closed is not None else []
 
     class Recording(service.MistRuleTransport):
         def __init__(self, **_kwargs: Any) -> None:
             pass
 
-        async def aclose(self) -> None:
-            closed.append("rule")
+        async def fetch(self, path: str, params: Any, *, timeout: float, max_bytes: int) -> Any:
+            return {"results": [], "total": 0}
 
-    async def unavailable(_self: object) -> None:
-        msg = "the provider settings could not be read"
-        raise RuntimeError(msg)
+        async def aclose(self) -> None:
+            sink.append("rule")
 
     monkeypatch.setattr(service, "MistRuleTransport", Recording)
-    monkeypatch.setattr(service, "service_token", AsyncMock(return_value="token"))
-    monkeypatch.setattr(service.ApplicationConfigurationService, "ai_runtime", unavailable)
-    organization = Organization.model_construct(id=ORG, mist_org_id="org-1", cloud_region=MistCloudRegion.GLOBAL_01)
+    monkeypatch.setattr(service, "MistMcpClient", mcp)
+    monkeypatch.setattr(service, "service_token", AsyncMock(return_value="s3cret-token"))
+    monkeypatch.setattr(service.ApplicationConfigurationService, "ai_runtime", AsyncMock(return_value=RUNTIME))
+    monkeypatch.setattr(
+        service, "get_settings", lambda: SimpleNamespace(mist_mcp_url="https://mcp.example.invalid/mcp")
+    )
+    return Organization.model_construct(id=ORG, mist_org_id="org-1", cloud_region=MistCloudRegion.GLOBAL_01)
 
-    with pytest.raises(RuntimeError, match="provider settings"):
-        async with service.GuardianTools(organization, vault=vault()):
+
+async def execute(organization: Organization, loaded: AttemptInputs, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """One attempt through the service's own execution step, with its database inputs stood in."""
+    monkeypatch.setattr(service, "load_attempt_inputs", AsyncMock(return_value=loaded))
+    committed = repo.CommittedAttempt(
+        token=PydanticObjectId(),
+        organization_id=ORG,
+        investigation_id=PydanticObjectId(),
+        audit_id=AUDIT,
+        kind="final",
+        attempt=1,
+        started_at=NOW,
+        retained_until=NOW + timedelta(days=30),
+    )
+    return await GuardianService(vault())._execute(root(), organization, committed, started=time.monotonic())
+
+
+async def test_an_unreachable_mcp_endpoint_skips_the_agent_and_the_attempt_still_composes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An MCP failure is an agent failure: its reason is recorded, and the deterministic verdict is still published."""
+    organization = ready_for_the_agent(monkeypatch, mcp=UnreachableMcp)
+
+    outcome = await execute(organization, inputs(), monkeypatch)
+
+    assert outcome.state == "succeeded"
+    assert isinstance(outcome.fields["verdict"], Verdict)
+    agent = outcome.fields["agent"]
+    assert agent.concluded is False
+    assert "MCP" in (agent.reason or "")
+    assert "transport" in (agent.reason or "")
+    assert "s3cret-token" not in repr(outcome.fields)
+
+
+async def test_a_service_token_that_cannot_be_read_fails_every_read_as_a_gap_and_skips_the_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rules read Mist with the token too, so without one every read is error evidence; the attempt still composes."""
+    organization = ready_for_the_agent(monkeypatch, mcp=UnreachableMcp)
+    monkeypatch.setattr(service, "service_token", AsyncMock(side_effect=ValueError("the ciphertext is not valid")))
+
+    outcome = await execute(organization, inputs(**removal()), monkeypatch)
+
+    assert outcome.state == "succeeded"
+    assert "service token" in (outcome.fields["agent"].reason or "")
+    reads = [item for item in outcome.fields["evidence"] if item.source.startswith("rule:")]
+    assert reads
+    assert all(item.collection == "error" for item in reads)
+
+
+async def test_ai_settings_that_cannot_be_read_skip_the_agent_and_keep_the_rule_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[str] = []
+    organization = ready_for_the_agent(monkeypatch, mcp=UnreachableMcp, closed=closed)
+    unreadable = AsyncMock(side_effect=RuntimeError("the provider settings could not be read"))
+    monkeypatch.setattr(service.ApplicationConfigurationService, "ai_runtime", unreadable)
+
+    async with service.GuardianTools(organization, vault=vault()) as tools:
+        assert tools.rule_transport is not None
+        assert tools.model_client is None
+        assert "provider settings could not be read" in (tools.skip_reason or "")
+        assert tools.secrets == ("s3cret-token",)
+
+    assert closed == ["rule"]
+
+
+async def test_an_mcp_endpoint_that_never_answers_initialize_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    organization = ready_for_the_agent(monkeypatch, mcp=SilentMcp)
+    monkeypatch.setattr(service, "CALL_TIMEOUT_CEILING", 0.05)
+
+    async with asyncio.timeout(5), service.GuardianTools(organization, vault=vault()) as tools:
+        assert tools.model_client is None
+        assert "MCP" in (tools.skip_reason or "")
+
+
+async def test_building_the_attempts_tools_closes_whatever_it_already_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build cancelled part way, by a deadline or a stopping worker, still closes the clients it opened."""
+    closed: list[str] = []
+    organization = ready_for_the_agent(monkeypatch, mcp=SilentMcp, closed=closed)
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05), service.GuardianTools(organization, vault=vault()):
             pass
 
     assert closed == ["rule"]

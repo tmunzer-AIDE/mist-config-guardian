@@ -24,14 +24,6 @@ class BootstrapAdminRequest(BaseModel):
     bootstrap_token: SecretStr
 
 
-class AccessTokenResponse(BaseModel):
-    """Bearer access token response."""
-
-    access_token: str
-    token_type: Literal["bearer"] = "bearer"  # noqa: S105
-    expires_in: int
-
-
 class UserResponse(BaseModel):
     """Safe local user representation."""
 
@@ -67,13 +59,10 @@ class UserResponse(BaseModel):
 
 
 class LoginSuccessResponse(BaseModel):
-    """A completed sign-in, carrying both the session and a bearer token."""
+    """A completed sign-in; the session cookies set alongside it are the credential."""
 
     mfa_required: Literal[False] = False
     user: UserResponse
-    access_token: str
-    token_type: Literal["bearer"] = "bearer"  # noqa: S105
-    expires_in: int
 
 
 class MfaChallengeResponse(BaseModel):

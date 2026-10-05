@@ -384,6 +384,19 @@ async def test_the_work_is_capped_per_kind_and_by_the_requested_limit() -> None:
     assert results.total >= 4
 
 
+async def test_a_page_full_of_one_kind_still_shows_the_others() -> None:
+    """Objects come first, but forty of them must not push a change or a site off a short page."""
+    reader = _reader()
+    reader.objects_.extend(_logical(name=f"NW-{index}") for index in range(40))
+    reader.objects_.append(_logical(name="NW-Branch", object_type="sites", mist_id="site-nw-branch"))
+
+    results = await SearchService(reader).search(ORGANIZATION_ID, "NW-", limit=4)
+
+    assert _kinds(results.items) == ["object", "object", "change_group", "site"]
+    # The total still counts everything matched, not just the page.
+    assert results.total == PER_KIND_LIMIT + 2
+
+
 # ----------------------------------------------------------------------- api
 
 

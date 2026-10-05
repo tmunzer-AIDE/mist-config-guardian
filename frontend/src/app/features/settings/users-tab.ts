@@ -64,6 +64,9 @@ export class UsersTab {
     return this.users.items().map((user) => {
       const isSelf = user.id === selfId;
       const guard = demotionGuard(user, isSelf, lastAdministrator);
+      // Revoked before it was accepted: nobody ever set a password for it, so
+      // it is invited again rather than activated, which the API refuses.
+      const revokedInvitation = !!user.invitation_revoked_at;
       return {
         user,
         id: user.id,
@@ -80,8 +83,10 @@ export class UsersTab {
         isSelf,
         guard,
         canDeactivate: user.is_active && guard === '',
-        canActivate: !user.is_active,
-        canResend: user.status === 'invited',
+        // An invitation is accepted, not activated: the API refuses that.
+        canActivate: !user.is_active && user.status !== 'invited' && !revokedInvitation,
+        canRevoke: user.status === 'invited',
+        canResend: user.status === 'invited' || revokedInvitation,
       };
     });
   });
@@ -178,7 +183,8 @@ export class UsersTab {
   }
 
   protected async changeRole(user: ManagedUser, event: Event): Promise<void> {
-    const role = (event.target as HTMLSelectElement).value as UserRole;
+    const select = event.target as HTMLSelectElement;
+    const role = select.value as UserRole;
     if (role === user.role) {
       return;
     }
@@ -186,6 +192,9 @@ export class UsersTab {
       const updated = await this.users.update(user.id, { role });
       this.notice.set(`${updated.display_name} is now ${updated.role}.`);
     });
+    // A refused change leaves the account as it was, and the select must say
+    // so: its row did not change, so nothing else would put the role back.
+    select.value = this.users.items().find((item) => item.id === user.id)?.role ?? user.role;
   }
 
   protected requestDeactivate(user: ManagedUser): void {
@@ -198,6 +207,21 @@ export class UsersTab {
         await this.run(user.id, async () => {
           await this.users.deactivate(user.id);
           this.notice.set(`${user.display_name} was deactivated.`);
+        });
+      },
+    });
+  }
+
+  protected requestRevoke(user: ManagedUser): void {
+    this.confirmRequested.emit({
+      title: `Revoke the invitation for ${user.display_name}?`,
+      body: `The invitation link sent to ${user.email} stops working immediately, and the account is deactivated before it was ever used.`,
+      confirmLabel: 'Revoke invitation',
+      danger: true,
+      run: async () => {
+        await this.run(user.id, async () => {
+          await this.users.deactivate(user.id);
+          this.notice.set(`Invitation for ${user.display_name} was revoked.`);
         });
       },
     });

@@ -3,6 +3,7 @@ import { inject, Injectable, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { API_ROOT } from '../../core/api';
+import { AiAssistService } from '../history/ai-assist.service';
 
 /**
  * Safe AI provider settings.
@@ -64,6 +65,7 @@ interface AiModelList {
 @Injectable({ providedIn: 'root' })
 export class AiSettingsService {
   private readonly http = inject(HttpClient);
+  private readonly assist = inject(AiAssistService);
 
   private readonly settingsState = signal<AiSettings | null>(null);
   private readonly modelsState = signal<AiModel[] | null>(null);
@@ -81,6 +83,9 @@ export class AiSettingsService {
   async save(update: AiSettingsUpdate): Promise<AiSettings> {
     const settings = await firstValueFrom(this.http.put<AiSettings>(`${API_ROOT}/ai/settings`, update));
     this.settingsState.set(settings);
+    // The configuration library resolves availability once a session; a
+    // change made here has to reach it, or it keeps the answer it had.
+    void this.assist.loadStatus(true);
     return settings;
   }
 
@@ -88,6 +93,10 @@ export class AiSettingsService {
     const result = await firstValueFrom(
       this.http.post<AiConnectionTest>(`${API_ROOT}/ai/settings/test`, draft ?? null),
     );
+    if (result.ok) {
+      // A provider that answers may be the fix for an earlier refusal.
+      void this.assist.loadStatus(true);
+    }
     if (draft) {
       return result;
     }

@@ -141,6 +141,8 @@ def describe_http_failure(error: Exception, *, model: str, timeout: float) -> st
         return _describe_status(error.response.status_code, model=model)
     if isinstance(error, httpx.HTTPError):
         return f"The provider could not be reached: {type(error).__name__}."
+    if isinstance(error, UnicodeEncodeError):
+        return "The API key contains characters that cannot be sent in a request header."
     return "The provider returned an unusable response."
 
 
@@ -173,11 +175,11 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
         self._timeout = timeout
         self._max_response_tokens = max_response_tokens
         self._max_response_bytes = max_response_bytes
-        self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
-            timeout=timeout,
-        )
+        # Sent with each request rather than as a client default: a key pasted with an invisible character cannot
+        # be encoded into a header, and that then fails the request like any other provider error instead of
+        # failing here, before any caller is handling one.
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
 
     async def __aenter__(self) -> Self:
         return self
@@ -217,7 +219,9 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
             payload["response_format"] = requested
         started = time.perf_counter()
         try:
-            async with self._client.stream("POST", "/chat/completions", json=payload) as response:
+            async with self._client.stream(
+                "POST", "/chat/completions", json=payload, headers=self._headers
+            ) as response:
                 response.raise_for_status()
                 data = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -247,7 +251,7 @@ class OpenAiCompatibleProvider(AbstractAsyncContextManager["OpenAiCompatibleProv
     async def list_models(self) -> list[AiModel]:
         """Return the provider's advertised models sorted by identifier."""
         try:
-            response = await self._client.get("/models")
+            response = await self._client.get("/models", headers=self._headers)
             response.raise_for_status()
             envelope = response.json()
             entries = envelope["data"]

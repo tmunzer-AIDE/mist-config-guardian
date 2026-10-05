@@ -8,6 +8,9 @@ import { OrganizationService } from './organization.service';
 
 const SELECTED_KEY = 'mist-config-guardian.organization';
 
+/** The most organizations the API returns in one page. */
+const PAGE_SIZE = 200;
+
 /**
  * The application-wide organization scope.
  *
@@ -47,15 +50,26 @@ export class OrganizationContextService {
       return;
     }
     const generation = this.generation;
-    const response = await firstValueFrom(this.organizations.list());
-    if (generation !== this.generation) {
-      return;
+    // Every page, not the first: the picker, the Settings cards and the stored
+    // selection all need the whole list, and the API pages it.
+    const items: Organization[] = [];
+    while (true) {
+      const page = await firstValueFrom(this.organizations.list(items.length, PAGE_SIZE));
+      if (generation !== this.generation) {
+        return;
+      }
+      items.push(...page.items);
+      // An empty page ends the list whatever the total said: organizations
+      // removed while it was being read shrink it under the reader.
+      if (page.items.length === 0 || items.length >= page.total) {
+        break;
+      }
     }
-    this.items.set(response.items);
+    this.items.set(items);
     this.loadedState.set(true);
     const current = this.selectedIdState();
-    if (!current || !response.items.some((item) => item.id === current)) {
-      this.select(response.items[0]?.id ?? null, false);
+    if (!current || !items.some((item) => item.id === current)) {
+      this.select(items[0]?.id ?? null, false);
     }
   }
 

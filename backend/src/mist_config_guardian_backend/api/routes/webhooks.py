@@ -1,31 +1,23 @@
 """Public Mist webhook receiver."""
 
-import logging
 from typing import Annotated
 
 from beanie import PydanticObjectId
-from celery.exceptions import CeleryError
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from kombu.exceptions import OperationalError
 
 from mist_config_guardian_backend.api.dependencies import get_webhook_ingestion_service
 from mist_config_guardian_backend.config import Settings, get_settings
-from mist_config_guardian_backend.models.webhook import (
-    WebhookProcessingStatus,
-    WebhookReceipt,
-)
 from mist_config_guardian_backend.schemas.webhook import WebhookAcceptedResponse
 from mist_config_guardian_backend.services.webhooks import (
     WebhookIngestionService,
     WebhookOrganizationNotFoundError,
     WebhookPayloadError,
     WebhookSignatureError,
+    queue_receipt,
 )
 from mist_config_guardian_backend.webhooks.signatures import SignatureVersion
-from mist_config_guardian_backend.worker import celery_app
 
 router = APIRouter(prefix="/webhooks")
-logger = logging.getLogger(__name__)
 
 
 @router.post("/mist/{organization_id}", status_code=status.HTTP_202_ACCEPTED)
@@ -64,23 +56,9 @@ async def receive_mist_webhook(
 
     queued = 0
     for receipt_id in result.receipt_ids:
-        try:
-            celery_app.send_task("webhooks.process", args=[str(receipt_id)])
-        except (CeleryError, OperationalError):
-            logger.exception("Unable to queue webhook receipt %s", receipt_id)
-            await WebhookReceipt.find_one(
-                WebhookReceipt.id == receipt_id,
-                WebhookReceipt.status == WebhookProcessingStatus.QUEUED,
-            ).update(
-                {
-                    "$set": {
-                        "status": WebhookProcessingStatus.RECEIVED,
-                        "processing_error": "Worker queue is unavailable",
-                    }
-                }
-            )
-            continue
-        queued += 1
+        # A receipt the queue refuses stays stored and is retried by the sweep.
+        if await queue_receipt(receipt_id):
+            queued += 1
 
     return WebhookAcceptedResponse(
         accepted=len(result.receipt_ids),

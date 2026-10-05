@@ -269,6 +269,18 @@ registration and at every later sign-in, and a passkey already registered
 against one RP ID is not offered for another, so changing these invalidates the
 passkeys enrolled before the change.
 
+### Client addresses behind the ingress
+
+Sign-in attempts are throttled per account and per client address. The API sees
+the ingress controller's address on every request, so it reads the client from
+`X-Forwarded-For`, believing only the hops listed in `config.forwardedAllowIps`.
+The default trusts the private ranges a cluster network uses. Narrow it to the
+ingress controller's pod network once you know it, so that a client on a private
+network cannot name its own address. Never set it to `*`, which believes
+whatever the client wrote in the header. If the API trusts none of the hops,
+every client shares one address, and a hundred failed sign-ins from anyone lock
+everyone out for the throttle window.
+
 ### Network policy
 
 `networkPolicy.enabled` (on by default) denies every connection to every pod in

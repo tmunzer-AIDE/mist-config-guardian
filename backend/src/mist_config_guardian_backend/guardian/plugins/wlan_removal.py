@@ -138,7 +138,7 @@ class WlanRemovalPlugin:
             findings=(Finding(text=_finding_text(target, reading), severity=severity, evidence_ids=cited),),
             impacted_devices=tuple(
                 DeviceImpact(mac=mac, severity="warning", evidence_ids=cited)
-                for mac in reading.access_points[:SHOWN_DEVICES]
+                for mac in base.named_devices(reading.access_points, readings)[:SHOWN_DEVICES]
             ),
             gaps=target.gaps,
         )

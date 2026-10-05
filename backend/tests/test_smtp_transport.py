@@ -1,7 +1,10 @@
 """The SMTP transport classifies its own outcome by protocol phase."""
 
+import email
+import email.policy
 import smtplib
 import ssl
+from email.utils import getaddresses
 from typing import ClassVar
 
 import pytest
@@ -58,7 +61,7 @@ class FakeSmtp:
     def login(self, _username: str, _password: str) -> None:
         self._maybe("login")
 
-    def send_message(self, _message: object) -> dict[str, object]:
+    def send_message(self, _message: object, **_envelope: object) -> dict[str, object]:
         self._maybe("send")
         self.sent = True
         return {}
@@ -127,7 +130,7 @@ class _RecordingSmtpSsl:
     def login(self, _username: str, _password: str) -> None:
         return None
 
-    def send_message(self, _message: object) -> dict[str, object]:
+    def send_message(self, _message: object, **_envelope: object) -> dict[str, object]:
         return {}
 
     def quit(self) -> None:
@@ -250,3 +253,51 @@ async def test_the_detail_never_carries_the_message_body() -> None:
 
     assert _TEXT_BODY not in outcome.detail
     assert len(outcome.detail) <= 200
+
+
+class _EnvelopeRecordingSmtp(smtplib.SMTP):
+    """A real ``smtplib.SMTP`` whose ``send_message`` runs unchanged, stopping at the wire.
+
+    ``send_message`` derives the envelope sender itself, so only the real
+    method shows what ``MAIL FROM`` a given ``From`` header turns into.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()  # no host: nothing connects
+        self.envelope_from: str | None = None
+        self.flattened: bytes | str | None = None
+
+    def ehlo_or_helo_if_needed(self) -> None:
+        self.esmtp_features = {}
+        self.does_esmtp = False
+
+    def sendmail(self, from_addr, to_addrs, msg, mail_options=(), rcpt_options=()) -> dict[str, object]:  # noqa: ARG002 - mirrors smtplib's signature
+        self.envelope_from = from_addr
+        self.flattened = msg
+        return {}
+
+    def quit(self) -> tuple[int, bytes]:
+        return 221, b"bye"
+
+
+@pytest.mark.parametrize("from_name", ["Acme, Inc.", "Ops@HQ", "Mist: Guardian", 'The "Guardian"'])
+async def test_a_display_name_never_changes_the_sender(from_name: str) -> None:
+    """A display name with a comma, ``@`` or ``:`` must be quoted, not read as more addresses."""
+    client = _EnvelopeRecordingSmtp()
+    credentials = SmtpCredentials(
+        host="mail.example.com",
+        port=25,
+        security="none",
+        username="",
+        password="",
+        from_address="guardian@example.com",
+        from_name=from_name,
+    )
+
+    outcome = await _send(SmtpMailSender(credentials, client_factory=lambda: client))
+
+    assert outcome.status == "sent"
+    assert client.envelope_from == "guardian@example.com"
+    assert isinstance(client.flattened, bytes)
+    message = email.message_from_bytes(client.flattened, policy=email.policy.default)
+    assert getaddresses([str(message["From"])]) == [(from_name, "guardian@example.com")]

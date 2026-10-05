@@ -100,7 +100,7 @@ describe('SettingsPage', () => {
     http.expectNone('/api/v1/users');
     http.expectNone('/api/v1/ai/settings');
     http.expectNone('/api/v1/settings/smtp');
-    http.expectNone('/api/v1/organizations');
+    http.expectNone((request) => request.url === '/api/v1/organizations');
   });
 
   it('shows a viewer the settings content rather than an error', async () => {
@@ -120,7 +120,7 @@ describe('SettingsPage', () => {
       .flush({ status: 'ok', checked_at: new Date().toISOString(), components: [] });
     await tick(fixture);
 
-    http.expectOne('/api/v1/organizations');
+    http.expectOne((request) => request.url === '/api/v1/organizations');
     http.expectOne((request) => request.url === '/api/v1/users');
     http.expectOne('/api/v1/ai/settings');
     http.expectOne('/api/v1/settings/smtp');
