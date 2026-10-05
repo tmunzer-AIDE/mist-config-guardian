@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 from beanie import PydanticObjectId
+from beanie.odm.fields import ExpressionField
 
 from mist_config_guardian_backend.api.dependencies import get_current_user, require_organization
 from mist_config_guardian_backend.api.routes.overview import get_overview_service
@@ -591,6 +592,24 @@ def test_pending_approvals_survive_a_record_written_by_another_workstream() -> N
     assert rows[0].title == "Restore approval"
     assert rows[0].detail == "0 objects"
     assert rows[0].requested_by_email == ""
+
+
+def test_partial_records_are_skipped_once_beanie_has_initialized_the_models(monkeypatch) -> None:
+    # Initializing Beanie puts a query expression on each document class under
+    # every field name, and an expression is a string, so a field a partial
+    # record lacks must not be read through the class.
+    for field in ("restore_operation_id", "requested_by_email", "summary"):
+        monkeypatch.setattr(RestoreApproval, field, ExpressionField(field), raising=False)
+    for field in ("mode", "actions", "failure_action_order"):
+        monkeypatch.setattr(RestoreOperation, field, ExpressionField(field), raising=False)
+    sparse = RestoreApproval.model_construct(id=PydanticObjectId(), restore_operation_id=PydanticObjectId())
+    headless = RestoreApproval.model_construct(id=PydanticObjectId())
+
+    rows = build_pending_approvals([sparse, headless])
+    failed = build_failed_restores([RestoreOperation.model_construct(id=PydanticObjectId())])
+
+    assert [(row.title, row.requested_by_email) for row in rows] == [("Restore approval", "")]
+    assert [(row.title, row.detail) for row in failed] == [("Restore", "0 planned actions")]
 
 
 def test_failed_restores_name_the_action_they_stopped_on() -> None:

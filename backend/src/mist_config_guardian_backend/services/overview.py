@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol
 
 from beanie import PydanticObjectId
 
@@ -559,16 +559,26 @@ def _snapshot_instant(snapshot: SnapshotManifest | None) -> datetime | None:
     return as_utc(captured) if captured is not None else None
 
 
+def _stored(document: object, field: str, default: object = None) -> Any:  # noqa: ANN401 - whatever the record holds
+    """A field the record itself holds, or ``default`` when it holds none.
+
+    Once Beanie is initialized every document class carries a query expression,
+    a string, under each field name, so ``getattr`` on a partially written record
+    would read the expression instead of falling back to the default.
+    """
+    return vars(document).get(field, default)
+
+
 def build_pending_approvals(approvals: Sequence[RestoreApproval]) -> list[PendingApprovalResponse]:
     """Render pending restore approvals, tolerating a partially written record."""
     rendered = []
     for approval in approvals:
-        identifier = getattr(approval, "id", None)
-        operation_id = getattr(approval, "restore_operation_id", None)
+        identifier = _stored(approval, "id", None)
+        operation_id = _stored(approval, "restore_operation_id", None)
         if identifier is None or operation_id is None:
             continue
-        objects = getattr(approval, "object_count", 0) or 0
-        deletes = getattr(approval, "delete_count", 0) or 0
+        objects = _stored(approval, "object_count", 0) or 0
+        deletes = _stored(approval, "delete_count", 0) or 0
         detail = f"{objects} object{'' if objects == 1 else 's'}"
         if deletes:
             detail = f"{detail} · {deletes} deletion{'' if deletes == 1 else 's'}"
@@ -576,10 +586,10 @@ def build_pending_approvals(approvals: Sequence[RestoreApproval]) -> list[Pendin
             PendingApprovalResponse(
                 id=str(identifier),
                 restore_operation_id=str(operation_id),
-                title=getattr(approval, "summary", "") or "Restore approval",
+                title=_stored(approval, "summary", "") or "Restore approval",
                 detail=detail,
-                requested_by_email=getattr(approval, "requested_by_email", "") or "",
-                requested_at=as_utc(getattr(approval, "created_at", None) or utc_now()),
+                requested_by_email=_stored(approval, "requested_by_email", "") or "",
+                requested_at=as_utc(_stored(approval, "created_at", None) or utc_now()),
             )
         )
     return rendered
@@ -589,21 +599,21 @@ def build_failed_restores(operations: Sequence[RestoreOperation]) -> list[Failed
     """Render failed restores, tolerating a partially written operation."""
     rendered = []
     for operation in operations:
-        identifier = getattr(operation, "id", None)
+        identifier = _stored(operation, "id", None)
         if identifier is None:
             continue
-        mode = getattr(operation, "mode", None)
-        actions = getattr(operation, "actions", None) or []
-        order = getattr(operation, "failure_action_order", None)
+        mode = _stored(operation, "mode", None)
+        actions = _stored(operation, "actions", None) or []
+        order = _stored(operation, "failure_action_order", None)
         detail = (
             f"Failed at action {order + 1} of {len(actions)}"
             if order is not None and actions
             else f"{len(actions)} planned action{'' if len(actions) == 1 else 's'}"
         )
         failed_at = (
-            getattr(operation, "completed_at", None)
-            or getattr(operation, "updated_at", None)
-            or getattr(operation, "created_at", None)
+            _stored(operation, "completed_at", None)
+            or _stored(operation, "updated_at", None)
+            or _stored(operation, "created_at", None)
             or utc_now()
         )
         rendered.append(
@@ -612,7 +622,7 @@ def build_failed_restores(operations: Sequence[RestoreOperation]) -> list[Failed
                 title=_RESTORE_MODE_TITLES.get(str(getattr(mode, "value", mode)), "Restore"),
                 detail=detail,
                 failed_at=as_utc(failed_at),
-                compensation_available=getattr(operation, "status", None) is RestoreStatus.COMPENSATION_AVAILABLE,
+                compensation_available=_stored(operation, "status", None) is RestoreStatus.COMPENSATION_AVAILABLE,
             )
         )
     return rendered
