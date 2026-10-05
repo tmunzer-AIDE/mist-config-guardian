@@ -99,6 +99,8 @@ def compute_plan_hash(actions: Sequence[RestoreAction]) -> str:
     A reversal of a write that was never read back is also bound to the payload
     that write sent, which is what it expects to find. It is hashed only when
     present, so every plan stored without one keeps the hash it was reviewed at.
+    The ids an action rewrites to where their objects live now change what it
+    writes, so they are bound the same way.
     """
     return _digest(
         [
@@ -113,6 +115,7 @@ def compute_plan_hash(actions: Sequence[RestoreAction]) -> str:
                 str(action.reason),
                 payload_digest(action.protected_configuration),
                 *(() if action.written_configuration is None else (payload_digest(action.written_configuration),)),
+                *(() if not action.reference_remap else (sorted(action.reference_remap.items()),)),
             ]
             for action in sorted(actions, key=lambda item: item.order)
         ]
@@ -258,6 +261,17 @@ class ApprovalDraft:
     delete_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovalDecision:
+    """A second administrator's decision, not yet stored on its request."""
+
+    status: ApprovalStatus
+    decided_by: PydanticObjectId | None
+    decided_by_email: str
+    decided_at: datetime
+    decision_reason: str | None
+
+
 class ApprovalStore(Protocol):
     """Persistence operations the approval service depends on."""
 
@@ -280,6 +294,9 @@ class ApprovalStore(Protocol):
 
     async def save(self, approval: RestoreApproval) -> None:
         """Persist changes to an existing approval request."""
+
+    async def record_decision(self, approval: RestoreApproval, decision: ApprovalDecision) -> bool:
+        """Store a decision on a request still pending and not the decider's own; ``False`` otherwise."""
 
     async def page(
         self,
@@ -347,6 +364,34 @@ class BeanieApprovalStore:
         approval.touch()
         await approval.save()
 
+    async def record_decision(self, approval: RestoreApproval, decision: ApprovalDecision) -> bool:
+        """Store a decision on a request still pending and not the decider's own; ``False`` otherwise.
+
+        One conditional update, so of two administrators deciding at once the
+        first decision stands and the second matches nothing, whatever each
+        read. The requester is checked again in the same write: a request
+        reopened by the decider since their read is no longer theirs to decide.
+        """
+        result = await RestoreApproval.get_pymongo_collection().update_one(
+            {
+                "_id": approval.id,
+                "organization_id": approval.organization_id,
+                "status": ApprovalStatus.PENDING,
+                "requested_by": {"$ne": decision.decided_by},
+            },
+            {
+                "$set": {
+                    "status": decision.status,
+                    "decided_by": decision.decided_by,
+                    "decided_by_email": decision.decided_by_email,
+                    "decided_at": decision.decided_at,
+                    "decision_reason": decision.decision_reason,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+        return result.matched_count == 1
+
     async def page(
         self,
         organization_id: PydanticObjectId,
@@ -407,7 +452,7 @@ class ApprovalService:
         plan_hash = compute_plan_hash(operation.actions)
         existing = await self.for_operation(operation)
         if existing is not None:
-            return await self._reopen(existing, policy, triggered, plan_hash, operation)
+            return await self._reopen(existing, policy, triggered, plan_hash, operation, requester=requester)
 
         approval = await self._store.insert(
             ApprovalDraft(
@@ -442,19 +487,28 @@ class ApprovalService:
         if approval is None:
             msg = "Approval request not found"
             raise ApprovalError(msg)
-        if decider.id is not None and approval.requested_by == decider.id:
-            msg = "The requester cannot approve or reject their own restore request"
-            raise SelfApprovalError(msg)
-        if approval.status is not ApprovalStatus.PENDING:
-            msg = f"This approval request is already {approval.status}"
-            raise ApprovalError(msg)
+        _refuse_undecidable(approval, decider)
 
-        approval.status = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
-        approval.decided_by = decider.id
-        approval.decided_by_email = decider.email
-        approval.decided_at = utc_now()
-        approval.decision_reason = reason
-        await self._store.save(approval)
+        decision = ApprovalDecision(
+            status=ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED,
+            decided_by=decider.id,
+            decided_by_email=decider.email,
+            decided_at=utc_now(),
+            decision_reason=reason,
+        )
+        if not await self._store.record_decision(approval, decision):
+            # Changed since it was read: decided by another administrator, or
+            # reopened by this one. The stored request says which.
+            stored = await self._store.find_by_id(organization_id, approval_id)
+            if stored is not None:
+                _refuse_undecidable(stored, decider)
+            msg = "This approval request changed while it was being decided; review it again"
+            raise ApprovalError(msg)
+        approval.status = decision.status
+        approval.decided_by = decision.decided_by
+        approval.decided_by_email = decision.decided_by_email
+        approval.decided_at = decision.decided_at
+        approval.decision_reason = decision.decision_reason
         return approval
 
     async def carry_to_prepared(self, source: RestoreOperation, prepared: RestoreOperation) -> CarryOutcome:
@@ -558,20 +612,32 @@ class ApprovalService:
         raise ApprovalRequiredError(_BLOCKED_MESSAGES[approval.status])
 
     # -------------------------------------------------------------- internal
-    async def _reopen(
+    async def _reopen(  # noqa: PLR0913 - the request's evaluated policy travels with it
         self,
         approval: RestoreApproval,
         policy: ApprovalPolicy,
         triggered: Sequence[TriggeredRule],
         plan_hash: str,
         operation: RestoreOperation,
+        *,
+        requester: User,
     ) -> RestoreApproval:
+        """Open an expired or invalidated request again, as a new request by whoever asked.
+
+        Asking again is requesting, so the caller becomes the requester: the
+        self-approval rule then holds against them, and the audit names them.
+        """
         if approval.status in {ApprovalStatus.PENDING, ApprovalStatus.APPROVED}:
             return approval
         if approval.status is ApprovalStatus.REJECTED:
             msg = "This restore plan was rejected; create a new plan to request approval again"
             raise ApprovalError(msg)
+        if requester.id is None:
+            msg = "Approval requires persisted organization, plan, and requester identifiers"
+            raise ApprovalError(msg)
         approval.status = ApprovalStatus.PENDING
+        approval.requested_by = requester.id
+        approval.requested_by_email = requester.email
         approval.plan_hash = plan_hash
         approval.intent_hash = compute_intent_hash(operation)
         approval.action_signature = compute_action_signature(operation.actions)
@@ -643,6 +709,16 @@ class ApprovalService:
         approval.status = resolved
         await self._store.save(approval)
         return approval
+
+
+def _refuse_undecidable(approval: RestoreApproval, decider: User) -> None:
+    """Refuse a decision by the request's own requester, or on a request no longer pending."""
+    if decider.id is not None and approval.requested_by == decider.id:
+        msg = "The requester cannot approve or reject their own restore request"
+        raise SelfApprovalError(msg)
+    if approval.status is not ApprovalStatus.PENDING:
+        msg = f"This approval request is already {approval.status}"
+        raise ApprovalError(msg)
 
 
 _BLOCKED_MESSAGES: dict[ApprovalStatus, str] = {

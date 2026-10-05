@@ -233,6 +233,17 @@ class _MemoryApprovalStore:
     async def save(self, approval):
         approval.touch()
 
+    async def record_decision(self, approval, decision):
+        if approval.status is not ApprovalStatus.PENDING or approval.requested_by == decision.decided_by:
+            return False
+        approval.status = decision.status
+        approval.decided_by = decision.decided_by
+        approval.decided_by_email = decision.decided_by_email
+        approval.decided_at = decision.decided_at
+        approval.decision_reason = decision.decision_reason
+        approval.touch()
+        return True
+
     async def page(self, organization_id, status, *, skip, limit):
         matched = [
             item
@@ -311,6 +322,7 @@ def test_plan_hash_ignores_execution_progress() -> None:
         lambda action: setattr(action, "protected_configuration", {"ssid": "Guest"}),
         lambda action: setattr(action, "reason", RestoreActionReason.REFERENCE_REWRITE),
         lambda action: setattr(action, "written_configuration", {"ssid": "Corp"}),
+        lambda action: setattr(action, "reference_remap", {"old-template": "live-template"}),
     ],
 )
 def test_any_plan_change_changes_the_hash(mutate) -> None:
@@ -486,6 +498,26 @@ async def test_an_expired_approval_blocks_execution() -> None:
     with pytest.raises(ApprovalRequiredError, match="expired"):
         await service.assert_execution_allowed(_organization(policy), operation)
     assert approval.status is ApprovalStatus.EXPIRED
+
+
+async def test_whoever_requests_an_expired_approval_again_becomes_its_requester() -> None:
+    policy = ApprovalPolicy(enabled=True)
+    operation = _operation([_action(scope="org")])
+    service, _, notifications = _service(operation)
+    first = await service.request(_organization(policy), operation, _requester())
+    first.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+
+    reopened = await service.request(_organization(policy), operation, _approver())
+
+    assert reopened.id == first.id
+    assert reopened.status is ApprovalStatus.PENDING
+    assert (reopened.requested_by, reopened.requested_by_email) == (APPROVER_ID, "approver@example.com")
+    assert len(notifications.requested) == 2
+    assert reopened.id is not None
+    # Asking again is requesting: the same administrator cannot then decide it (spec §4.3).
+    with pytest.raises(SelfApprovalError):
+        await service.decide(ORGANIZATION_ID, reopened.id, _approver(), approved=True)
+    assert reopened.status is ApprovalStatus.PENDING
 
 
 async def test_execution_is_blocked_when_policy_requires_an_absent_approval() -> None:
@@ -887,8 +919,8 @@ class _PreparedHistory:
             stored = history.versions.get(logical_id)
             return stored[-1] if stored else None
 
-        async def _version_at(logical_id, target_at):
-            earlier = [item for item in history.versions.get(logical_id, []) if item.observed_at <= target_at]
+        async def _version_at(logical_id, instant):
+            earlier = [item for item in history.versions.get(logical_id, []) if item.observed_at <= instant.at]
             return earlier[-1] if earlier else None
 
         async def _related(_planner, _organization_id, logical, _version, *, include_contained):
@@ -911,6 +943,7 @@ class _PreparedHistory:
         monkeypatch.setattr(RestorePlanner, "_version_at", staticmethod(_version_at))
         monkeypatch.setattr(RestorePlanner, "_related_logical_objects", _related)
         monkeypatch.setattr(RestorePlanner, "_action_dependencies", AsyncMock(return_value=[]))
+        monkeypatch.setattr(RestorePlanner, "_live_replacements", AsyncMock(return_value={}))
         monkeypatch.setattr(baseline_module, "latest_version", _latest)
         monkeypatch.setattr(
             baseline_module,

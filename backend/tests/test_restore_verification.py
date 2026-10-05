@@ -488,6 +488,39 @@ async def test_a_stale_replaced_uuid_reference_fails_verification() -> None:
     assert "Corp firewall rule" in (reference_check.detail or "")
 
 
+async def test_ids_the_plan_remapped_are_checked_like_the_ids_this_run_replaced() -> None:
+    searched: list[set[str]] = []
+
+    async def _stale(_organization_id, replaced):
+        searched.append(set(replaced))
+        return ["Corp WLAN"]
+
+    written = _action(0, RestoreActionType.UPDATE, status=RestoreActionStatus.COMPLETED)
+    written.reference_remap = {"old-template": "live-template"}
+    # A remap planned for an action that never ran says nothing about what was written.
+    unattempted = _action(1, RestoreActionType.UPDATE)
+    unattempted.reference_remap = {"other-old": "other-live"}
+    service = RestoreVerificationService(
+        _MemoryStateStore(),
+        stale_references=_stale,
+        queue_snapshot=AsyncMock(return_value="snapshot-task"),
+        reopen_monitoring=AsyncMock(return_value=[]),
+    )
+
+    result = await service.verify(
+        _FakeClient({"mist-0": {"name": "wlan-0"}}),
+        _organization(),
+        _operation([written, unattempted]),
+        id_map={},
+        applied={0: {"name": "wlan-0"}},
+    )
+
+    assert searched == [{"old-template"}]
+    reference_check = next(check for check in result.checks if check.label == "Replaced UUID references")
+    assert reference_check.status == "failed"
+    assert result.verified is False
+
+
 async def test_verification_queues_a_snapshot_and_reopens_monitoring() -> None:
     store = _MemoryStateStore()
     service = _build_verifier(store=store, sessions=["session-1", "session-2"])
@@ -543,7 +576,7 @@ async def test_monitoring_reopens_at_the_site_the_object_now_lives_in() -> None:
     service = RestoreVerificationService(
         _MemoryStateStore(),
         stale_references=AsyncMock(return_value=[]),
-        queue_snapshot=lambda _organization_id: None,
+        queue_snapshot=AsyncMock(return_value=None),
         reopen_monitoring=_reopen,
     )
 
@@ -573,7 +606,7 @@ def _build_verifier(
     return RestoreVerificationService(
         store or _MemoryStateStore(),
         stale_references=_stale,
-        queue_snapshot=lambda _organization_id: "snapshot-task",
+        queue_snapshot=AsyncMock(return_value="snapshot-task"),
         reopen_monitoring=_reopen,
     )
 

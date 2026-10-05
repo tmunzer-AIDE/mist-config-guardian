@@ -862,6 +862,46 @@ async def test_the_object_a_create_targets_is_not_its_own_collision(monkeypatch:
     assert [entry.order for entry in entries] == [0]
 
 
+def _replacement_and_original(*, delete_first: bool) -> RestoreOperation:
+    """An exact plan deleting the hand-made replacement (manual-uuid) and recreating the original under its name."""
+    replacement = _action(0 if delete_first else 1, RestoreActionType.DELETE)
+    replacement.current_mist_id = "manual-uuid"
+    replacement.protected_configuration = {"name": "wlan-0"}
+    original = _action(1 if delete_first else 0, RestoreActionType.CREATE)
+    original.current_mist_id = "original-uuid"
+    original.object_name = "wlan-0"
+    original.protected_configuration = {"name": "wlan-0"}
+    return _operation(sorted([replacement, original], key=lambda action: action.order))
+
+
+async def test_a_create_does_not_collide_with_the_object_its_plan_deletes_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    replacement = {"id": "manual-uuid", "name": "wlan-0"}
+    client = _FakeMistClient({"manual-uuid": replacement}, listing={("wlans", "site-a"): [replacement]})
+    operation = _replacement_and_original(delete_first=True)
+    operation.actions[0].expected_current_hash = configuration_hash(replacement, ignored_fields=IGNORED)
+
+    entries = await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+    assert [entry.order for entry in entries] == [0, 1]
+
+
+async def test_a_create_still_collides_with_an_object_its_plan_deletes_only_afterwards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Created first, the object would briefly exist twice; Mist may refuse it or keep both."""
+    monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
+    replacement = {"id": "manual-uuid", "name": "wlan-0"}
+    client = _FakeMistClient({"manual-uuid": replacement}, listing={("wlans", "site-a"): [replacement]})
+    operation = _replacement_and_original(delete_first=False)
+    operation.actions[1].expected_current_hash = configuration_hash(replacement, ignored_fields=IGNORED)
+
+    with pytest.raises(MistMutationError, match="named 'wlan-0' already exists in Mist"):
+        await capture_safety_snapshot(client, _organization(), operation, _vault())
+
+
 async def test_a_create_without_an_explicit_name_cannot_be_checked(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mist_config_guardian_backend.services.restore_compensation.latest_version", _no_stored_version)
     unnamed = _action(0, RestoreActionType.CREATE)
@@ -1677,6 +1717,7 @@ async def _plan_without_read_back(
     *,
     error: str | None = None,
     written: dict[str, object] | None = None,
+    reference_remap: dict[str, str] | None = None,
 ) -> RestoreAction:
     """Compensate a restore whose update of wlan-1 Mist accepted but that was never read back; return its reversal."""
     operation, store = await _applied_plan(monkeypatch)
@@ -1686,6 +1727,8 @@ async def _plan_without_read_back(
     operation.actions[1].error = error
     if written is not None:
         operation.actions[1].protected_configuration = written
+    if reference_remap is not None:
+        operation.actions[1].reference_remap = reference_remap
 
     plan = await RestoreCompensationService(store, _vault()).create_compensation_plan(
         operation=operation, requested_by=ADMINISTRATOR_ID
@@ -1758,6 +1801,32 @@ async def test_a_write_never_read_back_is_compared_with_the_uuids_the_restore_re
     assert assess_live_state(revert, {"name": "wlan-1", "network_id": "new-uuid"}, _vault()) == "proceed"
     with pytest.raises(RestoreDriftError, match="wlan-1 changed after this plan was reviewed"):
         assess_live_state(revert, {"name": "wlan-1", "network_id": "mist-0"}, _vault())
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_write_never_read_back_is_compared_with_the_live_ids_the_plan_remapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The template the restored version names was recreated by an earlier restore.
+    revert = await _plan_without_read_back(
+        monkeypatch,
+        written={"name": "wlan-1", "template_id": "old-template", "network_id": "mist-0"},
+        reference_remap={"old-template": "live-template"},
+    )
+
+    assert revert.written_configuration == {"name": "wlan-1", "template_id": "live-template", "network_id": "new-uuid"}
+
+
+@pytest.mark.usefixtures("offline_documents")
+async def test_a_planned_remap_follows_an_object_this_run_recreated_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Planned when wlan-0 lived as mist-0; this run recreated it as new-uuid.
+    revert = await _plan_without_read_back(
+        monkeypatch,
+        written={"name": "wlan-1", "network_id": "older-uuid"},
+        reference_remap={"older-uuid": "mist-0"},
+    )
+
+    assert revert.written_configuration == {"name": "wlan-1", "network_id": "new-uuid"}
 
 
 def test_a_reversal_whose_written_payload_no_longer_decrypts_is_never_taken_as_unchanged() -> None:

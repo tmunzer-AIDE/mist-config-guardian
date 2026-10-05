@@ -30,7 +30,11 @@ from mist_config_guardian_backend.models.snapshot import (
 )
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.notifications import NotificationService
-from mist_config_guardian_backend.services.restore_compensation import capture_safety_snapshot, recreated_site_ids
+from mist_config_guardian_backend.services.restore_compensation import (
+    capture_safety_snapshot,
+    payload_id_map,
+    recreated_site_ids,
+)
 from mist_config_guardian_backend.services.restore_identity import rekey_logical_object
 from mist_config_guardian_backend.services.restore_lease import (
     ANOTHER_RESTORE_RUNNING,
@@ -763,7 +767,7 @@ class RestoreExecutor:
         payload = prepare_restore_payload(
             configuration,
             excluded_fields=definition.restore_excluded_fields,
-            id_map=id_map,
+            id_map=payload_id_map(action, id_map),
         )
 
         # Guarded, so an operation the janitor closed never reaches Mist again.

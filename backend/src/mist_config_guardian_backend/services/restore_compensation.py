@@ -91,6 +91,17 @@ def recreated_site_ids(actions: Sequence[RestoreAction]) -> frozenset[str]:
     )
 
 
+def payload_id_map(action: RestoreAction, created: Mapping[str, str]) -> dict[str, str]:
+    """The ids one action's payload is rewritten with before it is written.
+
+    ``created`` maps the ids this run recreated to their new ones. The ids the
+    plan remapped name where an object lived at planning; when this run
+    recreated that object again, its new id is followed instead.
+    """
+    planned = {old: created.get(live, live) for old, live in action.reference_remap.items()}
+    return {**planned, **created}
+
+
 async def build_snapshot_entry(  # noqa: PLR0913 - the identifiers differ from the action's once remapped
     action: RestoreAction,
     definition: ObjectDefinition,
@@ -140,12 +151,18 @@ async def capture_safety_snapshot(
 
     A CREATE is also refused when Mist already holds an object of its type and
     name under another UUID: the old UUID being gone does not mean the object
-    is, and creating it again would leave two. Each type is listed once per
-    site however many CREATEs share it.
+    is, and creating it again would leave two. An object the plan deletes
+    before that CREATE is not in the way. Each type is listed once per site
+    however many CREATEs share it.
     """
     entries: list[SafetySnapshotEntry] = []
     listings: dict[tuple[str, str | None], list[dict[str, object]]] = {}
     recreated = recreated_site_ids(operation.actions)
+    deleted_at = {
+        action.current_mist_id: action.order
+        for action in operation.actions
+        if action.action is RestoreActionType.DELETE
+    }
     for action in operation.actions:
         if action.site_mist_id is not None and action.site_mist_id in recreated:
             # Nothing exists under a site this plan has not created yet. The
@@ -166,7 +183,10 @@ async def capture_safety_snapshot(
             # A reversal that finds its work already done is skipped at
             # execution, so it creates nothing that could collide.
             if action.action is RestoreActionType.CREATE and verdict == "proceed":
-                await _refuse_name_collision(client, organization, action, definition, listings)
+                deleted_before = frozenset(mist_id for mist_id, order in deleted_at.items() if order < action.order)
+                await _refuse_name_collision(
+                    client, organization, action, definition, listings, deleted_before=deleted_before
+                )
         except MistMutationError:
             await _log_preflight_diagnostics(operation, action, current, vault)
             raise
@@ -209,12 +229,14 @@ def _same_name_group(
     return True
 
 
-async def _refuse_name_collision(
+async def _refuse_name_collision(  # noqa: PLR0913 - the pass's shared listing and deletes travel with the action
     client: MistMutationClient,
     organization: Organization,
     action: RestoreAction,
     definition: ObjectDefinition,
     listings: dict[tuple[str, str | None], list[dict[str, object]]],
+    *,
+    deleted_before: frozenset[str],
 ) -> None:
     """Refuse to create an object Mist already holds under a new UUID with the same name.
 
@@ -222,7 +244,8 @@ async def _refuse_name_collision(
     reading as missing proves nothing. ``listings`` is shared across the pass so
     each type is listed once per site; narrower groups are filtered in memory.
     The name is read as stored: no name field is ever a sensitive one, so
-    nothing is decrypted to read it.
+    nothing is decrypted to read it. ``deleted_before`` holds the ids the plan
+    deletes ahead of this CREATE, which are gone by the time it runs.
     """
     configuration = action.protected_configuration
     name = restore_name(definition, configuration)
@@ -236,6 +259,7 @@ async def _refuse_name_collision(
     for item in listings[scope]:
         if (
             item.get("id") != action.current_mist_id
+            and item.get("id") not in deleted_before
             and _same_name_group(definition, configuration, item)
             and restore_name(definition, item) == name
         ):
@@ -497,8 +521,9 @@ def _sent_payload(operation: RestoreOperation, action: RestoreAction) -> dict[st
     """Rebuild, still protected, the payload the executor sent for one applied action.
 
     The executor drops the fields Mist manages and rewrites every id that an
-    earlier CREATE of the same run replaced, then writes. The same steps over
-    the stored configuration give what it sent without decrypting a secret.
+    earlier CREATE of the same run replaced, or that the plan remapped, then
+    writes. The same steps over the stored configuration give what it sent
+    without decrypting a secret.
     ``None`` for a type the registry no longer supports, which leaves the
     reversal nothing to compare, so it refuses.
     """
@@ -513,8 +538,9 @@ def _sent_payload(operation: RestoreOperation, action: RestoreAction) -> dict[st
             and earlier.resulting_mist_id is not None
         ):
             id_map[earlier.current_mist_id] = earlier.resulting_mist_id
+    rewrites = payload_id_map(action, id_map)
     return {
-        key: _remapped(value, id_map)
+        key: _remapped(value, rewrites)
         for key, value in action.protected_configuration.items()
         if key not in definition.restore_excluded_fields
     }

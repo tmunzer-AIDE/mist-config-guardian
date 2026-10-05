@@ -5,6 +5,7 @@ from beanie import PydanticObjectId
 
 from mist_config_guardian_backend.models.restore import RestoreAction, RestoreActionType
 from mist_config_guardian_backend.services.restore_planner import (
+    RestorePlanner,
     RestorePlanningError,
     order_restore_actions,
 )
@@ -54,3 +55,33 @@ def test_restore_dependency_cycle_fails_closed() -> None:
 
     with pytest.raises(RestorePlanningError, match="contains a cycle"):
         order_restore_actions(actions)
+
+
+def _site_wlan(action_type: RestoreActionType, ssid: str, *, site: str = "site-1") -> RestoreAction:
+    return RestoreAction(
+        logical_object_id=PydanticObjectId(),
+        source_version_id=PydanticObjectId(),
+        order=0,
+        action=action_type,
+        scope="site",
+        object_type="wlans",
+        object_name=ssid,
+        current_mist_id=str(PydanticObjectId()),
+        site_mist_id=site,
+        protected_configuration={"ssid": ssid},
+    )
+
+
+def test_an_object_is_deleted_before_another_is_created_under_its_name() -> None:
+    replacement = _site_wlan(RestoreActionType.DELETE, "Corp")
+    original = _site_wlan(RestoreActionType.CREATE, "Corp")
+    unrelated = _site_wlan(RestoreActionType.DELETE, "Guest")
+    elsewhere = _site_wlan(RestoreActionType.DELETE, "Corp", site="site-2")
+    actions = [replacement, original, unrelated, elsewhere]
+
+    RestorePlanner._add_name_reuse_dependencies(actions)  # noqa: SLF001
+    ordered = order_restore_actions(actions)
+
+    # Only the object holding the name it needs; another name or another site is not in its way.
+    assert original.depends_on == [replacement.logical_object_id]
+    assert ordered.index(replacement) < ordered.index(original)

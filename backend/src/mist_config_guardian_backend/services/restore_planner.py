@@ -32,6 +32,7 @@ from mist_config_guardian_backend.models.snapshot import (
     LogicalObject,
     ObjectIncarnation,
     ObjectVersion,
+    SnapshotManifest,
 )
 from mist_config_guardian_backend.security.credentials import CredentialDecryptionError, CredentialVault
 from mist_config_guardian_backend.services.approvals import (
@@ -40,7 +41,7 @@ from mist_config_guardian_backend.services.approvals import (
 )
 from mist_config_guardian_backend.snapshots.fingerprint import equivalent
 from mist_config_guardian_backend.snapshots.references import is_restore_reference
-from mist_config_guardian_backend.snapshots.registry import get_definition
+from mist_config_guardian_backend.snapshots.registry import explicit_name, get_definition
 from mist_config_guardian_backend.snapshots.secrets import (
     find_unavailable_secrets,
     format_secret_path,
@@ -438,16 +439,37 @@ async def latest_version(logical_id: PydanticObjectId) -> ObjectVersion | None:
     return await ObjectVersion.find(ObjectVersion.logical_object_id == logical_id).sort("-version").first_or_none()
 
 
+@dataclass(frozen=True)
+class TargetInstant:
+    """The moment a selected version stands for, at which the objects it reaches are judged.
+
+    The collector stamps each version as it reads the object, one after
+    another, so a snapshot spreads over the time it took to run. A version a
+    snapshot recorded stands for everything that snapshot recorded: its instant
+    is the snapshot's completion. While the snapshot has not completed, the
+    versions it recorded so far still count as simultaneous with this one.
+    Any other version stands for the moment it was observed.
+    """
+
+    at: datetime
+    snapshot_id: PydanticObjectId | None = None
+
+
 @dataclass
 class PlanningContext:
-    """Mutable target set while dependencies are expanded."""
+    """Mutable target set while dependencies are expanded.
+
+    ``instants`` holds, for each selected object, the instant the objects it
+    reaches are judged at: a requested version's own, inherited by everything
+    expanded from it.
+    """
 
     organization_id: PydanticObjectId
     selected: dict[PydanticObjectId, ObjectVersion]
     requested_logical_ids: frozenset[PydanticObjectId]
     logical_objects: dict[PydanticObjectId, LogicalObject]
     force_delete: set[PydanticObjectId]
-    target_at: datetime
+    instants: dict[PydanticObjectId, TargetInstant]
     mode: RestoreMode
     reference_rewrites: set[PydanticObjectId] = field(default_factory=set)
 
@@ -513,11 +535,12 @@ class RestorePlanner:
             requested_logical_ids=frozenset(selected),
             logical_objects=logical_objects,
             force_delete=force_delete,
-            target_at=target_at,
+            instants={logical_id: await self._instant_of(version) for logical_id, version in selected.items()},
             mode=mode,
         )
         if include_dependencies:
             await self._expand_dependencies(context)
+            await self._spare_referenced_objects(context)
         await self._mark_selected_reference_rewrites(context)
 
         if self._baseline_reader is not None:
@@ -530,6 +553,7 @@ class RestorePlanner:
             frozenset(context.reference_rewrites),
         )
         self._add_containment_delete_dependencies(actions)
+        self._add_name_reuse_dependencies(actions)
         actions = order_restore_actions(actions)
         preflight_errors = validate_action_capabilities(actions) + unavailable_secret_errors(actions, self._vault)
         triggered = evaluate_approval_policy(self._policy or ApprovalPolicy(), actions, mode)
@@ -561,10 +585,20 @@ class RestorePlanner:
         return operation
 
     async def _expand_dependencies(self, context: PlanningContext) -> None:
-        pending = deque(context.selected.values())
+        # Latest instant first: an object several selections reach is judged
+        # by the latest of them that reaches it, which rolls back and deletes
+        # the least.
+        pending = deque(
+            sorted(
+                context.selected.values(),
+                key=lambda version: context.instants[version.logical_object_id].at,
+                reverse=True,
+            )
+        )
         while pending:
             version = pending.popleft()
             logical = context.logical_objects[version.logical_object_id]
+            instant = context.instants[version.logical_object_id]
             related = await self._related_logical_objects(
                 context.organization_id,
                 logical,
@@ -574,19 +608,21 @@ class RestorePlanner:
             for related_logical in related:
                 if related_logical.id is None or related_logical.id in context.selected:
                     continue
-                target_version = await self._version_at(
-                    related_logical.id,
-                    context.target_at,
-                )
+                target_version = await self._version_at(related_logical.id, instant)
+                if context.mode is RestoreMode.NON_DESTRUCTIVE and (
+                    target_version is None or (target_version.is_deleted and not related_logical.is_deleted)
+                ):
+                    # Absent at the target yet live now: created, or brought
+                    # back, since. A non-destructive plan keeps it (spec §9.1).
+                    continue
                 if target_version is None:
-                    if context.mode is RestoreMode.NON_DESTRUCTIVE:
-                        continue
                     target_version = await self._latest_version(related_logical.id)
                     if target_version is None:
                         continue
                     context.force_delete.add(related_logical.id)
                 context.selected[related_logical.id] = target_version
                 context.logical_objects[related_logical.id] = related_logical
+                context.instants[related_logical.id] = instant
                 pending.append(target_version)
             if logical.is_deleted and not version.is_deleted:
                 reverse_dependents = await self._reverse_dependents(
@@ -601,6 +637,43 @@ class RestorePlanner:
                     context.selected[dependent.id] = current_version
                     context.logical_objects[dependent.id] = dependent
                     context.reference_rewrites.add(dependent.id)
+
+    async def _spare_referenced_objects(self, context: PlanningContext) -> None:
+        """Keep every object that a version this plan leaves in place still references.
+
+        A forced delete only means history holds no version of the object at
+        the instant judged, and history approximates instants: audit events
+        land out of order, and a restore records its writes one after another.
+        A version the plan restores, re-points or keeps that references the
+        object shows it is in use; deleting it would leave that reference
+        dangling. Such an object is dropped from the plan and kept as it is
+        now, and what it references is kept in turn.
+        """
+        kept = [
+            version
+            for logical_id, version in context.selected.items()
+            if logical_id not in context.force_delete and not version.is_deleted
+        ]
+        while kept and context.force_delete:
+            referenced = {
+                reference.target_mist_id
+                for version in kept
+                for reference in version.references
+                if is_restore_reference(reference)
+            }
+            if not referenced:
+                return
+            incarnations = await ObjectIncarnation.find(
+                ObjectIncarnation.organization_id == context.organization_id,
+                {"mist_object_id": {"$in": sorted(referenced)}},
+            ).to_list()
+            kept = []
+            for logical_id in {incarnation.logical_object_id for incarnation in incarnations} & context.force_delete:
+                context.force_delete.discard(logical_id)
+                context.logical_objects.pop(logical_id)
+                spared = context.selected.pop(logical_id)
+                if not spared.is_deleted:
+                    kept.append(spared)
 
     async def _mark_selected_reference_rewrites(self, context: PlanningContext) -> None:
         """Re-point objects the plan holds at their current version at the objects it recreates.
@@ -792,6 +865,11 @@ class RestorePlanner:
                 logical_objects,
                 action_type,
             )
+            reference_remap = (
+                {}
+                if action_type is RestoreActionType.DELETE
+                else await self._live_replacements(organization_id, target, logical_objects, recreated)
+            )
             actions.append(
                 RestoreAction(
                     logical_object_id=logical_id,
@@ -813,10 +891,47 @@ class RestorePlanner:
                     else target.configuration,
                     expected_current_hash=(None if logical.is_deleted else latest.configuration_hash),
                     depends_on=dependencies,
+                    reference_remap=reference_remap,
                     reason=RestoreActionReason.REFERENCE_REWRITE if rewrite else RestoreActionReason.RESTORE,
                 )
             )
         return actions
+
+    @staticmethod
+    async def _live_replacements(
+        organization_id: PydanticObjectId,
+        target: ObjectVersion,
+        logical_objects: dict[PydanticObjectId, LogicalObject],
+        recreated: frozenset[str],
+    ) -> dict[str, str]:
+        """Map each earlier incarnation the version names to the id its object has now.
+
+        An object a restore brought back lives on the same logical object under
+        a new id, yet older versions of what references it still name the old
+        one. The executor only learns the ids its own run creates, so such a
+        reference would be written back dangling. It is remapped when its
+        object is live, or when this plan recreates it, in which case the
+        executor follows the planned id on to the new one.
+        """
+        remap: dict[str, str] = {}
+        for reference in target.references:
+            mist_id = reference.target_mist_id
+            if mist_id in remap or not is_restore_reference(reference):
+                continue
+            incarnation = await ObjectIncarnation.find_one(
+                ObjectIncarnation.organization_id == organization_id,
+                ObjectIncarnation.mist_object_id == mist_id,
+            )
+            if incarnation is None:
+                continue
+            referenced = logical_objects.get(incarnation.logical_object_id) or await LogicalObject.get(
+                incarnation.logical_object_id
+            )
+            if referenced is None or referenced.current_mist_id == mist_id:
+                continue
+            if not referenced.is_deleted or referenced.current_mist_id in recreated:
+                remap[mist_id] = referenced.current_mist_id
+        return remap
 
     @staticmethod
     def _add_containment_delete_dependencies(actions: list[RestoreAction]) -> None:
@@ -838,6 +953,33 @@ class RestorePlanner:
                     if action.logical_object_id != parent.logical_object_id
                 ]
                 parent.depends_on = sorted(set(parent.depends_on) | set(children), key=str)
+
+    @staticmethod
+    def _add_name_reuse_dependencies(actions: list[RestoreAction]) -> None:
+        """Delete an object before another of its type is created under its name.
+
+        Preflight refuses a create whose name a live object already holds, as
+        it would leave two; an object this plan deletes is out of the way only
+        once that delete has run. Names are compared among objects of the same
+        type and site, the widest namespace the preflight check looks in.
+        """
+        deletes = [action for action in actions if action.action is RestoreActionType.DELETE]
+        for create in actions:
+            definition = get_definition(create.scope, create.object_type)
+            if create.action is not RestoreActionType.CREATE or definition is None:
+                continue
+            name = explicit_name(create.protected_configuration, definition)
+            if name is None:
+                continue
+            holders = [
+                delete.logical_object_id
+                for delete in deletes
+                if (delete.scope, delete.object_type, delete.site_mist_id)
+                == (create.scope, create.object_type, create.site_mist_id)
+                and explicit_name(delete.protected_configuration, definition) == name
+            ]
+            if holders:
+                create.depends_on = sorted(set(create.depends_on) | set(holders), key=str)
 
     async def _action_dependencies(
         self,
@@ -896,15 +1038,25 @@ class RestorePlanner:
         return RestoreActionType.UPDATE
 
     @staticmethod
+    async def _instant_of(version: ObjectVersion) -> TargetInstant:
+        """The instant one selected version stands for (see ``TargetInstant``)."""
+        if version.snapshot_id is None:
+            return TargetInstant(at=version.observed_at)
+        manifest = await SnapshotManifest.get(version.snapshot_id)
+        completed_at = None if manifest is None else manifest.completed_at
+        return TargetInstant(at=completed_at or version.observed_at, snapshot_id=version.snapshot_id)
+
+    @staticmethod
     async def _version_at(
         logical_id: PydanticObjectId,
-        target_at: datetime,
+        instant: TargetInstant,
     ) -> ObjectVersion | None:
+        observed: dict[str, object] = {"observed_at": {"$lte": instant.at}}
+        criteria = (
+            observed if instant.snapshot_id is None else {"$or": [observed, {"snapshot_id": instant.snapshot_id}]}
+        )
         return (
-            await ObjectVersion.find(
-                ObjectVersion.logical_object_id == logical_id,
-                {"observed_at": {"$lte": target_at}},
-            )
+            await ObjectVersion.find(ObjectVersion.logical_object_id == logical_id, criteria)
             .sort("-observed_at")
             .first_or_none()
         )

@@ -5,6 +5,7 @@ Skipped unless ``MONGO_TEST_URL`` names a reachable MongoDB.
 
 import os
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -28,6 +29,7 @@ from mist_config_guardian_backend.models.restore import (
 from mist_config_guardian_backend.models.snapshot import LogicalObject, ObjectIncarnation, ObjectVersion, VersionEvent
 from mist_config_guardian_backend.security.credentials import CredentialVault
 from mist_config_guardian_backend.services import restore_executor
+from mist_config_guardian_backend.services.audit_versioning import AuditVersioningService
 from mist_config_guardian_backend.services.restore_compensation import RestoreCompensationService
 from mist_config_guardian_backend.services.restore_executor import RestoreExecutor
 from mist_config_guardian_backend.services.restore_identity import RestoreIdentityConflictError
@@ -35,6 +37,7 @@ from mist_config_guardian_backend.services.restore_planner import RestorePlanner
 from mist_config_guardian_backend.services.restore_verification import RestoreVerificationService
 from mist_config_guardian_backend.services.snapshots import CaptureContext, SnapshotService
 from mist_config_guardian_backend.snapshots.canonical import configuration_hash
+from mist_config_guardian_backend.snapshots.fingerprint import fingerprint
 from mist_config_guardian_backend.snapshots.references import extract_uuid_references
 from mist_config_guardian_backend.snapshots.registry import get_definition
 from mist_config_guardian_backend.snapshots.secrets import reveal_configuration
@@ -642,7 +645,7 @@ def _executor_against(
     store = _MemoryStateStore()
     notifications = _Notifications()
     verifier = RestoreVerificationService(
-        store, queue_snapshot=lambda _organization_id: "snapshot-task", reopen_monitoring=_reopen
+        store, queue_snapshot=AsyncMock(return_value="snapshot-task"), reopen_monitoring=_reopen
     )
     executor = RestoreExecutor(_vault(), store=store, notifications=notifications, verifier=verifier)
     return executor, store, notifications, reopened
@@ -882,6 +885,139 @@ async def test_a_wlan_chosen_with_the_network_it_references_ends_on_the_recreate
     checks = {check.label: check.status for check in state.verification.checks}
     assert checks["Replaced UUID references"] == "ok"
     assert state.verification.verified is True
+
+
+# --------------------------- a WLAN naming a template an earlier restore recreated
+
+
+class _MistObjects:
+    """Mist holding live objects by id, recording every update it accepts."""
+
+    def __init__(self, objects: dict[str, dict[str, object]]) -> None:
+        self.objects = {key: dict(value) for key, value in objects.items()}
+        self.writes: list[tuple[str, str, dict[str, object]]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return
+
+    async def update(self, definition, object_id, configuration, *, org_id, site_id):  # noqa: ARG002
+        self.writes.append((definition.key, object_id, dict(configuration)))
+        self.objects[object_id] = {**configuration, "id": object_id}
+        return dict(self.objects[object_id])
+
+    async def get_current(self, definition, object_id, *, org_id, site_id):  # noqa: ARG002
+        found = self.objects.get(object_id)
+        return None if found is None else dict(found)
+
+
+async def _wlan_before_its_template_was_recreated(
+    organization_id: PydanticObjectId,
+) -> tuple[ObjectVersion, dict[str, object], dict[str, object], str]:
+    """Seed a WLAN whose first version names a template an earlier restore recreated under a new id.
+
+    The template keeps its logical object across that restore; only its first
+    incarnation's id is dead. Returns the WLAN's first version, the live
+    template and WLAN, and the dead id.
+    """
+    old_template, new_template, wlan_id = str(uuid4()), str(uuid4()), str(uuid4())
+    templates = get_definition("org", "templates")
+    wlans = get_definition("org", "wlans")
+    assert templates is not None
+    assert wlans is not None
+    snapshots = SnapshotService(_vault())
+
+    async def capture(definition, configuration) -> None:
+        await snapshots.capture_configuration(
+            organization_id, definition, configuration, CaptureContext(snapshot_id=None, site_id=None)
+        )
+
+    await capture(templates, {"id": old_template, "name": "Corp"})
+    await capture(wlans, {"id": wlan_id, "ssid": "Corp", "template_id": old_template, "vlan_id": 10})
+    template = await LogicalObject.find_one(
+        LogicalObject.organization_id == organization_id, LogicalObject.object_type == "templates"
+    )
+    assert template is not None
+    await AuditVersioningService._tombstone_logical(template, actor=None, audit_id=None)  # noqa: SLF001
+    live_template = {"id": new_template, "name": "Corp"}
+    incarnation = ObjectIncarnation(
+        organization_id=organization_id, logical_object_id=template.id, mist_object_id=new_template, ordinal=2
+    )
+    await incarnation.insert()
+    await ObjectVersion(
+        organization_id=organization_id,
+        logical_object_id=template.id,
+        incarnation_id=incarnation.id,
+        version=3,
+        event=VersionEvent.RESTORED,
+        configuration=live_template,
+        configuration_hash=fingerprint(templates, live_template),
+    ).insert()
+    template.is_deleted = False
+    template.current_mist_id = new_template
+    template.source_key = SnapshotService.source_key(templates, None, new_template)
+    await template.save()
+    # The WLAN was re-pointed by that restore, then edited.
+    await capture(wlans, {"id": wlan_id, "ssid": "Corp", "template_id": new_template, "vlan_id": 10})
+    live_wlan = {"id": wlan_id, "ssid": "Corp", "template_id": new_template, "vlan_id": 20}
+    await capture(wlans, live_wlan)
+    wlan = await LogicalObject.find_one(
+        LogicalObject.organization_id == organization_id, LogicalObject.object_type == "wlans"
+    )
+    assert wlan is not None
+    before_edits = await ObjectVersion.find_one(ObjectVersion.logical_object_id == wlan.id, ObjectVersion.version == 1)
+    assert before_edits is not None
+    return before_edits, live_template, live_wlan, old_template
+
+
+async def test_a_wlan_restored_to_before_its_template_was_recreated_names_the_live_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization_id = PydanticObjectId()
+    before_edits, live_template, live_wlan, old_template = await _wlan_before_its_template_was_recreated(
+        organization_id
+    )
+    new_template, wlan_id = str(live_template["id"]), str(live_wlan["id"])
+
+    operation = await RestorePlanner(store=_MemoryStateStore(), vault=_vault()).create_plan(
+        organization_id=organization_id,
+        requested_by=PydanticObjectId(),
+        version_ids=[before_edits.id],
+        mode=RestoreMode.NON_DESTRUCTIVE,
+        include_dependencies=True,
+    )
+
+    assert operation.preflight_errors == []
+    assert [(action.object_type, action.action, action.reference_remap) for action in operation.actions] == [
+        ("templates", RestoreActionType.UPDATE, {}),
+        ("wlans", RestoreActionType.UPDATE, {old_template: new_template}),
+    ]
+
+    identifier = operation.id
+    assert identifier is not None
+    operation.status = RestoreStatus.QUEUED
+    operation.credential_actor = "admin@example.com"
+    operation.encrypted_delegated_credential = _vault().encrypt_for_context(
+        "api-token", context=f"restore:{identifier}"
+    )
+    operation.delegated_credential_expires_at = datetime.now(UTC) + timedelta(minutes=10)
+    await operation.save()
+    client = _MistObjects({new_template: live_template, wlan_id: live_wlan})
+    executor, store, notifications, _ = _executor_against(monkeypatch, client, organization_id)
+
+    result = await executor.execute(identifier)
+
+    assert notifications.failed == []
+    assert result.status is RestoreStatus.COMPLETED
+    assert client.writes[-1] == ("wlans", wlan_id, {"ssid": "Corp", "template_id": new_template, "vlan_id": 10})
+    state = await store.load(organization_id, identifier)
+    assert state is not None
+    assert state.verification is not None
+    checks = {check.label: (check.status, check.detail) for check in state.verification.checks}
+    # Checked, not skipped: no current object names the dead id.
+    assert checks["Replaced UUID references"] == ("ok", "No current object references the 1 replaced UUIDs")
 
 
 # ------------------------------------------- restored versions and the next backup
