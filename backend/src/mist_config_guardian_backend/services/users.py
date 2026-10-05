@@ -13,7 +13,13 @@ from pymongo.errors import DuplicateKeyError
 
 from mist_config_guardian_backend.config import Settings
 from mist_config_guardian_backend.models.base import utc_now
-from mist_config_guardian_backend.models.user import User, UserRole, UserStatus, write_user_fields
+from mist_config_guardian_backend.models.user import (
+    User,
+    UserRole,
+    UserStatus,
+    write_user_fields,
+    write_user_fields_if,
+)
 from mist_config_guardian_backend.schemas.auth import BootstrapAdminRequest
 from mist_config_guardian_backend.security.auth import hash_password, verify_password
 
@@ -184,19 +190,35 @@ class UserService:
         return user, token
 
     async def resend_invitation(self, user_id: PydanticObjectId) -> tuple[User, str]:
-        """Replace a pending invitation token and return the new one."""
+        """Replace a pending invitation token, or reopen a revoked one, and return the new token."""
         user = await self._require_user(user_id)
-        if user.status is not UserStatus.INVITED:
+        revoked_at = user.invitation_revoked_at
+        if user.status is not UserStatus.INVITED and revoked_at is None:
             msg = "This account has already accepted its invitation"
             raise InvitationError(msg)
 
         token = secrets.token_urlsafe(_INVITATION_TOKEN_BYTES)
-        user.invitation_token_hash = hash_opaque_token(token)
-        await write_user_fields(
+        changes: dict[str, object] = {
+            "invitation_token_hash": hash_opaque_token(token),
+            "invitation_expires_at": utc_now() + timedelta(days=INVITATION_LIFETIME_DAYS),
+        }
+        if user.status is UserStatus.INVITED:
+            await write_user_fields(user, **changes)
+            return user, token
+        # A revoked invitation becomes a pending one again, but only while it
+        # is still the revocation this request read: a concurrent resend may
+        # already have reopened it, and its invitation have been accepted.
+        reopened = await write_user_fields_if(
             user,
-            invitation_token_hash=user.invitation_token_hash,
-            invitation_expires_at=utc_now() + timedelta(days=INVITATION_LIFETIME_DAYS),
+            {"invitation_revoked_at": revoked_at},
+            status=UserStatus.INVITED,
+            is_active=False,
+            invitation_revoked_at=None,
+            **changes,
         )
+        if not reopened:
+            msg = "This account changed while its invitation was being sent; reload it and try again"
+            raise InvitationError(msg)
         return user, token
 
     async def accept_invitation(
@@ -235,7 +257,12 @@ class UserService:
         chosen = (display_name or "").strip()
         if chosen:
             changes["display_name"] = chosen
-        await write_user_fields(user, **changes)
+        # Only while the invitation is still the one presented. Revoking it
+        # after this request read the account clears the token, and an
+        # activation written over that would bring back an account its
+        # administrator had just been told was deactivated.
+        if not await write_user_fields_if(user, {"invitation_token_hash": digest}, **changes):
+            raise InvitationError(invalid)
         return user
 
     async def update_user(
@@ -254,6 +281,7 @@ class UserService:
         role it had read on the way in.
         """
         user = await self._require_user(user_id)
+        previous_role = user.role
         changes: dict[str, object] = {}
         if role is not None and role is not user.role:
             await self._guard_administrator_removal(user, actor=actor)
@@ -264,15 +292,42 @@ class UserService:
             changes["display_name"] = user.display_name
         if changes:
             await write_user_fields(user, **changes)
+        if previous_role is UserRole.ADMINISTRATOR and user.role is not UserRole.ADMINISTRATOR:
+            await self._keep_an_administrator(user, written={"role": user.role}, previous={"role": previous_role})
         return user
 
     async def deactivate(self, user_id: PydanticObjectId, *, actor: User) -> User:
-        """Disable an account, keeping at least one active administrator."""
+        """Disable an account, keeping at least one active administrator.
+
+        An account still waiting on its invitation is inactive already, so for
+        it this revokes the invitation: the token is cleared and the link that
+        was sent stops working.
+        """
         user = await self._require_user(user_id)
+        if user.status is UserStatus.INVITED:
+            # `is_active` is named although an invitation leaves it false: an
+            # acceptance that landed after this request read the account has
+            # set it, and the account must still end up deactivated.
+            await write_user_fields(
+                user,
+                is_active=False,
+                status=UserStatus.DEACTIVATED,
+                invitation_token_hash=None,
+                invitation_expires_at=None,
+                invitation_revoked_at=utc_now(),
+            )
+            return user
         if not user.is_active:
             return user
         await self._guard_administrator_removal(user, actor=actor)
+        previous_status = user.status
         await write_user_fields(user, is_active=False, status=UserStatus.DEACTIVATED)
+        if user.role is UserRole.ADMINISTRATOR:
+            await self._keep_an_administrator(
+                user,
+                written={"is_active": False, "status": UserStatus.DEACTIVATED},
+                previous={"is_active": True, "status": previous_status},
+            )
         return user
 
     async def activate(self, user_id: PydanticObjectId) -> User:
@@ -280,6 +335,11 @@ class UserService:
         user = await self._require_user(user_id)
         if user.status is UserStatus.INVITED:
             msg = "This account has not accepted its invitation yet"
+            raise InvitationError(msg)
+        if user.invitation_revoked_at is not None:
+            # Nobody ever chose this account's password: activating it would
+            # leave an account no one can sign in to except through Mist.
+            msg = "This invitation was revoked before it was accepted; send a new invitation instead"
             raise InvitationError(msg)
         await write_user_fields(user, is_active=True, status=UserStatus.ACTIVE)
         return user
@@ -309,6 +369,29 @@ class UserService:
         if remaining == 0:
             msg = "At least one active administrator must remain"
             raise LastAdministratorError(msg)
+
+    async def _keep_an_administrator(
+        self,
+        user: User,
+        *,
+        written: dict[str, object],
+        previous: dict[str, object],
+    ) -> None:
+        """Undo an administrator's removal that left the deployment without one.
+
+        The guard counts the other administrators before the write, and two
+        administrators removing each other at once each count the other one.
+        Counting again once the write has landed closes that gap: a request
+        that now finds nobody puts back what it changed, only where nothing has
+        changed it since, and is refused. When both find nobody, both put
+        their change back and both administrators remain.
+        """
+        remaining = await User.find({"role": UserRole.ADMINISTRATOR.value, "is_active": True}).count()
+        if remaining > 0:
+            return
+        await write_user_fields_if(user, written, **previous)
+        msg = "At least one active administrator must remain"
+        raise LastAdministratorError(msg)
 
     @staticmethod
     def _list_criteria(

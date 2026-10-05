@@ -123,20 +123,23 @@ class DatabaseWebAuthnChallengeStore:
     async def take(self, handle: str, *, purpose: str, user_id: str | None = None) -> StoredChallenge:
         """Consume a challenge exactly once, or fail when it does not apply.
 
-        The delete is what makes consumption single-use: a replayed handle finds
-        nothing to delete and is refused, even under concurrent requests.
+        The record is read and deleted in one operation, which is what makes
+        consumption single-use: a replayed handle finds nothing to delete and
+        is refused, even under concurrent requests. Reading it first and
+        deleting it afterwards let every request that read it before the
+        first delete go on to use it.
         """
-        record = await WebAuthnChallenge.find_one(WebAuthnChallenge.handle == handle)
+        record = await WebAuthnChallenge.get_pymongo_collection().find_one_and_delete({"handle": handle})
         if record is None:
             raise WebAuthnError(_CHALLENGE_UNUSABLE)
-        await record.delete()
-        if record.purpose != purpose or record.user_id != user_id or _aware(record.expires_at) <= utc_now():
+        expires_at = _aware(record["expires_at"])
+        if record["purpose"] != purpose or record.get("user_id") != user_id or expires_at <= utc_now():
             raise WebAuthnError(_CHALLENGE_UNUSABLE)
         return StoredChallenge(
-            challenge=base64.urlsafe_b64decode(record.challenge.encode()),
-            purpose=record.purpose,
-            user_id=record.user_id,
-            expires_at=_aware(record.expires_at),
+            challenge=base64.urlsafe_b64decode(str(record["challenge"]).encode()),
+            purpose=record["purpose"],
+            user_id=record.get("user_id"),
+            expires_at=expires_at,
         )
 
 

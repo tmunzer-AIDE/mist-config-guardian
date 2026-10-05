@@ -5,9 +5,11 @@ import hmac
 import io
 import secrets
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import pyotp
 import segno
+from pyotp.utils import strings_equal
 
 RECOVERY_CODE_COUNT = 10
 _RECOVERY_GROUP_LENGTH = 5
@@ -27,10 +29,25 @@ def totp_provisioning_uri(secret: str, *, account_name: str, issuer: str) -> str
 
 def verify_totp(secret: str, code: str) -> bool:
     """Verify a submitted TOTP code against the enrolled shared secret."""
+    return totp_time_step(secret, code) is not None
+
+
+def totp_time_step(secret: str, code: str) -> int | None:
+    """Return the time step a submitted code belongs to, or ``None`` when it matches none.
+
+    The step is what makes a code single-use: a caller that records the last
+    step it accepted can refuse that code, and every earlier one, while they
+    are still inside the verification window.
+    """
     normalized = "".join(character for character in code if character.isdigit())
     if not normalized:
-        return False
-    return pyotp.TOTP(secret).verify(normalized, valid_window=_TOTP_VALID_WINDOW)
+        return None
+    totp = pyotp.TOTP(secret)
+    current = totp.timecode(datetime.now(UTC))
+    for step in range(current - _TOTP_VALID_WINDOW, current + _TOTP_VALID_WINDOW + 1):
+        if strings_equal(normalized, totp.generate_otp(step)):
+            return step
+    return None
 
 
 def generate_recovery_codes(count: int = RECOVERY_CODE_COUNT) -> list[str]:

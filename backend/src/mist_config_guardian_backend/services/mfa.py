@@ -30,6 +30,7 @@ from mist_config_guardian_backend.models.challenge import LoginChallenge, Pendin
 from mist_config_guardian_backend.models.user import (
     TotpEnrollment,
     User,
+    claim_totp_step,
     consume_user_recovery_code,
     write_user_fields,
 )
@@ -42,6 +43,7 @@ from mist_config_guardian_backend.security.totp import (
     hash_recovery_code,
     totp_provisioning_uri,
     totp_qr_svg,
+    totp_time_step,
     verify_totp,
 )
 from mist_config_guardian_backend.services.sessions import SessionService
@@ -160,8 +162,8 @@ class LoginChallengeStorage(Protocol):
         """Count one attempt and return the total, or ``None`` for an unknown or expired handle."""
         ...
 
-    async def discard(self, handle: str) -> None:
-        """Forget a challenge, whether completed or exhausted."""
+    async def discard(self, handle: str) -> bool:
+        """Forget a challenge, whether completed or exhausted; ``False`` when it was already gone."""
         ...
 
 
@@ -184,9 +186,9 @@ class LoginChallengeStore:
         entry.attempts += 1
         return entry.attempts
 
-    async def discard(self, handle: str) -> None:
+    async def discard(self, handle: str) -> bool:
         """Forget a challenge."""
-        self._entries.pop(handle, None)
+        return self._entries.pop(handle, None) is not None
 
     def reset(self) -> None:
         """Forget every challenge."""
@@ -209,9 +211,10 @@ class DatabaseLoginChallengeStore:
         )
         return int(document["attempts"]) if document is not None else None
 
-    async def discard(self, handle: str) -> None:
-        """Forget a challenge."""
-        await LoginChallenge.find(LoginChallenge.handle == handle).delete()
+    async def discard(self, handle: str) -> bool:
+        """Forget a challenge; only one of any number of concurrent calls sees ``True``."""
+        result = await LoginChallenge.get_pymongo_collection().delete_one({"handle": handle})
+        return result.deleted_count == 1
 
 
 @dataclass(frozen=True)
@@ -310,17 +313,20 @@ class DatabasePendingTotpEnrollmentStore:
         )
 
     async def take(self, user_id: str) -> str | None:
-        """Consume an unconfirmed enrollment, if one is still valid."""
-        record = await PendingTotpEnrollment.find_one(
-            PendingTotpEnrollment.user_id == PydanticObjectId(user_id),
+        """Consume an unconfirmed enrollment, if one is still valid.
+
+        Read and deleted in one operation, so two confirmations racing for the
+        same enrollment cannot both receive it.
+        """
+        record = await PendingTotpEnrollment.get_pymongo_collection().find_one_and_delete(
+            {"user_id": PydanticObjectId(user_id)},
         )
         if record is None:
             return None
-        await record.delete()
-        expires_at = record.expires_at
+        expires_at = record["expires_at"]
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
-        return None if expires_at <= utc_now() else record.encrypted_secret
+        return None if expires_at <= utc_now() else str(record["encrypted_secret"])
 
     async def discard(self, user_id: str) -> None:
         """Drop any unconfirmed enrollment for a user."""
@@ -420,11 +426,18 @@ class MfaService:
         return codes
 
     # ----------------------------------------------------------- verification
-    def verify_totp_code(self, user: User, code: str) -> bool:
-        """Check a submitted authenticator code against the enrolled secret."""
+    async def verify_totp_code(self, user: User, code: str) -> bool:
+        """Accept an authenticator code once, against the enrolled secret.
+
+        A code is spent by the first request that presents it: it, and every
+        code from an earlier time step, is refused from then on.
+        """
         if user.totp is None:
             return False
-        return verify_totp(self._decrypt(user.totp.encrypted_secret), code)
+        step = totp_time_step(self._decrypt(user.totp.encrypted_secret), code)
+        if step is None:
+            return False
+        return await claim_totp_step(user, step)
 
     async def consume_recovery_code(self, user: User, code: str) -> bool:
         """Spend a single-use recovery code, removing it from the account.
@@ -439,7 +452,7 @@ class MfaService:
 
     async def verify_second_factor(self, user: User, code: str) -> bool:
         """Accept either a valid authenticator code or an unused recovery code."""
-        if self.verify_totp_code(user, code):
+        if await self.verify_totp_code(user, code):
             return True
         return await self.consume_recovery_code(user, code)
 
@@ -484,9 +497,14 @@ class MfaService:
             return False
         return True
 
-    async def consume_login_challenge(self, handle: str) -> None:
-        """Retire a challenge the sign-in it guarded has completed."""
-        await self._login_challenges.discard(handle)
+    async def consume_login_challenge(self, handle: str) -> bool:
+        """Retire a challenge the sign-in it guarded has completed.
+
+        ``False`` when another request retired it first. Two submissions of one
+        challenge can both pass the attempt count and both present a valid
+        code; only the one that retires the challenge may sign in.
+        """
+        return await self._login_challenges.discard(handle)
 
     # --------------------------------------------------------------- internals
     def _decrypt(self, encrypted_secret: str) -> str:

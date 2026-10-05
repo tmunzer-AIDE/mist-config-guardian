@@ -11,7 +11,6 @@ from mist_config_guardian_backend.api.dependencies import (
     get_session_service,
     get_user_service,
 )
-from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.integrations.mist import (
     MistMfaRequiredError,
     MistVerificationError,
@@ -30,7 +29,6 @@ from mist_config_guardian_backend.schemas.auth import (
     UserResponse,
 )
 from mist_config_guardian_backend.schemas.mist_login import MistLoginRequest
-from mist_config_guardian_backend.security.auth import create_access_token
 from mist_config_guardian_backend.security.webauthn import WebAuthnError
 from mist_config_guardian_backend.services.mfa import (
     ChallengeTokenError,
@@ -100,17 +98,16 @@ async def login(  # noqa: PLR0913, PLR0917 - one dependency per collaborating se
     sessions: Annotated[SessionService, Depends(get_session_service)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
-    settings: Annotated[Settings, Depends(get_settings)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> MfaChallengeResponse | LoginSuccessResponse:
     """Authenticate a local account with an email address and password.
 
-    A successful sign-in always sets the browser session and CSRF cookies and
-    additionally returns a bearer access token, so command-line callers can use
-    the same endpoint. Accounts with an authenticator enrolled receive an
-    ``mfa_required`` challenge instead and get no session until they complete
-    ``POST /auth/login/mfa``. Failures are indistinguishable whether or not the
-    email address exists.
+    A successful sign-in sets the browser session and CSRF cookies, and the
+    session is the credential: the response carries no bearer token, which
+    signing out could not have revoked. Accounts with an authenticator
+    enrolled receive an ``mfa_required`` challenge instead and get no session
+    until they complete ``POST /auth/login/mfa``. Failures are
+    indistinguishable whether or not the email address exists.
     """
     account = throttle.account(form.username)
     address = throttle.address(request)
@@ -139,7 +136,6 @@ async def login(  # noqa: PLR0913, PLR0917 - one dependency per collaborating se
         users=users,
         sessions=sessions,
         passkeys=passkeys,
-        settings=settings,
         mfa_verified=False,
     )
 
@@ -153,7 +149,6 @@ async def mist_login(  # noqa: PLR0913, PLR0917
     sessions: Annotated[SessionService, Depends(get_session_service)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
-    settings: Annotated[Settings, Depends(get_settings)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
     mist: Annotated[MistVerificationService, Depends(get_mist_verification_service)],
 ) -> MfaChallengeResponse | LoginSuccessResponse:
@@ -185,7 +180,6 @@ async def mist_login(  # noqa: PLR0913, PLR0917
         users=users,
         sessions=sessions,
         passkeys=passkeys,
-        settings=settings,
         mfa_verified=False,
     )
 
@@ -199,7 +193,6 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
     sessions: Annotated[SessionService, Depends(get_session_service)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
-    settings: Annotated[Settings, Depends(get_settings)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> LoginSuccessResponse:
     """Complete a sign-in with an authenticator code or a single-use recovery code.
@@ -227,7 +220,11 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
     user = await users.get_by_id(challenge.user_id)
     if user is None or not user.is_active or not await mfa.verify_second_factor(user, payload.code):
         raise rejected
-    await mfa.consume_login_challenge(challenge.handle)
+    # Retired before the session exists, and by one request only: submissions
+    # racing on one challenge all pass the attempt count, and any of them can
+    # carry a valid code.
+    if not await mfa.consume_login_challenge(challenge.handle):
+        raise rejected
     await throttle.succeeded(second_factor)
     await throttle.release(address)
     return await _complete_sign_in(
@@ -237,7 +234,6 @@ async def complete_mfa_login(  # noqa: PLR0913, PLR0917 - one dependency per col
         users=users,
         sessions=sessions,
         passkeys=passkeys,
-        settings=settings,
         mfa_verified=True,
     )
 
@@ -253,12 +249,13 @@ async def passkey_authentication_options(
     The challenge itself stays on the server; the returned token only names it.
     Starting a ceremony therefore allocates a record per call, which an
     anonymous caller could repeat without limit, so beginning one is counted
-    against the address the way completing one already is.
+    against the address. It is counted in a scope of its own: a start checks
+    no credential, and must not spend the budget that the sign-in attempts of
+    everyone behind the same address share.
     """
-    address = throttle.address(request)
     # Reserved and kept: starting a ceremony is itself the work being limited,
     # so a successful start counts like any other.
-    await reserve_or_raise(throttle, address)
+    await reserve_or_raise(throttle, throttle.ceremony(request))
     options, challenge_token = await passkeys.begin_authentication()
     return PasskeyAuthenticationOptionsResponse(challenge_token=challenge_token, options=options)
 
@@ -271,7 +268,6 @@ async def verify_passkey_authentication(  # noqa: PLR0913, PLR0917 - one depende
     users: Annotated[UserService, Depends(get_user_service)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
     passkeys: Annotated[PasskeyService, Depends(get_passkey_service)],
-    settings: Annotated[Settings, Depends(get_settings)],
     mfa: Annotated[MfaService, Depends(get_mfa_service)],
     throttle: Annotated[ThrottleService, Depends(get_throttle_service)],
 ) -> MfaChallengeResponse | LoginSuccessResponse:
@@ -309,7 +305,6 @@ async def verify_passkey_authentication(  # noqa: PLR0913, PLR0917 - one depende
         users=users,
         sessions=sessions,
         passkeys=passkeys,
-        settings=settings,
         mfa_verified=authenticated.user_verified,
     )
 
@@ -350,7 +345,6 @@ async def _complete_sign_in(  # noqa: PLR0913 - a sign-in touches every collabor
     users: UserService,
     sessions: SessionService,
     passkeys: PasskeyService,
-    settings: Settings,
     mfa_verified: bool,
 ) -> LoginSuccessResponse:
     """Start a session, stamp the sign-in, and build the shared success body."""
@@ -362,9 +356,6 @@ async def _complete_sign_in(  # noqa: PLR0913 - a sign-in touches every collabor
         mfa_verified=mfa_verified,
     )
     await users.record_login(user)
-    token, expires_in = create_access_token(user, settings)
     return LoginSuccessResponse(
         user=UserResponse.from_document(user, passkey_count=await passkeys.count_for_user(user.id)),
-        access_token=token,
-        expires_in=expires_in,
     )

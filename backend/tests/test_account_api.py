@@ -1,5 +1,6 @@
 """Signed-in account API tests."""
 
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -14,7 +15,7 @@ from mist_config_guardian_backend.config import Settings, get_settings
 from mist_config_guardian_backend.main import create_app
 from mist_config_guardian_backend.models.base import utc_now
 from mist_config_guardian_backend.models.session import UserSession
-from mist_config_guardian_backend.models.user import User, UserRole, WebAuthnCredential
+from mist_config_guardian_backend.models.user import TotpEnrollment, User, UserRole, WebAuthnCredential
 from mist_config_guardian_backend.security import webauthn as webauthn_security
 from mist_config_guardian_backend.security.auth import hash_password, verify_password
 from mist_config_guardian_backend.security.totp import RECOVERY_CODE_COUNT, hash_recovery_code
@@ -465,7 +466,9 @@ async def test_a_confirmed_step_up_gives_back_the_shared_address_budget() -> Non
         secret = enrolled.json()["secret"]
         await client.post("/api/v1/account/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
         first = await client.post("/api/v1/account/mfa/step-up", json={"code": pyotp.TOTP(secret).now()})
-        second = await client.post("/api/v1/account/mfa/step-up", json={"code": pyotp.TOTP(secret).now()})
+        # A code is accepted once, so the second confirmation brings the next one.
+        following = pyotp.TOTP(secret).at(time.time() + 30)
+        second = await client.post("/api/v1/account/mfa/step-up", json={"code": following})
 
     assert first.status_code == 200
     # The address budget is one, and the first success spent none of it.
@@ -502,7 +505,9 @@ async def test_totp_confirm_rejects_a_wrong_code() -> None:
 async def test_totp_removal_and_recovery_code_rotation_need_the_password() -> None:
     app = create_app(_settings())
     user = _user()
-    app.dependency_overrides[require_viewer] = _signed_in(user)
+    session = _session(user)
+    app.dependency_overrides[require_viewer] = _signed_in(user, session)
+    app.dependency_overrides[get_session_service] = lambda: _FakeSessions([session])
 
     async with _client(app) as client:
         enrolled = await client.post("/api/v1/account/totp/enroll", json={"password": PASSWORD})
@@ -511,6 +516,9 @@ async def test_totp_removal_and_recovery_code_rotation_need_the_password() -> No
             "/api/v1/account/totp/confirm",
             json={"code": pyotp.TOTP(secret).now()},
         )
+        # Both now ask for a fresh step-up as well; this test is about the
+        # password they still need on top of it.
+        session.mfa_verified_at = utc_now()
         wrong = await client.request(
             "DELETE",
             "/api/v1/account/totp",
@@ -531,6 +539,41 @@ async def test_totp_removal_and_recovery_code_rotation_need_the_password() -> No
     assert rotated.json()["recovery_codes"] != first.json()["recovery_codes"]
     assert removed.status_code == 200
     assert user.totp is None
+
+
+async def test_changing_a_second_factor_or_the_password_needs_a_fresh_step_up() -> None:
+    """The password is the one factor a stolen or shoulder-surfed session may already have.
+
+    With it alone, a session that could not pass the step-up every restore
+    asks for could still remove the authenticator, replace the recovery
+    codes, add a passkey of its own, or change the password, and so turn
+    borrowed access into the account itself.
+    """
+    app = create_app(_settings())
+    user = _user()
+    user.totp = TotpEnrollment(encrypted_secret="v1:not-read-here", confirmed_at=utc_now())
+    session = _session(user)
+    app.dependency_overrides[require_viewer] = _signed_in(user, session)
+    app.dependency_overrides[get_session_service] = lambda: _FakeSessions([session])
+
+    async with _client(app) as client:
+        responses = [
+            await client.request("DELETE", "/api/v1/account/totp", json={"password": PASSWORD}),
+            await client.post("/api/v1/account/totp/recovery-codes", json={"password": PASSWORD}),
+            await client.post("/api/v1/account/passkeys/options", json={"password": PASSWORD}),
+            await client.post(
+                "/api/v1/account/password",
+                json={"current_password": PASSWORD, "new_password": "an-even-longer-password"},
+            ),
+        ]
+
+    assert [response.status_code for response in responses] == [403, 403, 403, 403]
+    # The detail is what the browser recognises as "ask for a code and retry".
+    assert {response.json()["detail"] for response in responses} == {
+        "Confirm your authenticator code again before continuing"
+    }
+    assert user.totp is not None
+    assert verify_password(PASSWORD, user.password_hash)
 
 
 async def test_recovery_code_rotation_requires_an_enrollment() -> None:

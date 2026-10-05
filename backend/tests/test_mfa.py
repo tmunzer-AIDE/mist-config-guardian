@@ -1,5 +1,7 @@
 """Second-factor enrollment, verification, step-up, and sign-in tests."""
 
+import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -228,6 +230,62 @@ async def test_second_factor_accepts_totp_and_spends_recovery_codes() -> None:
     assert len(user.totp.recovery_code_hashes) == RECOVERY_CODE_COUNT - 1
 
 
+def _enrolled(settings: Settings, secret: str) -> User:
+    user = _user()
+    user.totp = TotpEnrollment(
+        encrypted_secret=CredentialVault(settings).encrypt_for_context(secret, context=TOTP_SECRET_CONTEXT),
+        confirmed_at=utc_now(),
+    )
+    return user
+
+
+async def test_an_authenticator_code_is_accepted_once() -> None:
+    """A code stays inside the verification window for about 90 seconds.
+
+    Accepting it again let anyone who saw it, over a shoulder or on a shared
+    screen, sign in a second time or step up a stolen session with no
+    authenticator of their own.
+    """
+    settings = _settings()
+    secret = generate_totp_secret()
+    user = _enrolled(settings, secret)
+    service = _service(settings)
+    code = pyotp.TOTP(secret).now()
+
+    assert await service.verify_second_factor(user, code) is True
+    assert await service.verify_second_factor(user, code) is False
+
+
+async def test_a_used_code_retires_the_ones_before_it_but_not_the_next() -> None:
+    settings = _settings()
+    secret = generate_totp_secret()
+    user = _enrolled(settings, secret)
+    service = _service(settings)
+    now = time.time()
+    authenticator = pyotp.TOTP(secret)
+
+    assert await service.verify_second_factor(user, authenticator.at(now)) is True
+    assert await service.verify_second_factor(user, authenticator.at(now - 30)) is False
+    assert await service.verify_second_factor(user, authenticator.at(now + 30)) is True
+
+
+async def test_a_code_two_requests_present_together_is_accepted_once() -> None:
+    """Each request loads its own copy of the account, as two workers would.
+
+    Both copies say no code has been used yet, so the refusal has to come from
+    the stored account rather than from what either request read.
+    """
+    settings = _settings()
+    secret = generate_totp_secret()
+    stored = _enrolled(settings, secret)
+    first, second = stored.model_copy(deep=True), stored.model_copy(deep=True)
+    service = _service(settings)
+    code = pyotp.TOTP(secret).now()
+
+    assert await service.verify_second_factor(first, code) is True
+    assert await service.verify_second_factor(second, code) is False
+
+
 # ------------------------------------------------------------- challenge token
 async def test_login_challenge_round_trip() -> None:
     service = _service()
@@ -391,7 +449,10 @@ async def test_sign_in_without_a_second_factor_starts_a_session() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["mfa_required"] is False
-    assert body["access_token"]
+    # The session cookie is the browser's credential. A bearer token in the
+    # body was usable for its whole lifetime, and neither signing out nor
+    # signing out everywhere could take it back.
+    assert "access_token" not in body
     assert body["user"]["email"] == "operator@example.com"
     assert "cg_session" in response.headers.get("set-cookie", "")
     assert sessions.started == [False]
@@ -449,7 +510,8 @@ async def test_enrolled_account_must_answer_a_challenge_before_a_session_starts(
     assert "set-cookie" not in challenged.headers
     assert sessions.started == [True]
     assert completed.status_code == 200
-    assert completed.json()["access_token"]
+    assert "access_token" not in completed.json()
+    assert completed.json()["user"]["email"] == "operator@example.com"
     assert confirmed.json()["recovery_codes"]
 
 
@@ -484,6 +546,51 @@ async def test_recovery_code_completes_a_sign_in_exactly_once() -> None:
     assert sessions.started == [True]
     assert user.totp is not None
     assert len(user.totp.recovery_code_hashes) == RECOVERY_CODE_COUNT - 1
+
+
+async def test_one_challenge_submitted_twice_at_once_signs_in_once() -> None:
+    """Both submissions can pass the attempt count and both present a valid code.
+
+    Counting the attempt, checking the code, and only then retiring the
+    challenge let two concurrent submissions of one challenge each start a
+    session. Only the request that retires the challenge may sign in.
+    """
+    settings = _settings()
+    vault = CredentialVault(settings)
+    codes = generate_recovery_codes(2)
+    user = _user()
+    user.totp = TotpEnrollment(
+        encrypted_secret=vault.encrypt_for_context(generate_totp_secret(), context=TOTP_SECRET_CONTEXT),
+        confirmed_at=utc_now(),
+        recovery_code_hashes=[hash_recovery_code(code) for code in codes],
+    )
+    both_checked = asyncio.Barrier(2)
+
+    class _Racing(MfaService):
+        async def verify_second_factor(self, user: User, code: str) -> bool:
+            verified = await super().verify_second_factor(user, code)
+            # Hold each request here until the other has checked its code too.
+            async with asyncio.timeout(5):
+                await both_checked.wait()
+            return verified
+
+    app, _users, sessions = _sign_in_app(user, SIGN_IN_PASSWORD)
+    app.dependency_overrides[mfa_service.get_mfa_service] = lambda: _Racing(
+        settings, vault, PendingTotpEnrollmentStore()
+    )
+
+    async with _client(app) as client:
+        challenged = await client.post(
+            "/api/v1/auth/login",
+            data={"username": "operator@example.com", "password": SIGN_IN_PASSWORD},
+        )
+        token = challenged.json()["challenge_token"]
+        responses = await asyncio.gather(
+            *(client.post("/api/v1/auth/login/mfa", json={"challenge_token": token, "code": code}) for code in codes)
+        )
+
+    assert sorted(response.status_code for response in responses) == [200, 401]
+    assert sessions.started == [True]
 
 
 async def test_mfa_login_rejects_a_forged_challenge_token() -> None:

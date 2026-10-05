@@ -74,10 +74,20 @@ class User(TimestampedModel, Document):
     status: UserStatus = UserStatus.ACTIVE
     preferences: UserPreferences = Field(default_factory=UserPreferences)
     totp: TotpEnrollment | None = None
+    # Outside `totp`, which is written back whole by enrollment changes: those
+    # would otherwise carry an older step back over a code accepted meanwhile.
+    totp_last_used_step: int | None = None
     pending_email_change: PendingEmailChange | None = None
     invited_by: PydanticObjectId | None = None
     invitation_token_hash: str | None = None
     invitation_expires_at: datetime | None = None
+    # Set when an invitation is revoked before it was accepted. The account is
+    # then deactivated like any other, but its password is still the random
+    # placeholder the invitation was created with, so it can only be invited
+    # again, never activated. Recorded rather than inferred: `password_changed_at`
+    # is unset for the bootstrap administrator, and for accounts that accepted
+    # while acceptance did not yet write it.
+    invitation_revoked_at: datetime | None = None
     password_changed_at: datetime | None = None
     last_login_at: datetime | None = None
 
@@ -150,6 +160,32 @@ async def consume_user_recovery_code(user: User, code_hash: str) -> bool:
     return True
 
 
+async def claim_totp_step(user: User, step: int) -> bool:
+    """Record an authenticator code's time step as used, or report it already was.
+
+    A code stays inside the verification window for about 90 seconds, and
+    without this it could be presented again for all of them. Refusing the
+    last accepted step and every one before it makes each code single-use.
+
+    The write applies only while the stored step is still the one this request
+    read. Two requests presenting one code both read the same earlier step;
+    the first to write moves it on, and the second then matches nothing.
+    """
+    previous = user.totp_last_used_step
+    if previous is not None and step <= previous:
+        return False
+    now = utc_now()
+    result = await User.get_pymongo_collection().update_one(
+        {"_id": user.id, "totp_last_used_step": previous},
+        {"$set": {"totp_last_used_step": step, "updated_at": now}},
+    )
+    if getattr(result, "modified_count", 0) != 1:
+        return False
+    user.totp_last_used_step = step
+    user.updated_at = now
+    return True
+
+
 async def write_user_fields(user: User, **fields: object) -> User:
     """Write named fields on a user, touching nothing else.
 
@@ -160,12 +196,28 @@ async def write_user_fields(user: User, **fields: object) -> User:
     becoming able to sign in again, because its owner changed their display
     name at the right moment. Naming the fields removes the possibility.
     """
+    await _write_fields(user, {}, fields)
+    return user
+
+
+async def write_user_fields_if(user: User, condition: dict[str, object], **fields: object) -> bool:
+    """Write named fields only while the stored account still matches ``condition``.
+
+    For a write decided on something the request read, which another request
+    may have changed since. ``False`` means nothing was written.
+    """
+    return await _write_fields(user, condition, fields)
+
+
+async def _write_fields(user: User, condition: dict[str, object], fields: dict[str, object]) -> bool:
     now = utc_now()
     document: dict[str, object] = {"updated_at": now}
     for name, value in fields.items():
         document[name] = value.model_dump(mode="python") if isinstance(value, BaseModel) else value
-    await User.get_pymongo_collection().update_one({"_id": user.id}, {"$set": document})
+    result = await User.get_pymongo_collection().update_one({"_id": user.id, **condition}, {"$set": document})
+    if condition and getattr(result, "modified_count", 0) != 1:
+        return False
     for name, value in fields.items():
         setattr(user, name, value)
     user.updated_at = now
-    return user
+    return True

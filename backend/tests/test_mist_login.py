@@ -160,7 +160,6 @@ async def test_mist_signin_keeps_local_mfa_and_never_autoprovisions(monkeypatch,
         sessions=AsyncMock(),
         mfa=mfa,
         passkeys=AsyncMock(),
-        settings=Settings(environment="test"),
         throttle=throttle,
         mist=mist,
     )
