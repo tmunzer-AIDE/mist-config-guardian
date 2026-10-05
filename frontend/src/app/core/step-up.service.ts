@@ -9,10 +9,10 @@ interface Pending {
 /**
  * The second-factor confirmation a sensitive action asks for again.
  *
- * The actions that require a recent authenticator code — onboarding an
- * organization, replacing a service token, rotating a webhook secret, changing
- * the AI provider key — are reached long after signing in, and the window is
- * ten minutes. The prompt exists so meeting that requirement is a code away
+ * The actions that require a recent authenticator code — preparing and running
+ * a restore or its compensation, removing the authenticator, regenerating
+ * recovery codes, adding a passkey, changing the password — are reached long
+ * after signing in, and the window is ten minutes. The prompt exists so meeting that requirement is a code away
  * rather than a sign-out and back in.
  *
  * One prompt is open at a time: several requests failing together should ask

@@ -64,6 +64,9 @@ export class UsersTab {
     return this.users.items().map((user) => {
       const isSelf = user.id === selfId;
       const guard = demotionGuard(user, isSelf, lastAdministrator);
+      // Revoked before it was accepted: nobody ever set a password for it, so
+      // it is invited again rather than activated, which the API refuses.
+      const revokedInvitation = !!user.invitation_revoked_at;
       return {
         user,
         id: user.id,
@@ -81,9 +84,9 @@ export class UsersTab {
         guard,
         canDeactivate: user.is_active && guard === '',
         // An invitation is accepted, not activated: the API refuses that.
-        canActivate: !user.is_active && user.status !== 'invited',
+        canActivate: !user.is_active && user.status !== 'invited' && !revokedInvitation,
         canRevoke: user.status === 'invited',
-        canResend: user.status === 'invited',
+        canResend: user.status === 'invited' || revokedInvitation,
       };
     });
   });

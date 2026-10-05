@@ -214,6 +214,38 @@ describe('UsersTab', () => {
     expect(row.textContent).toContain('DEACTIVATED');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Invitation for newcomer was revoked.');
   });
+
+  it('offers to send a revoked invitation again, never to activate it', async () => {
+    const revoked = managed({
+      id: 'newcomer',
+      status: 'deactivated',
+      is_active: false,
+      invitation_revoked_at: '2026-10-01T00:00:00Z',
+    });
+    const fixture = await render('administrator', [managed({ id: 'admin', role: 'administrator' }), revoked]);
+
+    const row = [...(fixture.nativeElement as HTMLElement).querySelectorAll('tbody tr')][1];
+    const buttons = [...row.querySelectorAll<HTMLButtonElement>('button')];
+    // Activating it would make an account nobody ever set a password for; the API refuses it.
+    expect(buttons.map((button) => (button.textContent ?? '').trim())).not.toContain('Activate');
+    const resend = buttons.find((button) => (button.textContent ?? '').trim() === 'Resend invitation');
+    expect(resend?.disabled).toBe(false);
+
+    resend!.click();
+    http
+      .expectOne((request) => request.method === 'POST' && request.url === '/api/v1/users/newcomer/resend-invitation')
+      .flush({
+        user: { ...revoked, status: 'invited', invitation_revoked_at: null },
+        invitation_expires_at: '2026-10-12T00:00:00Z',
+        delivery: 'sent',
+        delivery_detail: null,
+        invitation_token: null,
+        invitation_url: null,
+      });
+    await settle(fixture);
+
+    expect(row.textContent).toContain('INVITED');
+  });
 });
 
 describe('UsersTab invitation link', () => {

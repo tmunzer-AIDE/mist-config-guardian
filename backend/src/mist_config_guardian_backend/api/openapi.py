@@ -17,13 +17,10 @@ monitoring for Juniper Mist.
 
 ## Authentication
 
-Two mechanisms reach the same endpoints.
-
-* **Browser sessions.** `POST /auth/login` sets an httpOnly session cookie and a
-  readable CSRF cookie. Every unsafe request must echo the CSRF cookie in the
-  `X-CSRF-Token` header. Sessions are revocable and appear under `/account/sessions`.
-* **Bearer tokens.** The same login returns a short-lived access token for
-  command-line and integration clients, sent as `Authorization: Bearer <token>`.
+`POST /auth/login` sets an httpOnly session cookie and a readable CSRF cookie.
+Every unsafe request must echo the CSRF cookie in the `X-CSRF-Token` header.
+Sessions are revocable and appear under `/account/sessions`. Sign-in returns no
+bearer token: one that signing out could not revoke would outlive the session.
 
 Accounts with an enrolled second factor receive an MFA challenge instead of a
 session and must complete `POST /auth/login/mfa` before one is issued.

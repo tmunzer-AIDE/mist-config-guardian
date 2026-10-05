@@ -17,6 +17,8 @@ export interface ManagedUser {
   is_active: boolean;
   mfa_enabled: boolean;
   invitation_expires_at?: string | null;
+  /** Set when an invitation was revoked before it was accepted; the account can be invited again, never activated. */
+  invitation_revoked_at?: string | null;
   last_login_at: string | null;
   created_at: string;
 }
