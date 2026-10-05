@@ -557,6 +557,36 @@ async def test_a_provider_failure_still_composes_a_deterministic_verdict() -> No
     assert outcome.fields["verdict"].confidence == "low"
 
 
+async def test_the_agent_receives_applicable_digital_twin_checks_as_retrieval_guidance() -> None:
+    model = FakeModel(
+        '{"action":"report","peak_impact":"info","current_impact":"info","confidence":"low",'
+        '"summary":"No supported conclusion from the available evidence.","evidence":[]}'
+    )
+    tools = AttemptTools(rule_transport=FakeRuleTransport(), mcp_transport=FakeMcpTransport(), model_client=model)
+    changed = ObjectChange(
+        logical_object_id=TEMPLATE,
+        scope="org",
+        object_type="networktemplates",
+        name="DNT-NTR",
+        version=7,
+        before={"vars": {"vlan": 10}},
+        after={"vars": {"vlan": 20}},
+    )
+
+    outcome = await run_attempt(tools=tools, changes=(changed,))
+
+    assert outcome.state == "succeeded"
+    assert model.prompts
+    prompt = model.prompts[0][1]
+    assert "impact-rules-1" in prompt
+    assert "wired.l2.blackhole" in prompt
+    assert "not findings" in prompt
+    assert "wired.auth.radius_missing" in prompt
+    assert "wired.l3.static_route_reachability" in prompt
+    assert outcome.fields["verdict"].peak == "info"
+    assert outcome.fields["verdict"].coverage != "complete"
+
+
 async def test_the_agent_phase_is_over_before_its_first_turn_when_the_commit_was_slow() -> None:
     model = FakeModel('{"action": "report"}')
     tools = AttemptTools(rule_transport=FakeRuleTransport(), mcp_transport=FakeMcpTransport(), model_client=model)

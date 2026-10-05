@@ -33,7 +33,7 @@ from mist_config_guardian_backend.guardian.agent import (
     tools_view,
 )
 from mist_config_guardian_backend.guardian.agent_schema import MAX_REPORT_ITEMS
-from mist_config_guardian_backend.guardian.change import AtomView
+from mist_config_guardian_backend.guardian.change import AtomView, ObjectChange, build_change_set
 from mist_config_guardian_backend.guardian.composition import cited, compose
 from mist_config_guardian_backend.guardian.contracts import (
     BANDS,
@@ -57,7 +57,9 @@ from mist_config_guardian_backend.guardian.evidence import (
     EvidenceRegistry,
     json_size,
 )
+from mist_config_guardian_backend.guardian.impact_rules import agent_hints, candidate_rules
 from mist_config_guardian_backend.guardian.ledger import DeterministicView, ObligationView
+from mist_config_guardian_backend.guardian.plugins import SwitchPortPlugin
 from mist_config_guardian_backend.guardian.reader import Reader, SiteAuthority, TransportError, evidence_windows
 
 ORG = "4ac1dcf4-9d8b-7211-65c4-057819f0862b"
@@ -848,6 +850,47 @@ def test_the_system_prompt_states_the_protocol_within_its_budget() -> None:
     assert len(SYSTEM_PROMPT.encode()) <= SYSTEM_PROMPT_BUDGET
     assert "report" in SYSTEM_PROMPT
     assert "service_health" in SYSTEM_PROMPT
+    assert "supplement rather than replace the SLE" in SYSTEM_PROMPT
+
+
+async def test_impact_rule_hints_are_prioritized_when_the_hint_budget_is_tight() -> None:
+    guided = AgentInputs(
+        change=inputs().change,
+        deterministic=inputs().deterministic,
+        hints={
+            "a-plugin": "a" * 500,
+            "b-plugin": "b" * 500,
+            "impact-rules-1": "Digital-twin candidate check: wired.l2.blackhole " + "x" * 450,
+        },
+    )
+
+    prompt = prompt_of([evidence()], agent_inputs=guided, tools=tools_view(await catalogue()))
+
+    assert "wired.l2.blackhole" in prompt.user
+
+
+async def test_a_mixed_change_keeps_all_candidates_and_applicable_plugin_guidance_in_the_prompt() -> None:
+    changed = build_change_set(
+        [
+            ObjectChange("template", "org", "templates", "Policy", 2, {"vars": {"x": 1}}, {"vars": {"x": 2}}),
+            ObjectChange("nac", "org", "nacrules", "Access", 2, {"order": 1}, {"order": 2}),
+        ]
+    )
+    guided = AgentInputs(
+        change=inputs().change,
+        deterministic=inputs().deterministic,
+        hints={**agent_hints(changed), SwitchPortPlugin.id: SwitchPortPlugin.agent_hint},
+    )
+
+    prompt = prompt_of([evidence()], agent_inputs=guided, tools=tools_view(await catalogue()))
+
+    assert all(rule.id in prompt.user for rule in candidate_rules(changed))
+    assert "wired.auth.radius_missing" in prompt.user
+    assert "wired.l3.static_route_reachability" in prompt.user
+    assert "wired.l3.control_plane_reachability" in prompt.user
+    assert "wired.port.storm_control_policy" in prompt.user
+    assert SwitchPortPlugin.agent_hint[:80] in prompt.user
+    assert prompt.fixed_size <= PROMPT_FIXED_BUDGET
 
 
 async def test_the_prompt_says_that_no_read_shows_the_present() -> None:

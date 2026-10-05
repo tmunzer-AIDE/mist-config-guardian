@@ -98,6 +98,7 @@ from mist_config_guardian_backend.guardian.evidence import (
     normalized_mac,
     pack,
 )
+from mist_config_guardian_backend.guardian.impact_rules import agent_hints as impact_rule_hints
 from mist_config_guardian_backend.guardian.ledger import build_ledger, coverage, deterministic_view, resolve_statuses
 from mist_config_guardian_backend.guardian.monitoring import (
     ComparisonRecord,
@@ -1005,7 +1006,10 @@ async def execute_attempt(
         inputs=AgentInputs(
             change=change_view(change),
             deterministic=deterministic_view(ledger, reported),
-            hints={plugin.id: plugin.agent_hint for plugin in PLUGINS},
+            hints={
+                **impact_rule_hints(change),
+                **{plugin.id: plugin.agent_hint for plugin in PLUGINS if plugin.id in rules.plans},
+            },
         ),
         deadline=started + AGENT_PHASE.total_seconds(),
         clock=clock,
