@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 
 import { AuthService } from '../core/auth.service';
@@ -13,8 +13,9 @@ interface NavItem {
 const NAV: NavItem[] = [
   { label: 'Overview', path: '/', exact: true, icon: 'overview' },
   { label: 'Changes', path: '/changes', exact: false, icon: 'changes' },
-  { label: 'Site topology', path: '/impact', exact: false, icon: 'impact' },
   { label: 'Configuration', path: '/history', exact: false, icon: 'history' },
+  { label: 'Sites & devices', path: '/impact', exact: false, icon: 'impact' },
+  { label: 'Restore activity', path: '/restore', exact: false, icon: 'restore' },
   { label: 'Settings', path: '/settings', exact: false, icon: 'settings' },
 ];
 
@@ -31,5 +32,7 @@ export class AppSidebar {
   readonly buildLabel = input('');
 
   protected readonly auth = inject(AuthService);
-  protected readonly items = NAV;
+  protected readonly items = computed(() =>
+    NAV.filter((item) => item.icon !== 'restore' || this.auth.can('operator')),
+  );
 }

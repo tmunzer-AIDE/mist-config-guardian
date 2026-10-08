@@ -57,6 +57,7 @@ from mist_config_guardian_backend.services.impact_evidence import (
     has_unverified_zero,
     validate_zero_evidence,
 )
+from mist_config_guardian_backend.services.monitoring_recovery import reconciled_session
 from mist_config_guardian_backend.services.network_impact_policy import (
     confirmed_changes,
     eligible_query,
@@ -995,7 +996,7 @@ class ChangeGroupProjector:
             )
             group.evidence = [ChangeEvidence(label=excluded)]
         group.projection_updated_at = utc_now()
-        group.impact_policy_version = 1
+        group.impact_policy_version = 2
         group.touch()
         if not await self._store.save(group):
             return _CONTENDED
@@ -1501,7 +1502,8 @@ def _summarize(
 
 def validated_sessions(sessions: Sequence[MonitoringSession]) -> list[MonitoringSession]:
     result = []
-    for session in sessions:
+    for original in sessions:
+        session = reconciled_session(original)
         latest = session.observations[-1] if session.observations else None
         if (
             session.assessment
@@ -1531,7 +1533,7 @@ def validated_sessions(sessions: Sequence[MonitoringSession]) -> list[Monitoring
 def validated_group(
     group: AuditChangeGroup, sessions: Sequence[MonitoringSession], names: Mapping[str, str]
 ) -> tuple[AuditChangeGroup, list[MonitoringSession]]:
-    """Correct already-stored false zero alarms at read time; never mutate a shared session."""
+    """Correct false zero alarms and observed recovery without mutating shared sessions."""
     clean = validated_sessions(sessions)
     if all(before is after for before, after in zip(sessions, clean, strict=True)):
         return group, clean
@@ -1553,10 +1555,20 @@ def validated_group(
         site_labels=tuple(names.get(site, site) for site in group.affected_site_ids),
         monitored_for=None,
     )
-    group.deterministic_assessment = "Zero SLE percentages without sampled-traffic evidence are unavailable. " + (
+    zero_correction = any(
+        has_unverified_zero(sample) for session in sessions for sample in [session.baseline, *session.observations]
+    )
+    explanation = (
+        "Zero SLE percentages without sampled-traffic evidence are unavailable. "
+        if zero_correction
+        else "An earlier configuration failure was followed by successful configuration. "
+    )
+    group.deterministic_assessment = explanation + (
         build_assessment(evidence, group.recovery_state)
         if group.impact_severity in _IMPACTING
         else "Those values do not establish network degradation."
+        if zero_correction
+        else "The latest available evidence does not establish measured network degradation."
     )
     group.summary = build_summary(group, evidence, group.recovery_state)
     group.evidence = build_evidence(evidence, group.degraded_metrics, group.baseline_confidence)

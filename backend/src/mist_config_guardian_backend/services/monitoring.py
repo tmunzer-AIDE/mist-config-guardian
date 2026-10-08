@@ -42,6 +42,7 @@ from mist_config_guardian_backend.services.impact_analysis import (
     assess_impact,
     store_assessment,
 )
+from mist_config_guardian_backend.services.monitoring_recovery import recovered_incidents
 from mist_config_guardian_backend.services.notifications import NotificationService
 from mist_config_guardian_backend.services.service_credentials import service_token
 
@@ -161,12 +162,12 @@ class MonitoringEventService:
         if session is not None and event_type in _FAILED_EVENTS | _INCIDENT_EVENTS | _REVERT_EVENTS:
             self._link_receipt(session, receipt)
             self._record_event(session, event, receipt)
-            await self._record_incident(session, event_type)
+            await self._record_incident(session, event_type, occurred_at=event_time(event, receipt))
             return session
         if session is not None and event_type in _RESOLUTIONS:
             self._link_receipt(session, receipt)
             self._record_event(session, event, receipt)
-            self._resolve_incidents(session, event_type)
+            self._resolve_incidents(session, event_type, occurred_at=event_time(event, receipt))
             session.touch()
             await session.save()
             return session
@@ -179,10 +180,19 @@ class MonitoringEventService:
         return None
 
     @staticmethod
-    def _resolve_incidents(session: MonitoringSession, event_type: str) -> None:
-        now = utc_now()
+    def _resolve_incidents(session: MonitoringSession, event_type: str, *, occurred_at: datetime | None = None) -> None:
+        now = occurred_at or utc_now()
         for incident in session.incidents:
-            if incident.event_type == _RESOLUTIONS[event_type] and not incident.resolved:
+            if (
+                incident.event_type == _RESOLUTIONS[event_type]
+                and not incident.resolved
+                and (
+                    incident.occurred_at.replace(tzinfo=UTC)
+                    if incident.occurred_at.tzinfo is None
+                    else incident.occurred_at
+                )
+                <= (now.replace(tzinfo=UTC) if now.tzinfo is None else now)
+            ):
                 incident.resolved = True
                 incident.resolved_at = now
         store_assessment(
@@ -214,9 +224,13 @@ class MonitoringEventService:
     async def _record_incident(
         session: MonitoringSession,
         event_type: str,
+        *,
+        occurred_at: datetime | None = None,
     ) -> None:
         severity = ImpactSeverity.CRITICAL if event_type in _FAILED_EVENTS | _REVERT_EVENTS else ImpactSeverity.WARNING
-        session.incidents.append(MonitoringIncident(event_type=event_type, severity=severity))
+        session.incidents.append(
+            MonitoringIncident(event_type=event_type, severity=severity, occurred_at=occurred_at or utc_now())
+        )
         assessment = assess_impact(
             session.baseline,
             session.observations[-1] if session.observations else None,
@@ -225,6 +239,16 @@ class MonitoringEventService:
             device_findings=session.device_findings,
         )
         session.peak_impact_severity = max_severity(session.peak_impact_severity, assessment.severity)
+        recovered = recovered_incidents(session.incidents, session.timeline)
+        if recovered is not None:
+            session.incidents = recovered
+            assessment = assess_impact(
+                session.baseline,
+                session.observations[-1] if session.observations else None,
+                session.incidents,
+                relevance_plan=session.relevance_plan,
+                device_findings=session.device_findings,
+            )
         if event_type in _FAILED_EVENTS and session.status is MonitoringStatus.AWAITING_CONFIG:
             session.status = MonitoringStatus.FAILED
             session.active = False
@@ -353,6 +377,19 @@ class MonitoringEventService:
                 session.next_poll_at = min(session.next_poll_at, comparison.due_at)
         self._link_receipt(session, receipt)
         self._record_event(session, event, receipt)
+        recovered = recovered_incidents(session.incidents, session.timeline)
+        if recovered is not None:
+            session.incidents = recovered
+            store_assessment(
+                session,
+                assess_impact(
+                    session.baseline,
+                    session.observations[-1] if session.observations else None,
+                    session.incidents,
+                    relevance_plan=session.relevance_plan,
+                    device_findings=session.device_findings,
+                ),
+            )
         session.touch()
         await session.save()
         return session

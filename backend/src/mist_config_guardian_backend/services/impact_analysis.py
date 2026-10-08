@@ -60,6 +60,15 @@ def assess_impact(  # noqa: PLR0913 - evidence inputs and configurable threshold
         severity = ImpactSeverity.INFO
 
     summary = _summary(severity, device_findings)
+    if severity in (ImpactSeverity.CRITICAL, ImpactSeverity.WARNING) and not degraded:
+        if any(incident.event_type.endswith("_CONFIG_FAILED") for incident in unresolved):
+            summary = "A configuration failure remains unresolved in this monitoring window."
+        elif unresolved:
+            summary = "An unresolved device incident needs review in this monitoring window."
+        elif device_findings:
+            summary = "Operational differences need review after the configuration change."
+        if device_findings and unresolved:
+            summary += f" {len(device_findings)} operational differences were also observed."
     if severity is ImpactSeverity.NONE and ((baseline and baseline.no_data) or (latest and latest.no_data)):
         summary += " Metrics with no sampled traffic were excluded from numeric comparisons."
 

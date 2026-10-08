@@ -1,5 +1,5 @@
 <div class="section-heading">
-  <h3>Site & device impact</h3>
+  <h3>Sites & device findings</h3>
 </div>
 @if (historical()) {
   <p class="notice">
@@ -69,6 +69,11 @@
       }
     </div>
     @if (site(); as current) {
+      <div class="cg-pills" role="group" aria-label="Device view">
+        <button class="cg-pill" [class.cg-pill--on]="mode() === 'devices'" [attr.aria-pressed]="mode() === 'devices'" (click)="mode.set('devices')">Devices</button>
+        <button class="cg-pill" [class.cg-pill--on]="mode() === 'topology'" [attr.aria-pressed]="mode() === 'topology'" (click)="mode.set('topology')">Topology</button>
+      </div>
+      @if (mode() === 'topology') {
       <div class="topology-head">
         <strong>{{ current.site_name }}</strong
         ><span>Select a device to inspect its impact</span>
@@ -102,8 +107,8 @@
         }
       </div>
       <div class="map-legend">
-        <span><i class="critical"></i>Service loss</span
-        ><span><i class="warning"></i>Measured degradation</span
+        <span><i class="critical"></i>Critical finding</span
+        ><span><i class="warning"></i>Warning finding</span
         ><span><i class="ok"></i>No impact observed</span
         ><span><i></i>Unknown / outside change</span>
       </div>
@@ -117,7 +122,8 @@
           <p class="notice">{{ warning }}</p>
         }
       }
-      <div class="device-list" aria-label="Devices linked to this change">
+      }
+      <div class="device-list cg-scroll" aria-label="Devices linked to this change">
         @for (id of impacted(); track id) {
           <button
             type="button"

@@ -12,22 +12,63 @@ causation. Uncorrelated device changes stay explicitly uncorrelated.
 Overview shows period-wide change/disruption/recovery counts and a recent feed.
 Feed filters are explicitly limited to that feed; the Changes workspace provides
 server-side search, severity filters and pagination across the full period.
-Selecting a change turns the list into a narrow navigation rail. Its main pane
-combines redacted before/after configuration values, known cross-site reach,
-site selection, topology, and per-device evidence. On small screens the list
-gives way to the detail, with a focused return action and section shortcuts.
+Selecting a change opens a focused outcome page with the change identity and
+return action pinned above its scrollable work area. Four local sections keep
+Outcome, Configuration, Timeline and Technical evidence in the same context.
+The selected section is retained in the URL; a full version comparison or legacy
+device link carries a direct return to the originating change.
 
-The embedded topology uses the same routing algorithm as Site topology, with
-empty tier rows removed and tighter spacing. It still shows only observed
-connections. Its colors describe evidence for the selected change; devices
-outside that change have unknown impact, even when currently connected.
-The device list is an alternative to selecting a node. Shared monitoring
-windows, missing measurements and completed historical windows stay explicit.
-Refresh evidence reloads the selected change; full device timelines remain a
-deliberate drill-down.
+The Outcome section answers the operational questions first: what needs
+attention, why it was flagged, whether deployment recovered, what service impact
+was actually measured, and what evidence is missing. Deployment events do not
+increment the measured-degradation count. A comparable, selected metric must
+cross the existing ten-percentage-point warning threshold for that count.
+Unmeasured application traffic remains explicitly unknown. Historical peak,
+latest recorded outcome and live connectivity are distinct facts.
 
-The time bar keeps Live, exact-date and period controls visible. Expand
-“Explore time” for the activity slider and event navigation.
+Incident status, event/recovery times, overlapping changes and AI interpretation
+appear before topology and raw captures. Stored AI commentary stays labelled as
+an interpretation; severity or metric-direction conflicts are flagged for review.
+The current Guardian summary can load automatically, while its full investigation
+and attempts expand locally. These are existing read APIs, bounded to twenty
+monitoring windows with explicit omissions and retry feedback. Critical and
+warning device windows are prioritized within that limit.
+
+Device lists are the default for both the selected change and Sites & devices.
+Topology is an optional local view using the existing observed-link canvas.
+Its colors describe recorded findings for the selected change; outside devices
+remain unknown. It does not establish live health or causation. Device evidence
+can be expanded inline, and full captures/timelines are available in local change
+sections. Restore activity also has a direct navigation entry; contextual rollback
+still uses the existing plan, backup, authorization and execution workflow.
+
+The time bar remains on period-based lists and inventory. A selected recorded
+change uses its own timestamps; historical mode retains its explicit banner.
+The browser and application frame do not scroll. Feeds, work areas, device details,
+version/comparison panes, forms and restore plan/authorization each own their
+scrollport. On compact overview layouts the summary also has a bounded scrollport
+so the feed and attention rail remain reachable. Chromium rails are 4px; Firefox
+uses its native thin rail.
+
+### Information hierarchy and journey
+
+| Information | Priority and purpose | Default placement |
+| --- | --- | --- |
+| Latest recorded outcome, unresolved finding, recovery and evidence age | Immediate triage: decide what needs attention | Change header and outcome summary |
+| Deployment status, measured service impact, application evidence gaps | Avoid conflating a failed deployment with a service decline | Three separate outcome facts |
+| Incident/recovery event, attribution limits, next action and AI interpretation | Explain the verdict and support an administrator's decision | First outcome section, before raw telemetry |
+| Affected sites/devices and changed configuration | Identify scope and inspect the proposed cause | Inline device selection and local Configuration section |
+| Event chronology, metrics and operational captures | Validate a finding without losing the selected change | Local Timeline and Technical evidence sections |
+| Raw IDs, collection metadata and full AI attempts | Diagnose collection or interpretation issues | Explicit disclosures within those sections |
+| Backup state, restore plans/approvals/progress | Assess recovery readiness and safely act | Overview attention rail, direct Restore activity and contextual rollback |
+| Organization, time context, account and settings | Maintain scope and configure the application | Fixed transparent chrome and dedicated form panes |
+
+From the Changes list, the outcome and its reason take one selection. Configuration,
+timeline or technical evidence each take one local section switch. Selecting a
+device exposes its measurements inline. A full comparison provides a direct
+return to the same change. Rollback planning remains in that change's context
+through authorization and progress. No diagnostic step requires traversing a
+sequence of unrelated pages.
 
 The shared navigation and top bars sit directly on one neutral background,
 without enclosing borders or colored bands. Main content cards and tables use
@@ -42,7 +83,7 @@ card. Recent changes communicate severity through their labeled badges.
 
 Desktop previews use synthetic browser-test fixtures:
 [overview](change-overview-preview.png),
-[change workspace](change-workspace-preview.png), and
+[recorded outcome](change-outcome-preview.png), and
 [rollback review](change-rollback-preview.png). The shared flat styling can also
 be seen in [Site topology](flat-shell-topology-preview.png) and
 [Configuration](flat-shell-configuration-preview.png).
@@ -160,3 +201,19 @@ The assessment describes the metric, before/after percentages, percentage-point
 change and exact scope identity. Device colors report observed degradation in
 the window, with an explicit statement that this does not establish causation.
 See the [excluded asset-filter preview](excluded-network-validation-preview.png).
+
+## Deployment incident recovery
+
+Within one device monitoring window, an observed later AP/SW/GW CONFIGURED event
+closes the matching CONFIG_FAILED incident. Provider event time takes precedence
+over receipt time, including late delivery. A prior success, a different device
+kind or a revert does not close a failure; a subsequent failure stays open.
+Ambiguous or incomplete historical ledgers do not infer recovery. Historical
+peak and operational findings are retained; recovery never manufactures missing
+SLE measurements or rewrites stored AI text.
+
+Current reads reconcile affected legacy records on a copy. Projection policy
+version 2 also uses the existing idempotent background backfill, bounded to 200
+groups per run, so cached list filters and counts converge. Raw receipts,
+configuration versions and monitoring observations are retained. Resolution in a
+different closed monitoring window is not inferred by this reconciliation.

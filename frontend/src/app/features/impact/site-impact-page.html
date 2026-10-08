@@ -84,7 +84,7 @@
         </div>
       }
       @if (changes().length < total()) {
-        <button class="load-more" type="button" [disabled]="moreBusy()" (click)="more()">
+        <button class="cg-btn load-more" type="button" [disabled]="moreBusy()" (click)="more()">
           {{ moreBusy() ? 'Loading…' : 'Load more · ' + changes().length + ' of ' + total() }}
         </button>
       }
@@ -94,6 +94,10 @@
     <header class="topology-head">
       <div>
         <h2>{{ siteName() }}</h2>
+        <div class="cg-pills" role="group" aria-label="Site view">
+          <button class="cg-pill" [class.cg-pill--on]="viewMode() === 'devices'" [attr.aria-pressed]="viewMode() === 'devices'" (click)="viewMode.set('devices')">Devices</button>
+          <button class="cg-pill" [class.cg-pill--on]="viewMode() === 'topology'" [attr.aria-pressed]="viewMode() === 'topology'" (click)="viewMode.set('topology')">Topology</button>
+        </div>
         <p>
           {{ selectedChange() ? 'Change impact and site connectivity' : 'Current connectivity' }} ·
           {{ devices().length }} devices
@@ -142,7 +146,7 @@
         }
       </details>
     }
-    <div class="diagram-body">
+    <div class="diagram-body" [class.device-view]="viewMode() === 'devices'">
       @if (busy() && !topology()) {
         <div class="loading-state" role="status">
           <div class="cg-skeleton"></div>
@@ -166,6 +170,15 @@
                 : 'This organization has no stored sites yet. Complete its first snapshot to discover the topology.'
             }}
           </p>
+        </div>
+      } @else if (viewMode() === 'devices') {
+        <div class="device-table cg-scroll" aria-label="Devices at the selected site">
+          <p class="cg-meta">Connectivity snapshot: {{ topology()?.collected_at ? at(topology()!.collected_at) : 'not available' }}. Recorded change outcomes have their own monitoring times.</p>
+          <table class="cg-data-table"><thead><tr><th>Device</th><th>Connectivity snapshot</th><th>Selected change finding</th></tr></thead><tbody>
+          @for (item of devices(); track item.id) {
+            <tr [class.cg-row-selected]="selectedDeviceId() === item.id"><td><button class="text-button" (click)="chooseDevice(item.id)">{{ item.name }}</button><small>{{ item.model || label(item.kind) }}</small></td><td>{{ item.health_label }}</td><td>{{ deviceFinding(item.id) }}</td></tr>
+          }
+          </tbody></table>
         </div>
       } @else {
         <app-topology-canvas

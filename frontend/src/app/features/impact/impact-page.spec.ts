@@ -340,14 +340,14 @@ describe('ImpactPage', () => {
     expect(text()).toContain('One monitoring window covers 2 overlapping changes');
     expect(all('.act-buttons').length).toBe(0);
   });
-  it('shows metrics once, keeping the chart and AI commentary collapsed', async () => {
+  it('shows metrics once, keeping AI visible and the chart collapsed', async () => {
     await render(CRITICAL);
     expect(all('.metrics tbody tr').length).toBe(2);
     expect(all('.metrics')[0].textContent).toContain('41%');
     expect(all('.metrics')[0].textContent).toContain('13%');
     const chartDetails = all('app-sle-chart')[0].closest('details')!;
     expect(chartDetails.open).toBe(false);
-    expect((all('details.ai')[0] as HTMLDetailsElement).open).toBe(false);
+    expect((all('details.ai')[0] as HTMLDetailsElement).open).toBe(true);
     expect(all('.bar').length).toBe(4);
     expect(all('.cg-visually-hidden tbody tr').length).toBe(4);
   });

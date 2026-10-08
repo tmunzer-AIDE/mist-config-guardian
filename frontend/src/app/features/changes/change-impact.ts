@@ -25,6 +25,7 @@ import {
 } from '../impact/site-impact.model';
 import { TopologyCanvas } from '../impact/topology-canvas';
 import { metricLabel } from '../impact/monitoring.model';
+import { measuredDegradation } from './change-outcome.model';
 
 const mac = (value: string) => value.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 const severityRank: Health[] = ['critical', 'error', 'warning', 'unknown', 'ok'];
@@ -46,6 +47,7 @@ export class ChangeImpact {
   private readonly injector = inject(Injector);
   private deviceTrigger: HTMLElement | null = null;
   protected readonly siteId = signal('');
+  protected readonly mode = signal<'devices' | 'topology'>('devices');
   protected readonly deviceId = signal<string | null>(null);
   protected readonly topology = signal<SiteTopology | null>(null);
   protected readonly busy = signal(false);
@@ -88,7 +90,7 @@ export class ChangeImpact {
       new Set(
         this.sites().flatMap((s) =>
           s.devices
-            .filter((d) => ['critical', 'warning'].includes(d.severity))
+            .filter((d) => measuredDegradation(d.metrics))
             .map((d) => mac(d.device_id)),
         ),
       ).size,
@@ -169,8 +171,8 @@ export class ChangeImpact {
   protected readonly label = (value: Health) =>
     ({
       ok: 'No impact observed',
-      warning: 'Possible disruption',
-      critical: 'Severe degradation',
+      warning: 'Warning finding',
+      critical: 'Critical finding',
       error: 'Collection failed',
       unknown: 'Not established',
     })[value];
@@ -187,13 +189,14 @@ export class ChangeImpact {
   protected affected(site: ChangeSiteImpact) {
     return new Set(
       site.devices
-        .filter((d) => ['critical', 'warning'].includes(d.severity))
+        .filter((d) => measuredDegradation(d.metrics))
         .map((d) => mac(d.device_id)),
     ).size;
   }
   protected verdict(site: ChangeSiteImpact) {
     const disrupted = this.affected(site);
     if (disrupted) return `${disrupted} with measured degradation`;
+    if (site.devices.some(d => ['critical', 'warning'].includes(d.severity))) return 'Recorded findings · metric degradation not established';
     if (!site.devices.length) return 'No measurements';
     if (
       site.unmonitored_devices.length ||
@@ -227,19 +230,20 @@ export class ChangeImpact {
   }
   protected async openEvidence(device: DeviceImpact) {
     await this.router.navigate(['/impact/sessions'], {
-      queryParams: { session: device.session_id },
+      queryParams: { session: device.session_id, fromChange: this.detail().id },
     });
   }
   constructor() {
     effect((cleanup) => {
       const org = this.orgs.selected()?.id,
         site = this.site()?.site_id;
+      const topologyRequested = this.mode() === 'topology';
       this.refresh();
       this.topology.set(null);
       this.error.set('');
       this.deviceId.set(null);
       this.busy.set(false);
-      if (!org || !site) return;
+      if (!org || !site || !topologyRequested) return;
       this.busy.set(true);
       const subscription = this.api
         .topology(org, site, this.time.asOf()?.toISOString() ?? null)

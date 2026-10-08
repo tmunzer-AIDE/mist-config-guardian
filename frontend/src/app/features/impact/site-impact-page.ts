@@ -53,6 +53,7 @@ export class SiteImpactPage implements OnDestroy {
   readonly change = input('');
   readonly device = input('');
   protected readonly preferredZoom = signal<number | null>(null);
+  protected readonly viewMode = signal<'devices' | 'topology'>('devices');
   protected readonly sites = signal<ImpactSite[]>([]);
   protected readonly siteId = signal('');
   protected readonly changes = signal<SiteChange[]>([]);
@@ -113,6 +114,11 @@ export class SiteImpactPage implements OnDestroy {
     () =>
       this.selectedChange()?.impacts.find((i) => i.device_id === this.selectedDeviceId()) ?? null,
   );
+  protected deviceFinding(id: string): string {
+    const impact = this.selectedChange()?.impacts.find(item => item.device_id === id);
+    if (!impact) return this.selectedChange() ? 'Outside this change' : 'Select a change for its outcome';
+    return ({ ok: 'No measured degradation', critical: 'Critical finding', warning: 'Warning finding', unknown: 'Not established', error: 'Collection failed' })[impact.severity];
+  }
   protected readonly selection = computed(() => !!this.selectedChange() || !!this.selectedDevice());
   protected readonly siteName = computed(
     () => this.sites().find((s) => s.id === this.siteId())?.name ?? 'Site',

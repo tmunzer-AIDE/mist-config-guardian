@@ -26,9 +26,10 @@ async def _backfill_change_group_projections() -> int:
     Groups recorded before the projection existed carry none of the display
     data the Changes and Overview pages read, so they would render blank. The
     batch is bounded and the task is idempotent, so a large history is filled in
-    over successive runs without ever monopolizing a worker. Policy version 1
+    over successive runs without ever monopolizing a worker. Policy version 2
     also repairs already-projected administrative changes and unverified SLE
-    zero alarms. Raw receipts, versions and monitoring observations are retained.
+    zero alarms, and closes deployment failures with observed later success.
+    Raw receipts, versions and monitoring observations are retained.
     """
     settings = get_settings()
     database = DatabaseManager(settings)
@@ -36,7 +37,7 @@ async def _backfill_change_group_projections() -> int:
     try:
         pending = (
             await AuditChangeGroup.find(
-                {"$or": [{"projection_updated_at": None}, {"impact_policy_version": {"$ne": 1}}]},
+                {"$or": [{"projection_updated_at": None}, {"impact_policy_version": {"$ne": 2}}]},
             )
             .sort("-created_at")
             .limit(BACKFILL_BATCH_SIZE)

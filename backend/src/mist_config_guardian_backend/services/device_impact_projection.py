@@ -4,9 +4,19 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from mist_config_guardian_backend.integrations.mist_topology import normalized_mac
-from mist_config_guardian_backend.models.monitoring import ImpactAssessment, ImpactSeverity, SleObservation
+from mist_config_guardian_backend.models.monitoring import (
+    ImpactAssessment,
+    ImpactSeverity,
+    MonitoringIncident,
+    MonitoringTimelineEvent,
+    RelevancePlan,
+    SleObservation,
+)
+from mist_config_guardian_backend.models.telemetry import DeviceStateFinding
 from mist_config_guardian_backend.schemas.impact import DeviceImpact, Health, ImpactMetric
+from mist_config_guardian_backend.services.impact_analysis import assess_impact
 from mist_config_guardian_backend.services.impact_evidence import legacy_assessment, validate_zero_evidence
+from mist_config_guardian_backend.services.monitoring_recovery import recovered_incidents
 
 
 def as_utc(value: datetime) -> datetime:
@@ -26,6 +36,8 @@ def impact_from_session(row: dict[str, Any], end: datetime, *, historical: bool)
     stored = ImpactAssessment.model_validate(row["assessment"]) if row.get("assessment") else None
     if stored and (historical or as_utc(stored.evaluated_at) > end):
         stored = None
+    stored_assessment = stored is not None
+    stored = _recovered_assessment(row, end, stored, baseline, latest) if not historical else stored
     assessment = (
         stored
         if stored is not None
@@ -104,7 +116,43 @@ def impact_from_session(row: dict[str, Any], end: datetime, *, historical: bool)
         headline=headline,
         metrics=[] if historical else metrics,
         evidence_coverage="insufficient" if historical else assessment.coverage,
-        assessment_source="historical" if historical else "stored" if stored else "legacy",
+        assessment_source="historical" if historical else "stored" if stored_assessment else "legacy",
         collection_errors=errors,
         shared_window=len(row.get("audit_ids", [])) > 1,
+    )
+
+
+def _recovered_assessment(
+    row: dict[str, Any],
+    end: datetime,
+    stored: ImpactAssessment | None,
+    baseline: dict[str, Any],
+    latest: dict[str, Any],
+) -> ImpactAssessment | None:
+    if not any(
+        incident.get("event_type", "").endswith("_CONFIG_FAILED") and not incident.get("resolved")
+        for incident in row.get("incidents", [])
+    ):
+        return stored
+    incidents = [MonitoringIncident.model_validate(item) for item in row.get("incidents", [])]
+    events = [
+        MonitoringTimelineEvent.model_validate(item)
+        for item in row.get("timeline", [])
+        if item.get("key")
+        and isinstance(item.get("occurred_at"), datetime)
+        and isinstance(item.get("received_at"), datetime)
+        and as_utc(item["occurred_at"]) <= end
+        and as_utc(item["received_at"]) <= end
+    ]
+    recovered = recovered_incidents(incidents, events)
+    if recovered is None:
+        return stored
+    return assess_impact(
+        SleObservation.model_validate(baseline) if baseline else None,
+        SleObservation.model_validate(latest) if latest else None,
+        recovered,
+        relevance_plan=stored.plan
+        if stored
+        else RelevancePlan.model_validate(row.get("relevance_plan", {"mode": "legacy_all"})),
+        device_findings=[DeviceStateFinding.model_validate(item) for item in row.get("device_findings", [])],
     )

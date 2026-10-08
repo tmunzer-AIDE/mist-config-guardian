@@ -26,12 +26,20 @@ async function setup(role: UserRole): Promise<RouterTestingHarness> {
 describe('History and restore workspace routing', () => {
   it('preserves restore selections, operation links and fragments through the legacy redirect', async () => {
     const harness = await setup('operator');
-    await harness.navigateByUrl('/restore?versions=v1,v2&operation=op1&step=plan#details', HistoryPage);
+    await harness.navigateByUrl('/history/restore?versions=v1,v2&operation=op1&step=plan#details', HistoryPage);
     expect(TestBed.inject(Router).url).toBe('/history?versions=v1,v2&operation=op1&step=plan&restore=1#details');
     const page = harness.routeDebugElement!.query(By.directive(RestorePage)).componentInstance as RestorePage;
     expect(page.versions()).toBe('v1,v2');
     expect(page.operation()).toBe('op1');
     expect(page.step()).toBe('plan');
+  });
+
+  it('keeps direct restore navigation in its own workspace', async () => {
+    const harness = await setup('operator');
+    const page = await harness.navigateByUrl('/restore?versions=v1&operation=op1&step=plan#details', RestorePage);
+    expect(TestBed.inject(Router).url).toBe('/restore?versions=v1&operation=op1&step=plan#details');
+    expect(page.versions()).toBe('v1');
+    expect(page.operation()).toBe('op1');
   });
 
   it('keeps version browsing available to viewers without exposing a restore tab', async () => {
@@ -44,7 +52,7 @@ describe('History and restore workspace routing', () => {
 
   it('rejects viewer restore access through legacy and direct links', async () => {
     const harness = await setup('viewer');
-    for (const url of ['/history/restore', '/restore', '/history?restore=1', '/history?versions=v1', '/history?operation=op1']) {
+    for (const url of ['/history/restore', '/restore', '/restore/', '/history?restore=1', '/history?versions=v1', '/history?operation=op1']) {
       await harness.navigateByUrl(url);
       expect(TestBed.inject(Router).url).toBe('/');
       expect(harness.routeNativeElement?.querySelector('app-restore-page')).toBeNull();

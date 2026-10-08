@@ -1,7 +1,7 @@
 <div class="page">
   @if (!embedded()) {
     <header class="head">
-      <h1 class="cg-page-title">Restore center</h1>
+      <h1 class="cg-page-title">Restore activity</h1>
       <p class="head-sub">
         Plans are built read-only. Nothing is written until you authorize with a separate write
         credential.
@@ -34,6 +34,7 @@
     }
   </ol>
 
+  <div class="restore-body cg-scroll" [class.restore-body--plan]="currentStep() === 'plan'" aria-label="Restore workspace">
   @switch (currentStep()) {
     @case ('targets') {
       @if (focused()) {
@@ -97,7 +98,7 @@
 
     @case ('plan') {
       @if (activeOperation(); as operation) {
-        <app-restore-step-plan
+        <app-restore-step-plan class="cg-scroll"
           [operation]="operation"
           [mode]="mode()"
           [readOnly]="readOnly()"
@@ -106,7 +107,7 @@
           (backRequested)="backToTargets()"
         />
         @if (!blockedByPreflight() && operation.actions.length > 0) {
-          <app-restore-step-authorize
+          <app-restore-step-authorize class="cg-scroll"
             [operation]="operation"
             [mode]="mode()"
             [canAuthorize]="canAuthorize()"
@@ -129,7 +130,7 @@
     @case ('execute') {
       @if (compensating()) {
         @if (compensationPlan(); as plan) {
-          <app-restore-step-authorize
+          <app-restore-step-authorize class="cg-scroll"
             [operation]="plan"
             [mode]="mode()"
             [canAuthorize]="canAuthorize()"
@@ -164,4 +165,5 @@
       }
     }
   }
+  </div>
 </div>

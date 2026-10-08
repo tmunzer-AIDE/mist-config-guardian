@@ -57,10 +57,69 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.cg-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  .cg-row-selected {
+    background: var(--surface-selected);
+  }
+
+  th,
+  td {
+    text-align: left;
+    padding: 12px 8px;
+    border-bottom: 1px solid var(--rule);
+    overflow-wrap: anywhere;
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    color: var(--ink-muted);
+  }
+  small {
+    display: block;
+    color: var(--ink-soft);
+    margin-top: 5px;
+  }
+}
+
 :where(.cg-scroll, .library-table, .table-card, .change-list, .details) {
   scrollbar-width: thin;
   scrollbar-color: var(--rule-strong) transparent;
   overscroll-behavior: contain;
+}
+
+// Use a 4px rail on WebKit/Chromium; Firefox keeps its native thin scrollbar.
+@supports selector(::-webkit-scrollbar) {
+  .cg-scroll,
+  .cg-scroll-x,
+  .library-table,
+  .table-card,
+  .change-list,
+  .details {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+
+    &::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: var(--rule-strong);
+      border-radius: 4px;
+    }
+
+    &::-webkit-scrollbar-thumb:hover {
+      background: var(--ink-soft);
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -86,7 +145,6 @@ textarea {
   border: 0;
 }
 
-
 // Every feature page is a `.page` with 20px of padding. Below `narrow` that is
 // most of a phone's width spent on margin, so it is reclaimed globally rather
 // than in each of the eight page stylesheets.
@@ -108,10 +166,15 @@ textarea {
 :where(.page-host, .workspace-content) > router-outlet + * {
   display: block;
   height: 100%;
-  min-height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .page-host > router-outlet + * > .page,
 .workspace-content > router-outlet + * > .page {
-  min-height: 100%;
+  min-height: 0;
+}
+
+[hidden] {
+  display: none !important;
 }

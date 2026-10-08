@@ -5,6 +5,8 @@
   min-height: 0;
   container: impact/inline-size;
 }
+.device-view { display: flex; min-height: 0; }
+.device-table { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
 .impact-workspace {
   position: absolute;
   inset: 0;
@@ -319,12 +321,6 @@ i.applied-dot {
   display: block;
   width: calc(100% - 32px);
   margin: 14px 16px;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 9px;
-  cursor: pointer;
-  color: var(--ink);
 }
 .detail-head {
   padding: 20px 18px 16px;

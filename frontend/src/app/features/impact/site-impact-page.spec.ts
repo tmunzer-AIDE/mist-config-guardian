@@ -84,6 +84,7 @@ describe('site Impact workspace', () => {
     http = TestBed.inject(HttpTestingController);
     time = TestBed.inject(TimeContextService);
     fixture = TestBed.createComponent(SiteImpactPage);
+    fixture.componentInstance['viewMode'].set('topology');
     fixture.detectChanges();
   });
   afterEach(() => {
@@ -146,6 +147,7 @@ describe('site Impact workspace', () => {
     flushSite();
     fixture.destroy();
     fixture = TestBed.createComponent(SiteImpactPage);
+    fixture.componentInstance['viewMode'].set('topology');
     fixture.detectChanges();
     load();
     expect(fixture.nativeElement.querySelector('select').value).toBe('site2');

@@ -1,10 +1,21 @@
+:host { display: block; height: 100%; min-height: 0; }
 .page {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 15px;
   animation: cg-in 0.2s ease-out;
 }
+.page > .head, .page > .read-only, .page > .steps { flex: none; }
+.restore-body { flex: 1; min-height: 0; overflow: auto; }
+.restore-body--plan { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; overflow: hidden; }
+.restore-body--plan > app-restore-step-plan,
+.restore-body--plan > app-restore-step-authorize { display: block; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.restore-body--plan > :only-child { grid-column: 1 / -1; grid-row: 1 / -1; }
+@media (max-width: 800px) { .restore-body--plan { grid-template-columns: 1fr; grid-template-rows: repeat(2,minmax(0,1fr)); } }
 
 .head {
   display: flex;
