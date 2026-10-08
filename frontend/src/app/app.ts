@@ -70,8 +70,10 @@ export class App {
 
   protected readonly showTimeBar = computed(() => {
     const url = this.currentUrl().split('?')[0];
+    const query = new URLSearchParams(this.currentUrl().split('?')[1] ?? '');
     return (
       this.chrome() &&
+      !(url === '/changes' && query.has('group')) &&
       TIME_BAR_ROUTES.some((route) => (route === '/' ? url === '/' : url.startsWith(route)))
     );
   });

@@ -1,5 +1,6 @@
 import { DeviceEvidence } from './device-evidence';
 import { evidenceValue } from './site-impact.model';
+import { interpretationNeedsReview } from '../changes/change-outcome.model';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -82,6 +83,7 @@ export class ImpactPage {
 
   /** `?session=` — bound by the router's component input binding. */
   readonly session = input('');
+  readonly fromChange = input('');
   protected readonly selected = signal<MonitoringSession | null>(null);
   protected readonly loading = signal(false);
   protected readonly failure = signal('');
@@ -157,6 +159,7 @@ export class ImpactPage {
   );
 
   protected readonly ai = computed(() => readAiAssessment(this.selected()?.ai_assessment ?? null));
+  protected readonly aiNeedsReview = computed(() => this.selected() ? interpretationNeedsReview(this.selected()!) : false);
   protected readonly aiError = computed(() => this.selected()?.ai_assessment_error ?? null);
 
   /**
@@ -291,6 +294,10 @@ export class ImpactPage {
   protected retry(): void { this.retryCount.update((n) => n + 1); }
 
   protected async backToImpact(): Promise<void> {
+    if (this.fromChange()) {
+      await this.router.navigate(['/changes'], { queryParams: { group: this.fromChange() } });
+      return;
+    }
     const session = this.selected();
     await this.router.navigate(['/impact'], {
       queryParams: session ? {

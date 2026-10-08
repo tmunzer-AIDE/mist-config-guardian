@@ -1,7 +1,7 @@
 import { inject } from '@angular/core';
 import { RedirectFunction, Router, Routes } from '@angular/router';
 
-import { authGuard, historyAccessGuard } from './core/auth.guard';
+import { authGuard, historyAccessGuard, roleGuard } from './core/auth.guard';
 
 /** Send `/<page>/<tab>` to `/<page>?tab=<tab>`, the one route that mounts the page. */
 function tabRedirect(page: string): RedirectFunction {
@@ -33,7 +33,13 @@ export const routes: Routes = [
     loadComponent: () => import('./features/history/history-page').then((m) => m.HistoryPage),
     title: 'Configuration library · Config Guardian',
   },
-  ...['restore', 'history/restore'].map(path => ({
+  {
+    path: 'restore',
+    canActivate: [authGuard, roleGuard('operator')],
+    loadComponent: () => import('./features/restore/restore-page').then(m => m.RestorePage),
+    title: 'Restore activity · Config Guardian',
+  },
+  ...['history/restore'].map(path => ({
     path,
     redirectTo: (({ queryParams, fragment }) => inject(Router).createUrlTree(
       ['/history'], { queryParams: { ...queryParams, restore: '1' }, fragment: fragment ?? undefined },

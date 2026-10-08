@@ -13,8 +13,8 @@
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
-  // No minimum height: the shell is exactly as tall as the viewport and `main`
-  // scrolls inside it. A floor taller than the window pushed the footer of
+  // No minimum height: the shell is exactly as tall as the viewport and the
+  // work areas scroll inside it. A floor taller than the window pushed the footer of
   // every page out of reach, because this element also clips its overflow.
   background: var(--app-background);
   font-size: var(--text-base);
@@ -150,7 +150,7 @@
 main {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .page-host {

@@ -202,17 +202,12 @@ export class HistoryPage {
   }
 
   protected async restoreActivity(): Promise<void> {
-    await this.router.navigate(['/history'], {
-      queryParamsHandling: 'merge',
-      queryParams: {
-        restore: '1',
-        versions: null,
-        operation: null,
-        changeGroup: null,
-        step: null,
-        compensate: null,
-      },
-    });
+    await this.router.navigate(['/restore']);
+  }
+
+  protected readonly fromChange = computed(() => this.routeParams().get('fromChange'));
+  protected backToChange(): void {
+    void this.router.navigate(['/changes'], { queryParams: { group: this.fromChange() } });
   }
 
   // ------------------------------------------------------------------ state

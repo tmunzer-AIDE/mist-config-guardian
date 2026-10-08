@@ -25,6 +25,7 @@ import { GuardianPanel } from './guardian-panel';
 import { GuardianBadge } from '../../shared/guardian-badge';
 import { ChangeConfiguration } from './change-configuration';
 import { ChangeImpact } from './change-impact';
+import { ChangeOutcome, ChangeSection } from './change-outcome';
 import { RestorePage } from '../restore/restore-page';
 import { MAX_PLAN_VERSIONS } from '../restore/restore.model';
 import { RestoreService } from '../restore/restore.service';
@@ -64,7 +65,14 @@ interface ChangeDay {
 
 @Component({
   selector: 'app-changes-page',
-  imports: [GuardianPanel, GuardianBadge, ChangeConfiguration, ChangeImpact, RestorePage],
+  imports: [
+    GuardianPanel,
+    GuardianBadge,
+    ChangeConfiguration,
+    ChangeImpact,
+    ChangeOutcome,
+    RestorePage,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './changes-page.html',
   styleUrl: './changes-page.scss',
@@ -107,6 +115,16 @@ export class ChangesPage {
    *  deep-link into this page that way. */
   readonly group = input<string>();
   readonly operation = input<string>();
+  readonly section = input<ChangeSection>();
+  protected readonly sections: { key: ChangeSection; label: string }[] = [
+    { key: 'outcome', label: 'Outcome' },
+    { key: 'configuration', label: 'Configuration' },
+    { key: 'timeline', label: 'Timeline' },
+    { key: 'evidence', label: 'Technical evidence' },
+  ];
+  protected readonly activeSection = computed<ChangeSection>(() =>
+    this.sections.some((s) => s.key === this.section()) ? this.section()! : 'outcome',
+  );
 
   /** `?actor=<name>`, bound by the router. Global search links an actor here so
    *  the page opens narrowed to that person's change groups. */
@@ -120,7 +138,9 @@ export class ChangesPage {
    * one is worth saying.
    */
   protected readonly hasGuardian = computed(
-    () => !this.time.isHistorical() && this.changeGroups.items().some((group) => !!group.guardian),
+    () =>
+      !this.time.isHistorical() &&
+      (!!this.rawDetail()?.guardian || this.changeGroups.items().some((group) => !!group.guardian)),
   );
 
   /** Derived rather than mirrored: the URL is the only thing that sets an
@@ -358,7 +378,7 @@ export class ChangesPage {
     this.focusDetail = next !== null;
     this.selectGroup(next);
     await this.router.navigate([], {
-      queryParams: { group: next, operation: null },
+      queryParams: { group: next, operation: null, section: null },
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
@@ -400,6 +420,7 @@ export class ChangesPage {
         object: object.logical_object_id,
         a: object.before_version_id,
         b: object.after_version_id,
+        fromChange: this.selectedId(),
       },
     });
   }
@@ -456,6 +477,34 @@ export class ChangesPage {
   }
   protected closeRollback(): void {
     this.updateOperation(null);
+  }
+
+  protected showSection(section: ChangeSection): void {
+    void this.router.navigate([], {
+      queryParams: { section: section === 'outcome' ? null : section },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+
+  protected onSectionKey(event: KeyboardEvent, index: number): void {
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? this.sections.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + this.sections.length) %
+            this.sections.length;
+    this.showSection(this.sections[next].key);
+    afterNextRender(
+      () =>
+        this.element.nativeElement
+          .querySelector<HTMLElement>(`#change-tab-${this.sections[next].key}`)
+          ?.focus(),
+      { injector: this.injector },
+    );
   }
 
   protected search(value: string): void {

@@ -11,6 +11,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 import { TimeContextService } from '../../core/time-context.service';
 import { ChangesPage } from './changes-page';
 import { DiffService } from '../history/diff.service';
+import { MonitoringService } from '../impact/monitoring.service';
 import { SiteImpactService } from '../impact/site-impact.service';
 import { of } from 'rxjs';
 
@@ -117,6 +118,7 @@ describe('ChangesPage', () => {
         provideHttpClientTesting(),
         provideRouter([]),
         { provide: DiffService, useValue: { compare: vi.fn().mockResolvedValue({ mode: 'chips', entries: [], sections: [], summary: '2 fields changed', counts: { changed: 2 }, truncated: false }) } },
+        { provide: MonitoringService, useValue: { get: vi.fn(() => of(null)) } },
         { provide: SiteImpactService, useValue: { topology: vi.fn().mockReturnValue(of({ devices: [], links: [], warnings: [], source: 'stored', collected_at: null })) } },
         {
           provide: OrganizationContextService,
@@ -204,6 +206,7 @@ describe('ChangesPage', () => {
     expect(selected.length).toBe(1);
     expect(selected[0].getAttribute('aria-expanded')).toBe('true');
     expect(text('.panel-title')).toEqual([MONDAY_WARNING.title]);
+    fixture.componentRef.setInput('section', 'configuration'); fixture.detectChanges(); await fixture.whenStable();
     expect(text('.object-picker option')[0]).toContain('NW-Corp');
     expect(text('.object-meta')[0]).toContain('v14 → v15');
   });
@@ -276,7 +279,7 @@ describe('ChangesPage', () => {
     expect(button.textContent).toContain('site-1');
     button.click();
     expect(navigate).not.toHaveBeenCalled();
-    expect(text('.topology-head')[0]).toContain('site-1');
+    expect(text('.site-card')[0]).toContain('site-1');
   });
 
   it('offers each affected site once, including changes without a monitoring session', async () => {
@@ -295,7 +298,7 @@ describe('ChangesPage', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(navigate).not.toHaveBeenCalled();
-    expect(text('.topology-head')[0]).toContain('site-2');
+    expect(text('.site-card')[1]).toContain('site-2');
   });
 
   it('compares a changed object under the slot names History reads', async () => {
@@ -307,13 +310,14 @@ describe('ChangesPage', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    fixture.componentRef.setInput('section', 'configuration'); fixture.detectChanges(); await fixture.whenStable();
     const element = fixture.nativeElement as HTMLElement;
     element.querySelector<HTMLButtonElement>('app-change-configuration .cg-btn--link')?.click();
 
     // History names its two slots `a` and `b`, with A the earlier side; sending
     // `before` and `after` would open an unselected comparison.
     expect(navigate).toHaveBeenCalledWith(['/history'], {
-      queryParams: { object: 'obj-1', a: 'v14', b: 'v15' },
+      queryParams: { object: 'obj-1', a: 'v14', b: 'v15', fromChange: MONDAY_WARNING.id },
     });
   });
 
@@ -422,14 +426,14 @@ describe('ChangesPage', () => {
     fixture.detectChanges();
 
     const review = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.rollback-card button'),
+      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.decision button'),
     ).find((button) => button.textContent?.includes('Review rollback'))!;
     review.click();
     await fixture.whenStable();
     fixture.detectChanges();
 
     httpMock.expectNone('/api/v1/organizations/org-1/restores/plans');
-    const alert = text('.rollback-card [role="alert"]')[0];
+    const alert = text('.rollback-note[role="alert"]')[0];
     expect(alert).toContain('at most 100 objects');
     expect(alert).not.toContain('Try again');
   });

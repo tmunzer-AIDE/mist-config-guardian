@@ -1,149 +1,158 @@
 <div class="page">
-  <header class="head">
-    <div>
-      <h1 class="cg-page-title">Change overview</h1>
-      <p class="head-sub">Recent configuration changes and their recorded impact.</p>
-    </div>
-    <button class="cg-btn cg-btn--primary" (click)="openChanges()">
-      Explore all changes <span aria-hidden="true">↗</span>
-    </button>
-  </header>
-  @if (counts(); as total) {
-    <section class="dashboard-stats" aria-label="Changes in the selected period">
-      <button class="stat" (click)="openChanges()">
-        <span>Configuration changes <span aria-hidden="true">↗</span></span
-        ><strong>{{ total.change_groups }}</strong
-        ><small>in the selected period</small>
-      </button>
-      <button class="stat" [disabled]="historical()" (click)="filter.set('impacting')">
-        <span>With disruption</span
-        ><strong class="warning">{{ historical() ? '—' : total.impacting }}</strong
-        ><small>{{
-          historical() ? 'Historical outcome unavailable' : 'Warning or critical assessment'
-        }}</small>
-      </button>
-      <div class="stat">
-        <span>Not yet recovered</span
-        ><strong [class.critical]="total.unrecovered > 0">{{
-          historical() ? '—' : total.unrecovered
-        }}</strong
-        ><small>{{
-          historical() ? 'Historical outcome unavailable' : 'Latest recorded outcome'
-        }}</small>
+  <div class="overview-summary cg-scroll" aria-label="Overview summary">
+    <header class="head">
+      <div>
+        <h1 class="cg-page-title">Overview</h1>
+        <p class="head-sub">Recent configuration changes and their recorded impact.</p>
       </div>
-      <div class="stat">
-        <span>Recovery queue</span
-        ><strong>{{ historical() ? '—' : total.pending_approvals + total.failed_restores }}</strong
-        ><small>{{
-          historical()
-            ? 'Return to Live for recovery status'
-            : total.pending_approvals + ' approvals · ' + total.failed_restores + ' failed restores'
-        }}</small>
-      </div>
-    </section>
-  }
+      <button class="cg-btn cg-btn--primary" (click)="openChanges()">
+        Explore all changes <span aria-hidden="true">↗</span>
+      </button>
+    </header>
+    @if (counts(); as total) {
+      <section class="dashboard-stats" aria-label="Changes in the selected period">
+        <button class="stat" (click)="openChanges()">
+          <span>Configuration changes <span aria-hidden="true">↗</span></span
+          ><strong>{{ total.change_groups }}</strong
+          ><small>in the selected period</small>
+        </button>
+        <button class="stat" [disabled]="historical()" (click)="filter.set('impacting')">
+          <span>Recorded findings</span
+          ><strong class="warning">{{ historical() ? '—' : total.impacting }}</strong
+          ><small>{{
+            historical() ? 'Historical outcome unavailable' : 'Warning or critical findings'
+          }}</small>
+        </button>
+        <div class="stat">
+          <span>Not yet recovered</span
+          ><strong [class.critical]="total.unrecovered > 0">{{
+            historical() ? '—' : total.unrecovered
+          }}</strong
+          ><small>{{
+            historical() ? 'Historical outcome unavailable' : 'Latest recorded outcome'
+          }}</small>
+        </div>
+        <div class="stat">
+          <span>Recovery queue</span
+          ><strong>{{
+            historical() ? '—' : total.pending_approvals + total.failed_restores
+          }}</strong
+          ><small>{{
+            historical()
+              ? 'Return to Live for recovery status'
+              : total.pending_approvals +
+                ' approvals · ' +
+                total.failed_restores +
+                ' failed restores'
+          }}</small>
+        </div>
+      </section>
+    }
+  </div>
   <div class="columns">
     <section class="activity">
-      <div class="section-head">
-        <div>
-          <h2>Recent changes</h2>
-          <p>{{ subtitle() }}</p>
-        </div>
-        <div class="cg-pills head-filters" role="group" aria-label="Change filter">
-          @for (option of filters(); track option) {
-            <button
-              class="cg-pill"
-              [class.cg-pill--on]="filter() === option"
-              [attr.aria-pressed]="filter() === option"
-              (click)="filter.set(option)"
-            >
-              {{
-                option === 'all'
-                  ? 'All changes'
-                  : option === 'impacting'
-                    ? 'With disruption'
-                    : 'My changes'
-              }}
-            </button>
-          }
-        </div>
-      </div>
-      @for (card of feed(); track card.id) {
-        <article class="cg-card card" [attr.data-tone]="card.tone">
-          <div class="entry-time">
-            {{ card.time }}
-            <span>UTC</span>
+      <div class="feed-scroll cg-scroll" aria-label="Recent change feed">
+        <div class="section-head">
+          <div>
+            <h2>Recent changes</h2>
+            <p>{{ subtitle() }}</p>
           </div>
-          <div class="card-body">
-            <div class="card-head">
-              <button class="card-title" (click)="open(card.id)">{{ card.title }}</button
-              ><span [class]="'cg-badge cg-badge--' + card.tone">{{ card.level }}</span>
-            </div>
-            <p class="card-summary">{{ card.summary }}</p>
-            <div class="card-context">
-              <span>{{ card.group.actor || 'Unattributed' }}</span
-              ><span
-                >{{ card.group.object_count }}
-                {{ card.group.object_count === 1 ? 'object' : 'objects' }}</span
-              ><span
-                >{{ card.group.affected_site_ids.length }} linked
-                {{ card.group.affected_site_ids.length === 1 ? 'site' : 'sites' }}</span
-              ><span>{{ card.group.devices_label || 'Device reach unknown' }}</span>
-              @if (card.group.recovery_state === 'recovered') {
-                <span class="recovered">✓ Recovered</span>
-              }
-            </div>
-            @if (!historical() && overview.overview()?.guardian_feed_counts) {
-              <app-guardian-badge [summary]="card.group.guardian ?? null" [compact]="true" />
+          <div class="cg-pills head-filters" role="group" aria-label="Change filter">
+            @for (option of filters(); track option) {
+              <button
+                class="cg-pill"
+                [class.cg-pill--on]="filter() === option"
+                [attr.aria-pressed]="filter() === option"
+                (click)="filter.set(option)"
+              >
+                {{
+                  option === 'all'
+                    ? 'All changes'
+                    : option === 'impacting'
+                      ? 'Recorded findings'
+                      : 'My changes'
+                }}
+              </button>
             }
-            @if (card.metrics.length) {
-              <div class="metrics">
-                @for (metric of card.metrics; track metric.label) {
-                  <span
-                    >{{ metric.label }} <strong>{{ metric.value }}</strong>
-                    <small>{{ metric.from }}</small></span
-                  >
+          </div>
+        </div>
+        @for (card of feed(); track card.id) {
+          <article class="cg-card card" [attr.data-tone]="card.tone">
+            <div class="entry-time">
+              {{ card.time }}
+              <span>UTC</span>
+            </div>
+            <div class="card-body">
+              <div class="card-head">
+                <button class="card-title" (click)="open(card.id)">{{ card.title }}</button
+                ><span [class]="'cg-badge cg-badge--' + card.tone">{{ card.level }}</span>
+              </div>
+              <p class="card-summary">{{ card.summary }}</p>
+              <div class="card-context">
+                <span>{{ card.group.actor || 'Unattributed' }}</span
+                ><span
+                  >{{ card.group.object_count }}
+                  {{ card.group.object_count === 1 ? 'object' : 'objects' }}</span
+                ><span
+                  >{{ card.group.affected_site_ids.length }} linked
+                  {{ card.group.affected_site_ids.length === 1 ? 'site' : 'sites' }}</span
+                ><span>{{ card.group.devices_label || 'Device reach unknown' }}</span>
+                @if (card.group.recovery_state === 'recovered') {
+                  <span class="recovered">✓ Recovered</span>
                 }
               </div>
+              @if (!historical() && overview.overview()?.guardian_feed_counts) {
+                <app-guardian-badge [summary]="card.group.guardian ?? null" [compact]="true" />
+              }
+              @if (card.metrics.length) {
+                <div class="metrics">
+                  @for (metric of card.metrics; track metric.label) {
+                    <span
+                      >{{ metric.label }} <strong>{{ metric.value }}</strong>
+                      <small>{{ metric.from }}</small></span
+                    >
+                  }
+                </div>
+              }
+            </div>
+            <button
+              class="open-change"
+              [attr.aria-label]="'Inspect ' + card.title"
+              (click)="open(card.id)"
+            >
+              Inspect <span aria-hidden="true">→</span>
+            </button>
+          </article>
+        } @empty {
+          <div class="empty">
+            <h3>{{ hasChanges() ? 'No matching changes in this feed' : emptyTitle() }}</h3>
+            <p>
+              {{ hasChanges() ? 'Choose All changes or explore the full history.' : emptyBody() }}
+            </p>
+            @if (setupOffered()) {
+              <button class="cg-btn cg-btn--primary" (click)="openSettings()">
+                Open organization setup
+              </button>
             }
           </div>
-          <button
-            class="open-change"
-            [attr.aria-label]="'Inspect ' + card.title"
-            (click)="open(card.id)"
-          >
-            Inspect <span aria-hidden="true">→</span>
-          </button>
-        </article>
-      } @empty {
-        <div class="empty">
-          <h3>{{ hasChanges() ? 'No matching changes in this feed' : emptyTitle() }}</h3>
-          <p>
-            {{ hasChanges() ? 'Choose All changes or explore the full history.' : emptyBody() }}
-          </p>
-          @if (setupOffered()) {
-            <button class="cg-btn cg-btn--primary" (click)="openSettings()">
-              Open organization setup
+        }
+        @if (hasChanges()) {
+          <div class="feed-footer">
+            <span
+              >{{ feed().length }} shown from the recent feed · totals above cover the full
+              period</span
+            ><button class="cg-btn cg-btn--link" (click)="openChanges()">
+              View complete change history →
             </button>
-          }
-        </div>
-      }
-      @if (hasChanges()) {
-        <div class="feed-footer">
-          <span
-            >{{ feed().length }} shown from the recent feed · totals above cover the full
-            period</span
-          ><button class="cg-btn cg-btn--link" (click)="openChanges()">
-            View complete change history →
-          </button>
-        </div>
-      }
+          </div>
+        }
+      </div>
     </section>
-    <aside class="rail">
+    <aside class="rail cg-scroll" aria-label="Backup and recovery status">
       <section class="topology-shortcut">
-        <h2>Site topology</h2>
+        <h2>Sites & devices</h2>
         <p>View network connections and inspect changes on individual devices.</p>
-        <button class="cg-btn" (click)="openTopology()">Open site topology →</button>
+        <button class="cg-btn" (click)="openTopology()">Open sites & devices →</button>
       </section>
       @if (historical()) {
         <section class="cg-card panel">

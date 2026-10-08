@@ -19,6 +19,7 @@ from mist_config_guardian_backend.services.impact_evidence import (
     normalized_observation,
     validate_zero_evidence,
 )
+from mist_config_guardian_backend.services.monitoring_recovery import reconciled_session
 
 
 class SleObservationResponse(BaseModel):
@@ -100,6 +101,8 @@ class MonitoringSessionResponse(BaseModel):
         cls, session: MonitoringSession, changes: list[MonitoringChangeRef] | None = None
     ) -> "MonitoringSessionResponse":
         """Convert a persisted session into its safe API shape."""
+        stored_assessment = session.assessment is not None
+        session = reconciled_session(session)
         if session.id is None:
             msg = "Persisted monitoring session is missing an identifier"
             raise ValueError(msg)
@@ -146,7 +149,7 @@ class MonitoringSessionResponse(BaseModel):
             monitoring_ends_at=session.monitoring_ends_at,
             impact_severity=assessment.severity,
             assessment=assessment,
-            assessment_source="stored" if session.assessment else "legacy",
+            assessment_source="stored" if stored_assessment else "legacy",
             peak_impact_severity=session.peak_impact_severity,
             deterministic_summary=assessment.summary,
             degraded_metrics=list(assessment.degraded_metrics),

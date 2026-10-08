@@ -134,7 +134,7 @@
   display: block;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 .restore-inline-head {
   display: flex;
@@ -422,9 +422,10 @@
   }
   .detail-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(100px, 30%) minmax(0, 1fr);
   }
   .library-body {
-    min-height: 200px;
+    min-height: 0;
   }
 
   .col {
@@ -433,7 +434,7 @@
   }
 
   .col-body {
-    max-height: 280px;
+    min-height: 0;
   }
 }
 

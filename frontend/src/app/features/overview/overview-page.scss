@@ -1,10 +1,18 @@
+:host {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
 .page {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   padding: 28px;
   display: flex;
   flex-direction: column;
   gap: 26px;
   max-width: 1800px;
-  margin: auto;
+  margin: 0 auto;
 }
 .head {
   display: flex;
@@ -13,8 +21,17 @@
   gap: 20px;
   flex-wrap: wrap;
 }
+.overview-summary {
+  flex: none;
+  min-height: 0;
+  max-height: 40%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 .head h1 {
-  font-size: 35px;
+  font-size: 25px;
   line-height: 1.2;
   letter-spacing: -1.3px;
   margin: 7px 0;
@@ -30,7 +47,7 @@
   gap: 14px;
 }
 .stat {
-  padding: 22px;
+  padding: 14px;
   border: 1px solid var(--glass-border);
   background: white;
   box-shadow: var(--shadow-card);
@@ -50,11 +67,11 @@
   font-weight: 550;
 }
 .stat strong {
-  font-size: 42px;
+  font-size: 28px;
   font-weight: 650;
   letter-spacing: -1.8px;
   line-height: 1.2;
-  margin: 13px 0 5px;
+  margin: 6px 0 4px;
 }
 .stat small {
   font-size: 11px;
@@ -76,12 +93,19 @@ button.stat:disabled {
   color: var(--tone-critical-ink);
 }
 .columns {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 285px;
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
 }
 .activity {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 .section-head {
@@ -200,7 +224,15 @@ h2 {
   color: var(--ink-soft);
   padding: 10px 0;
 }
+.feed-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
 .rail {
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
   display: grid;
   gap: 16px;
 }
@@ -336,6 +368,7 @@ h2 {
 @media (max-width: 950px) {
   .columns {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.6fr) minmax(0, 1fr);
   }
   .rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));

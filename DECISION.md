@@ -180,3 +180,46 @@ Ruff format/lint, source types and unchanged OpenAPI verification. Upstream's
 2,173 offline tests, lint, types, wheel build and installed-wheel imports passed.
 No live Mist/model calls were made. CodeRabbit remains unavailable; the diff
 received a local review.
+
+## Outcome-first UX · 8 October 2026
+
+The approved mockups move the selected change into a focused workspace. The
+shared top bar and left navigation remain transparent and borderless. The
+application frame stays within the viewport, with independent content scroll
+areas and 4px Chromium scrollbars (native thin on Firefox).
+
+The first section separates deployment outcome, measured service impact and
+application experience. It shows the reason for a finding, recovery time,
+attribution limits, recommended next step and labelled AI interpretation before
+raw captures or topology. Configuration, Timeline and Technical evidence are
+local sections that retain the selected change and section in the URL. Full
+version comparisons and legacy device evidence have a direct return to the
+originating change. Device lists are the default; observed topology remains an
+optional local view. Restore activity has a direct operator-only navigation
+entry, while contextual rollback retains the existing backup, credential,
+approval, confirmation and progress workflow.
+
+A configuration failure is not proof of measured network degradation. Later
+matching successful configuration in the same monitoring window closes the
+failure using observed event time, including out-of-order receipt delivery.
+Read-time reconciliation retains the historical peak, other operational findings
+and uncertainty. Projection policy version 2 uses the existing bounded backfill
+to repair list filters and counts without altering raw observations or receipts.
+Stored AI text is preserved and flagged when severity or metric direction
+conflicts with the deterministic evidence.
+
+The information inventory, hierarchy, click paths and recovery limits are in
+[configuration events and impact evidence](docs/design/change-event-impact.md).
+The [desktop](docs/design/change-outcome-preview.png) and
+[mobile](docs/design/change-outcome-mobile-preview.png) previews use synthetic
+browser fixtures for the reported gateway scenario.
+
+Validation: production build, 479 frontend unit tests and all 20 Chrome browser
+scenarios passed. The compact-window refinement also passed focused outcome,
+keyboard/context and independent-scroll checks at 1600, 1024, 768, 390 and 320px.
+The backend suite passed 2,765 tests with 175 environment-dependent integration
+cases skipped; formatting, lint, type checks and OpenAPI consistency passed.
+An additional 77 focused group/recovery regressions passed after the wording
+cleanup. Local code review was completed. CodeRabbit could not run because its
+CLI reports that reauthentication is required. No live Mist restore, deployment
+or other network mutation was performed.

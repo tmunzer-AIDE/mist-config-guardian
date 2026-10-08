@@ -10,8 +10,8 @@
   </span>
 </div>
 
-<nav aria-label="Primary">
-  @for (item of items; track item.path) {
+<nav class="cg-scroll" aria-label="Primary">
+  @for (item of items(); track item.path) {
     <a
       class="nav-item"
       [attr.title]="item.label"

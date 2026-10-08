@@ -30,7 +30,7 @@
   }
 
   @if (results().length > 0) {
-    <ul class="cg-panel results">
+    <ul class="cg-panel results cg-scroll">
       @for (result of results(); track result.kind + result.id) {
         <li>
           <button class="row" type="button" (click)="open(result)">

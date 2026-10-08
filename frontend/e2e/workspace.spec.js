@@ -242,6 +242,7 @@ test.beforeEach(async ({ page }) => {
         latest_snapshot_objects: 100,
       };
     else if (path.endsWith('/auth/me')) json = user;
+    else if (path.endsWith('/account/profile')) json = user;
     else if (path.endsWith('/organizations')) json = { items: [org], total: 1 };
     else if (path.endsWith('/version')) json = { version: '0.6.5' };
     else if (path.endsWith('/health'))
@@ -313,6 +314,7 @@ test('four selection states, safe panning, zoom, clearing and site isolation', a
     if (message.type() === 'error') errors.push(message.text());
   });
   await page.goto('/impact');
+  await page.getByRole('button', { name: 'Topology', exact: true }).click();
   await expect(page.locator('.node')).toHaveCount(6);
   const panel = page.locator('.details');
   await expect(panel).toHaveAttribute('data-panel', 'site');
@@ -355,6 +357,7 @@ test('overlay breakpoints, mobile navigation, exact UTC time and keyboard contro
   page,
 }, info) => {
   await page.goto('/impact');
+  await page.getByRole('button', { name: 'Topology', exact: true }).click();
   await expect(page.locator('.node')).toHaveCount(6);
   for (const width of [1257, 1255]) {
     await page.setViewportSize({ width, height: 900 });
@@ -433,7 +436,7 @@ test('embedded restore plans have a reachable vertical scrollport', async ({ pag
   await expect(page.locator('.step-button')).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'Capture backup and review new plan' })).toBeAttached();
 
-  const scrollport = page.locator('.restore-inline > app-restore-page');
+  const scrollport = page.locator('app-restore-step-plan');
   expect(
     await scrollport.evaluate((element) => element.scrollHeight > element.clientHeight),
   ).toBe(true);
@@ -457,6 +460,7 @@ test('failed discovery stays unknown and can be retried without reloading the pa
     page.getByText('This organization has no stored sites yet.', { exact: false }),
   ).toHaveCount(0);
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await page.getByRole('button', { name: 'Topology', exact: true }).click();
   await expect(page.locator('.node')).toHaveCount(6);
 });
 
@@ -470,6 +474,7 @@ test('existing monitoring links keep the detailed evidence accessible', async ({
 
 test('gateway and switch neighbor edges expose observed ports without inventing link health', async ({ page }, info) => {
   await page.goto('/impact');
+  await page.getByRole('button', { name: 'Topology', exact: true }).click();
   await expect(page.locator('.links path')).toHaveCount(5);
   await page.getByRole('button', { name: /Paris gateway,/ }).click();
   await page.getByText('Observed neighbors · 1', { exact: true }).click();
@@ -522,7 +527,7 @@ test('device evidence shows one session and one finding with capture history on 
   await expect(page.getByRole('heading', { name: 'Meeting room AP', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('evidence-mobile.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Back to site impact', exact: false }).click();
+  await page.getByRole('button', { name: 'Back to sites & devices', exact: false }).click();
   await expect(page).toHaveURL(/\/impact\?site=site1&device=aabbccddee04/);
 });
 
@@ -707,6 +712,7 @@ test('Guardian panel labels the AI summary, an early result and withheld evidenc
   await expect(panel).toContainText('Early result · attempt 1');
   await expect(panel).toContainText('ended without publishing a final result');
   await expect(panel).toContainText("AI summary · the AI agent's own words");
+  await panel.getByRole('button', { name: 'Full investigation & sources' }).click();
   await expect(panel).toContainText('3 further impacted devices are not named here: this attempt did not record them individually');
   await expect(panel).toContainText('no change atom · an input this attempt never saw in full');
   await expect(panel).toContainText('attempt could not be read by this build');
@@ -777,12 +783,12 @@ test('change workspace brings configuration, cross-site reach and device evidenc
   page.on('pageerror', error => errors.push(error.message));
   await installChangeWorkspace(page);
   await page.goto('/overview');
-  await expect(page.getByRole('heading', { name: 'Change overview' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
   await expect(page.locator('.card')).toHaveCount(2);
   await expect(page.locator('.card').first()).toBeVisible();
   await expect(page.locator('.page-host--hidden')).toHaveCount(0);
-  await page.getByRole('heading', { name: 'Change overview' }).scrollIntoViewIfNeeded();
-  await expect(page.getByRole('heading', { name: 'Change overview' })).toBeInViewport();
+  await page.getByRole('heading', { name: 'Overview' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeInViewport();
   await page.screenshot({ path: info.outputPath('change-overview-desktop.png'), animations: 'disabled' });
   await page.getByRole('button', { name: 'Inspect Meeting room power policy updated', exact: true }).click();
   await expect(page).toHaveURL(/\/changes\?group=g0/);
@@ -795,11 +801,14 @@ test('change workspace brings configuration, cross-site reach and device evidenc
   await expect(page.locator('.row--group').first()).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('.panel-title')).toBeFocused();
+  await page.getByRole('tab', { name: 'Configuration', exact: true }).click();
   await expect(page.getByRole('table', { name: 'Configuration changes' })).toContainText('false');
   await expect(page.getByRole('table', { name: 'Configuration changes' })).toContainText('true');
+  await page.getByRole('tab', { name: 'Outcome', exact: true }).click();
   await expect(page.getByLabel('Known impact across sites')).toContainText('2linked sites');
   await expect(page.getByLabel('Known impact across sites')).toContainText('4linked devices');
   await expect(page.getByLabel('Known impact across sites')).toContainText('1with measured degradation');
+  await page.getByRole('button', { name: 'Topology', exact: true }).click();
   await expect(page.locator('app-change-impact .node')).toHaveCount(6);
   await page.screenshot({ path: info.outputPath('change-workspace-desktop.png') });
   await page.locator('.device-list').getByRole('button', { name: /Access switch 1/ }).click();
@@ -816,10 +825,11 @@ test('change workspace brings configuration, cross-site reach and device evidenc
   await expect(page.locator('.site-card.active')).toContainText('No measurements');
   await page.locator('.device-list').getByRole('button', { name: /Lyon access switch/ }).click();
   await expect(page.locator('.device-detail')).toContainText('Its impact is unknown');
+  await page.getByRole('tab', { name: 'Configuration', exact: true }).click();
   await page.getByLabel('Configuration object').selectOption('new-wlan');
   await expect(page.locator('app-change-configuration')).toContainText('No before version was captured');
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('.panel').evaluate(el => el.scrollTop = 0);
+  await page.locator('.panel-body').evaluate(el => el.scrollTop = 0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('change-workspace-mobile.png') });
   await page.getByRole('button', { name: 'All changes', exact: false }).last().click();
@@ -877,10 +887,13 @@ test('failed comparisons and topology remain recoverable without claiming health
   await page.route('**/diff?**', route => route.fulfill({ status: 503, json: { detail: 'Unavailable' } }), { times: 1 });
   await page.route('**/impact/sites/site1/topology', route => route.fulfill({ status: 503, json: { detail: 'Unavailable' } }), { times: 1 });
   await page.goto('/changes?group=g0');
+  await page.getByRole('tab', { name: 'Configuration', exact: true }).click();
   await expect(page.locator('app-change-configuration [role=alert]')).toContainText('could not be loaded');
-  await expect(page.locator('app-change-impact [role=alert]')).toContainText('Device evidence is still available');
-  await page.locator('app-change-configuration').getByRole('button', { name: 'Retry', exact: true }).click();
+    await page.locator('app-change-configuration').getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(page.getByRole('table', { name: 'Configuration changes' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Outcome', exact: true }).click();
+  await page.getByRole('button', { name: 'Topology', exact: true }).click();
+  await expect(page.locator('app-change-impact [role=alert]')).toContainText('Device evidence is still available');
   await page.getByRole('button', { name: 'Retry topology' }).click();
   await expect(page.locator('app-change-impact .node')).toHaveCount(6);
 });
@@ -913,7 +926,9 @@ test('asset filter changes explain why network validation is not applicable', as
   await expect(page.locator('app-change-impact')).toContainText('Network impact validation skipped.');
   await expect(page.locator('app-change-impact')).toContainText('categorize BLE assets');
   await expect(page.getByLabel('Known impact across sites')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Configuration', exact: true }).click();
   await expect(page.locator('app-change-configuration')).toContainText('Aeroscout');
+  await page.getByRole('tab', { name: 'Outcome', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Review rollback' })).toBeVisible();
   await page.screenshot({ path: info.outputPath('excluded-network-validation.png'), fullPage: true, animations: 'disabled' });
 });
@@ -929,4 +944,119 @@ test('unlinked audit detail has no zero-object rollback workflow', async ({ page
   await expect(page.locator('.panel-title')).toHaveText('Audit awaiting a captured configuration difference');
   await expect(page.getByRole('button', { name: 'Review rollback' })).toHaveCount(0);
   await expect(page.locator('.rollback-card')).toHaveCount(0);
+});
+
+// Regression for the reported case: an old deployment failure, later success,
+// stable network metrics and an ungrounded stored AI recommendation.
+test('recovered deployment is understandable on arrival and retains local investigation context', async ({ page }, info) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const stableMetrics = [
+    { name: 'gateway-health', baseline: 99.89, latest: 100, delta: 0.11, comparable: true, selected: true, baseline_state: 'measured', latest_state: 'measured' },
+    { name: 'gateway-bandwidth', baseline: 100, latest: 100, delta: 0, comparable: true, selected: true, baseline_state: 'measured', latest_state: 'measured' },
+    { name: 'application-health', baseline: null, latest: null, delta: null, comparable: false, selected: true, baseline_state: 'no_data', latest_state: 'no_data' },
+  ];
+  const recovered = {
+    ...sessions[0], id: 'recovery-window', device_name: 'SSR400C', device_type: 'gateway',
+    status: 'completed', impact_severity: 'none', peak_impact_severity: 'critical',
+    completed_at: '2026-09-19T04:33:00Z', audit_ids: ['previous-audit', 'audit0'],
+    assessment: { severity: 'none', summary: 'No monitored metric moved beyond the noise band.', coverage: 'complete', metrics: stableMetrics },
+    incidents: [{ event_type: 'GW_CONFIG_FAILED', occurred_at: '2026-09-19T03:23:00Z', resolved: true, resolved_at: '2026-09-19T03:32:10Z', severity: 'critical' }],
+    timeline: [
+      { key: 'failed', event_type: 'GW_CONFIG_FAILED', occurred_at: '2026-09-19T03:23:00Z', received_at: '2026-09-19T03:23:10Z' },
+      { key: 'configured', event_type: 'GW_CONFIGURED', occurred_at: '2026-09-19T03:32:10Z', received_at: '2026-09-19T03:32:19Z' },
+    ],
+    ai_assessment: { severity: 'critical', confidence: 'high', explanation: 'Gateway health has experienced degradation of 0.11 (11%).', recommendations: ['Immediately roll back to the last known good configuration.'] },
+  };
+  const detail = {
+    ...workspaceChange, title: 'Device updated · SSR400C', occurred_at: '2026-09-19T03:31:41Z',
+    impact_severity: 'none', impact_label: 'RECOVERED', recovery_state: 'recovered',
+    deterministic_assessment: 'No monitored metric moved beyond the noise band.',
+    monitoring_session_ids: [recovered.id], site_impacts: [{ site_id: 'site1', site_name: 'DNT-NTR', unmonitored_devices: [],
+      devices: [deviceImpact(0, { session_id: recovered.id, completed_at: recovered.completed_at, evidence_coverage: 'complete', metrics: stableMetrics })] }],
+  };
+  await installChangeWorkspace(page);
+  await page.route('**/change-groups/g0*', route => route.fulfill({ json: detail }));
+  await page.route('**/monitoring/recovery-window', route => route.fulfill({ json: recovered }));
+  await page.goto('/changes?group=g0');
+  await expect(page.locator('.outcome-banner')).toContainText('Configuration recovered; no degradation measured');
+  await expect(page.locator('.outcome-facts')).toContainText('Not measured · no application traffic');
+  await expect(page.locator('.incident')).toContainText('Resolved');
+  await expect(page.locator('.incident')).toContainText('GW_CONFIG_FAILED');
+  await expect(page.locator('.ai-conflict')).toBeInViewport();
+  await expect(page.locator('.ai-preview')).toBeInViewport();
+  await expect(page.locator('.attribution').first()).toContainText('An incident predates this audit');
+  await expect(page.getByLabel('Known impact across sites')).toContainText('0with measured degradation');
+  await page.screenshot({ path: info.outputPath('recovered-outcome-desktop.png'), animations: 'disabled' });
+  const identity = await page.locator('.panel-head').boundingBox();
+  await page.getByRole('tab', { name: 'Timeline', exact: true }).click();
+  await expect(page).toHaveURL(/section=timeline/);
+  await expect(page.locator('app-configuration-timeline')).toContainText('GW CONFIGURED');
+  await expect(page.locator('app-configuration-timeline')).toContainText('GW CONFIG FAILED');
+  await page.locator('.panel-body').evaluate(el => el.scrollTop = el.scrollHeight);
+  expect((await page.locator('.panel-head').boundingBox()).y).toBe(identity.y);
+  await page.reload();
+  await expect(page.getByRole('tab', { name: 'Timeline', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tab', { name: 'Outcome', exact: true }).click();
+  await page.getByRole('tab', { name: 'Outcome', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Configuration', exact: true })).toBeFocused();
+  await page.getByRole('tab', { name: 'Outcome', exact: true }).click();
+  for (const viewport of [{ width: 1024, height: 600 }, { width: 390, height: 844 }, { width: 320, height: 568 }]) {
+    await page.setViewportSize(viewport);
+    await page.locator('.panel-body').evaluate(el => el.scrollTop = 0);
+    await expect.poll(() => page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, viewportWidth: innerWidth, viewportHeight: innerHeight })))
+      .toEqual({ width: viewport.width, height: viewport.height, viewportWidth: viewport.width, viewportHeight: viewport.height });
+    await expect(page.locator('.panel-head')).toBeInViewport();
+    expect(await page.locator('.panel-body').evaluate(el => el.clientHeight)).toBeGreaterThan(150);
+    await page.screenshot({ path: info.outputPath(`recovered-outcome-${viewport.width}.png`), animations: 'disabled' });
+  }
+  expect(errors).toEqual([]);
+});
+
+test('the frame stays fixed while work areas scroll with thin rails', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const viewport of [{ width: 1600, height: 900 }, { width: 768, height: 600 }, { width: 390, height: 844 }, { width: 320, height: 568 }]) {
+    await page.setViewportSize(viewport);
+    for (const path of ['/overview', '/changes', '/history', '/impact', '/settings', '/account', '/restore?operation=op-scroll', '/impact/sessions?session=s0']) {
+      await page.goto(path);
+      await expect(page.locator('.page-host--hidden')).toHaveCount(0);
+      const frame = await page.evaluate(() => ({
+        width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight,
+        viewportWidth: innerWidth, viewportHeight: innerHeight, mainOverflow: getComputedStyle(document.querySelector('main')).overflowY,
+        chrome: ['app-header', 'app-sidebar'].map(selector => {
+          const style = getComputedStyle(document.querySelector(selector));
+          return { background: style.backgroundColor, border: style.borderWidth };
+        }),
+      }));
+      expect(frame.width, path).toBeLessThanOrEqual(frame.viewportWidth);
+      expect(frame.height, path).toBeLessThanOrEqual(frame.viewportHeight);
+      expect(frame.mainOverflow, path).toBe('hidden');
+      expect(frame.chrome, path).toEqual([{ background: 'rgba(0, 0, 0, 0)', border: '0px' }, { background: 'rgba(0, 0, 0, 0)', border: '0px' }]);
+      if (path === '/overview') {
+        expect(await page.locator('.feed-scroll').evaluate(el => el.clientHeight), `Overview feed remains usable at ${viewport.width}×${viewport.height}`).toBeGreaterThan(50);
+        expect(await page.locator('.rail').evaluate(el => el.clientHeight), 'Overview attention rail remains usable').toBeGreaterThan(50);
+      }
+    }
+    await page.goto('/history');
+    const table = page.locator('.library-table');
+    await expect(table.locator('tbody tr')).toHaveCount(100);
+    expect(await table.evaluate(el => getComputedStyle(el, '::-webkit-scrollbar').width)).toBe('4px');
+    const header = await page.locator('app-header').boundingBox();
+    await table.hover();
+    await page.mouse.wheel(0, 600);
+    await expect.poll(() => table.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    expect((await page.locator('app-header').boundingBox()).y).toBe(header.y);
+    await page.goto('/restore?operation=op-scroll');
+    const plan = page.locator('app-restore-step-plan'), authorization = page.locator('app-restore-step-authorize');
+    await expect(plan.getByRole('heading', { name: 'Plan · 40 actions' })).toBeVisible();
+    await expect(authorization).toBeVisible();
+    await plan.hover();
+    await page.mouse.wheel(0, 800);
+    await expect.poll(() => plan.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    expect(await authorization.evaluate(el => el.scrollTop)).toBe(0);
+  }
+  expect(errors).toEqual([]);
 });

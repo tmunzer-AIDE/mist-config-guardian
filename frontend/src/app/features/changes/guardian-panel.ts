@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { orgPath } from '../../core/api';
@@ -120,6 +120,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
               <p>{{ note }}</p>
             }
 
+            @if (!compact() || fullReport()) {
             <h5>Change</h5>
             @for (atom of run.report.change.items; track atom.id) {
               <p>
@@ -277,9 +278,12 @@ import { OrganizationContextService } from '../../core/organization-context.serv
             @if (omittedRows(run.report.gaps); as note) {
               <p>{{ note }}</p>
             }
+            }
+            @if (compact() && !fullReport()) { <button class="cg-btn" (click)="fullReport.set(true)">Full investigation & sources</button> }
           </article>
         }
 
+        @if (!compact() || fullReport()) {
         <h4>Attempts</h4>
         @for (attempt of investigation.attempts; track attempt.id) {
           <article class="attempt">
@@ -345,6 +349,7 @@ import { OrganizationContextService } from '../../core/organization-context.serv
         @if (!investigation.attempts.length) {
           <p>No attempt is recorded for this investigation.</p>
         }
+        }
       </section>
     }
   `,
@@ -363,6 +368,9 @@ import { OrganizationContextService } from '../../core/organization-context.serv
 })
 export class GuardianPanel {
   readonly groupId = input.required<string>();
+  readonly compact = input(false);
+  readonly autoLoad = input(false);
+  protected readonly fullReport = signal(false);
 
   private readonly organizations = inject(OrganizationContextService);
   private readonly http = inject(HttpClient);
@@ -422,6 +430,7 @@ export class GuardianPanel {
     effect(() => {
       this.groupId();
       this.organizations.selected()?.id;
+      const automatic = this.autoLoad();
       this.request++;
       this.runRequest++;
       this.investigation.set(null);
@@ -432,6 +441,8 @@ export class GuardianPanel {
       this.message.set('');
       this.pending.set(false);
       this.runPending.set(false);
+      this.fullReport.set(false);
+      if (automatic) untracked(() => void this.load());
     });
   }
 

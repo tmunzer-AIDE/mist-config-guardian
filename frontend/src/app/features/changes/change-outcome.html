@@ -1,0 +1,227 @@
+@if (outcome(); as result) {
+  <section
+    class="outcome-banner"
+    [attr.data-tone]="result.tone"
+    aria-label="Latest recorded outcome"
+  >
+    <div class="outcome-status">
+      <span [class]="'cg-badge cg-badge--' + result.tone">{{ result.label }}</span
+      ><span>Latest recorded outcome · not live connectivity</span>
+    </div>
+    <h3>{{ result.headline }}</h3>
+    <p>
+      {{
+        detail().impact_validation_reason ||
+          detail().deterministic_assessment ||
+          'Inspect the findings and evidence below.'
+      }}
+    </p>
+    @if (result.latestAt) {
+      <small>Latest evidence {{ at(result.latestAt) }}</small>
+    }
+  </section>
+  @if (detail().impact_validation !== 'excluded' && detail().impact_known !== false) {
+    <div class="outcome-facts" aria-label="Separate deployment, service and coverage findings">
+      <div>
+        <span>Deployment outcome</span><strong>{{ result.deployment }}</strong>
+        @if (result.failures.length) {
+          <small
+            >{{ result.failures.length }} failure events · {{ result.open.length }} still
+            open</small
+          >
+        }
+      </div>
+      <div>
+        <span>Measured service impact</span><strong>{{ result.service }}</strong
+        ><small>{{ result.comparable.length }} comparable network metrics</small>
+      </div>
+      <div>
+        <span>User experience</span><strong>{{ result.experience }}</strong
+        ><small>{{ result.coverage }}</small>
+      </div>
+    </div>
+  }
+  @if (result.attribution || result.predates) {
+    <p class="attribution">
+      <strong>Attribution uncertain.</strong>
+      @if (result.predates) {
+        An incident predates this audit.
+      }
+      @if (result.attribution) {
+        Multiple changes share the monitoring window.
+      }
+      These findings do not establish which change caused them.
+    </p>
+  }
+  @if (unavailable() || windowsOmitted()) {
+    <p class="attribution" role="status">
+      Evidence is incomplete: {{ unavailable() }} windows could not be read;
+      {{ windowsOmitted() }} additional windows are outside this bounded view.
+      <button class="cg-btn" (click)="retry()">Retry evidence</button>
+    </p>
+  }
+  <ng-content select="[change-tabs]" />
+  <div id="change-section-content" role="tabpanel" [attr.aria-labelledby]="'change-tab-' + view()">
+    @if (view() === 'outcome') {
+      <div class="decision-columns">
+        <section class="cg-card decision">
+          <h3>Why this was flagged</h3>
+          @for (incident of result.incidents; track incident.key) {
+            <div class="incident">
+              <span
+                [class]="
+                  'cg-badge cg-badge--' +
+                  (incident.resolved ? 'ok' : incident.severity === 'critical' ? 'crit' : 'warn')
+                "
+                >{{ incident.resolved ? 'Resolved' : 'Open' }}</span
+              >
+              <div>
+                <strong>{{ incident.event_type }}</strong> · {{ incident.device
+                }}<small
+                  >{{ at(incident.occurred_at) }}
+                  @if (incident.resolved_at) {
+                    → resolved {{ at(incident.resolved_at) }}
+                  }
+                </small>
+              </div>
+            </div>
+          } @empty {
+            @for (item of detail().evidence; track $index) {
+              <p>{{ item.label }}</p>
+            } @empty {
+              <p>
+                {{
+                  pending()
+                    ? 'Loading incident evidence…'
+                    : 'No detailed incident finding was recorded.'
+                }}
+              </p>
+            }
+          }
+          <h4>Recommended next step</h4>
+          <p>
+            {{
+              result.open.length
+                ? 'Review the failed deployment and changed settings before choosing a recovery action.'
+                : result.recovered
+                  ? 'Review recovery evidence and overlapping changes. A historical failure alone does not establish a current need to roll back.'
+                  : result.uncertain
+                    ? 'Inspect collection gaps before judging network impact.'
+                    : result.degraded
+                      ? 'Review the degraded metrics and configuration diff, then assess recovery options.'
+                      : 'Review the recorded outcome and changed configuration.'
+            }}
+          </p>
+          <div class="actions">
+            <button class="cg-btn cg-btn--primary" (click)="openSection.emit('timeline')">
+              View events & recovery
+            </button>
+            @if (canRestore()) {
+              <button class="cg-btn" [disabled]="restoreBusy()" (click)="rollback.emit()">
+                {{ restoreBusy() ? 'Building rollback plan…' : 'Review rollback' }}
+              </button>
+            }
+          </div>
+        </section>
+        <aside class="cg-card decision ai" aria-label="AI interpretation">
+          <h3>AI interpretation</h3>
+          @for (item of commentary(); track item.session.id) {
+            <strong class="device-name">{{
+              item.session.device_name || item.session.device_mac
+            }}</strong>
+            @if (item.needsReview) {
+              <p class="ai-conflict" role="status">
+                Needs review: the stored interpretation conflicts with the latest recorded outcome
+                or metric direction. Review its recommendations against the evidence.
+              </p>
+            }
+            @if (item.ai; as ai) {
+              <p class="ai-preview">{{ ai.explanation }}</p>
+              <details>
+                <summary>Full stored commentary & recommendations</summary>
+                <p>{{ ai.explanation }}</p>
+                <ul>
+                  @for (recommendation of ai.recommendations; track $index) {
+                    <li>{{ recommendation }}</li>
+                  }
+                </ul>
+                <small
+                  >AI severity: {{ ai.severity || 'not supplied' }} · confidence:
+                  {{ ai.confidence || 'not supplied' }}</small
+                >
+              </details>
+            } @else {
+              <p>Commentary unavailable: {{ item.session.ai_assessment_error }}</p>
+            }
+          } @empty {
+            <p>
+              {{
+                pending()
+                  ? 'Loading stored commentary…'
+                  : 'No AI commentary was recorded for the available windows.'
+              }}
+            </p>
+          }
+          <p class="help">AI interprets evidence; it is not an additional measurement.</p>
+          <ng-content select="[change-investigation]" />
+        </aside>
+      </div>
+      <ng-content select="[change-impact]" />
+    } @else if (view() === 'configuration') {
+      <ng-content select="[change-configuration]" />
+    } @else {
+      @for (session of sessions(); track session.id) {
+        <section class="cg-card evidence-window">
+          <h3>{{ session.device_name || session.device_mac }}</h3>
+          <p class="help">
+            Window ended {{ at(session.completed_at) }} · {{ session.audit_ids.length }} linked
+            audits
+          </p>
+          @if (view() === 'timeline') {
+            <app-configuration-timeline [session]="session" />
+          } @else {
+            <app-device-evidence [session]="session" />
+            <h4>Network metrics</h4>
+            <div class="cg-scroll-x">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Before</th>
+                    <th>Latest</th>
+                    <th>Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (m of session.assessment?.metrics || []; track m.name) {
+                    <tr>
+                      <th>{{ metric(m.name) }}</th>
+                      <td>{{ value(m.baseline, m.baseline_state) }}</td>
+                      <td>{{ value(m.latest, m.latest_state) }}</td>
+                      <td>{{ m.delta === null ? 'Not comparable' : m.delta + ' pp' }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+            <details>
+              <summary>Monitoring metadata & collection warnings</summary>
+              <p>Session: {{ session.id }} · Site: {{ session.site_id }}</p>
+              @for (warning of session.warnings; track $index) {
+                <p>{{ warning }}</p>
+              }
+            </details>
+          }
+        </section>
+      } @empty {
+        <p class="help">
+          {{
+            pending()
+              ? 'Loading device evidence…'
+              : 'No monitoring windows are available for this change.'
+          }}
+        </p>
+      }
+    }
+  </div>
+}

@@ -464,7 +464,7 @@ export class RestorePage {
       // for; under another one they name nothing. The URL is cleared rather
       // than left to fail, and the effect re-runs with the empty link.
       if (this.contextual()) this.operationChanged.emit(null);
-      else void this.router.navigate(['/history/restore'], { queryParams: {} });
+      else void this.router.navigate([this.workspacePath() === '/restore' ? '/restore' : '/history/restore'], { queryParams: {} });
       return;
     }
     void this.applyLink(organizationId, link, token);
@@ -583,7 +583,7 @@ export class RestorePage {
       this.operationChanged.emit(operationId);
       return;
     }
-    void this.router.navigate(['/history'], {
+    void this.router.navigate([this.workspacePath()], {
       queryParamsHandling: 'merge',
       queryParams: { restore: '1', versions: null, changeGroup: null, step: null, compensate: null, operation: operationId },
       replaceUrl,
@@ -1260,6 +1260,10 @@ export class RestorePage {
 
   protected async openImpact(sessionId: string): Promise<void> {
     await this.router.navigate(['/impact'], { queryParams: { session: sessionId } });
+  }
+
+  private workspacePath(): string {
+    return this.router.url?.split(/[?#]/)[0].replace(/\/$/, '') === '/restore' ? '/restore' : '/history';
   }
 
   protected async openSnapshot(): Promise<void> {

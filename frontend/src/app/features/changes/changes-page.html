@@ -135,40 +135,12 @@
               <button class="cg-btn cg-btn--link" (click)="retryDetail()">Refresh evidence</button>
             }
             <span class="panel-audit">{{ detail.audit }}</span
-            ><span [class]="'cg-badge cg-badge--' + detail.tone">{{ detail.level }}</span>
+            ><span class="recorded-label">Recorded change</span>
           </div>
           <h2 class="panel-title" tabindex="-1" [id]="panelId + '-title'">{{ detail.title }}</h2>
           <p class="panel-byline">{{ detail.byline }}</p>
-          @if (!restoreOperation()) {
-            <nav class="detail-jumps" aria-label="Change sections">
-              <button class="cg-btn cg-btn--link" (click)="jump('.configuration-column')">
-                Configuration
-              </button>
-              <button class="cg-btn cg-btn--link" (click)="jump('.impact-column')">
-                Site & device impact
-              </button>
-              @if (canRestore()) {
-                <button class="cg-btn cg-btn--link" (click)="jump('.rollback-card')">
-                  Rollback
-                </button>
-              }
-            </nav>
-          }
         </header>
         @if (rawDetail(); as change) {
-          <div class="change-verdict">
-            <div>
-              <strong>{{
-                change.impact_validation === 'excluded'
-                  ? 'Network impact validation'
-                  : 'Recorded impact'
-              }}</strong>
-              <p>{{ detail.assessment }}</p>
-              @if (change.recovery_state === 'recovered') {
-                <span class="recovered">Recovered after the change</span>
-              }
-            </div>
-          </div>
           @if (restoreOperation()) {
             <section class="rollback-workspace" aria-label="Rollback review">
               <div class="rollback-heading">
@@ -197,58 +169,79 @@
               />
             </section>
           } @else {
-            <div class="panel-body">
-              <section class="configuration-column">
-                <app-change-configuration
-                  [objects]="change.changed_objects"
-                  (compare)="compare($event)"
-                />
-                @if (canRestore() && restorable().length) {
-                  <section class="rollback-card">
-                    <h3>Roll back this change</h3>
-                    <p>
-                      Restore {{ restorable().length }}
-                      {{ restorable().length === 1 ? 'object' : 'objects' }} to the captured
-                      previous configuration. You’ll review the exact actions before anything is
-                      changed.
-                    </p>
-                    @if (skippedRestore()) {
-                      <p class="rollback-note">
-                        {{ skippedRestore() }}
-                        {{ skippedRestore() === 1 ? 'object' : 'objects' }} without a previous
-                        version will be excluded.
-                      </p>
-                    }
+            <div class="panel-body cg-scroll">
+              <app-change-outcome
+                [detail]="change"
+                [view]="activeSection()"
+                [canRestore]="canRestore() && restorable().length > 0"
+                [restoreBusy]="restoreBusy()"
+                (rollback)="planRestore(detail.id)"
+                (openSection)="showSection($event)"
+              >
+                <nav
+                  change-tabs
+                  class="cg-tabs detail-tabs cg-scroll-x"
+                  role="tablist"
+                  aria-label="Change sections"
+                >
+                  @for (item of sections; track item.key; let index = $index) {
                     <button
-                      class="cg-btn cg-btn--primary"
-                      [disabled]="!restorable().length || restoreBusy()"
-                      (click)="planRestore(detail.id)"
+                      class="cg-tab"
+                      type="button"
+                      role="tab"
+                      [id]="'change-tab-' + item.key"
+                      [class.cg-tab--on]="activeSection() === item.key"
+                      [attr.aria-selected]="activeSection() === item.key"
+                      [attr.tabindex]="activeSection() === item.key ? 0 : -1"
+                      aria-controls="change-section-content"
+                      (click)="showSection(item.key)"
+                      (keydown)="onSectionKey($event, index)"
                     >
-                      {{ restoreBusy() ? 'Building rollback plan…' : 'Review rollback' }}
-                      <span aria-hidden="true">↶</span>
+                      {{ item.label }}
                     </button>
-                    @if (restoreError()) {
-                      <p role="alert">{{ restoreError() }}</p>
+                  }
+                </nav>
+                <section change-configuration class="configuration-column">
+                  @if (activeSection() === 'configuration') {
+                    <app-change-configuration
+                      [objects]="change.changed_objects"
+                      (compare)="compare($event)"
+                    />
+                    @if (canRestore() && restorable().length) {
+                      <div class="rollback-card">
+                        <h3>Restore the previous configuration</h3>
+                        <p>
+                          {{ restorable().length }} captured previous versions are available for
+                          review.
+                        </p>
+                        <button
+                          class="cg-btn"
+                          [disabled]="restoreBusy()"
+                          (click)="planRestore(detail.id)"
+                        >
+                          Review rollback
+                        </button>
+                      </div>
                     }
-                  </section>
-                }
-                <details class="supporting-evidence">
-                  <summary>Assessment evidence · {{ detail.evidence.length }}</summary>
-                  <ul class="evidence">
-                    @for (item of detail.evidence; track item.key) {
-                      <li>{{ item.label }}</li>
-                    }
-                  </ul>
-                </details>
+                  }
+                </section>
+                <section change-impact class="impact-column">
+                  <app-change-impact [detail]="change" />
+                </section>
                 @if (hasGuardian()) {
-                  <div class="guardian-section">
-                    <app-guardian-badge [summary]="detail.guardian" /><app-guardian-panel
+                  <div change-investigation class="guardian-section">
+                    <app-guardian-badge [summary]="detail.guardian" [compact]="true" />
+                    <app-guardian-panel
                       [groupId]="detail.id"
+                      [compact]="true"
+                      [autoLoad]="!!detail.guardian?.result"
                     />
                   </div>
                 }
-              </section>
-              <section class="impact-column"><app-change-impact [detail]="change" /></section>
+              </app-change-outcome>
+              @if (restoreError()) {
+                <p class="rollback-note" role="alert">{{ restoreError() }}</p>
+              }
             </div>
           }
         }
